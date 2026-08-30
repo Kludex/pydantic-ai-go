@@ -30,7 +30,7 @@ Status:
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
 - [~] Per-run overrides cover model, fieldwise-merged settings, additive instructions, output mode, usage limits, retry limits, and history. Typed output specialization, dynamic per-step settings/instructions, capabilities, and toolsets remain.
 - [ ] Model selection and model-ID resolution per request step.
-- [ ] Usage/cost details beyond basic token counts, including cached, audio, and reasoning tokens.
+- [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, and optional USD cost. Arbitrary provider detail keys, automatic pricing, and tool-call usage limits remain.
 
 ### Messages and persisted history
 
@@ -120,7 +120,7 @@ Status:
 ### Model settings
 
 - [x] Max tokens, temperature, top-p, seed, and stop sequences in the common settings type.
-- [~] Providers only forward settings they support; compatibility is not validated by profiles.
+- [~] Providers only forward settings they support; compatibility is not validated by profiles. OpenAI, Anthropic, and Gemini normalize their available cache, audio, reasoning, and prediction usage details.
 - [ ] Timeout and request-level deadline settings.
 - [x] `ParallelToolCalls` generation setting for OpenAI Chat/Responses and Anthropic; Gemini exposes no equivalent request setting.
 - [ ] Thinking/reasoning effort and token budgets.

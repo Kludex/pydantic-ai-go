@@ -34,7 +34,14 @@ func TestRequestTextResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"model": "gpt-5", "created": 1735689600,
 			"choices": [{"message": {"role": "assistant", "content": "Hello!"}}],
-			"usage": {"prompt_tokens": 12, "completion_tokens": 3}
+			"usage": {
+				"prompt_tokens": 12, "completion_tokens": 9,
+				"prompt_tokens_details": {"cached_tokens": 4, "audio_tokens": 2},
+				"completion_tokens_details": {
+					"reasoning_tokens": 3, "audio_tokens": 1,
+					"accepted_prediction_tokens": 2, "rejected_prediction_tokens": 1
+				}
+			}
 		}`))
 	})
 
@@ -63,7 +70,10 @@ func TestRequestTextResponse(t *testing.T) {
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
 	}
-	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 3 || resp.Usage.Requests != 1 {
+	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 9 || resp.Usage.Requests != 1 ||
+		resp.Usage.CacheReadTokens != 4 || resp.Usage.InputAudioTokens != 2 ||
+		resp.Usage.OutputAudioTokens != 1 || resp.Usage.ReasoningTokens != 3 ||
+		resp.Usage.AcceptedPredictionTokens != 2 || resp.Usage.RejectedPredictionTokens != 1 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
 	if resp.ModelName != "gpt-5" {

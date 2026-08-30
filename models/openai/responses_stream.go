@@ -74,10 +74,7 @@ type responsesStreamEvent struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
-		Usage struct {
-			InputTokens  int `json:"input_tokens"`
-			OutputTokens int `json:"output_tokens"`
-		} `json:"usage"`
+		Usage responsesUsage `json:"usage"`
 	} `json:"response"`
 	Error struct {
 		Code    string `json:"code"`
@@ -143,11 +140,7 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 				if modelName == "" {
 					modelName = m.name
 				}
-				usage := ai.Usage{
-					Requests: 1, InputTokens: event.Response.Usage.InputTokens,
-					OutputTokens: event.Response.Usage.OutputTokens,
-				}
-				yield(ai.FinishEvent{Usage: usage, ModelName: modelName}, nil)
+				yield(ai.FinishEvent{Usage: event.Response.Usage.usage(), ModelName: modelName}, nil)
 				return
 			case "response.failed", "response.incomplete":
 				message := event.Response.Status

@@ -329,10 +329,23 @@ type messagesResponse struct {
 		Name     string          `json:"name"`
 		Input    json.RawMessage `json:"input"`
 	} `json:"content"`
-	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
+	Usage anthropicUsage `json:"usage"`
+}
+
+type anthropicUsage struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+}
+
+func (u anthropicUsage) usage() ai.Usage {
+	return ai.Usage{
+		Requests:         1,
+		InputTokens:      u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
+		CacheWriteTokens: u.CacheCreationInputTokens, CacheReadTokens: u.CacheReadInputTokens,
+		OutputTokens: u.OutputTokens,
+	}
 }
 
 func parseResponse(data []byte) (*ai.ModelResponse, error) {
@@ -342,11 +355,7 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	}
 	resp := &ai.ModelResponse{
 		ModelName: mr.Model,
-		Usage: ai.Usage{
-			Requests:     1,
-			InputTokens:  mr.Usage.InputTokens,
-			OutputTokens: mr.Usage.OutputTokens,
-		},
+		Usage:     mr.Usage.usage(),
 	}
 	for _, block := range mr.Content {
 		switch block.Type {

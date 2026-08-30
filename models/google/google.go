@@ -375,10 +375,46 @@ type generateResponse struct {
 			Parts []part `json:"parts"`
 		} `json:"content"`
 	} `json:"candidates"`
-	UsageMetadata struct {
-		PromptTokenCount     int `json:"promptTokenCount"`
-		CandidatesTokenCount int `json:"candidatesTokenCount"`
-	} `json:"usageMetadata"`
+	UsageMetadata googleUsage `json:"usageMetadata"`
+}
+
+type googleUsage struct {
+	PromptTokenCount        int           `json:"promptTokenCount"`
+	CandidatesTokenCount    int           `json:"candidatesTokenCount"`
+	CachedContentTokenCount int           `json:"cachedContentTokenCount"`
+	ThoughtsTokenCount      int           `json:"thoughtsTokenCount"`
+	PromptTokensDetails     []tokenDetail `json:"promptTokensDetails"`
+	CacheTokensDetails      []tokenDetail `json:"cacheTokensDetails"`
+	CandidatesTokensDetails []tokenDetail `json:"candidatesTokensDetails"`
+}
+
+type tokenDetail struct {
+	Modality   string `json:"modality"`
+	TokenCount int    `json:"tokenCount"`
+}
+
+func (u googleUsage) usage() ai.Usage {
+	usage := ai.Usage{
+		Requests: 1, InputTokens: u.PromptTokenCount,
+		OutputTokens:    u.CandidatesTokenCount + u.ThoughtsTokenCount,
+		CacheReadTokens: u.CachedContentTokenCount, ReasoningTokens: u.ThoughtsTokenCount,
+	}
+	for _, detail := range u.PromptTokensDetails {
+		if detail.Modality == "AUDIO" {
+			usage.InputAudioTokens += detail.TokenCount
+		}
+	}
+	for _, detail := range u.CacheTokensDetails {
+		if detail.Modality == "AUDIO" {
+			usage.CacheAudioReadTokens += detail.TokenCount
+		}
+	}
+	for _, detail := range u.CandidatesTokensDetails {
+		if detail.Modality == "AUDIO" {
+			usage.OutputAudioTokens += detail.TokenCount
+		}
+	}
+	return usage
 }
 
 func parseResponse(data []byte) (*ai.ModelResponse, error) {
@@ -391,11 +427,7 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	}
 	resp := &ai.ModelResponse{
 		ModelName: gr.ModelVersion,
-		Usage: ai.Usage{
-			Requests:     1,
-			InputTokens:  gr.UsageMetadata.PromptTokenCount,
-			OutputTokens: gr.UsageMetadata.CandidatesTokenCount,
-		},
+		Usage:     gr.UsageMetadata.usage(),
 	}
 	for _, p := range gr.Candidates[0].Content.Parts {
 		switch {

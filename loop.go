@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Kludex/pydantic-ai-go/internal/schema"
@@ -108,9 +109,9 @@ func (a *Agent[Deps, Output]) newRun(
 	r.rc = &RunContext[Deps]{
 		Deps: deps, MaxRetries: r.retryLimits.Output, RunID: newRunID(),
 		Model: model, ModelSettings: settings, UsageLimits: limits,
-		usage: &r.usage, messages: &r.messages, cancellation: cancellation,
+		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, cancellation: cancellation,
 	}
-	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, messages: &r.messages}
+	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages}
 	instructionParts, err := a.buildInstructions(runCtx, r.rc, r.info, cfg.instructions)
 	if err != nil {
 		cancellation.finish()
@@ -183,6 +184,7 @@ type run[Deps, Output any] struct {
 	messages     []ModelMessage
 	newMessages  int
 	usage        Usage
+	toolCalls    atomic.Int64
 	retryLimits  RetryLimits
 	toolRetries  map[string]int
 	outputRetry  int
@@ -661,6 +663,11 @@ func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) c
 		outcome.part = nil
 		outcome.output = nil
 	}
+	if outcome.err == nil && outcome.part != nil && outcome.functionCall {
+		if part, ok := outcome.part.(ToolReturnPart); ok && part.Outcome == ToolReturnOutcomeSuccess {
+			r.toolCalls.Add(1)
+		}
+	}
 	if outcome.err == nil && outcome.part != nil && !outcome.outputCall {
 		if !r.emitStreamEvent(FunctionToolResultEvent{Part: outcome.part}) {
 			outcome.err = context.Canceled
@@ -967,7 +974,9 @@ func (r *run[Deps, Output]) outputRetryCount() int {
 }
 
 func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
-	return &RunResult[Output]{Output: out, usage: r.usage, messages: r.messages, newMessages: r.newMessages}
+	usage := r.usage
+	usage.ToolCalls = int(r.toolCalls.Load())
+	return &RunResult[Output]{Output: out, usage: usage, messages: r.messages, newMessages: r.newMessages}
 }
 
 func (a *Agent[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
@@ -1096,7 +1105,9 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 	}
 	err := next(ctx)
 	if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
-		return nil, &RunCancelledError{messages: slices.Clone(r.messages), usage: r.usage}
+		usage := r.usage
+		usage.ToolCalls = int(r.toolCalls.Load())
+		return nil, &RunCancelledError{messages: slices.Clone(r.messages), usage: usage}
 	}
 	if err != nil {
 		return nil, err

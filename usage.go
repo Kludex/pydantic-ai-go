@@ -5,19 +5,53 @@ import "fmt"
 // Usage counts model requests and tokens across a run.
 // The zero value is an empty count.
 type Usage struct {
-	Requests     int `json:"requests,omitempty"`
-	InputTokens  int `json:"input_tokens,omitempty"`
-	OutputTokens int `json:"output_tokens,omitempty"`
+	Requests                 int      `json:"requests,omitempty"`
+	ToolCalls                int      `json:"tool_calls,omitempty"`
+	InputTokens              int      `json:"input_tokens,omitempty"`
+	CacheWriteTokens         int      `json:"cache_write_tokens,omitempty"`
+	CacheReadTokens          int      `json:"cache_read_tokens,omitempty"`
+	InputAudioTokens         int      `json:"input_audio_tokens,omitempty"`
+	CacheAudioReadTokens     int      `json:"cache_audio_read_tokens,omitempty"`
+	OutputTokens             int      `json:"output_tokens,omitempty"`
+	OutputAudioTokens        int      `json:"output_audio_tokens,omitempty"`
+	ReasoningTokens          int      `json:"reasoning_tokens,omitempty"`
+	AcceptedPredictionTokens int      `json:"accepted_prediction_tokens,omitempty"`
+	RejectedPredictionTokens int      `json:"rejected_prediction_tokens,omitempty"`
+	CostUSD                  *float64 `json:"cost_usd,omitempty"`
 }
 
 // TotalTokens returns input plus output tokens.
 func (u Usage) TotalTokens() int { return u.InputTokens + u.OutputTokens }
 
+// CacheHitRatio returns the fraction of input tokens read from a provider cache.
+func (u Usage) CacheHitRatio() float64 {
+	if u.InputTokens == 0 {
+		return 0
+	}
+	return float64(u.CacheReadTokens) / float64(u.InputTokens)
+}
+
 // Add accumulates another usage count into u.
 func (u *Usage) Add(other Usage) {
 	u.Requests += other.Requests
+	u.ToolCalls += other.ToolCalls
 	u.InputTokens += other.InputTokens
+	u.CacheWriteTokens += other.CacheWriteTokens
+	u.CacheReadTokens += other.CacheReadTokens
+	u.InputAudioTokens += other.InputAudioTokens
+	u.CacheAudioReadTokens += other.CacheAudioReadTokens
 	u.OutputTokens += other.OutputTokens
+	u.OutputAudioTokens += other.OutputAudioTokens
+	u.ReasoningTokens += other.ReasoningTokens
+	u.AcceptedPredictionTokens += other.AcceptedPredictionTokens
+	u.RejectedPredictionTokens += other.RejectedPredictionTokens
+	if other.CostUSD != nil {
+		cost := *other.CostUSD
+		if u.CostUSD != nil {
+			cost += *u.CostUSD
+		}
+		u.CostUSD = &cost
+	}
 }
 
 // UsageLimits bounds a run. The zero value means unlimited.
@@ -26,6 +60,7 @@ type UsageLimits struct {
 	InputTokenLimit  int
 	OutputTokenLimit int
 	TotalTokenLimit  int
+	CostLimitUSD     *float64
 }
 
 func (l UsageLimits) check(u Usage) error {
@@ -38,6 +73,8 @@ func (l UsageLimits) check(u Usage) error {
 		return usageLimitError("output token", u.OutputTokens, l.OutputTokenLimit)
 	case l.TotalTokenLimit > 0 && u.TotalTokens() > l.TotalTokenLimit:
 		return usageLimitError("total token", u.TotalTokens(), l.TotalTokenLimit)
+	case l.CostLimitUSD != nil && u.CostUSD != nil && *u.CostUSD > *l.CostLimitUSD:
+		return fmt.Errorf("%w: cost $%g exceeds limit $%g", ErrUsageLimitExceeded, *u.CostUSD, *l.CostLimitUSD)
 	}
 	return nil
 }

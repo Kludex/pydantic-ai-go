@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"sync/atomic"
 )
 
 // A Capability is a reusable, composable unit of agent behavior. Setup runs
@@ -44,12 +45,17 @@ func (r *CapabilityRegistry) AddInstructions(instructions string) {
 type RunInfo struct {
 	RunID string
 
-	usage    *Usage
-	messages *[]ModelMessage
+	usage     *Usage
+	toolCalls *atomic.Int64
+	messages  *[]ModelMessage
 }
 
 // Usage returns the usage accumulated so far in this run.
-func (ri *RunInfo) Usage() Usage { return *ri.usage }
+func (ri *RunInfo) Usage() Usage {
+	usage := *ri.usage
+	usage.ToolCalls = int(ri.toolCalls.Load())
+	return usage
+}
 
 // Messages returns the conversation so far in this run.
 func (ri *RunInfo) Messages() []ModelMessage { return *ri.messages }

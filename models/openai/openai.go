@@ -306,10 +306,34 @@ type chatResponse struct {
 			ToolCalls []toolCall `json:"tool_calls"`
 		} `json:"message"`
 	} `json:"choices"`
-	Usage struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
+	Usage chatUsage `json:"usage"`
+}
+
+type chatUsage struct {
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+		AudioTokens  int `json:"audio_tokens"`
+	} `json:"prompt_tokens_details"`
+	CompletionTokensDetails struct {
+		ReasoningTokens          int `json:"reasoning_tokens"`
+		AudioTokens              int `json:"audio_tokens"`
+		AcceptedPredictionTokens int `json:"accepted_prediction_tokens"`
+		RejectedPredictionTokens int `json:"rejected_prediction_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+func (u chatUsage) usage() ai.Usage {
+	return ai.Usage{
+		Requests: 1, InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens,
+		CacheReadTokens:          u.PromptTokensDetails.CachedTokens,
+		InputAudioTokens:         u.PromptTokensDetails.AudioTokens,
+		OutputAudioTokens:        u.CompletionTokensDetails.AudioTokens,
+		ReasoningTokens:          u.CompletionTokensDetails.ReasoningTokens,
+		AcceptedPredictionTokens: u.CompletionTokensDetails.AcceptedPredictionTokens,
+		RejectedPredictionTokens: u.CompletionTokensDetails.RejectedPredictionTokens,
+	}
 }
 
 func parseResponse(data []byte) (*ai.ModelResponse, error) {
@@ -323,11 +347,7 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	resp := &ai.ModelResponse{
 		ModelName: cr.Model,
 		Timestamp: time.Unix(cr.Created, 0).UTC(),
-		Usage: ai.Usage{
-			Requests:     1,
-			InputTokens:  cr.Usage.PromptTokens,
-			OutputTokens: cr.Usage.CompletionTokens,
-		},
+		Usage:     cr.Usage.usage(),
 	}
 	msg := cr.Choices[0].Message
 	if msg.Content != "" {

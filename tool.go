@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Kludex/pydantic-ai-go/internal/schema"
@@ -25,12 +26,17 @@ type RunContext[Deps any] struct {
 	UsageLimits   UsageLimits
 
 	usage        *Usage
+	toolCalls    *atomic.Int64
 	messages     *[]ModelMessage
 	cancellation *runCancellation
 }
 
 // Usage returns the usage accumulated so far in this run.
-func (rc *RunContext[Deps]) Usage() Usage { return *rc.usage }
+func (rc *RunContext[Deps]) Usage() Usage {
+	usage := *rc.usage
+	usage.ToolCalls = int(rc.toolCalls.Load())
+	return usage
+}
 
 // Messages returns the conversation so far in this run.
 func (rc *RunContext[Deps]) Messages() []ModelMessage { return *rc.messages }

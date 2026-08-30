@@ -73,8 +73,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				modelName = chunk.ModelVersion
 			}
 			if chunk.UsageMetadata.PromptTokenCount != 0 || chunk.UsageMetadata.CandidatesTokenCount != 0 {
-				usage.InputTokens = chunk.UsageMetadata.PromptTokenCount
-				usage.OutputTokens = chunk.UsageMetadata.CandidatesTokenCount
+				usage = chunk.UsageMetadata.usage()
 			}
 			if len(chunk.Candidates) == 0 {
 				continue

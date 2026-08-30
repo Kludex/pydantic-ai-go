@@ -39,7 +39,10 @@ func TestRequestTextResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"model": "claude-sonnet-4-5",
 			"content": [{"type": "text", "text": "Hello!"}],
-			"usage": {"input_tokens": 12, "output_tokens": 3}
+			"usage": {
+				"input_tokens": 12, "output_tokens": 3,
+				"cache_creation_input_tokens": 3, "cache_read_input_tokens": 4
+			}
 		}`))
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}
@@ -62,7 +65,8 @@ func TestRequestTextResponse(t *testing.T) {
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
 	}
-	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 3 {
+	if resp.Usage.InputTokens != 19 || resp.Usage.OutputTokens != 3 ||
+		resp.Usage.CacheWriteTokens != 3 || resp.Usage.CacheReadTokens != 4 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
 }

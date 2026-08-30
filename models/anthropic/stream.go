@@ -56,8 +56,8 @@ type streamEvent struct {
 	Type    string `json:"type"`
 	Index   int    `json:"index"`
 	Message struct {
-		Model string      `json:"model"`
-		Usage streamUsage `json:"usage"`
+		Model string         `json:"model"`
+		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
 	ContentBlock struct {
 		Type     string          `json:"type"`
@@ -73,16 +73,11 @@ type streamEvent struct {
 		Thinking    string `json:"thinking"`
 		PartialJSON string `json:"partial_json"`
 	} `json:"delta"`
-	Usage streamUsage `json:"usage"`
+	Usage anthropicUsage `json:"usage"`
 	Error struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
-}
-
-type streamUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
 }
 
 func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
@@ -108,8 +103,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				if event.Message.Model != "" {
 					modelName = event.Message.Model
 				}
-				usage.InputTokens = event.Message.Usage.InputTokens
-				usage.OutputTokens = event.Message.Usage.OutputTokens
+				usage = event.Message.Usage.usage()
 			case "content_block_start":
 				if !m.emitContentBlockStart(yield, event) {
 					return

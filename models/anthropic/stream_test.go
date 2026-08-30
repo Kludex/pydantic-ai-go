@@ -67,7 +67,7 @@ func TestStreamEvents(t *testing.T) {
 		}
 		gotStream = body.Stream
 		anthropicSSE(t, []string{
-			`{"type":"message_start","message":{"model":"claude-stream","usage":{"input_tokens":5,"output_tokens":1}}}`,
+			`{"type":"message_start","message":{"model":"claude-stream","usage":{"input_tokens":5,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}}`,
 			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"H"}}`,
 			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"i"}}`,
 			`{"type":"content_block_stop","index":0}`,
@@ -116,7 +116,8 @@ func TestStreamEvents(t *testing.T) {
 	if textPartID != "0" || thinkingPartID != "1" || start.PartID != "2" || argsPartID != "2" {
 		t.Fatalf("unstable Anthropic part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
-	if finish.ModelName != "claude-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 8 {
+	if finish.ModelName != "claude-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 12 ||
+		finish.Usage.OutputTokens != 8 || finish.Usage.CacheWriteTokens != 3 || finish.Usage.CacheReadTokens != 4 {
 		t.Fatalf("unexpected finish %+v", finish)
 	}
 }

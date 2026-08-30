@@ -68,10 +68,7 @@ type chatChunk struct {
 			} `json:"tool_calls"`
 		} `json:"delta"`
 	} `json:"choices"`
-	Usage *struct {
-		PromptTokens     int `json:"prompt_tokens"`
-		CompletionTokens int `json:"completion_tokens"`
-	} `json:"usage"`
+	Usage *chatUsage `json:"usage"`
 }
 
 func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
@@ -102,11 +99,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				modelName = chunk.Model
 			}
 			if chunk.Usage != nil {
-				usage = ai.Usage{
-					Requests:     1,
-					InputTokens:  chunk.Usage.PromptTokens,
-					OutputTokens: chunk.Usage.CompletionTokens,
-				}
+				usage = chunk.Usage.usage()
 			}
 			if len(chunk.Choices) == 0 {
 				continue

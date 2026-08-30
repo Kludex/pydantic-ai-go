@@ -211,10 +211,26 @@ type responsesResponse struct {
 			Text string `json:"text"`
 		} `json:"summary"`
 	} `json:"output"`
-	Usage struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
+	Usage responsesUsage `json:"usage"`
+}
+
+type responsesUsage struct {
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	InputTokensDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
+}
+
+func (u responsesUsage) usage() ai.Usage {
+	return ai.Usage{
+		Requests: 1, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
+		CacheReadTokens: u.InputTokensDetails.CachedTokens,
+		ReasoningTokens: u.OutputTokensDetails.ReasoningTokens,
+	}
 }
 
 func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
@@ -224,11 +240,7 @@ func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
 	}
 	resp := &ai.ModelResponse{
 		ModelName: rr.Model,
-		Usage: ai.Usage{
-			Requests:     1,
-			InputTokens:  rr.Usage.InputTokens,
-			OutputTokens: rr.Usage.OutputTokens,
-		},
+		Usage:     rr.Usage.usage(),
 	}
 	for _, item := range rr.Output {
 		switch item.Type {

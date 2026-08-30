@@ -42,7 +42,13 @@ func TestRequestTextResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"modelVersion": "gemini-2.5-flash",
 			"candidates": [{"content": {"parts": [{"text": "Hello!"}]}}],
-			"usageMetadata": {"promptTokenCount": 12, "candidatesTokenCount": 3}
+			"usageMetadata": {
+				"promptTokenCount": 12, "candidatesTokenCount": 3,
+				"cachedContentTokenCount": 4, "thoughtsTokenCount": 2,
+				"promptTokensDetails": [{"modality":"AUDIO","tokenCount":2}],
+				"cacheTokensDetails": [{"modality":"AUDIO","tokenCount":1}],
+				"candidatesTokensDetails": [{"modality":"AUDIO","tokenCount":1}]
+			}
 		}`))
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}
@@ -71,7 +77,10 @@ func TestRequestTextResponse(t *testing.T) {
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
 	}
-	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 3 || resp.Usage.Requests != 1 {
+	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 || resp.Usage.Requests != 1 ||
+		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 ||
+		resp.Usage.InputAudioTokens != 2 || resp.Usage.CacheAudioReadTokens != 1 ||
+		resp.Usage.OutputAudioTokens != 1 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
 	if resp.ModelName != "gemini-2.5-flash" {

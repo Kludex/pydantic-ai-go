@@ -180,6 +180,12 @@ Unknown tool names also go back to the model as retry prompts. The prompt lists 
 
 Use `ai.WithToolTimeout(5 * time.Second)` to give one tool call a deadline. The tool must honor `ctx.Done()`. A tool-specific timeout becomes a retry, while cancellation of the parent run remains `context.Canceled`.
 
+## Usage
+
+`result.Usage()` includes requests, successful function-tool calls, token totals, cache reads and writes, audio tokens, reasoning tokens, and prediction tokens when the provider reports them. `Usage.CacheHitRatio()` returns the fraction of input tokens read from cache.
+
+Providers do not calculate prices. A model or capability can set `Usage.CostUSD`. `UsageLimits.CostLimitUSD` enforces known costs and does not reject a run when cost is unavailable.
+
 ## Structured output
 
 Use any struct as the `Output` type and the agent asks the model for it via a final output tool. The result arrives typed and validated:

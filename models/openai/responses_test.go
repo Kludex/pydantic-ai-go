@@ -40,7 +40,11 @@ func TestResponsesTextResponse(t *testing.T) {
 				{"type": "reasoning", "summary": [{"text": "thinking"}]},
 				{"type": "message", "content": [{"type": "output_text", "text": "Hello!"}]}
 			],
-			"usage": {"input_tokens": 12, "output_tokens": 3}
+			"usage": {
+				"input_tokens": 12, "output_tokens": 5,
+				"input_tokens_details": {"cached_tokens": 4},
+				"output_tokens_details": {"reasoning_tokens": 2}
+			}
 		}`))
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}
@@ -60,7 +64,8 @@ func TestResponsesTextResponse(t *testing.T) {
 	if _, ok := resp.Parts[0].(ai.ThinkingPart); !ok {
 		t.Fatalf("reasoning summary lost: %+v", resp.Parts)
 	}
-	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 3 {
+	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 ||
+		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
 }

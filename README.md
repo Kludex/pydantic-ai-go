@@ -51,7 +51,7 @@ func main() {
 }
 ```
 
-The tool's argument schema is reflected from `WeatherArgs` - the model sees the `json` names and the `jsonschema` descriptions. If the model sends arguments that fail to unmarshal, the error goes back to the model as a retry prompt instead of failing the run.
+The tool's argument schema is reflected from `WeatherArgs` - the model sees the `json` names and `jsonschema` constraints. The agent enforces the complete Draft 2020-12 schema before Go decoding and tool execution. Invalid arguments go back to the model as a retry prompt instead of failing the run.
 
 ## Per-run configuration
 
@@ -347,6 +347,8 @@ for output, err := range stream.Outputs() {
 	fmt.Printf("%+v\n", output)
 }
 ```
+
+Structured snapshots satisfy the output's complete Draft 2020-12 schema. Incomplete prefixes and values that fail constraints, formats, or custom Go decoding are withheld until they become valid.
 
 Use `stream.OutputsDebounced(100 * time.Millisecond)` to group bursty partial snapshots. The interval is a soft maximum: the next snapshot after the interval flushes the latest value from the preceding group. Stream completion flushes the final partial. Pass zero to disable grouping.
 

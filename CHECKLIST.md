@@ -62,12 +62,13 @@ Status:
 - [x] Dependency-aware and simple tool signatures.
 - [x] Raw-schema dynamic tool registration.
 - [x] Tool and argument-unmarshal retries use independent per-tool counters; output retries use a separate counter.
-- [~] JSON Schema supports common structs, arrays, maps, descriptions, and enums; it is not full JSON Schema parity.
+- [~] Reflected JSON Schema supports common structs, arrays, maps, descriptions, and enums; schema generation is not yet full Pydantic parity.
 - [x] Provider schema transforms for implemented providers: Gemini full JSON Schema wire fields, OpenAI compatibility inference/forced rewrites including recursive roots, and opt-in Anthropic strict-subset conversion.
 - [x] Provider-aware strict tool mode via `WithStrict()` / `WithoutStrict()`: OpenAI infers schema compatibility, Anthropic is explicit and model-gated, and Gemini 2.5+ defaults to request-wide `VALIDATED`; each provider supports alias/proxy overrides.
 - [x] Surface Anthropic's lossy strict transformation of dynamic-map schemas through `anthropic.WithSchemaWarningHandler`.
 - [x] Per-tool and agent-wide per-step preparation and omission via `AddPreparedTool` and `AddToolsPrepareFunc`, applied in upstream order.
-- [x] Typed semantic argument validators run after JSON decoding and before execution for dependency-aware, simple, prepared, and raw-schema tools, with retry and terminal-failure semantics.
+- [x] Complete Draft 2020-12 tool schemas, including prepared raw schemas and asserted formats, compile before each request and validate arguments before Go decoding or execution.
+- [x] Typed semantic argument validators run after JSON Schema validation and Go decoding but before execution for dependency-aware, simple, prepared, and raw-schema tools, with retry and terminal-failure semantics.
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
 - [ ] Per-toolset retry defaults and output-tool-specific overrides once those abstractions land.
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
@@ -100,7 +101,7 @@ Status:
 - [x] Final streamed output validation; retry requests fail clearly because `RunStream` cannot start another model round after committing output.
 - [x] Typed partial text and structured output snapshots through `StreamedRun.Outputs`, with partial-validator context, retry suppression, required-field checks, and a final fully validated value.
 - [x] Configurable soft-maximum partial-output debouncing through `OutputsDebounced`, including text, structured output, validator grouping, final flush, and consumer-break cleanup.
-- [ ] Full partial-output JSON Schema constraint validation beyond Go decoding and required fields.
+- [x] Complete Draft 2020-12 constraint and format validation for partial and final tool/native outputs, followed by custom Go decoding and semantic validators.
 - [x] Streaming final-output commitment: `RunStream` locks the first matching text, native, or output-tool result. Configured end strategies still govern co-emitted tools, but retries cannot revoke the committed result.
 - [x] Consumer-only stream transformation through `RunEventStreamWrapper` and `StreamEventProcessor`, including automatic streaming for `Run`.
 - [x] `FunctionToolCallEvent`, `FunctionToolResultEvent`, `OutputToolCallEvent`, and `OutputToolResultEvent`, with concurrent results emitted in completion order.
@@ -211,7 +212,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add per-run typed output specialization, capabilities, tools, and toolsets.
-3. Add broader partial-output schema constraint validation.
+3. Add stable persisted instruction IDs and reevaluate dynamic instructions when resuming history.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

@@ -25,6 +25,11 @@ func (r *run[Deps, Output]) streamedOutput(
 			}
 			var output Output
 			if r.params.OutputSchema != nil {
+				if r.currentOutputValidator != nil {
+					if err := r.currentOutputValidator.ValidateJSON([]byte(response.Text())); err != nil {
+						return nil, -1, false, streamOutputValidationError()
+					}
+				}
 				if err := json.Unmarshal([]byte(response.Text()), &output); err != nil {
 					return nil, -1, false, streamOutputValidationError()
 				}
@@ -41,6 +46,11 @@ func (r *run[Deps, Output]) streamedOutput(
 				continue
 			}
 			var output Output
+			if r.currentOutputValidator != nil {
+				if err := r.currentOutputValidator.ValidateJSON(part.Args); err != nil {
+					return nil, callIndex, false, streamOutputValidationError()
+				}
+			}
 			if err := json.Unmarshal(part.Args, &output); err != nil {
 				return nil, callIndex, false, streamOutputValidationError()
 			}
@@ -60,12 +70,8 @@ func (r *run[Deps, Output]) validatePartialOutput(
 	if r.params.OutputSchema == nil && r.currentOutputTool == nil {
 		output = any(raw).(Output)
 	} else {
-		schema := r.params.OutputSchema
-		if r.currentOutputTool != nil {
-			schema = r.currentOutputTool.Schema
-		}
 		var valid bool
-		output, valid = decodePartialJSON[Output](raw, schema)
+		output, valid = decodePartialJSON[Output](raw, r.currentOutputValidator)
 		if !valid {
 			return output, false, nil
 		}

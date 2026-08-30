@@ -320,33 +320,35 @@ func toolResultIdentity(part RequestPart) (toolName, toolCallID string, ok bool)
 }
 
 type run[Deps, Output any] struct {
-	agent                *Agent[Deps, Output]
-	model                Model
-	capabilities         []Capability
-	ctx                  context.Context
-	cancellation         *runCancellation
-	rc                   *RunContext[Deps]
-	info                 *RunInfo
-	params               ModelRequestParams
-	messages             []ModelMessage
-	newMessages          int
-	usage                Usage
-	toolCalls            atomic.Int64
-	retryLimits          RetryLimits
-	toolRetries          map[string]int
-	outputRetry          int
-	retriesMu            sync.Mutex
-	currentTools         map[string]struct{}
-	currentOutputTool    *ToolDefinition
-	staticInstructions   []InstructionPart
-	runSettings          *ModelSettings
-	runSettingsFuncs     []erasedModelSettingsFunc
-	runInstructionsFuncs []erasedInstructionsFunc
-	explicitRunModel     bool
-	staticModelID        string
-	runModelSelectors    []erasedModelSelectorFunc
-	resolvedModels       map[string]Model
-	runStep              int
+	agent                  *Agent[Deps, Output]
+	model                  Model
+	capabilities           []Capability
+	ctx                    context.Context
+	cancellation           *runCancellation
+	rc                     *RunContext[Deps]
+	info                   *RunInfo
+	params                 ModelRequestParams
+	messages               []ModelMessage
+	newMessages            int
+	usage                  Usage
+	toolCalls              atomic.Int64
+	retryLimits            RetryLimits
+	toolRetries            map[string]int
+	outputRetry            int
+	retriesMu              sync.Mutex
+	currentTools           map[string]struct{}
+	currentToolValidators  map[string]*schema.Validator
+	currentOutputTool      *ToolDefinition
+	currentOutputValidator *schema.Validator
+	staticInstructions     []InstructionPart
+	runSettings            *ModelSettings
+	runSettingsFuncs       []erasedModelSettingsFunc
+	runInstructionsFuncs   []erasedInstructionsFunc
+	explicitRunModel       bool
+	staticModelID          string
+	runModelSelectors      []erasedModelSelectorFunc
+	resolvedModels         map[string]Model
+	runStep                int
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
 	emitMu               sync.Mutex
@@ -651,7 +653,39 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		seen[def.Name] = struct{}{}
 	}
 	params.Tools = tools
+	if err := r.compileCurrentSchemas(params); err != nil {
+		return ModelRequestParams{}, err
+	}
 	return params, nil
+}
+
+func (r *run[Deps, Output]) compileCurrentSchemas(params ModelRequestParams) error {
+	r.currentToolValidators = make(map[string]*schema.Validator, len(params.Tools))
+	for _, tool := range params.Tools {
+		if tool.Schema == nil {
+			continue
+		}
+		validator, err := schema.Compile(tool.Schema)
+		if err != nil {
+			return fmt.Errorf("ai: tool %q schema: %w", tool.Name, err)
+		}
+		r.currentToolValidators[tool.Name] = validator
+	}
+	r.currentOutputValidator = nil
+	var outputSchema map[string]any
+	if params.OutputTool != nil {
+		outputSchema = params.OutputTool.Schema
+	} else if params.OutputSchema != nil {
+		outputSchema = params.OutputSchema
+	}
+	if outputSchema != nil {
+		validator, err := schema.Compile(outputSchema)
+		if err != nil {
+			return fmt.Errorf("ai: output schema: %w", err)
+		}
+		r.currentOutputValidator = validator
+	}
+	return nil
 }
 
 func cloneToolDefinition(def ToolDefinition) ToolDefinition {
@@ -1195,6 +1229,16 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 			Content: r.unknownToolMessage(call.ToolName), ToolName: call.ToolName, ToolCallID: call.ToolCallID,
 		}, nil, nil
 	}
+	if validator := r.currentToolValidators[call.ToolName]; validator != nil {
+		if err := validator.ValidateJSON(call.Args); err != nil {
+			if retryErr := r.countToolRetry(call.ToolName); retryErr != nil {
+				return nil, nil, retryErr
+			}
+			return RetryPromptPart{
+				Content: "invalid arguments: " + err.Error(), ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+			}, nil, nil
+		}
+	}
 	toolRC := *r.rc
 	toolRC.ToolCallID = call.ToolCallID
 	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)
@@ -1255,6 +1299,15 @@ func quoteToolName(name string) string {
 
 func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCallPart) (RequestPart, *Output, error) {
 	var out Output
+	if r.currentOutputValidator != nil {
+		if err := r.currentOutputValidator.ValidateJSON(call.Args); err != nil {
+			if retryErr := r.countOutputRetry(); retryErr != nil {
+				return nil, nil, retryErr
+			}
+			msg := fmt.Sprintf("invalid final result: %v", err)
+			return RetryPromptPart{Content: msg, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
+		}
+	}
 	if err := json.Unmarshal(call.Args, &out); err != nil {
 		if err := r.countOutputRetry(); err != nil {
 			return nil, nil, err
@@ -1291,6 +1344,14 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 	}
 	var out Output
 	if r.params.OutputSchema != nil {
+		if r.currentOutputValidator != nil {
+			if err := r.currentOutputValidator.ValidateJSON([]byte(resp.Text())); err != nil {
+				if retryErr := r.countOutputRetry(); retryErr != nil {
+					return nil, nil, retryErr
+				}
+				return nil, &RetryPromptPart{Content: fmt.Sprintf("invalid JSON output: %v", err)}, nil
+			}
+		}
 		if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
 			if err := r.countOutputRetry(); err != nil {
 				return nil, nil, err

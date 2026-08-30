@@ -3,9 +3,11 @@ package ai
 import (
 	"bytes"
 	"encoding/json"
+
+	"github.com/Kludex/pydantic-ai-go/internal/schema"
 )
 
-func decodePartialJSON[Output any](raw string, schema map[string]any) (Output, bool) {
+func decodePartialJSON[Output any](raw string, validator *schema.Validator) (Output, bool) {
 	var zero Output
 	data := bytes.TrimSpace([]byte(raw))
 	for end := len(data); end > 0; end-- {
@@ -14,8 +16,13 @@ func decodePartialJSON[Output any](raw string, schema map[string]any) (Output, b
 			continue
 		}
 		var value any
-		if err := json.Unmarshal(candidate, &value); err != nil || !requiredFieldsPresent(value, schema) {
+		if err := json.Unmarshal(candidate, &value); err != nil {
 			continue
+		}
+		if validator != nil {
+			if err := validator.Validate(value); err != nil {
+				continue
+			}
 		}
 		var output Output
 		if err := json.Unmarshal(candidate, &output); err != nil {
@@ -76,39 +83,4 @@ func closeJSONPrefix(prefix []byte) ([]byte, bool) {
 		}
 	}
 	return candidate, true
-}
-
-func requiredFieldsPresent(value any, schema map[string]any) bool {
-	switch schema["type"] {
-	case "object":
-		object, ok := value.(map[string]any)
-		if !ok {
-			return false
-		}
-		required, _ := schema["required"].([]string)
-		for _, name := range required {
-			if _, ok := object[name]; !ok {
-				return false
-			}
-		}
-		properties, _ := schema["properties"].(map[string]any)
-		for name, property := range properties {
-			child, present := object[name]
-			if present && !requiredFieldsPresent(child, property.(map[string]any)) {
-				return false
-			}
-		}
-	case "array":
-		array, ok := value.([]any)
-		if !ok {
-			return false
-		}
-		items := schema["items"].(map[string]any)
-		for _, item := range array {
-			if !requiredFieldsPresent(item, items) {
-				return false
-			}
-		}
-	}
-	return true
 }

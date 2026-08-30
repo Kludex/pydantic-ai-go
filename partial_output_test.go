@@ -3,10 +3,13 @@ package ai_test
 import (
 	"context"
 	"errors"
+	"iter"
 	"slices"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/fakes"
 )
 
 func TestRunStreamOutputsTextPartialsAndFinal(t *testing.T) {
@@ -39,6 +42,145 @@ func TestRunStreamOutputsTextPartialsAndFinal(t *testing.T) {
 	if !slices.Equal(validationOutputs, outputs) || !slices.Equal(partialFlags, []bool{true, true, false}) {
 		t.Fatalf("unexpected validator calls: outputs=%v partial=%v", validationOutputs, partialFlags)
 	}
+}
+
+func TestRunStreamOutputsDebouncesBurstPartials(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.TextDeltaEvent{PartID: "text", Delta: "Hel"},
+			ai.TextDeltaEvent{PartID: "text", Delta: "lo"},
+			ai.FinishEvent{},
+		}
+	})
+	agent := ai.NewAgent[deps, string](model)
+	var validated []string
+	agent.AddOutputValidator(func(_ context.Context, rc *ai.RunContext[deps], output string) error {
+		if rc.PartialOutput {
+			validated = append(validated, output)
+		}
+		return nil
+	})
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	var outputs []string
+	for output, err := range stream.OutputsDebounced(time.Hour) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputs = append(outputs, output)
+	}
+	if !slices.Equal(outputs, []string{"Hello", "Hello"}) || !slices.Equal(validated, []string{"Hello"}) {
+		t.Fatalf("unexpected debounced outputs=%v validated=%v", outputs, validated)
+	}
+}
+
+type delayedTextStreamingModel struct {
+	ai.Model
+	delay time.Duration
+}
+
+func (m delayedTextStreamingModel) StreamRequest(
+	_ context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
+		if !yield(ai.TextDeltaEvent{PartID: "text", Delta: "a"}, nil) {
+			return
+		}
+		time.Sleep(m.delay)
+		if !yield(ai.TextDeltaEvent{PartID: "text", Delta: "b"}, nil) {
+			return
+		}
+		yield(ai.FinishEvent{}, nil)
+	}, nil
+}
+
+func TestRunStreamOutputsDebounceUsesSoftMaximum(t *testing.T) {
+	model := delayedTextStreamingModel{Model: fakes.NewTestModel(), delay: 20 * time.Millisecond}
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	var outputs []string
+	for output, err := range stream.OutputsDebounced(5 * time.Millisecond) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputs = append(outputs, output)
+	}
+	if !slices.Equal(outputs, []string{"a", "ab", "ab"}) {
+		t.Fatalf("unexpected temporally grouped outputs: %v", outputs)
+	}
+}
+
+func TestRunStreamOutputsDebouncedStructuredSnapshot(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ToolCallStartEvent{PartID: "output", ToolName: "final_result", ToolCallID: "result"},
+			ai.ToolCallDeltaEvent{PartID: "output", ArgsDelta: `{"city":"SF"`},
+			ai.ToolCallDeltaEvent{PartID: "output", ArgsDelta: `,"temp_c":18}`},
+			ai.FinishEvent{},
+		}
+	})
+	stream := ai.NewAgent[deps, weather](model).RunStream(t.Context(), "go", deps{})
+	var outputs []weather
+	for output, err := range stream.OutputsDebounced(time.Hour) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		outputs = append(outputs, output)
+	}
+	want := []weather{{City: "SF", TempC: 18}, {City: "SF", TempC: 18}}
+	if !slices.Equal(outputs, want) {
+		t.Fatalf("unexpected structured debounced outputs: %+v", outputs)
+	}
+}
+
+func TestRunStreamOutputsDebounceValidation(t *testing.T) {
+	t.Run("zero disables grouping", func(t *testing.T) {
+		model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+			return []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: "a"}, ai.TextDeltaEvent{Delta: "b"}, ai.FinishEvent{}}
+		})
+		stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+		var outputs []string
+		for output, err := range stream.OutputsDebounced(0) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			outputs = append(outputs, output)
+		}
+		if !slices.Equal(outputs, []string{"a", "ab", "ab"}) {
+			t.Fatalf("zero interval grouped outputs: %v", outputs)
+		}
+	})
+
+	t.Run("negative panics", func(t *testing.T) {
+		stream := ai.NewAgent[deps, string](fakes.NewTestModel()).RunStream(t.Context(), "go", deps{})
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected negative debounce panic")
+			}
+		}()
+		stream.OutputsDebounced(-time.Second)
+	})
+}
+
+func TestRunStreamOutputsDebouncedConsumerBreak(t *testing.T) {
+	t.Run("during stream", func(t *testing.T) {
+		model := delayedTextStreamingModel{Model: fakes.NewTestModel(), delay: 20 * time.Millisecond}
+		stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+		for range stream.OutputsDebounced(5 * time.Millisecond) {
+			break
+		}
+		if stream.Result() != nil {
+			t.Fatalf("consumer break completed the run: %+v", stream.Result())
+		}
+	})
+
+	t.Run("while flushing", func(t *testing.T) {
+		model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+			return []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: "done"}, ai.FinishEvent{}}
+		})
+		stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+		for range stream.OutputsDebounced(time.Hour) {
+			break
+		}
+	})
 }
 
 func TestRunStreamOutputsStructuredPartialsAndFinal(t *testing.T) {

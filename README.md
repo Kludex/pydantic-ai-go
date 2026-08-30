@@ -300,7 +300,9 @@ for output, err := range stream.Outputs() {
 }
 ```
 
-The last value is always the fully validated output, even when it equals the preceding partial value. `Events` and `Outputs` are alternative views; consume only one for each run.
+Use `stream.OutputsDebounced(100 * time.Millisecond)` to group bursty partial snapshots. The interval is a soft maximum: the next snapshot after the interval flushes the latest value from the preceding group. Stream completion flushes the final partial. Pass zero to disable grouping.
+
+The last value is always the fully validated output, even when it equals the preceding partial value. `Events`, `Outputs`, and `OutputsDebounced` are alternative views; consume only one for each run.
 
 `RunStream` commits the first matching text, native, or output-tool result. The configured end strategy still controls co-emitted tools, but a tool retry cannot revoke that result. If an output validator requests a retry, the streamed run returns `UnexpectedModelBehaviorError` because output has already been committed. Use `Run` when validation should start another model round.
 

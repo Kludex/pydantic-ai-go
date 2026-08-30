@@ -3,7 +3,9 @@ package ai
 import (
 	"context"
 	"iter"
+	"slices"
 	"strconv"
+	"time"
 )
 
 // StreamedRun is a run in progress. Range over Events to consume it;
@@ -22,10 +24,48 @@ func (s *StreamedRun[Output]) Events() EventStream { return s.events }
 // validated final output. It is an alternative view of Events; consume only
 // one view for a run.
 func (s *StreamedRun[Output]) Outputs() iter.Seq2[Output, error] {
+	return s.outputs(0)
+}
+
+// OutputsDebounced groups partial snapshots over interval. A zero interval
+// disables grouping. The fully validated final output is always emitted.
+func (s *StreamedRun[Output]) OutputsDebounced(interval time.Duration) iter.Seq2[Output, error] {
+	if interval < 0 {
+		panic("ai: output debounce interval must be non-negative")
+	}
+	return s.outputs(interval)
+}
+
+func (s *StreamedRun[Output]) outputs(interval time.Duration) iter.Seq2[Output, error] {
 	return func(yield func(Output, error) bool) {
 		parts := map[int]ResponsePart{}
 		selectedIndex := -1
 		lastStarted := -1
+		var pending ResponsePart
+		var groupStarted time.Time
+		flush := func() bool {
+			if pending == nil {
+				return true
+			}
+			part := pending
+			pending = nil
+			groupStarted = time.Time{}
+			return s.yieldPartialOutput(yield, part)
+		}
+		queue := func(part ResponsePart) bool {
+			if interval == 0 {
+				return s.yieldPartialOutput(yield, part)
+			}
+			now := time.Now()
+			if pending != nil && now.Sub(groupStarted) >= interval && !flush() {
+				return false
+			}
+			pending = cloneResponsePart(part)
+			if groupStarted.IsZero() {
+				groupStarted = now
+			}
+			return true
+		}
 		for event, err := range s.Events() {
 			if err != nil {
 				yield(*new(Output), err)
@@ -46,20 +86,31 @@ func (s *StreamedRun[Output]) Outputs() iter.Seq2[Output, error] {
 					return
 				}
 				parts[event.Index] = part
-				if event.Index == selectedIndex && !s.yieldPartialOutput(yield, part) {
+				if event.Index == selectedIndex && !queue(part) {
 					return
 				}
 			case FinalResultEvent:
 				selectedIndex = lastStarted
-				if part, ok := parts[selectedIndex]; ok && !s.yieldPartialOutput(yield, part) {
+				if part, ok := parts[selectedIndex]; ok && !queue(part) {
 					return
 				}
 			}
+		}
+		if !flush() {
+			return
 		}
 		if s.result != nil {
 			yield(s.result.Output, nil)
 		}
 	}
+}
+
+func cloneResponsePart(part ResponsePart) ResponsePart {
+	if call, ok := part.(ToolCallPart); ok {
+		call.Args = slices.Clone(call.Args)
+		return call
+	}
+	return part
 }
 
 func (s *StreamedRun[Output]) yieldPartialOutput(

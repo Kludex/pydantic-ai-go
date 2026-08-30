@@ -17,7 +17,7 @@ import (
 // StreamRequest implements ai.StreamingModel using Gemini server-sent events.
 func (m *Model) StreamRequest(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
-) (iter.Seq2[ai.StreamEvent, error], error) {
+) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 	payload, err := m.buildPayload(msgs, params)
 	if err != nil {
 		return nil, err
@@ -50,8 +50,8 @@ func (m *Model) StreamRequest(
 	return m.eventStream(resp.Body), nil
 }
 
-func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error] {
-	return func(yield func(ai.StreamEvent, error) bool) {
+func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
 		usage := ai.Usage{Requests: 1}
 		modelName := m.name
@@ -97,7 +97,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error]
 	}
 }
 
-func emitPart(yield func(ai.StreamEvent, error) bool, part part, index int) bool {
+func emitPart(yield func(ai.ModelStreamEvent, error) bool, part part, index int) bool {
 	switch {
 	case part.FunctionCall != nil:
 		partID := fmt.Sprintf("tool:%d", index)

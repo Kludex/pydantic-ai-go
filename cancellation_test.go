@@ -201,8 +201,8 @@ func TestRunStreamContextCancellation(t *testing.T) {
 }
 
 func TestRunStreamCommittedCancellationRetainsCompletedTools(t *testing.T) {
-	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-		return []ai.StreamEvent{
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
 			ai.TextDeltaEvent{PartID: "text", Delta: "discarded"},
 			ai.ToolCallStartEvent{PartID: "fast", ToolName: "fast", ToolCallID: "fast"},
 			ai.ToolCallDeltaEvent{PartID: "fast", ArgsDelta: `{}`},
@@ -257,8 +257,8 @@ type cancelStreamingModel struct{ ai.Model }
 
 func (m *cancelStreamingModel) StreamRequest(
 	context.Context, []ai.ModelMessage, ai.ModelRequestParams,
-) (iter.Seq2[ai.StreamEvent, error], error) {
-	return func(yield func(ai.StreamEvent, error) bool) {
+) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		if yield(ai.TextDeltaEvent{PartID: "text", Delta: "discarded"}, nil) {
 			yield(ai.FinishEvent{}, nil)
 		}

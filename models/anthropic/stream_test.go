@@ -24,13 +24,13 @@ func anthropicSSE(t *testing.T, events []string) http.HandlerFunc {
 
 func collectAnthropicStream(
 	t *testing.T, model ai.StreamingModel, params ai.ModelRequestParams,
-) ([]ai.StreamEvent, error) {
+) ([]ai.ModelStreamEvent, error) {
 	t.Helper()
 	stream, err := model.StreamRequest(t.Context(), nil, params)
 	if err != nil {
 		return nil, err
 	}
-	var events []ai.StreamEvent
+	var events []ai.ModelStreamEvent
 	for event, err := range stream {
 		if err != nil {
 			return events, err
@@ -38,6 +38,20 @@ func collectAnthropicStream(
 		events = append(events, event)
 	}
 	return events, nil
+}
+
+func normalizedAnthropicText(event ai.StreamEvent) string {
+	switch event := event.(type) {
+	case ai.PartStartEvent:
+		if text, ok := event.Part.(ai.TextPart); ok {
+			return text.Content
+		}
+	case ai.PartDeltaEvent:
+		if text, ok := event.Delta.(ai.TextPartDelta); ok {
+			return text.ContentDelta
+		}
+	}
+	return ""
 }
 
 func TestStreamEvents(t *testing.T) {
@@ -122,9 +136,7 @@ func TestStreamEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if delta, ok := event.(ai.TextDeltaEvent); ok {
-			text += delta.Delta
-		}
+		text += normalizedAnthropicText(event)
 	}
 	if text != "hello" || stream.Result().Output != "hello" {
 		t.Fatalf("unexpected stream text %q and result %+v", text, stream.Result())

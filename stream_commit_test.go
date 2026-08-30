@@ -22,8 +22,8 @@ func TestRunStreamCommitsTextBeforeToolProcessing(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(string(test.strategy), func(t *testing.T) {
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-				return []ai.StreamEvent{
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+				return []ai.ModelStreamEvent{
 					ai.ToolCallStartEvent{ToolName: "before", ToolCallID: "a"},
 					ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
 					ai.TextDeltaEvent{Delta: "committed"},
@@ -75,8 +75,8 @@ func TestRunStreamCommitsFirstOutputTool(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(string(test.strategy), func(t *testing.T) {
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-				return []ai.StreamEvent{
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+				return []ai.ModelStreamEvent{
 					ai.ToolCallStartEvent{ToolName: "before", ToolCallID: "a"},
 					ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
 					ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "first"},
@@ -130,8 +130,8 @@ func TestRunStreamCommitsFirstOutputTool(t *testing.T) {
 }
 
 func TestRunStreamCommittedOutputCannotBeRevokedByRetries(t *testing.T) {
-	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-		return []ai.StreamEvent{
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
 			ai.TextDeltaEvent{Delta: "done"},
 			ai.ToolCallStartEvent{ToolName: "retry", ToolCallID: "r"},
 			ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
@@ -174,8 +174,8 @@ func TestRunStreamCommittedExhaustiveOutputFailures(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-				return []ai.StreamEvent{
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+				return []ai.ModelStreamEvent{
 					ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "first"},
 					ai.ToolCallDeltaEvent{ArgsDelta: `{"city":"first","temp_c":1}`},
 					ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "second"},
@@ -216,8 +216,8 @@ func TestRunStreamCommittedOutputCancellation(t *testing.T) {
 		"canceled": context.Canceled, "deadline": context.DeadlineExceeded,
 	} {
 		t.Run(name, func(t *testing.T) {
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-				return []ai.StreamEvent{
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+				return []ai.ModelStreamEvent{
 					ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "first"},
 					ai.ToolCallDeltaEvent{ArgsDelta: `{"city":"first","temp_c":1}`},
 					ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "second"},
@@ -242,21 +242,21 @@ func TestRunStreamValidationFailuresDoNotRetry(t *testing.T) {
 	tests := []struct {
 		name   string
 		agent  func(*streamingModel) *ai.Agent[deps, weather]
-		events []ai.StreamEvent
+		events []ai.ModelStreamEvent
 	}{
 		{
 			name: "native JSON",
 			agent: func(model *streamingModel) *ai.Agent[deps, weather] {
 				return ai.NewAgent[deps, weather](model, ai.WithOutputMode(ai.OutputModeNative))
 			},
-			events: []ai.StreamEvent{ai.TextDeltaEvent{Delta: `{`}, ai.FinishEvent{}},
+			events: []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: `{`}, ai.FinishEvent{}},
 		},
 		{
 			name: "output tool JSON",
 			agent: func(model *streamingModel) *ai.Agent[deps, weather] {
 				return ai.NewAgent[deps, weather](model)
 			},
-			events: []ai.StreamEvent{
+			events: []ai.ModelStreamEvent{
 				ai.TextDeltaEvent{Delta: "not an output"},
 				ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "bad"},
 				ai.ToolCallDeltaEvent{ArgsDelta: `{`}, ai.FinishEvent{},
@@ -266,7 +266,7 @@ func TestRunStreamValidationFailuresDoNotRetry(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			requests := 0
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
 				requests++
 				return test.events
 			})
@@ -293,8 +293,8 @@ func TestRunStreamValidatorFailures(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-				return []ai.StreamEvent{ai.TextDeltaEvent{Delta: `{"city":"ok","temp_c":1}`}, ai.FinishEvent{}}
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+				return []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: `{"city":"ok","temp_c":1}`}, ai.FinishEvent{}}
 			})
 			agent := ai.NewAgent[deps, weather](model, ai.WithOutputMode(ai.OutputModeNative))
 			agent.AddOutputValidator(func(_ context.Context, _ *ai.RunContext[deps], output weather) error {
@@ -315,8 +315,8 @@ func TestRunStreamOutputToolValidatorFailures(t *testing.T) {
 		"error": func(weather) error { return errors.New("broken") },
 	} {
 		t.Run(name, func(t *testing.T) {
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-				return []ai.StreamEvent{
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+				return []ai.ModelStreamEvent{
 					ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "result"},
 					ai.ToolCallDeltaEvent{ArgsDelta: `{"city":"ok","temp_c":1}`}, ai.FinishEvent{},
 				}
@@ -334,8 +334,8 @@ func TestRunStreamOutputToolValidatorFailures(t *testing.T) {
 
 func TestRunStreamCommittedFlushErrors(t *testing.T) {
 	t.Run("graceful before output", func(t *testing.T) {
-		model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-			return []ai.StreamEvent{
+		model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+			return []ai.ModelStreamEvent{
 				ai.ToolCallStartEvent{ToolName: "bad", ToolCallID: "bad"}, ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
 				ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "result"},
 				ai.ToolCallDeltaEvent{ArgsDelta: `{"city":"ok","temp_c":1}`}, ai.FinishEvent{},
@@ -351,8 +351,8 @@ func TestRunStreamCommittedFlushErrors(t *testing.T) {
 	})
 
 	t.Run("exhaustive before barrier", func(t *testing.T) {
-		model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-			return []ai.StreamEvent{
+		model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+			return []ai.ModelStreamEvent{
 				ai.TextDeltaEvent{Delta: "done"},
 				ai.ToolCallStartEvent{ToolName: "bad", ToolCallID: "bad"}, ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
 				ai.ToolCallStartEvent{ToolName: "gate", ToolCallID: "gate"}, ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
@@ -384,8 +384,8 @@ func TestRunStreamCommittedFunctionErrors(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-				events := []ai.StreamEvent{
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+				events := []ai.ModelStreamEvent{
 					ai.TextDeltaEvent{Delta: "done"},
 					ai.ToolCallStartEvent{ToolName: "bad", ToolCallID: "bad"}, ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
 				}

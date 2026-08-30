@@ -285,13 +285,13 @@ func (r *run[Deps, Output]) doModelRequest(ctx context.Context, msgs []ModelMess
 		if err != nil {
 			return nil, err
 		}
-		return accumulate(events, r.emit)
+		return accumulate(events, params, r.emit)
 	}
 	resp, err := r.agent.model.Request(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
-	return accumulate(replayAsEvents(resp), r.emit)
+	return accumulate(replayAsEvents(resp), params, r.emit)
 }
 
 func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error) {

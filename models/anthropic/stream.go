@@ -18,7 +18,7 @@ import (
 // StreamRequest implements ai.StreamingModel using Anthropic server-sent events.
 func (m *Model) StreamRequest(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
-) (iter.Seq2[ai.StreamEvent, error], error) {
+) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 	payload, err := m.buildPayload(msgs, params)
 	if err != nil {
 		return nil, err
@@ -85,8 +85,8 @@ type streamUsage struct {
 	OutputTokens int `json:"output_tokens"`
 }
 
-func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error] {
-	return func(yield func(ai.StreamEvent, error) bool) {
+func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
 		usage := ai.Usage{Requests: 1}
 		modelName := m.name
@@ -140,7 +140,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error]
 	}
 }
 
-func (m *Model) emitContentBlockStart(yield func(ai.StreamEvent, error) bool, event streamEvent) bool {
+func (m *Model) emitContentBlockStart(yield func(ai.ModelStreamEvent, error) bool, event streamEvent) bool {
 	partID := strconv.Itoa(event.Index)
 	switch event.ContentBlock.Type {
 	case "text":
@@ -162,7 +162,7 @@ func (m *Model) emitContentBlockStart(yield func(ai.StreamEvent, error) bool, ev
 	}
 }
 
-func emitContentBlockDelta(yield func(ai.StreamEvent, error) bool, event streamEvent) bool {
+func emitContentBlockDelta(yield func(ai.ModelStreamEvent, error) bool, event streamEvent) bool {
 	partID := strconv.Itoa(event.Index)
 	switch event.Delta.Type {
 	case "text_delta":

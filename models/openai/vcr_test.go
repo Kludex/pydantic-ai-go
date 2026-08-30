@@ -106,9 +106,7 @@ func TestRecordedStreamingRun(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if delta, ok := event.(ai.TextDeltaEvent); ok {
-			text += delta.Delta
-		}
+		text += normalizedText(event)
 	}
 	if text == "" || stream.Result() == nil {
 		t.Fatalf("expected streamed text and result, got %q", text)

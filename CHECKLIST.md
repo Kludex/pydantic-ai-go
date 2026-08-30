@@ -49,7 +49,8 @@ Status:
 - [ ] Synthesized-return metadata markers and deterministic repair of arbitrary interior dangling calls.
 - [ ] Rich `ToolReturn`: separate return value, extra content, metadata, and revealed tools.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, and tool-argument deltas across bundled providers and fallback replay.
-- [ ] Explicit part start/delta/end, final-result, and enqueued-message events.
+- [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, and `FinalResultEvent` with typed, applicable deltas.
+- [ ] Enqueued-message events.
 
 ### Tools and toolsets
 
@@ -86,7 +87,7 @@ Status:
 ### Streaming
 
 - [x] Provider-optional `StreamingModel` and `Agent.RunStream`.
-- [x] Text, thinking, and partial tool-argument events with stable part IDs and interleaved-delta routing.
+- [x] Normalized part lifecycle and final-result events over text, thinking, and partial tool arguments, with stable IDs and interleaved-delta routing.
 - [x] Non-streaming fallback replay.
 - [x] OpenAI Chat Completions SSE streaming.
 - [x] Anthropic SSE streaming for text, thinking, function calls, usage, errors, and cancellation.
@@ -203,6 +204,6 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add partial structured-output validation while streaming deltas.
-3. Add explicit part start/delta/end and final-result events on top of stable part IDs.
+3. Add event-stream capability wrappers and per-event processors.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 5. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

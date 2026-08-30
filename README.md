@@ -198,14 +198,23 @@ With native structured output, `ai.EndStrategyEarly` also lets valid JSON preemp
 
 ## Streaming
 
-`RunStream` yields events as the model produces them - text deltas, tool call starts, argument fragments - and the typed result is available once the stream completes:
+`RunStream` yields normalized part lifecycle events, and the typed result is available once the stream completes:
 
 ```go
 stream := agent.RunStream(ctx, "tell me a story", deps)
 for event, err := range stream.Events() {
-	if err != nil { /* handle */ }
-	if delta, ok := event.(ai.TextDeltaEvent); ok {
-		fmt.Print(delta.Delta)
+	if err != nil {
+		panic(err)
+	}
+	switch event := event.(type) {
+	case ai.PartStartEvent:
+		if text, ok := event.Part.(ai.TextPart); ok {
+			fmt.Print(text.Content)
+		}
+	case ai.PartDeltaEvent:
+		if text, ok := event.Delta.(ai.TextPartDelta); ok {
+			fmt.Print(text.ContentDelta)
+		}
 	}
 }
 result := stream.Result()
@@ -213,7 +222,9 @@ result := stream.Result()
 
 OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini stream text, thinking, tool arguments, and usage from their SSE APIs. Models that do not implement `ai.StreamingModel` still work: each response is replayed as events.
 
-Every text, thinking, tool-start, and tool-argument event carries a stable `PartID`. Use it to route interleaved deltas without relying on arrival order. Bundled providers populate it, and custom streaming models can leave it empty only for strictly sequential parts.
+`PartStartEvent` contains the first content for a part. Later content arrives through `PartDeltaEvent`, and `PartEndEvent` marks its grouping boundary. Each event carries a stable `PartID` and response index, so you can route interleaved deltas without relying on arrival order. `FinalResultEvent` follows the first part matching the configured output.
+
+Bundled providers populate part IDs. A custom `StreamingModel` emits provider-facing `ModelStreamEvent` values and can leave `PartID` empty only when its parts are strictly sequential.
 
 `RunStream` commits the first matching text, native, or output-tool result. The configured end strategy still controls co-emitted tools, but a tool retry cannot revoke that result. If an output validator requests a retry, the streamed run returns `UnexpectedModelBehaviorError` because output has already been committed. Use `Run` when validation should start another model round.
 

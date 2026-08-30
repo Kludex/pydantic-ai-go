@@ -17,7 +17,7 @@ import (
 // StreamRequest implements ai.StreamingModel using the Responses SSE API.
 func (m *ResponsesModel) StreamRequest(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
-) (iter.Seq2[ai.StreamEvent, error], error) {
+) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 	payload, err := m.buildResponsesPayload(msgs, params)
 	if err != nil {
 		return nil, err
@@ -85,8 +85,8 @@ type responsesStreamEvent struct {
 	} `json:"error"`
 }
 
-func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error] {
-	return func(yield func(ai.StreamEvent, error) bool) {
+func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)

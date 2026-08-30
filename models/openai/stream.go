@@ -15,7 +15,7 @@ import (
 )
 
 // StreamRequest implements ai.StreamingModel using server-sent events.
-func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (iter.Seq2[ai.StreamEvent, error], error) {
+func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 	payload, err := m.buildPayload(msgs, params)
 	if err != nil {
 		return nil, err
@@ -74,8 +74,8 @@ type chatChunk struct {
 	} `json:"usage"`
 }
 
-func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error] {
-	return func(yield func(ai.StreamEvent, error) bool) {
+func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
 		var usage ai.Usage
 		modelName := m.name

@@ -1,0 +1,125 @@
+package ai
+
+import (
+	"encoding/json"
+	"fmt"
+)
+
+// ResponsePartKind identifies a streamed response part.
+type ResponsePartKind string
+
+const (
+	ResponsePartKindText     ResponsePartKind = "text"
+	ResponsePartKindThinking ResponsePartKind = "thinking"
+	ResponsePartKindToolCall ResponsePartKind = "tool-call"
+)
+
+// ResponsePartDelta updates one response part.
+type ResponsePartDelta interface {
+	// Apply returns a copy of part with this delta applied.
+	Apply(part ResponsePart) (ResponsePart, error)
+	responsePartDeltaKind() ResponsePartKind
+}
+
+// TextPartDelta appends content to a TextPart.
+type TextPartDelta struct {
+	ContentDelta string
+}
+
+func (TextPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindText }
+
+// Apply applies the text delta.
+func (d TextPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
+	text, ok := part.(TextPart)
+	if !ok {
+		return nil, fmt.Errorf("ai: cannot apply TextPartDelta to %T", part)
+	}
+	text.Content += d.ContentDelta
+	return text, nil
+}
+
+// ThinkingPartDelta appends content to a ThinkingPart.
+type ThinkingPartDelta struct {
+	ContentDelta string
+}
+
+func (ThinkingPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindThinking }
+
+// Apply applies the thinking delta.
+func (d ThinkingPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
+	thinking, ok := part.(ThinkingPart)
+	if !ok {
+		return nil, fmt.Errorf("ai: cannot apply ThinkingPartDelta to %T", part)
+	}
+	thinking.Content += d.ContentDelta
+	return thinking, nil
+}
+
+// ToolCallPartDelta updates a ToolCallPart. Names and JSON arguments append;
+// a non-empty tool-call ID fills an empty ID and must otherwise match it.
+type ToolCallPartDelta struct {
+	ToolNameDelta string
+	ArgsDelta     string
+	ToolCallID    string
+}
+
+func (ToolCallPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindToolCall }
+
+// Apply applies the tool-call delta.
+func (d ToolCallPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
+	call, ok := part.(ToolCallPart)
+	if !ok {
+		return nil, fmt.Errorf("ai: cannot apply ToolCallPartDelta to %T", part)
+	}
+	if d.ToolCallID != "" && call.ToolCallID != "" && d.ToolCallID != call.ToolCallID {
+		return nil, &UnexpectedModelBehaviorError{Message: fmt.Sprintf(
+			"tool call ID changed from %q to %q", call.ToolCallID, d.ToolCallID,
+		)}
+	}
+	call.ToolName += d.ToolNameDelta
+	call.Args = json.RawMessage(append(append([]byte(nil), call.Args...), d.ArgsDelta...))
+	if d.ToolCallID != "" {
+		call.ToolCallID = d.ToolCallID
+	}
+	return call, nil
+}
+
+// PartStartEvent announces a new response part. Index is stable within the
+// model response and follows first-appearance order.
+type PartStartEvent struct {
+	Index            int
+	PartID           string
+	Part             ResponsePart
+	PreviousPartKind ResponsePartKind
+}
+
+func (PartStartEvent) streamEventKind() string { return "part-start" }
+
+// PartDeltaEvent updates a response part previously announced at Index.
+type PartDeltaEvent struct {
+	Index  int
+	PartID string
+	Delta  ResponsePartDelta
+}
+
+func (PartDeltaEvent) streamEventKind() string { return "part-delta" }
+
+// PartEndEvent marks the current grouping boundary for a response part. A
+// provider may still send keyed deltas for an earlier part after this event.
+type PartEndEvent struct {
+	Index        int
+	PartID       string
+	Part         ResponsePart
+	NextPartKind ResponsePartKind
+}
+
+func (PartEndEvent) streamEventKind() string { return "part-end" }
+
+// FinalResultEvent announces the first response part matching the configured
+// output. ToolName is empty for text and native output.
+type FinalResultEvent struct {
+	ToolName   string
+	ToolCallID string
+}
+
+func (FinalResultEvent) streamEventKind() string { return "final-result" }

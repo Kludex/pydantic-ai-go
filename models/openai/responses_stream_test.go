@@ -88,9 +88,7 @@ func TestResponsesStreamEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if delta, ok := event.(ai.TextDeltaEvent); ok {
-			text += delta.Delta
-		}
+		text += normalizedText(event)
 	}
 	if text != "hello" || stream.Result().Output != "hello" {
 		t.Fatalf("unexpected text %q and result %+v", text, stream.Result())

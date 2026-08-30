@@ -16,16 +16,16 @@ import (
 // streamingModel wraps a FunctionModel and streams scripted events.
 type streamingModel struct {
 	ai.Model
-	script func(msgs []ai.ModelMessage) []ai.StreamEvent
+	script func(msgs []ai.ModelMessage) []ai.ModelStreamEvent
 	fail   error
 }
 
-func (m *streamingModel) StreamRequest(_ context.Context, msgs []ai.ModelMessage, _ ai.ModelRequestParams) (iter.Seq2[ai.StreamEvent, error], error) {
+func (m *streamingModel) StreamRequest(_ context.Context, msgs []ai.ModelMessage, _ ai.ModelRequestParams) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 	if m.fail != nil {
 		return nil, m.fail
 	}
 	events := m.script(msgs)
-	return func(yield func(ai.StreamEvent, error) bool) {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		for _, e := range events {
 			if !yield(e, nil) {
 				return
@@ -34,13 +34,13 @@ func (m *streamingModel) StreamRequest(_ context.Context, msgs []ai.ModelMessage
 	}, nil
 }
 
-func newStreamingModel(script func(msgs []ai.ModelMessage) []ai.StreamEvent) *streamingModel {
+func newStreamingModel(script func(msgs []ai.ModelMessage) []ai.ModelStreamEvent) *streamingModel {
 	return &streamingModel{Model: fakes.NewTestModel(), script: script}
 }
 
 func TestRunStreamTextDeltas(t *testing.T) {
-	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-		return []ai.StreamEvent{
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
 			ai.TextDeltaEvent{Delta: "Hel"},
 			ai.TextDeltaEvent{Delta: "lo!"},
 			ai.FinishEvent{Usage: ai.Usage{Requests: 1, OutputTokens: 2}, ModelName: "scripted"},
@@ -50,16 +50,18 @@ func TestRunStreamTextDeltas(t *testing.T) {
 	stream := agent.RunStream(t.Context(), "hi", deps{})
 
 	var text string
+	var finalResults int
 	for event, err := range stream.Events() {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if delta, ok := event.(ai.TextDeltaEvent); ok {
-			text += delta.Delta
+		text += streamText(event)
+		if _, ok := event.(ai.FinalResultEvent); ok {
+			finalResults++
 		}
 	}
-	if text != "Hello!" {
-		t.Fatalf("unexpected streamed text %q", text)
+	if text != "Hello!" || finalResults != 1 {
+		t.Fatalf("unexpected streamed text %q or final-result count %d", text, finalResults)
 	}
 	result := stream.Result()
 	if result == nil || result.Output != "Hello!" {
@@ -70,10 +72,113 @@ func TestRunStreamTextDeltas(t *testing.T) {
 	}
 }
 
+func TestRunStreamPartLifecycle(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.TextDeltaEvent{PartID: "answer", Delta: "a"},
+			ai.TextDeltaEvent{PartID: "answer", Delta: "b"},
+			ai.ThinkingDeltaEvent{PartID: "reasoning", Delta: "why"},
+			ai.FinishEvent{},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	var events []ai.StreamEvent
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 7 {
+		t.Fatalf("unexpected lifecycle events: %v", events)
+	}
+	textStart := events[0].(ai.PartStartEvent)
+	if textStart.Index != 0 || textStart.PartID != "answer" || textStart.PreviousPartKind != "" ||
+		textStart.Part.(ai.TextPart).Content != "a" {
+		t.Fatalf("unexpected text start: %+v", textStart)
+	}
+	if _, ok := events[1].(ai.FinalResultEvent); !ok {
+		t.Fatalf("final result did not follow matching start: %T", events[1])
+	}
+	textDelta := events[2].(ai.PartDeltaEvent)
+	if textDelta.Index != 0 || textDelta.PartID != "answer" ||
+		textDelta.Delta.(ai.TextPartDelta).ContentDelta != "b" {
+		t.Fatalf("unexpected text delta: %+v", textDelta)
+	}
+	textEnd := events[3].(ai.PartEndEvent)
+	if textEnd.NextPartKind != ai.ResponsePartKindThinking || textEnd.Part.(ai.TextPart).Content != "ab" {
+		t.Fatalf("unexpected text end: %+v", textEnd)
+	}
+	thinkingStart := events[4].(ai.PartStartEvent)
+	if thinkingStart.Index != 1 || thinkingStart.PreviousPartKind != ai.ResponsePartKindText {
+		t.Fatalf("unexpected thinking start: %+v", thinkingStart)
+	}
+	thinkingEnd := events[5].(ai.PartEndEvent)
+	if thinkingEnd.NextPartKind != "" || thinkingEnd.Part.(ai.ThinkingPart).Content != "why" {
+		t.Fatalf("unexpected thinking end: %+v", thinkingEnd)
+	}
+	if _, ok := events[6].(ai.FinishEvent); !ok {
+		t.Fatalf("finish event missing: %T", events[6])
+	}
+	if stream.Result().Output != "ab" {
+		t.Fatalf("unexpected output %q", stream.Result().Output)
+	}
+}
+
+func TestResponsePartDeltasApply(t *testing.T) {
+	text, err := (ai.TextPartDelta{ContentDelta: "b"}).Apply(ai.TextPart{Content: "a"})
+	if err != nil || text.(ai.TextPart).Content != "ab" {
+		t.Fatalf("unexpected text delta result=%v err=%v", text, err)
+	}
+	thinking, err := (ai.ThinkingPartDelta{ContentDelta: "b"}).Apply(ai.ThinkingPart{Content: "a"})
+	if err != nil || thinking.(ai.ThinkingPart).Content != "ab" {
+		t.Fatalf("unexpected thinking delta result=%v err=%v", thinking, err)
+	}
+	call, err := (ai.ToolCallPartDelta{
+		ToolNameDelta: "ther", ArgsDelta: "1}", ToolCallID: "call",
+	}).Apply(ai.ToolCallPart{ToolName: "wea", Args: json.RawMessage(`{"x":`), ToolCallID: "call"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	toolCall := call.(ai.ToolCallPart)
+	if toolCall.ToolName != "weather" || string(toolCall.Args) != `{"x":1}` || toolCall.ToolCallID != "call" {
+		t.Fatalf("unexpected tool-call delta result: %+v", toolCall)
+	}
+	call, err = (ai.ToolCallPartDelta{ToolCallID: "assigned"}).Apply(ai.ToolCallPart{})
+	if err != nil || call.(ai.ToolCallPart).ToolCallID != "assigned" {
+		t.Fatalf("tool-call ID was not assigned: result=%v err=%v", call, err)
+	}
+
+	for name, apply := range map[string]func() error{
+		"text mismatch": func() error {
+			_, err := (ai.TextPartDelta{}).Apply(ai.ThinkingPart{})
+			return err
+		},
+		"thinking mismatch": func() error {
+			_, err := (ai.ThinkingPartDelta{}).Apply(ai.TextPart{})
+			return err
+		},
+		"tool mismatch": func() error {
+			_, err := (ai.ToolCallPartDelta{}).Apply(ai.TextPart{})
+			return err
+		},
+		"tool ID change": func() error {
+			_, err := (ai.ToolCallPartDelta{ToolCallID: "new"}).Apply(ai.ToolCallPart{ToolCallID: "old"})
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := apply(); err == nil {
+				t.Fatal("expected incompatible delta error")
+			}
+		})
+	}
+}
+
 func TestRunStreamWithToolCalls(t *testing.T) {
-	model := newStreamingModel(func(msgs []ai.ModelMessage) []ai.StreamEvent {
+	model := newStreamingModel(func(msgs []ai.ModelMessage) []ai.ModelStreamEvent {
 		if len(msgs) == 1 {
-			return []ai.StreamEvent{
+			return []ai.ModelStreamEvent{
 				ai.ThinkingDeltaEvent{Delta: "let me check"},
 				ai.ToolCallStartEvent{ToolName: "get_weather", ToolCallID: "c1"},
 				ai.ToolCallDeltaEvent{ArgsDelta: `{"city":`},
@@ -81,7 +186,7 @@ func TestRunStreamWithToolCalls(t *testing.T) {
 				ai.FinishEvent{Usage: ai.Usage{Requests: 1}},
 			}
 		}
-		return []ai.StreamEvent{
+		return []ai.ModelStreamEvent{
 			ai.TextDeltaEvent{Delta: "Sunny."},
 			ai.FinishEvent{Usage: ai.Usage{Requests: 1}},
 		}
@@ -99,15 +204,15 @@ func TestRunStreamWithToolCalls(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		switch event.(type) {
-		case ai.ThinkingDeltaEvent:
-			kinds = append(kinds, "thinking")
-		case ai.ToolCallStartEvent:
-			kinds = append(kinds, "tool-start")
-		case ai.ToolCallDeltaEvent:
-			kinds = append(kinds, "tool-delta")
-		case ai.TextDeltaEvent:
-			kinds = append(kinds, "text")
+		switch event := event.(type) {
+		case ai.PartStartEvent:
+			kinds = append(kinds, "start:"+string(responsePartKind(event.Part)))
+		case ai.PartDeltaEvent:
+			kinds = append(kinds, "delta:"+string(deltaKind(event.Delta)))
+		case ai.PartEndEvent:
+			kinds = append(kinds, "end:"+string(responsePartKind(event.Part)))
+		case ai.FinalResultEvent:
+			kinds = append(kinds, "final")
 		case ai.FinishEvent:
 			kinds = append(kinds, "finish")
 		}
@@ -115,7 +220,10 @@ func TestRunStreamWithToolCalls(t *testing.T) {
 	if gotCity != "SF" {
 		t.Fatalf("tool args not accumulated: %q", gotCity)
 	}
-	want := []string{"thinking", "tool-start", "tool-delta", "tool-delta", "finish", "text", "finish"}
+	want := []string{
+		"start:thinking", "end:thinking", "start:tool-call", "delta:tool-call", "delta:tool-call",
+		"end:tool-call", "finish", "start:text", "final", "end:text", "finish",
+	}
 	if len(kinds) != len(want) {
 		t.Fatalf("unexpected events %v", kinds)
 	}
@@ -139,11 +247,13 @@ func TestRunStreamNonStreamingFallback(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		switch event.(type) {
-		case ai.ToolCallStartEvent:
-			sawToolStart = true
-		case ai.TextDeltaEvent:
-			sawText = true
+		if start, ok := event.(ai.PartStartEvent); ok {
+			switch start.Part.(type) {
+			case ai.ToolCallPart:
+				sawToolStart = true
+			case ai.TextPart:
+				sawText = true
+			}
 		}
 	}
 	if !sawToolStart || !sawText {
@@ -193,8 +303,8 @@ func TestRunStreamSetupError(t *testing.T) {
 }
 
 func TestRunStreamStructuredOutput(t *testing.T) {
-	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-		return []ai.StreamEvent{
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
 			ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "c1"},
 			ai.ToolCallDeltaEvent{ArgsDelta: `{"city":"SF","temp_c":18}`},
 			ai.FinishEvent{Usage: ai.Usage{Requests: 1}},
@@ -202,10 +312,17 @@ func TestRunStreamStructuredOutput(t *testing.T) {
 	})
 	agent := ai.NewAgent[deps, weather](model)
 	stream := agent.RunStream(t.Context(), "go", deps{})
-	for _, err := range stream.Events() {
+	var final ai.FinalResultEvent
+	for event, err := range stream.Events() {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if event, ok := event.(ai.FinalResultEvent); ok {
+			final = event
+		}
+	}
+	if final.ToolName != "final_result" || final.ToolCallID != "c1" {
+		t.Fatalf("unexpected final-result event: %+v", final)
 	}
 	if stream.Result().Output.City != "SF" {
 		t.Fatalf("unexpected output %+v", stream.Result().Output)
@@ -213,9 +330,9 @@ func TestRunStreamStructuredOutput(t *testing.T) {
 }
 
 func TestRunStreamInterleavesKeyedToolCalls(t *testing.T) {
-	model := newStreamingModel(func(msgs []ai.ModelMessage) []ai.StreamEvent {
+	model := newStreamingModel(func(msgs []ai.ModelMessage) []ai.ModelStreamEvent {
 		if len(msgs) == 1 {
-			return []ai.StreamEvent{
+			return []ai.ModelStreamEvent{
 				ai.ToolCallStartEvent{PartID: "first", ToolName: "lookup", ToolCallID: "a"},
 				ai.ToolCallStartEvent{PartID: "second", ToolName: "lookup", ToolCallID: "b"},
 				ai.ToolCallDeltaEvent{PartID: "first", ArgsDelta: `{"city":"S`},
@@ -225,7 +342,7 @@ func TestRunStreamInterleavesKeyedToolCalls(t *testing.T) {
 				ai.FinishEvent{Usage: ai.Usage{Requests: 1}},
 			}
 		}
-		return []ai.StreamEvent{ai.TextDeltaEvent{PartID: "answer", Delta: "done"}, ai.FinishEvent{}}
+		return []ai.ModelStreamEvent{ai.TextDeltaEvent{PartID: "answer", Delta: "done"}, ai.FinishEvent{}}
 	})
 	agent := ai.NewAgent[deps, string](model)
 	var mutex sync.Mutex
@@ -254,8 +371,8 @@ func TestRunStreamInterleavesKeyedToolCalls(t *testing.T) {
 }
 
 func TestRunStreamInterleavesKeyedTextAndThinking(t *testing.T) {
-	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-		return []ai.StreamEvent{
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
 			ai.TextDeltaEvent{PartID: "answer", Delta: "A"},
 			ai.ThinkingDeltaEvent{PartID: "reasoning", Delta: "why"},
 			ai.TextDeltaEvent{PartID: "answer", Delta: "B"},
@@ -269,9 +386,9 @@ func TestRunStreamInterleavesKeyedTextAndThinking(t *testing.T) {
 			t.Fatal(err)
 		}
 		switch event := event.(type) {
-		case ai.TextDeltaEvent:
+		case ai.PartStartEvent:
 			IDs = append(IDs, event.PartID)
-		case ai.ThinkingDeltaEvent:
+		case ai.PartDeltaEvent:
 			IDs = append(IDs, event.PartID)
 		}
 	}
@@ -289,7 +406,7 @@ func TestRunStreamInterleavesKeyedTextAndThinking(t *testing.T) {
 }
 
 func TestRunStreamRejectsInvalidPartIDs(t *testing.T) {
-	tests := map[string][]ai.StreamEvent{
+	tests := map[string][]ai.ModelStreamEvent{
 		"text to thinking": {
 			ai.TextDeltaEvent{PartID: "same", Delta: "text"},
 			ai.ThinkingDeltaEvent{PartID: "same", Delta: "thinking"},
@@ -306,7 +423,7 @@ func TestRunStreamRejectsInvalidPartIDs(t *testing.T) {
 	}
 	for name, events := range tests {
 		t.Run(name, func(t *testing.T) {
-			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent { return events })
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent { return events })
 			stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
 			var got error
 			for _, err := range stream.Events() {
@@ -324,8 +441,8 @@ func TestRunStreamRejectsInvalidPartIDs(t *testing.T) {
 
 func TestAccumulateErrors(t *testing.T) {
 	// Delta before start.
-	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-		return []ai.StreamEvent{ai.ToolCallDeltaEvent{ArgsDelta: "{}"}}
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{ai.ToolCallDeltaEvent{ArgsDelta: "{}"}}
 	})
 	agent := ai.NewAgent[deps, string](model)
 	var got error
@@ -340,8 +457,8 @@ func TestAccumulateErrors(t *testing.T) {
 	}
 
 	// Stream ends without finish.
-	model = newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-		return []ai.StreamEvent{ai.TextDeltaEvent{Delta: "hi"}}
+	model = newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: "hi"}}
 	})
 	agent = ai.NewAgent[deps, string](model)
 	got = nil
@@ -369,10 +486,50 @@ func TestStreamErrorMidStream(t *testing.T) {
 	}
 }
 
+func streamText(event ai.StreamEvent) string {
+	switch event := event.(type) {
+	case ai.PartStartEvent:
+		if part, ok := event.Part.(ai.TextPart); ok {
+			return part.Content
+		}
+	case ai.PartDeltaEvent:
+		if delta, ok := event.Delta.(ai.TextPartDelta); ok {
+			return delta.ContentDelta
+		}
+	}
+	return ""
+}
+
+func responsePartKind(part ai.ResponsePart) ai.ResponsePartKind {
+	switch part.(type) {
+	case ai.TextPart:
+		return ai.ResponsePartKindText
+	case ai.ThinkingPart:
+		return ai.ResponsePartKindThinking
+	case ai.ToolCallPart:
+		return ai.ResponsePartKindToolCall
+	default:
+		panic("unknown response part")
+	}
+}
+
+func deltaKind(delta ai.ResponsePartDelta) ai.ResponsePartKind {
+	switch delta.(type) {
+	case ai.TextPartDelta:
+		return ai.ResponsePartKindText
+	case ai.ThinkingPartDelta:
+		return ai.ResponsePartKindThinking
+	case ai.ToolCallPartDelta:
+		return ai.ResponsePartKindToolCall
+	default:
+		panic("unknown response delta")
+	}
+}
+
 type streamingErrModel struct{ ai.Model }
 
-func (m *streamingErrModel) StreamRequest(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (iter.Seq2[ai.StreamEvent, error], error) {
-	return func(yield func(ai.StreamEvent, error) bool) {
+func (m *streamingErrModel) StreamRequest(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		if !yield(ai.TextDeltaEvent{Delta: "partial"}, nil) {
 			return
 		}
@@ -409,27 +566,47 @@ func TestReplayPreservesRawArgs(t *testing.T) {
 }
 
 func TestRunStreamEarlyBreakDuringStreaming(t *testing.T) {
-	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
-		return []ai.StreamEvent{
-			ai.TextDeltaEvent{Delta: "a"},
-			ai.TextDeltaEvent{Delta: "b"},
-			ai.FinishEvent{Usage: ai.Usage{Requests: 1}},
-		}
-	})
-	agent := ai.NewAgent[deps, string](model)
-	stream := agent.RunStream(t.Context(), "go", deps{})
-	count := 0
-	for _, err := range stream.Events() {
-		if err != nil {
-			t.Fatal(err)
-		}
-		count++
-		if count == 1 {
-			break
-		}
+	tests := map[string]struct {
+		events     []ai.ModelStreamEvent
+		eventCount int
+	}{
+		"text": {
+			events: []ai.ModelStreamEvent{
+				ai.TextDeltaEvent{Delta: "a"}, ai.TextDeltaEvent{Delta: "b"},
+				ai.FinishEvent{Usage: ai.Usage{Requests: 1}},
+			},
+			eventCount: 5,
+		},
+		"thinking": {
+			events: []ai.ModelStreamEvent{
+				ai.ThinkingDeltaEvent{Delta: "a"}, ai.ThinkingDeltaEvent{Delta: "b"}, ai.FinishEvent{},
+			},
+			eventCount: 4,
+		},
+		"tool": {
+			events: []ai.ModelStreamEvent{
+				ai.ToolCallStartEvent{ToolName: "work"}, ai.ToolCallDeltaEvent{ArgsDelta: `{}`}, ai.FinishEvent{},
+			},
+			eventCount: 4,
+		},
 	}
-	if stream.Result() != nil {
-		t.Fatal("result should be nil after early break")
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			for breakAt := 1; breakAt <= test.eventCount; breakAt++ {
+				model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent { return test.events })
+				stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+				count := 0
+				for range stream.Events() {
+					count++
+					if count == breakAt {
+						break
+					}
+				}
+				if stream.Result() != nil {
+					t.Fatalf("breakAt %d: result should be nil after early break", breakAt)
+				}
+			}
+		})
 	}
 }
 
@@ -478,9 +655,9 @@ func TestRunStreamFallbackModelError(t *testing.T) {
 	}
 }
 
-func TestRunStreamFallbackBreakOnToolCallDelta(t *testing.T) {
-	// Break on the fourth replayed event: the ToolCallDeltaEvent of a
-	// second tool call, covering the delta yield-false branch.
+func TestRunStreamFallbackBreakOnToolCallEvents(t *testing.T) {
+	// Break on the normalized start and delta so replayAsEvents observes
+	// each provider-facing tool event being rejected.
 	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{
 			ai.ToolCallPart{ToolName: "a", Args: json.RawMessage(`{}`)},
@@ -488,18 +665,20 @@ func TestRunStreamFallbackBreakOnToolCallDelta(t *testing.T) {
 		}}, nil
 	})
 	agent := ai.NewAgent[deps, string](model)
-	stream := agent.RunStream(t.Context(), "go", deps{})
-	count := 0
-	for _, err := range stream.Events() {
-		if err != nil {
-			t.Fatal(err)
+	for breakAt := 1; breakAt <= 2; breakAt++ {
+		stream := agent.RunStream(t.Context(), "go", deps{})
+		count := 0
+		for _, err := range stream.Events() {
+			if err != nil {
+				t.Fatal(err)
+			}
+			count++
+			if count == breakAt {
+				break
+			}
 		}
-		count++
-		if count == 4 {
-			break
+		if stream.Result() != nil {
+			t.Fatalf("breakAt %d: result should be nil", breakAt)
 		}
-	}
-	if stream.Result() != nil {
-		t.Fatal("result should be nil")
 	}
 }

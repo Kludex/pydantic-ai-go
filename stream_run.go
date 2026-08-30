@@ -83,10 +83,10 @@ func (a *Agent[Deps, Output]) runStreamPrompt(ctx context.Context, prompt UserPr
 	return s
 }
 
-// replayAsEvents converts a complete response into the events a streaming
-// model would have produced.
-func replayAsEvents(resp *ModelResponse) iter.Seq2[StreamEvent, error] {
-	return func(yield func(StreamEvent, error) bool) {
+// replayAsEvents converts a complete response into the provider deltas a
+// streaming model would have produced.
+func replayAsEvents(resp *ModelResponse) iter.Seq2[ModelStreamEvent, error] {
+	return func(yield func(ModelStreamEvent, error) bool) {
 		for index, part := range resp.Parts {
 			partID := strconv.Itoa(index)
 			switch part := part.(type) {

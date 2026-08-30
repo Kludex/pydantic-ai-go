@@ -395,3 +395,56 @@ func TestNativeJSONOutputMode(t *testing.T) {
 		t.Fatal("schema should be sanitized")
 	}
 }
+
+func TestStrictToolModes(t *testing.T) {
+	for name, strict := range map[string]struct {
+		value bool
+		mode  string
+	}{
+		"enabled":  {value: true, mode: "VALIDATED"},
+		"disabled": {value: false, mode: "AUTO"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var gotBody map[string]any
+			model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{}}`))
+			})
+			value := strict.value
+			params := ai.ModelRequestParams{AllowText: true, Tools: []ai.ToolDefinition{{
+				Name: "search", Schema: map[string]any{"type": "object"}, Strict: &value,
+			}}}
+			if _, err := model.Request(t.Context(), nil, params); err != nil {
+				t.Fatal(err)
+			}
+			mode := gotBody["toolConfig"].(map[string]any)["functionCallingConfig"].(map[string]any)["mode"]
+			if mode != strict.mode {
+				t.Fatalf("expected %s, got %v", strict.mode, mode)
+			}
+		})
+	}
+}
+
+func TestAnyLooseToolDisablesGoogleStrictMode(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{}}`))
+	})
+	yes, no := true, false
+	params := ai.ModelRequestParams{AllowText: true, Tools: []ai.ToolDefinition{
+		{Name: "strict", Schema: map[string]any{"type": "object"}, Strict: &yes},
+		{Name: "loose", Schema: map[string]any{"type": "object"}, Strict: &no},
+	}}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	mode := gotBody["toolConfig"].(map[string]any)["functionCallingConfig"].(map[string]any)["mode"]
+	if mode != "AUTO" {
+		t.Fatalf("expected AUTO, got %v", mode)
+	}
+}

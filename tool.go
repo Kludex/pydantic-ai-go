@@ -86,6 +86,18 @@ func WithSequential() ToolOption {
 	return func(d *ToolDefinition) { d.Sequential = true }
 }
 
+// WithStrict forces provider-native schema enforcement for tool arguments.
+func WithStrict() ToolOption {
+	strict := true
+	return func(d *ToolDefinition) { d.Strict = &strict }
+}
+
+// WithoutStrict disables provider-native schema enforcement for this tool.
+func WithoutStrict() ToolOption {
+	strict := false
+	return func(d *ToolDefinition) { d.Strict = &strict }
+}
+
 func toolDefinition[Args any](name string, opts []ToolOption) ToolDefinition {
 	s, err := schema.For(reflect.TypeFor[Args]())
 	if err != nil {

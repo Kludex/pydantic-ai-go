@@ -401,3 +401,24 @@ func TestNativeJSONOutputModeUnsupported(t *testing.T) {
 		t.Fatalf("expected unsupported error, got %v", err)
 	}
 }
+
+func TestStrictToolDefinition(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	strict := true
+	params := ai.ModelRequestParams{AllowText: true, Tools: []ai.ToolDefinition{{
+		Name: "search", Schema: map[string]any{"type": "object"}, Strict: &strict,
+	}}}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	tool := gotBody["tools"].([]any)[0].(map[string]any)
+	if tool["strict"] != true {
+		t.Fatalf("strict flag not sent: %v", tool)
+	}
+}

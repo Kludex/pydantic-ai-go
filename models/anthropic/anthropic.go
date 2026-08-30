@@ -134,6 +134,7 @@ type toolParam struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	InputSchema map[string]any `json:"input_schema"`
+	Strict      *bool          `json:"strict,omitempty"`
 }
 
 type toolChoiceParam struct {
@@ -263,7 +264,7 @@ func convertResponse(m ai.ModelResponse) []messageParam {
 }
 
 func convertTool(def ai.ToolDefinition) toolParam {
-	return toolParam{Name: def.Name, Description: def.Description, InputSchema: def.Schema}
+	return toolParam{Name: def.Name, Description: def.Description, InputSchema: def.Schema, Strict: def.Strict}
 }
 
 type messagesResponse struct {

@@ -147,6 +147,7 @@ type chatFunction struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	Parameters  map[string]any `json:"parameters"`
+	Strict      *bool          `json:"strict,omitempty"`
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*chatRequest, error) {
@@ -259,7 +260,7 @@ func convertResponse(m ai.ModelResponse) []chatMessage {
 func convertTool(def ai.ToolDefinition) chatTool {
 	return chatTool{
 		Type:     "function",
-		Function: chatFunction{Name: def.Name, Description: def.Description, Parameters: def.Schema},
+		Function: chatFunction{Name: def.Name, Description: def.Description, Parameters: def.Schema, Strict: def.Strict},
 	}
 }
 

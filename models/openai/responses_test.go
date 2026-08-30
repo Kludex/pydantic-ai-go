@@ -316,3 +316,24 @@ func TestResponsesAssistantHistoryWithThinking(t *testing.T) {
 		t.Fatalf("thinking should be dropped, text kept: %v", input)
 	}
 }
+
+func TestResponsesStrictToolDefinition(t *testing.T) {
+	var gotBody map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{}}`))
+	})
+	strict := true
+	params := ai.ModelRequestParams{AllowText: true, Tools: []ai.ToolDefinition{{
+		Name: "search", Schema: map[string]any{"type": "object"}, Strict: &strict,
+	}}}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	tool := gotBody["tools"].([]any)[0].(map[string]any)
+	if tool["strict"] != true {
+		t.Fatalf("strict flag not sent: %v", tool)
+	}
+}

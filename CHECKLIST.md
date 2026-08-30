@@ -55,7 +55,7 @@ Status:
 - [x] Raw-schema dynamic tool registration.
 - [x] Tool retries and argument-unmarshal retries.
 - [~] JSON Schema supports common structs, arrays, maps, descriptions, and enums; it is not full JSON Schema parity.
-- [ ] Strict tool mode, including provider-specific defaults and schema compatibility checks.
+- [~] Explicit strict tool mode via `WithStrict()` / `WithoutStrict()` on OpenAI, Anthropic, and Gemini; automatic provider/model defaults and schema compatibility checks remain.
 - [ ] Dynamic per-step tool preparation and omission.
 - [ ] Argument validators before approval/execution.
 - [ ] Tool timeout.
@@ -190,7 +190,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add agent/run-wide sequential execution and final-output end strategies.
-3. Add strict tool definitions and per-step tool preparation.
+3. Add per-step tool preparation, then provider-profile defaults for strict mode.
 4. Add Anthropic, Gemini, and OpenAI Responses streaming.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

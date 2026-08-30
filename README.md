@@ -65,6 +65,14 @@ ai.AddTool(agent, "update_database", updateDatabase, ai.WithSequential())
 
 The sequential tool is a barrier. Earlier calls finish before it starts. Later calls wait until it finishes.
 
+Use `ai.WithStrict()` to ask the provider to constrain generated arguments to the tool schema:
+
+```go
+ai.AddTool(agent, "book_table", bookTable, ai.WithStrict())
+```
+
+Strict mode prevents malformed arguments before they reach your code. OpenAI and Anthropic configure it per tool. Gemini applies its request-wide `VALIDATED` mode. Use `ai.WithoutStrict()` when you need to disable a provider default explicitly.
+
 ## Structured output
 
 Use any struct as the `Output` type and the agent asks the model for it via a final output tool. The result arrives typed and validated:

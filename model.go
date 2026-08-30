@@ -47,4 +47,7 @@ type ToolDefinition struct {
 	// Sequential makes this tool an execution barrier. Calls before it
 	// finish first; the tool then runs alone; later calls start afterward.
 	Sequential bool `json:"-"`
+	// Strict asks the provider to constrain generated arguments to Schema.
+	// Nil uses the provider default; true forces strict mode; false disables it.
+	Strict *bool `json:"-"`
 }

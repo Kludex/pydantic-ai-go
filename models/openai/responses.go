@@ -90,6 +90,7 @@ type responsesTool struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	Parameters  map[string]any `json:"parameters"`
+	Strict      *bool          `json:"strict,omitempty"`
 }
 
 func (m *ResponsesModel) buildResponsesPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*responsesRequest, error) {
@@ -108,10 +109,15 @@ func (m *ResponsesModel) buildResponsesPayload(msgs []ai.ModelMessage, params ai
 		req.Input = append(req.Input, items...)
 	}
 	for _, tool := range params.Tools {
-		req.Tools = append(req.Tools, responsesTool{Type: "function", Name: tool.Name, Description: tool.Description, Parameters: tool.Schema})
+		req.Tools = append(req.Tools, responsesTool{
+			Type: "function", Name: tool.Name, Description: tool.Description, Parameters: tool.Schema, Strict: tool.Strict,
+		})
 	}
 	if params.OutputTool != nil {
-		req.Tools = append(req.Tools, responsesTool{Type: "function", Name: params.OutputTool.Name, Description: params.OutputTool.Description, Parameters: params.OutputTool.Schema})
+		req.Tools = append(req.Tools, responsesTool{
+			Type: "function", Name: params.OutputTool.Name, Description: params.OutputTool.Description,
+			Parameters: params.OutputTool.Schema, Strict: params.OutputTool.Strict,
+		})
 		if !params.AllowText {
 			req.ToolChoice = "required"
 		}

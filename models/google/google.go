@@ -207,16 +207,28 @@ func buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*genera
 		req.Contents = append(req.Contents, converted...)
 	}
 	declarations := make([]functionDeclaration, 0, len(params.Tools)+1)
+	strictEnabled, strictDisabled := false, false
 	for _, tool := range params.Tools {
 		declarations = append(declarations, convertTool(tool))
+		strictEnabled, strictDisabled = collectStrict(tool, strictEnabled, strictDisabled)
 	}
 	if params.OutputTool != nil {
 		declarations = append(declarations, convertTool(*params.OutputTool))
+		strictEnabled, strictDisabled = collectStrict(*params.OutputTool, strictEnabled, strictDisabled)
 		if !params.AllowText {
 			tc := &toolConfig{}
 			tc.FunctionCallingConfig.Mode = "ANY"
 			req.ToolConfig = tc
 		}
+	}
+	if req.ToolConfig == nil && (strictEnabled || strictDisabled) {
+		tc := &toolConfig{}
+		if strictDisabled {
+			tc.FunctionCallingConfig.Mode = "AUTO"
+		} else {
+			tc.FunctionCallingConfig.Mode = "VALIDATED"
+		}
+		req.ToolConfig = tc
 	}
 	if params.OutputSchema != nil {
 		if req.GenerationConfig == nil {
@@ -292,6 +304,16 @@ func convertResponse(m ai.ModelResponse) ([]content, error) {
 		}
 	}
 	return []content{{Role: "model", Parts: parts}}, nil
+}
+
+func collectStrict(def ai.ToolDefinition, enabled, disabled bool) (bool, bool) {
+	if def.Strict == nil {
+		return enabled, disabled
+	}
+	if *def.Strict {
+		return true, disabled
+	}
+	return enabled, true
 }
 
 func convertTool(def ai.ToolDefinition) functionDeclaration {

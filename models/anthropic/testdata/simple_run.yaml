@@ -1,0 +1,79 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 181
+        host: api.anthropic.com
+        body: '{"model":"claude-haiku-4-5","max_tokens":4096,"system":"Answer with a single word.","messages":[{"role":"user","content":[{"type":"text","text":"What is the capital of France?"}]}]}'
+        headers:
+            Anthropic-Version:
+                - "2023-06-01"
+            Content-Type:
+                - application/json
+        url: https://api.anthropic.com/v1/messages
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: '{"model":"claude-haiku-4-5-20251001","id":"msg_011CeZ8d9fExvSkDKnMv8u4Z","type":"message","role":"assistant","content":[{"type":"text","text":"Paris"}],"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":20,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":4,"service_tier":"standard","inference_geo":"not_available"}}'
+        headers:
+            Anthropic-Organization-Id:
+                - 44ae676c-958f-4d68-9108-eae9de7b366b
+            Anthropic-Ratelimit-Input-Tokens-Limit:
+                - "10000000"
+            Anthropic-Ratelimit-Input-Tokens-Remaining:
+                - "10000000"
+            Anthropic-Ratelimit-Input-Tokens-Reset:
+                - "2026-08-30T14:59:56Z"
+            Anthropic-Ratelimit-Output-Tokens-Limit:
+                - "2000000"
+            Anthropic-Ratelimit-Output-Tokens-Remaining:
+                - "2000000"
+            Anthropic-Ratelimit-Output-Tokens-Reset:
+                - "2026-08-30T14:59:56Z"
+            Anthropic-Ratelimit-Requests-Limit:
+                - "20000"
+            Anthropic-Ratelimit-Requests-Remaining:
+                - "19999"
+            Anthropic-Ratelimit-Requests-Reset:
+                - "2026-08-30T14:59:56Z"
+            Anthropic-Ratelimit-Tokens-Limit:
+                - "12000000"
+            Anthropic-Ratelimit-Tokens-Remaining:
+                - "12000000"
+            Anthropic-Ratelimit-Tokens-Reset:
+                - "2026-08-30T14:59:56Z"
+            Anthropic-Workspace-Id:
+                - wrkspc_01L52HbY7uCkD17LL3R3voXT
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a334a9860c0c2409-AMS
+            Content-Security-Policy:
+                - default-src 'none'; frame-ancestors 'none'
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 14:59:57 GMT
+            Request-Id:
+                - req_011CeZ8d9HRN5XVKPPYt1y9D
+            Server:
+                - cloudflare
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            Traceresponse:
+                - 00-2145bb52879b2b4f8973f444e393a1f6-7e4fd1e4889defbf-01
+            Vary:
+                - Accept-Encoding
+            X-Robots-Tag:
+                - none
+        status: 200 OK
+        code: 200
+        duration: 599.712834ms

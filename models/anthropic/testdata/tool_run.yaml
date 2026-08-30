@@ -1,0 +1,155 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 429
+        host: api.anthropic.com
+        body: '{"model":"claude-haiku-4-5","max_tokens":4096,"system":"Use the get_weather tool, then answer briefly.","messages":[{"role":"user","content":[{"type":"text","text":"What is the weather in Berlin?"}]}],"tools":[{"name":"get_weather","description":"Get current weather for a city","input_schema":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}]}'
+        headers:
+            Anthropic-Version:
+                - "2023-06-01"
+            Content-Type:
+                - application/json
+        url: https://api.anthropic.com/v1/messages
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: '{"model":"claude-haiku-4-5-20251001","id":"msg_011CeZ8dEjqGvPEUQ6PKvBnQ","type":"message","role":"assistant","content":[{"type":"tool_use","id":"toolu_016QB1XR1bVv9xqP4gW2HyBi","name":"get_weather","input":{"city":"Berlin"},"caller":{"type":"direct"}}],"stop_reason":"tool_use","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":590,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":54,"service_tier":"standard","inference_geo":"not_available"}}'
+        headers:
+            Anthropic-Organization-Id:
+                - 44ae676c-958f-4d68-9108-eae9de7b366b
+            Anthropic-Ratelimit-Input-Tokens-Limit:
+                - "10000000"
+            Anthropic-Ratelimit-Input-Tokens-Remaining:
+                - "10000000"
+            Anthropic-Ratelimit-Input-Tokens-Reset:
+                - "2026-08-30T14:59:58Z"
+            Anthropic-Ratelimit-Output-Tokens-Limit:
+                - "2000000"
+            Anthropic-Ratelimit-Output-Tokens-Remaining:
+                - "2000000"
+            Anthropic-Ratelimit-Output-Tokens-Reset:
+                - "2026-08-30T14:59:58Z"
+            Anthropic-Ratelimit-Requests-Limit:
+                - "20000"
+            Anthropic-Ratelimit-Requests-Remaining:
+                - "19999"
+            Anthropic-Ratelimit-Requests-Reset:
+                - "2026-08-30T14:59:57Z"
+            Anthropic-Ratelimit-Tokens-Limit:
+                - "12000000"
+            Anthropic-Ratelimit-Tokens-Remaining:
+                - "12000000"
+            Anthropic-Ratelimit-Tokens-Reset:
+                - "2026-08-30T14:59:58Z"
+            Anthropic-Workspace-Id:
+                - wrkspc_01L52HbY7uCkD17LL3R3voXT
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a334a98d59942409-AMS
+            Content-Security-Policy:
+                - default-src 'none'; frame-ancestors 'none'
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 14:59:58 GMT
+            Request-Id:
+                - req_011CeZ8dEJYCzkw2UKFRLJCN
+            Server:
+                - cloudflare
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            Traceresponse:
+                - 00-a2fdc3f260da5042030cfeb771ce3ffe-f8dddae49e79f5fe-01
+            Vary:
+                - Accept-Encoding
+            X-Robots-Tag:
+                - none
+        status: 200 OK
+        code: 200
+        duration: 786.179042ms
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 698
+        host: api.anthropic.com
+        body: '{"model":"claude-haiku-4-5","max_tokens":4096,"system":"Use the get_weather tool, then answer briefly.","messages":[{"role":"user","content":[{"type":"text","text":"What is the weather in Berlin?"}]},{"role":"assistant","content":[{"type":"tool_use","id":"toolu_016QB1XR1bVv9xqP4gW2HyBi","name":"get_weather","input":{"city":"Berlin"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_016QB1XR1bVv9xqP4gW2HyBi","content":"sunny, 21C in Berlin"}]}],"tools":[{"name":"get_weather","description":"Get current weather for a city","input_schema":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}]}'
+        headers:
+            Anthropic-Version:
+                - "2023-06-01"
+            Content-Type:
+                - application/json
+        url: https://api.anthropic.com/v1/messages
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: '{"model":"claude-haiku-4-5-20251001","id":"msg_011CeZ8dMPSGBmM1hDUzqzaN","type":"message","role":"assistant","content":[{"type":"text","text":"The weather in Berlin is currently **sunny** with a temperature of **21°C (about 70°F)**."}],"stop_reason":"end_turn","stop_sequence":null,"stop_details":null,"usage":{"input_tokens":663,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":28,"service_tier":"standard","inference_geo":"not_available"}}'
+        headers:
+            Anthropic-Organization-Id:
+                - 44ae676c-958f-4d68-9108-eae9de7b366b
+            Anthropic-Ratelimit-Input-Tokens-Limit:
+                - "10000000"
+            Anthropic-Ratelimit-Input-Tokens-Remaining:
+                - "10000000"
+            Anthropic-Ratelimit-Input-Tokens-Reset:
+                - "2026-08-30T14:59:59Z"
+            Anthropic-Ratelimit-Output-Tokens-Limit:
+                - "2000000"
+            Anthropic-Ratelimit-Output-Tokens-Remaining:
+                - "2000000"
+            Anthropic-Ratelimit-Output-Tokens-Reset:
+                - "2026-08-30T14:59:59Z"
+            Anthropic-Ratelimit-Requests-Limit:
+                - "20000"
+            Anthropic-Ratelimit-Requests-Remaining:
+                - "19999"
+            Anthropic-Ratelimit-Requests-Reset:
+                - "2026-08-30T14:59:59Z"
+            Anthropic-Ratelimit-Tokens-Limit:
+                - "12000000"
+            Anthropic-Ratelimit-Tokens-Remaining:
+                - "12000000"
+            Anthropic-Ratelimit-Tokens-Reset:
+                - "2026-08-30T14:59:59Z"
+            Anthropic-Workspace-Id:
+                - wrkspc_01L52HbY7uCkD17LL3R3voXT
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a334a9973c522409-AMS
+            Content-Security-Policy:
+                - default-src 'none'; frame-ancestors 'none'
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 15:00:00 GMT
+            Request-Id:
+                - req_011CeZ8dM2rTrT7GkfoaUdc1
+            Server:
+                - cloudflare
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            Traceresponse:
+                - 00-b4c0bdd050052d49f14af2573982ce7e-ffdd54ec9386d295-01
+            Vary:
+                - Accept-Encoding
+            X-Robots-Tag:
+                - none
+        status: 200 OK
+        code: 200
+        duration: 795.810917ms

@@ -1,0 +1,119 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 439
+        host: api.openai.com
+        body: '{"model":"gpt-4o-mini","messages":[{"role":"user","content":"Where is the Eiffel Tower?"}],"tools":[{"type":"function","function":{"name":"final_result","description":"The final result of the run.","parameters":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"},"country":{"description":"Country name","type":"string"}},"required":["city","country"],"type":"object"}}}],"tool_choice":"required"}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://api.openai.com/v1/chat/completions
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: |
+            {
+              "id": "chatcmpl-EIapNRyiTOD0P5dz1dWt5DC3RMvqO",
+              "object": "chat.completion",
+              "created": 1788100177,
+              "model": "gpt-4o-mini-2024-07-18",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                      {
+                        "id": "call_MLrLRSQG3c15sQgEFBLLlyQ1",
+                        "type": "function",
+                        "function": {
+                          "name": "final_result",
+                          "arguments": "{\"city\":\"Paris\",\"country\":\"France\"}"
+                        }
+                      }
+                    ],
+                    "refusal": null,
+                    "annotations": []
+                  },
+                  "logprobs": null,
+                  "finish_reason": "tool_calls"
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 61,
+                "completion_tokens": 18,
+                "total_tokens": 79,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "audio_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "audio_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "service_tier": "default",
+              "system_fingerprint": "fp_c23e83d968"
+            }
+        headers:
+            Access-Control-Expose-Headers:
+                - X-Request-ID
+                - CF-Ray
+                - CF-Ray
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a3347d1a0c130df3-AMS
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 14:29:37 GMT
+            Openai-Organization:
+                - pydantic-28gund
+            Openai-Processing-Ms:
+                - "515"
+            Openai-Project:
+                - proj_dKobscVY9YJxeEaDJen54e3d
+            Openai-Version:
+                - "2020-10-01"
+            Server:
+                - cloudflare
+            Set-Cookie:
+                - __cf_bm=6eVrOHYrlXxvCOcd8tST1zyMelwP.GtegfW3LNZS75k-1788100176.9622133-1.0.1.1-FqKB6n61i_z1s_I6v95t8g.CI3Gl1WANfEBGcV1bTgb5Rylv9n0JACLjgyZFm1ripOT2a8VY5YNdGiaIN.kuTbQfbtzU0TKmir2E9E5kwJmJEVf.84lYtKGHbWA7z3Rh; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Sun, 30 Aug 2026 14:59:37 GMT
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            X-Content-Type-Options:
+                - nosniff
+            X-Openai-Proxy-Wasm:
+                - v0.1
+            X-Ratelimit-Limit-Requests:
+                - "30000"
+            X-Ratelimit-Limit-Tokens:
+                - "150000000"
+            X-Ratelimit-Remaining-Requests:
+                - "29999"
+            X-Ratelimit-Remaining-Tokens:
+                - "149999990"
+            X-Ratelimit-Reset-Requests:
+                - 2ms
+            X-Ratelimit-Reset-Tokens:
+                - 0s
+            X-Request-Id:
+                - req_19bd897705204f9fb2f021f21887534c
+        status: 200 OK
+        code: 200
+        duration: 688.754375ms

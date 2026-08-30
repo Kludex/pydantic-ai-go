@@ -1,0 +1,225 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 429
+        host: api.openai.com
+        body: '{"model":"gpt-4o-mini","messages":[{"role":"system","content":"Use the get_weather tool, then answer briefly."},{"role":"user","content":"What is the weather in Berlin?"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get current weather for a city","parameters":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}}]}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://api.openai.com/v1/chat/completions
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: |
+            {
+              "id": "chatcmpl-EIapJDRknVTWKNw6mcleU10fyr9yN",
+              "object": "chat.completion",
+              "created": 1788100173,
+              "model": "gpt-4o-mini-2024-07-18",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [
+                      {
+                        "id": "call_fWdGqdCzTObAk0VgvwL5fam5",
+                        "type": "function",
+                        "function": {
+                          "name": "get_weather",
+                          "arguments": "{\"city\":\"Berlin\"}"
+                        }
+                      }
+                    ],
+                    "refusal": null,
+                    "annotations": []
+                  },
+                  "logprobs": null,
+                  "finish_reason": "tool_calls"
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 65,
+                "completion_tokens": 14,
+                "total_tokens": 79,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "audio_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "audio_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "service_tier": "default",
+              "system_fingerprint": "fp_c23e83d968"
+            }
+        headers:
+            Access-Control-Expose-Headers:
+                - X-Request-ID
+                - CF-Ray
+                - CF-Ray
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a3347d016a6f0df3-AMS
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 14:29:33 GMT
+            Openai-Organization:
+                - pydantic-28gund
+            Openai-Processing-Ms:
+                - "461"
+            Openai-Project:
+                - proj_dKobscVY9YJxeEaDJen54e3d
+            Openai-Version:
+                - "2020-10-01"
+            Server:
+                - cloudflare
+            Set-Cookie:
+                - __cf_bm=nE4lHCZYwue0q0HH2kiNnE0MDsrwEk.dqu2vBdh6qQ8-1788100173.0269406-1.0.1.1-zst5x_jUw4kbaG4PmMXVwED_UAklfgyxXoJ9oD_HkYfkuosnE1hFDhEFrh_WNnUkFqmx0xhwgFd8u9NQFjojP2R5uC85vgHIAiCx92j2jOUhwPIEOJVcGUWBK6wk6RRN; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Sun, 30 Aug 2026 14:59:33 GMT
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            X-Content-Type-Options:
+                - nosniff
+            X-Openai-Proxy-Wasm:
+                - v0.1
+            X-Ratelimit-Limit-Requests:
+                - "30000"
+            X-Ratelimit-Limit-Tokens:
+                - "150000000"
+            X-Ratelimit-Remaining-Requests:
+                - "29999"
+            X-Ratelimit-Remaining-Tokens:
+                - "149999977"
+            X-Ratelimit-Reset-Requests:
+                - 2ms
+            X-Ratelimit-Reset-Tokens:
+                - 0s
+            X-Request-Id:
+                - req_d4d4a60f67dc4b27afb556323a8e4034
+        status: 200 OK
+        code: 200
+        duration: 923.695875ms
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 688
+        host: api.openai.com
+        body: '{"model":"gpt-4o-mini","messages":[{"role":"system","content":"Use the get_weather tool, then answer briefly."},{"role":"user","content":"What is the weather in Berlin?"},{"role":"assistant","tool_calls":[{"id":"call_fWdGqdCzTObAk0VgvwL5fam5","type":"function","function":{"name":"get_weather","arguments":"{\"city\":\"Berlin\"}"}}]},{"role":"tool","content":"sunny, 21C in Berlin","tool_call_id":"call_fWdGqdCzTObAk0VgvwL5fam5"}],"tools":[{"type":"function","function":{"name":"get_weather","description":"Get current weather for a city","parameters":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}}]}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://api.openai.com/v1/chat/completions
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: |
+            {
+              "id": "chatcmpl-EIapL0boVkZRY41UJsmcThZ52BMrO",
+              "object": "chat.completion",
+              "created": 1788100175,
+              "model": "gpt-4o-mini-2024-07-18",
+              "choices": [
+                {
+                  "index": 0,
+                  "message": {
+                    "role": "assistant",
+                    "content": "The weather in Berlin is sunny with a temperature of 21°C.",
+                    "refusal": null,
+                    "annotations": []
+                  },
+                  "logprobs": null,
+                  "finish_reason": "stop"
+                }
+              ],
+              "usage": {
+                "prompt_tokens": 95,
+                "completion_tokens": 15,
+                "total_tokens": 110,
+                "prompt_tokens_details": {
+                  "cached_tokens": 0,
+                  "audio_tokens": 0
+                },
+                "completion_tokens_details": {
+                  "reasoning_tokens": 0,
+                  "audio_tokens": 0,
+                  "accepted_prediction_tokens": 0,
+                  "rejected_prediction_tokens": 0
+                }
+              },
+              "service_tier": "default",
+              "system_fingerprint": "fp_c23e83d968"
+            }
+        headers:
+            Access-Control-Expose-Headers:
+                - X-Request-ID
+                - CF-Ray
+                - CF-Ray
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a3347d0cee7d0df3-AMS
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 14:29:35 GMT
+            Openai-Organization:
+                - pydantic-28gund
+            Openai-Processing-Ms:
+                - "527"
+            Openai-Project:
+                - proj_dKobscVY9YJxeEaDJen54e3d
+            Openai-Version:
+                - "2020-10-01"
+            Server:
+                - cloudflare
+            Set-Cookie:
+                - __cf_bm=jfQKUTvk_5MxHlFPuiiKmzJAnbP26F1sCx3L25U3MIc-1788100174.8692355-1.0.1.1-YCcK.ir2uecNIRx6TNsizenllWLmD4tT_rbuhe9aLYLR0h78MmVbwdBuXh75IJcKnGXSKPlLBhuYeLZe8C_ap0D6ne3qt1Y7Gkt5g.CIPpWL8FE1jxmlPmFFGKJcOjYY; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Sun, 30 Aug 2026 14:59:35 GMT
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            X-Content-Type-Options:
+                - nosniff
+            X-Openai-Proxy-Wasm:
+                - v0.1
+            X-Ratelimit-Limit-Requests:
+                - "30000"
+            X-Ratelimit-Limit-Tokens:
+                - "150000000"
+            X-Ratelimit-Remaining-Requests:
+                - "29999"
+            X-Ratelimit-Remaining-Tokens:
+                - "149999972"
+            X-Ratelimit-Reset-Requests:
+                - 2ms
+            X-Ratelimit-Reset-Tokens:
+                - 0s
+            X-Request-Id:
+                - req_2a0def8e2c674c658f967752a02799a0
+        status: 200 OK
+        code: 200
+        duration: 1.04266175s

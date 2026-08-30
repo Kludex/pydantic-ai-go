@@ -283,3 +283,41 @@ func TestUsageLimitsPropagateModelErrors(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+// truncateHistory keeps only the last N messages - the history-processor
+// pattern implemented as a ModelRequestWrapper.
+type truncateHistory struct{ keep int }
+
+func (truncateHistory) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (c truncateHistory) WrapModelRequest(ctx context.Context, _ *ai.RunInfo, msgs []ai.ModelMessage, params ai.ModelRequestParams, next ai.ModelRequestFunc) (*ai.ModelResponse, error) {
+	if len(msgs) > c.keep {
+		msgs = msgs[len(msgs)-c.keep:]
+	}
+	return next(ctx, msgs, params)
+}
+
+func TestCapabilityProcessesHistory(t *testing.T) {
+	var sawMessages int
+	model := fakes.NewFunctionModel(func(_ context.Context, msgs []ai.ModelMessage, _ ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		sawMessages = len(msgs)
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "ok"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model, ai.WithCapabilities(truncateHistory{keep: 2}))
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "old 1"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "old answer"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "old 2"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "old answer 2"}}},
+	}
+	result, err := agent.Run(t.Context(), "new question", deps{}, ai.WithMessageHistory(history))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sawMessages != 2 {
+		t.Fatalf("model saw %d messages, expected truncated 2", sawMessages)
+	}
+	if len(result.Messages()) != 6 {
+		t.Fatalf("stored history must stay intact, got %d", len(result.Messages()))
+	}
+}

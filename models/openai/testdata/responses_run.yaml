@@ -1,0 +1,163 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 135
+        host: api.openai.com
+        body: '{"model":"gpt-4o-mini","instructions":"Answer with a single word.","input":[{"role":"user","content":"What is the capital of Spain?"}]}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://api.openai.com/v1/responses
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: |-
+            {
+              "id": "resp_0aeb7c7dcd16abe9006a944b4207b087d29552ee0b5a0db1c2",
+              "object": "response",
+              "created_at": 1788103490,
+              "status": "completed",
+              "background": false,
+              "billing": {
+                "payer": "developer"
+              },
+              "completed_at": 1788103491,
+              "error": null,
+              "frequency_penalty": 0.0,
+              "incomplete_details": null,
+              "instructions": "Answer with a single word.",
+              "max_output_tokens": null,
+              "max_tool_calls": null,
+              "model": "gpt-4o-mini-2024-07-18",
+              "moderation": null,
+              "output": [
+                {
+                  "id": "msg_0aeb7c7dcd16abe9006a944b4324e887d28bd18110ab6cf05c",
+                  "type": "message",
+                  "status": "completed",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "annotations": [],
+                      "logprobs": [],
+                      "text": "Madrid."
+                    }
+                  ],
+                  "role": "assistant"
+                }
+              ],
+              "parallel_tool_calls": true,
+              "presence_penalty": 0.0,
+              "previous_response_id": null,
+              "prompt_cache_key": null,
+              "prompt_cache_retention": "in_memory",
+              "reasoning": {
+                "context": null,
+                "effort": null,
+                "summary": null
+              },
+              "safety_identifier": null,
+              "service_tier": "default",
+              "store": true,
+              "temperature": 1.0,
+              "text": {
+                "format": {
+                  "type": "text"
+                },
+                "verbosity": "medium"
+              },
+              "tool_choice": "auto",
+              "tool_usage": {
+                "image_gen": {
+                  "input_tokens": 0,
+                  "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0
+                  },
+                  "output_tokens": 0,
+                  "output_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0
+                  },
+                  "total_tokens": 0
+                },
+                "web_search": {
+                  "num_requests": 0
+                }
+              },
+              "tools": [],
+              "top_logprobs": 0,
+              "top_p": 1.0,
+              "truncation": "disabled",
+              "usage": {
+                "input_tokens": 24,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 3,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 27
+              },
+              "user": null,
+              "metadata": {}
+            }
+        headers:
+            Access-Control-Expose-Headers:
+                - X-Request-ID
+                - CF-Ray
+                - CF-Ray
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a334cdf7ac4d86dc-AMS
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 15:24:51 GMT
+            Openai-Organization:
+                - pydantic-28gund
+            Openai-Processing-Ms:
+                - "1257"
+            Openai-Project:
+                - proj_dKobscVY9YJxeEaDJen54e3d
+            Openai-Version:
+                - "2020-10-01"
+            Server:
+                - cloudflare
+            Set-Cookie:
+                - __cf_bm=dD_K_f6iPf3duXucZIQFagLoC49Piv5AhBXJ3yUQVbA-1788103489.2289388-1.0.1.1-S15clcT_xqiALlAcbdQbalIUJvPo0r_QXcPnN3vAB9ZVM2Y2BDFIXRxVZEnJnkNkb.vP_ti0ErdllFFrRiJzZvFg99CJzIYpYtvOxWOPK62y3GM3nOV5ToABqBdTB9SP; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Sun, 30 Aug 2026 15:54:51 GMT
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            X-Content-Type-Options:
+                - nosniff
+            X-Ratelimit-Limit-Requests:
+                - "30000"
+            X-Ratelimit-Limit-Tokens:
+                - "150000000"
+            X-Ratelimit-Remaining-Requests:
+                - "29999"
+            X-Ratelimit-Remaining-Tokens:
+                - "149999955"
+            X-Ratelimit-Reset-Requests:
+                - 2ms
+            X-Ratelimit-Reset-Tokens:
+                - 0s
+            X-Request-Id:
+                - req_59e227336d0c4807858a5bd9cd91be8f
+        status: 200 OK
+        code: 200
+        duration: 2.170856792s

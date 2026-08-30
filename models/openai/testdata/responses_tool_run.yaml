@@ -1,0 +1,359 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 400
+        host: api.openai.com
+        body: '{"model":"gpt-4o-mini","instructions":"Use the get_weather tool, then answer briefly.","input":[{"role":"user","content":"What is the weather in Berlin?"}],"tools":[{"type":"function","name":"get_weather","description":"Get current weather for a city","parameters":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}]}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://api.openai.com/v1/responses
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: |-
+            {
+              "id": "resp_05f40c7702693616006a944b46174487d2b33a6607974215da",
+              "object": "response",
+              "created_at": 1788103494,
+              "status": "completed",
+              "background": false,
+              "billing": {
+                "payer": "developer"
+              },
+              "completed_at": 1788103495,
+              "error": null,
+              "frequency_penalty": 0.0,
+              "incomplete_details": null,
+              "instructions": "Use the get_weather tool, then answer briefly.",
+              "max_output_tokens": null,
+              "max_tool_calls": null,
+              "model": "gpt-4o-mini-2024-07-18",
+              "moderation": null,
+              "output": [
+                {
+                  "id": "fc_05f40c7702693616006a944b474f9887d2bdbf7268151e6e6f",
+                  "type": "function_call",
+                  "status": "completed",
+                  "arguments": "{\"city\":\"Berlin\"}",
+                  "call_id": "call_XxTanGBVGtVBH7n1DVXn8ZVx",
+                  "name": "get_weather"
+                }
+              ],
+              "parallel_tool_calls": true,
+              "presence_penalty": 0.0,
+              "previous_response_id": null,
+              "prompt_cache_key": null,
+              "prompt_cache_retention": "in_memory",
+              "reasoning": {
+                "context": null,
+                "effort": null,
+                "summary": null
+              },
+              "safety_identifier": null,
+              "service_tier": "default",
+              "store": true,
+              "temperature": 1.0,
+              "text": {
+                "format": {
+                  "type": "text"
+                },
+                "verbosity": "medium"
+              },
+              "tool_choice": "auto",
+              "tool_usage": {
+                "image_gen": {
+                  "input_tokens": 0,
+                  "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0
+                  },
+                  "output_tokens": 0,
+                  "output_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0
+                  },
+                  "total_tokens": 0
+                },
+                "web_search": {
+                  "num_requests": 0
+                }
+              },
+              "tools": [
+                {
+                  "type": "function",
+                  "description": "Get current weather for a city",
+                  "name": "get_weather",
+                  "output_schema": null,
+                  "parameters": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "city": {
+                        "description": "City name",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "city"
+                    ],
+                    "type": "object"
+                  },
+                  "strict": true
+                }
+              ],
+              "top_logprobs": 0,
+              "top_p": 1.0,
+              "truncation": "disabled",
+              "usage": {
+                "input_tokens": 63,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 15,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 78
+              },
+              "user": null,
+              "metadata": {}
+            }
+        headers:
+            Access-Control-Expose-Headers:
+                - X-Request-ID
+                - CF-Ray
+                - CF-Ray
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a334ce129a1286dc-AMS
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 15:24:55 GMT
+            Openai-Organization:
+                - pydantic-28gund
+            Openai-Processing-Ms:
+                - "1829"
+            Openai-Project:
+                - proj_dKobscVY9YJxeEaDJen54e3d
+            Openai-Version:
+                - "2020-10-01"
+            Server:
+                - cloudflare
+            Set-Cookie:
+                - __cf_bm=z.b51QZarjDlgcT9JjIsd6Kuvmwc_WMiVuIKwKRMOnE-1788103493.5374706-1.0.1.1-YOaUvezMapWSRv47uA90lEirotR.KJvjP45NaC25BEAFa0nK5ayn4odgm00MgB5X4sh0Q8psRNGjJ2WxTPVp30y1y7ID.Y1jKgaLKbw3JJsGnVJyG5S_BQfW0VsOkHXw; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Sun, 30 Aug 2026 15:54:55 GMT
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            X-Content-Type-Options:
+                - nosniff
+            X-Ratelimit-Limit-Requests:
+                - "30000"
+            X-Ratelimit-Limit-Tokens:
+                - "150000000"
+            X-Ratelimit-Remaining-Requests:
+                - "29999"
+            X-Ratelimit-Remaining-Tokens:
+                - "149999720"
+            X-Ratelimit-Reset-Requests:
+                - 2ms
+            X-Ratelimit-Reset-Tokens:
+                - 0s
+            X-Request-Id:
+                - req_8c2ace47ad834aef9ef40546380593ec
+        status: 200 OK
+        code: 200
+        duration: 1.992803959s
+    - id: 1
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 630
+        host: api.openai.com
+        body: '{"model":"gpt-4o-mini","instructions":"Use the get_weather tool, then answer briefly.","input":[{"role":"user","content":"What is the weather in Berlin?"},{"type":"function_call","call_id":"call_XxTanGBVGtVBH7n1DVXn8ZVx","name":"get_weather","arguments":"{\"city\":\"Berlin\"}"},{"type":"function_call_output","call_id":"call_XxTanGBVGtVBH7n1DVXn8ZVx","output":"sunny, 21C in Berlin"}],"tools":[{"type":"function","name":"get_weather","description":"Get current weather for a city","parameters":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}]}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://api.openai.com/v1/responses
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: |-
+            {
+              "id": "resp_035fb3c569deba3f006a944b49ad6c87d299764785d25fcb92",
+              "object": "response",
+              "created_at": 1788103497,
+              "status": "completed",
+              "background": false,
+              "billing": {
+                "payer": "developer"
+              },
+              "completed_at": 1788103499,
+              "error": null,
+              "frequency_penalty": 0.0,
+              "incomplete_details": null,
+              "instructions": "Use the get_weather tool, then answer briefly.",
+              "max_output_tokens": null,
+              "max_tool_calls": null,
+              "model": "gpt-4o-mini-2024-07-18",
+              "moderation": null,
+              "output": [
+                {
+                  "id": "msg_035fb3c569deba3f006a944b4b26cc87d29b39c5cf41b4f592",
+                  "type": "message",
+                  "status": "completed",
+                  "content": [
+                    {
+                      "type": "output_text",
+                      "annotations": [],
+                      "logprobs": [],
+                      "text": "The weather in Berlin is sunny with a temperature of 21\u00b0C."
+                    }
+                  ],
+                  "role": "assistant"
+                }
+              ],
+              "parallel_tool_calls": true,
+              "presence_penalty": 0.0,
+              "previous_response_id": null,
+              "prompt_cache_key": null,
+              "prompt_cache_retention": "in_memory",
+              "reasoning": {
+                "context": null,
+                "effort": null,
+                "summary": null
+              },
+              "safety_identifier": null,
+              "service_tier": "default",
+              "store": true,
+              "temperature": 1.0,
+              "text": {
+                "format": {
+                  "type": "text"
+                },
+                "verbosity": "medium"
+              },
+              "tool_choice": "auto",
+              "tool_usage": {
+                "image_gen": {
+                  "input_tokens": 0,
+                  "input_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0
+                  },
+                  "output_tokens": 0,
+                  "output_tokens_details": {
+                    "image_tokens": 0,
+                    "text_tokens": 0
+                  },
+                  "total_tokens": 0
+                },
+                "web_search": {
+                  "num_requests": 0
+                }
+              },
+              "tools": [
+                {
+                  "type": "function",
+                  "description": "Get current weather for a city",
+                  "name": "get_weather",
+                  "output_schema": null,
+                  "parameters": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "city": {
+                        "description": "City name",
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "city"
+                    ],
+                    "type": "object"
+                  },
+                  "strict": true
+                }
+              ],
+              "top_logprobs": 0,
+              "top_p": 1.0,
+              "truncation": "disabled",
+              "usage": {
+                "input_tokens": 91,
+                "input_tokens_details": {
+                  "cache_write_tokens": 0,
+                  "cached_tokens": 0
+                },
+                "output_tokens": 16,
+                "output_tokens_details": {
+                  "reasoning_tokens": 0
+                },
+                "total_tokens": 107
+              },
+              "user": null,
+              "metadata": {}
+            }
+        headers:
+            Access-Control-Expose-Headers:
+                - X-Request-ID
+                - CF-Ray
+                - CF-Ray
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a334ce2bbf9986dc-AMS
+            Content-Type:
+                - application/json
+            Date:
+                - Sun, 30 Aug 2026 15:24:59 GMT
+            Openai-Organization:
+                - pydantic-28gund
+            Openai-Processing-Ms:
+                - "1874"
+            Openai-Project:
+                - proj_dKobscVY9YJxeEaDJen54e3d
+            Openai-Version:
+                - "2020-10-01"
+            Server:
+                - cloudflare
+            Set-Cookie:
+                - __cf_bm=.XVPmtlz2VgNexrqOpqLVPT_a1F5plz7OfgJbOJH6M8-1788103497.556813-1.0.1.1-3YDbssVXZYrsJMrrCPahnJJHcJs2cFsLzHD711oUblRrQIQJjgGQ84mqnKcH0Vk_X0STGPvT1bR6B9qjthEWI_NEWgKx7Oa0x4oTNObMCVb8pCDecqvo_QBgJ2Ymc8JZ; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Sun, 30 Aug 2026 15:54:59 GMT
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            X-Content-Type-Options:
+                - nosniff
+            X-Ratelimit-Limit-Requests:
+                - "30000"
+            X-Ratelimit-Limit-Tokens:
+                - "150000000"
+            X-Ratelimit-Remaining-Requests:
+                - "29999"
+            X-Ratelimit-Remaining-Tokens:
+                - "149999692"
+            X-Ratelimit-Reset-Requests:
+                - 2ms
+            X-Ratelimit-Reset-Tokens:
+                - 0s
+            X-Request-Id:
+                - req_af1f449e63ce46278691d3e83a2be4d4
+        status: 200 OK
+        code: 200
+        duration: 2.050139166s

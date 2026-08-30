@@ -20,6 +20,9 @@ type RunContext[Deps any] struct {
 	RunID         string
 	ToolCallID    string
 	PartialOutput bool
+	Model         Model
+	ModelSettings ModelSettings
+	UsageLimits   UsageLimits
 
 	usage        *Usage
 	messages     *[]ModelMessage

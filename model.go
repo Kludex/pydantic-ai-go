@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"slices"
 	"time"
 )
 
@@ -41,6 +42,31 @@ type ModelSettings struct {
 	Seed              *int
 	StopSequences     []string
 	ParallelToolCalls *bool
+}
+
+func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettings {
+	if override == nil {
+		return base
+	}
+	if override.MaxTokens != 0 {
+		base.MaxTokens = override.MaxTokens
+	}
+	if override.Temperature != nil {
+		base.Temperature = override.Temperature
+	}
+	if override.TopP != nil {
+		base.TopP = override.TopP
+	}
+	if override.Seed != nil {
+		base.Seed = override.Seed
+	}
+	if override.StopSequences != nil {
+		base.StopSequences = slices.Clone(override.StopSequences)
+	}
+	if override.ParallelToolCalls != nil {
+		base.ParallelToolCalls = override.ParallelToolCalls
+	}
+	return base
 }
 
 // ToolDefinition describes a tool to the model.

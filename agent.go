@@ -17,6 +17,7 @@ type Agent[Deps, Output any] struct {
 	instructionsFuncs []func(ctx context.Context, rc *RunContext[Deps]) (string, error)
 	toolsPrepareFuncs []ToolsPrepareFunc[Deps]
 	settings          ModelSettings
+	usageLimits       UsageLimits
 	retryLimits       RetryLimits
 	outputMode        OutputMode
 	endStrategy       EndStrategy
@@ -46,7 +47,9 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	}
 	a.instructions = cfg.instructions
 	a.settings = cfg.settings
+	a.usageLimits = cfg.limits
 	a.outputMode = cfg.outputMode
+	validateOutputMode(a.outputMode)
 	if cfg.endStrategy != "" {
 		switch cfg.endStrategy {
 		case EndStrategyEarly, EndStrategyGraceful, EndStrategyExhaustive:
@@ -57,9 +60,6 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	}
 	a.sequentialTools = cfg.sequentialTools
 	a.capabilities = cfg.capabilities
-	if cfg.limits != (UsageLimits{}) {
-		a.capabilities = append([]Capability{usageLimitsCapability{limits: cfg.limits}}, a.capabilities...)
-	}
 	if cfg.retryLimits != nil {
 		validateRetryLimits(*cfg.retryLimits)
 		a.retryLimits = *cfg.retryLimits
@@ -231,8 +231,13 @@ func validateRetryLimits(limits RetryLimits) {
 type RunOption func(*runConfig)
 
 type runConfig struct {
-	history     []ModelMessage
-	retryLimits *RetryLimits
+	history      []ModelMessage
+	model        Model
+	settings     *ModelSettings
+	instructions string
+	usageLimits  *UsageLimits
+	retryLimits  *RetryLimits
+	outputMode   *OutputMode
 }
 
 // WithMessageHistory prepends prior conversation messages to the run.
@@ -244,6 +249,40 @@ func WithMessageHistory(msgs []ModelMessage) RunOption {
 // per-tool limits still take precedence.
 func WithRunRetryLimits(limits RetryLimits) RunOption {
 	return func(c *runConfig) { c.retryLimits = &limits }
+}
+
+// WithRunModel uses model for one run without changing the agent default.
+func WithRunModel(model Model) RunOption {
+	return func(c *runConfig) { c.model = model }
+}
+
+// WithRunModelSettings merges settings over the agent defaults for one run.
+// Non-zero scalar values, non-nil pointers, and non-nil slices override the
+// corresponding defaults.
+func WithRunModelSettings(settings ModelSettings) RunOption {
+	return func(c *runConfig) { c.settings = &settings }
+}
+
+// WithRunInstructions appends static instructions for one run.
+func WithRunInstructions(instructions string) RunOption {
+	return func(c *runConfig) { c.instructions = instructions }
+}
+
+// WithRunUsageLimits replaces the agent usage limits for one run. The zero
+// value disables agent-level limits for that run.
+func WithRunUsageLimits(limits UsageLimits) RunOption {
+	return func(c *runConfig) { c.usageLimits = &limits }
+}
+
+// WithRunOutputMode selects the structured-output mode for one run.
+func WithRunOutputMode(mode OutputMode) RunOption {
+	return func(c *runConfig) { c.outputMode = &mode }
+}
+
+func validateOutputMode(mode OutputMode) {
+	if mode != OutputModeTool && mode != OutputModeNative {
+		panic(fmt.Sprintf("ai: invalid output mode %d", mode))
+	}
 }
 
 // RunResult is the outcome of a successful run.

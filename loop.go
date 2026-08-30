@@ -45,7 +45,12 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 		}
 		return stream.Result(), nil
 	}
-	ctx, span := startRunSpan(ctx, a.model.Name())
+	cfg := buildRunConfig(opts)
+	model := a.model
+	if cfg.model != nil {
+		model = cfg.model
+	}
+	ctx, span := startRunSpan(ctx, model.Name())
 	defer func() {
 		if result != nil {
 			recordUsage(span, result.usage)
@@ -53,7 +58,7 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 		endSpan(span, err)
 	}()
 	a.started.Store(true)
-	r, err := a.newRun(ctx, prompt, deps, opts)
+	r, err := a.newRun(ctx, prompt, deps, cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -61,16 +66,36 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 	return r.wrappedLoop(r.ctx)
 }
 
-func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (*run[Deps, Output], error) {
-	a.started.Store(true)
+func buildRunConfig(opts []RunOption) runConfig {
 	var cfg runConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	return cfg
+}
+
+func (a *Agent[Deps, Output]) newRun(
+	ctx context.Context, prompt UserPromptPart, deps Deps, cfg runConfig,
+) (*run[Deps, Output], error) {
+	a.started.Store(true)
 	runCtx, cancel := context.WithCancelCause(ctx)
 	cancellation := &runCancellation{cancel: cancel, active: true}
+	model := a.model
+	if cfg.model != nil {
+		model = cfg.model
+	}
+	capabilities := slices.Clone(a.capabilities)
+	limits := a.usageLimits
+	if cfg.usageLimits != nil {
+		limits = *cfg.usageLimits
+	}
+	if limits != (UsageLimits{}) {
+		limitCapability := usageLimitsCapability{limits: limits}
+		_ = limitCapability.Setup(&CapabilityRegistry{})
+		capabilities = append([]Capability{limitCapability}, capabilities...)
+	}
 	r := &run[Deps, Output]{
-		agent: a, ctx: runCtx, cancellation: cancellation,
+		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int),
 	}
 	if cfg.retryLimits != nil {
@@ -79,17 +104,24 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 	}
 	r.messages = append(r.messages, cfg.history...)
 	r.newMessages = len(r.messages)
+	settings := mergeModelSettings(a.settings, cfg.settings)
 	r.rc = &RunContext[Deps]{
-		Deps: deps, MaxRetries: r.retryLimits.Output, RunID: newRunID(), usage: &r.usage, messages: &r.messages,
-		cancellation: cancellation,
+		Deps: deps, MaxRetries: r.retryLimits.Output, RunID: newRunID(),
+		Model: model, ModelSettings: settings, UsageLimits: limits,
+		usage: &r.usage, messages: &r.messages, cancellation: cancellation,
 	}
 	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, messages: &r.messages}
-	instructions, err := a.buildInstructions(runCtx, r.rc, r.info)
+	instructions, err := a.buildInstructions(runCtx, r.rc, r.info, cfg.instructions)
 	if err != nil {
 		cancellation.finish()
 		return nil, err
 	}
-	r.params, err = a.buildParams(instructions)
+	outputMode := a.outputMode
+	if cfg.outputMode != nil {
+		outputMode = *cfg.outputMode
+	}
+	validateOutputMode(outputMode)
+	r.params, err = a.buildParams(instructions, settings, outputMode)
 	if err != nil {
 		cancellation.finish()
 		return nil, err
@@ -141,6 +173,8 @@ func interruptedToolReturns(messages []ModelMessage) []RequestPart {
 
 type run[Deps, Output any] struct {
 	agent        *Agent[Deps, Output]
+	model        Model
+	capabilities []Capability
 	ctx          context.Context
 	cancellation *runCancellation
 	rc           *RunContext[Deps]
@@ -163,10 +197,9 @@ type run[Deps, Output any] struct {
 // modelRequest is the model-request interception point: tracing plus
 // capability middleware (ModelRequestWrapper), outermost first.
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
-	a := r.agent
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 		r.setCurrentTools(params)
-		reqCtx, reqSpan := startRequestSpan(ctx, a.model.Name())
+		reqCtx, reqSpan := startRequestSpan(ctx, r.model.Name())
 		resp, err := r.doModelRequest(reqCtx, msgs, params)
 		if err != nil {
 			endSpan(reqSpan, err)
@@ -178,7 +211,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			resp.Timestamp = time.Now().UTC()
 		}
 		if resp.ModelName == "" {
-			resp.ModelName = a.model.Name()
+			resp.ModelName = r.model.Name()
 		}
 		return resp, nil
 	}
@@ -187,8 +220,8 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		return nil, err
 	}
 	next := inner
-	for i := len(a.capabilities) - 1; i >= 0; i-- {
-		if wrapper, ok := a.capabilities[i].(ModelRequestWrapper); ok {
+	for i := len(r.capabilities) - 1; i >= 0; i-- {
+		if wrapper, ok := r.capabilities[i].(ModelRequestWrapper); ok {
 			innerNext := next
 			next = func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 				return wrapper.WrapModelRequest(ctx, r.info, msgs, params, innerNext)
@@ -292,16 +325,16 @@ func cloneSchemaValue(value any) any {
 // response as events so RunStream works with every Model.
 func (r *run[Deps, Output]) doModelRequest(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 	if r.emit == nil {
-		return r.agent.model.Request(ctx, msgs, params)
+		return r.model.Request(ctx, msgs, params)
 	}
-	if sm, ok := r.agent.model.(StreamingModel); ok {
+	if sm, ok := r.model.(StreamingModel); ok {
 		events, err := sm.StreamRequest(ctx, msgs, params)
 		if err != nil {
 			return nil, err
 		}
 		return accumulate(events, params, r.emitStreamEvent)
 	}
-	resp, err := r.agent.model.Request(ctx, msgs, params)
+	resp, err := r.model.Request(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
@@ -945,12 +978,17 @@ func (a *Agent[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
 	return toolEntry[Deps]{}, false
 }
 
-func (a *Agent[Deps, Output]) buildInstructions(ctx context.Context, rc *RunContext[Deps], info *RunInfo) (string, error) {
-	parts := make([]string, 0, len(a.instructionsFuncs)+len(a.capInstructions)+1)
+func (a *Agent[Deps, Output]) buildInstructions(
+	ctx context.Context, rc *RunContext[Deps], info *RunInfo, additional string,
+) (string, error) {
+	parts := make([]string, 0, len(a.instructionsFuncs)+len(a.capInstructions)+2)
 	if a.instructions != "" {
 		parts = append(parts, a.instructions)
 	}
 	parts = append(parts, a.capInstructions...)
+	if additional != "" {
+		parts = append(parts, additional)
+	}
 	for _, capability := range a.capabilities {
 		provider, ok := capability.(InstructionsProvider)
 		if !ok {
@@ -976,8 +1014,10 @@ func (a *Agent[Deps, Output]) buildInstructions(ctx context.Context, rc *RunCont
 	return strings.Join(parts, "\n\n"), nil
 }
 
-func (a *Agent[Deps, Output]) buildParams(instructions string) (ModelRequestParams, error) {
-	params := ModelRequestParams{Instructions: instructions, Settings: a.settings}
+func (a *Agent[Deps, Output]) buildParams(
+	instructions string, settings ModelSettings, outputMode OutputMode,
+) (ModelRequestParams, error) {
+	params := ModelRequestParams{Instructions: instructions, Settings: settings}
 	for _, entry := range a.tools {
 		params.Tools = append(params.Tools, entry.def)
 	}
@@ -990,7 +1030,7 @@ func (a *Agent[Deps, Output]) buildParams(instructions string) (ModelRequestPara
 	if err != nil {
 		return params, fmt.Errorf("ai: output type: %w", err)
 	}
-	if a.outputMode == OutputModeNative {
+	if outputMode == OutputModeNative {
 		params.OutputSchema = s
 		params.AllowText = true
 		return params, nil
@@ -1017,8 +1057,8 @@ func (r *run[Deps, Output]) callTool(
 	next := ToolCallFunc(func(ctx context.Context, call ToolCallPart) (any, error) {
 		return entry.call(ctx, rc, call.Args)
 	})
-	for i := len(r.agent.capabilities) - 1; i >= 0; i-- {
-		if wrapper, ok := r.agent.capabilities[i].(ToolCallWrapper); ok {
+	for i := len(r.capabilities) - 1; i >= 0; i-- {
+		if wrapper, ok := r.capabilities[i].(ToolCallWrapper); ok {
 			innerNext := next
 			next = func(ctx context.Context, call ToolCallPart) (any, error) {
 				return wrapper.WrapToolCall(ctx, r.info, call, innerNext)
@@ -1037,8 +1077,8 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 		result, err = r.loop(ctx)
 		return err
 	})
-	for i := len(r.agent.capabilities) - 1; i >= 0; i-- {
-		if wrapper, ok := r.agent.capabilities[i].(RunWrapper); ok {
+	for i := len(r.capabilities) - 1; i >= 0; i-- {
+		if wrapper, ok := r.capabilities[i].(RunWrapper); ok {
 			innerNext := next
 			next = func(ctx context.Context) error {
 				return wrapper.WrapRun(ctx, r.info, innerNext)

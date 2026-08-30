@@ -119,7 +119,12 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 ) *StreamedRun[Output] {
 	streamedRun := &StreamedRun[Output]{}
 	streamedRun.events = func(yield func(StreamEvent, error) bool) {
-		ctx, span := startRunSpan(ctx, a.model.Name())
+		cfg := buildRunConfig(opts)
+		model := a.model
+		if cfg.model != nil {
+			model = cfg.model
+		}
+		ctx, span := startRunSpan(ctx, model.Name())
 		var runErr error
 		defer func() {
 			if streamedRun.result != nil {
@@ -128,7 +133,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 			endSpan(span, runErr)
 		}()
 
-		run, err := a.newRun(ctx, prompt, deps, opts)
+		run, err := a.newRun(ctx, prompt, deps, cfg)
 		if err != nil {
 			runErr = err
 			yield(nil, err)
@@ -161,7 +166,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 			}
 			streamedRun.result = result
 		})
-		stream := wrapEventStream(run.ctx, run.info, core, a.capabilities)
+		stream := wrapEventStream(run.ctx, run.info, core, run.capabilities)
 		for event, err := range stream {
 			if err != nil {
 				runErr = err

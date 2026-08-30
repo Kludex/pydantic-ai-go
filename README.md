@@ -53,6 +53,24 @@ func main() {
 
 The tool's argument schema is reflected from `WeatherArgs` - the model sees the `json` names and the `jsonschema` descriptions. If the model sends arguments that fail to unmarshal, the error goes back to the model as a retry prompt instead of failing the run.
 
+## Per-run configuration
+
+Run options change one invocation without mutating the agent. You can safely use different options in concurrent runs:
+
+```go
+result, err := agent.Run(
+	ctx,
+	"What's the weather in Oslo?",
+	deps,
+	ai.WithRunModel(fasterModel),
+	ai.WithRunInstructions("Prefer concise answers."),
+	ai.WithRunModelSettings(ai.ModelSettings{MaxTokens: 200}),
+	ai.WithRunUsageLimits(ai.UsageLimits{TotalTokenLimit: 1_000}),
+)
+```
+
+Run settings merge over agent settings field by field. Additional instructions follow agent and capability instructions. A zero `UsageLimits` value disables agent-level limits for that run. `RunContext.Model`, `RunContext.ModelSettings`, and `RunContext.UsageLimits` expose the resolved values to dynamic hooks and tools.
+
 ## Concurrent tools
 
 Independent tool calls from one model response run concurrently. Results still go back to the model in the order it requested them.

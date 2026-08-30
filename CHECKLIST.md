@@ -28,7 +28,7 @@ Status:
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
-- [ ] Per-run overrides for model, settings, instructions, output type/mode, limits, and tools.
+- [~] Per-run overrides cover model, fieldwise-merged settings, additive instructions, output mode, usage limits, retry limits, and history. Typed output specialization, dynamic per-step settings/instructions, capabilities, and toolsets remain.
 - [ ] Model selection and model-ID resolution per request step.
 - [ ] Usage/cost details beyond basic token counts, including cached, audio, and reasoning tokens.
 
@@ -125,7 +125,7 @@ Status:
 - [x] `ParallelToolCalls` generation setting for OpenAI Chat/Responses and Anthropic; Gemini exposes no equivalent request setting.
 - [ ] Thinking/reasoning effort and token budgets.
 - [ ] Logprobs, penalties, service tier, response metadata, and provider-specific settings.
-- [ ] Settings merge semantics across model, agent, capability, and run levels.
+- [~] Fieldwise settings merge semantics across agent and run levels; model defaults, capability contributions, and dynamic per-step settings remain.
 
 ### Outputs
 
@@ -205,7 +205,8 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add configurable partial-output debouncing and broader schema constraint validation.
-3. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
-4. Add streamed deferred request and result events with that lifecycle.
-5. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.
+2. Add per-run dynamic settings, typed output specialization, capabilities, and toolsets.
+3. Add configurable partial-output debouncing and broader schema constraint validation.
+4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
+5. Add streamed deferred request and result events with that lifecycle.
+6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

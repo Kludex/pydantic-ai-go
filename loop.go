@@ -103,7 +103,7 @@ func (a *Agent[Deps, Output]) newRun(
 		validateRetryLimits(*cfg.retryLimits)
 		r.retryLimits = *cfg.retryLimits
 	}
-	history, interruptedReturns := repairDanglingToolCalls(cfg.history)
+	history, interruptedReturns := repairDanglingToolCalls(dropOrphanedToolResults(cfg.history))
 	r.messages = append(r.messages, history...)
 	r.newMessages = len(r.messages)
 	settings := mergeModelSettings(a.settings, cfg.settings)
@@ -132,6 +132,36 @@ func (a *Agent[Deps, Output]) newRun(
 	requestParts = append(requestParts, prompt)
 	r.messages = append(r.messages, ModelRequest{Parts: requestParts})
 	return r, nil
+}
+
+func dropOrphanedToolResults(messages []ModelMessage) []ModelMessage {
+	seenCalls := map[string]struct{}{}
+	repaired := make([]ModelMessage, 0, len(messages))
+	for index, message := range messages {
+		switch message := message.(type) {
+		case ModelResponse:
+			for _, call := range message.ToolCalls() {
+				seenCalls[toolCallMatchKey(call.ToolName, call.ToolCallID)] = struct{}{}
+			}
+			repaired = append(repaired, message)
+		case ModelRequest:
+			parts := make([]RequestPart, 0, len(message.Parts))
+			for _, part := range message.Parts {
+				toolName, toolCallID, isResult := toolResultIdentity(part)
+				if isResult {
+					if _, seen := seenCalls[toolCallMatchKey(toolName, toolCallID)]; !seen {
+						continue
+					}
+				}
+				parts = append(parts, part)
+			}
+			if len(parts) > 0 || index == len(messages)-1 {
+				message.Parts = parts
+				repaired = append(repaired, message)
+			}
+		}
+	}
+	return repaired
 }
 
 type trackedToolCall struct {

@@ -56,6 +56,10 @@ func TestRunRepairsInteriorAndTrailingDanglingToolCalls(t *testing.T) {
 	if len(captured) != 9 {
 		t.Fatalf("unexpected repaired history length: %d\n%+v", len(captured), captured)
 	}
+	initial := captured[0].(ai.ModelRequest).Parts
+	if len(initial) != 1 || initial[0].(ai.UserPromptPart).Content != "start" {
+		t.Fatalf("out-of-place tool result was not dropped: %+v", initial)
+	}
 
 	interior := captured[2].(ai.ModelRequest).Parts
 	if len(interior) != 6 {
@@ -90,6 +94,58 @@ func TestRunRepairsInteriorAndTrailingDanglingToolCalls(t *testing.T) {
 	}
 	if countSynthesizedReturns(result.Messages()) != 5 {
 		t.Fatalf("history repair was not idempotent: %+v", result.Messages())
+	}
+}
+
+func TestRunDropsOrphanedToolResults(t *testing.T) {
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.ToolReturnPart{ToolName: "orphan", ToolCallID: "one", Content: "bad"},
+		}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "old"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.ToolReturnPart{ToolName: "orphan", ToolCallID: "two", Content: "bad"},
+			ai.RetryPromptPart{ToolName: "orphan", ToolCallID: "three", Content: "bad"},
+			ai.RetryPromptPart{Content: "plain feedback"},
+		}},
+	}
+	var captured []ai.ModelMessage
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		captured = append([]ai.ModelMessage(nil), messages...)
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	if _, err := ai.NewAgent[deps, string](model).Run(
+		t.Context(), "continue", deps{}, ai.WithMessageHistory(history),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 3 {
+		t.Fatalf("unexpected normalized history: %+v", captured)
+	}
+	trailing := captured[1].(ai.ModelRequest).Parts
+	if len(trailing) != 1 || trailing[0].(ai.RetryPromptPart).Content != "plain feedback" {
+		t.Fatalf("orphaned results were not removed selectively: %+v", trailing)
+	}
+}
+
+func TestRunKeepsEmptyTrailingRequestAfterDroppingOrphan(t *testing.T) {
+	history := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.ToolReturnPart{ToolName: "orphan", ToolCallID: "one", Content: "bad"},
+	}}}
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if len(messages) != 2 || len(messages[0].(ai.ModelRequest).Parts) != 0 {
+			t.Fatalf("empty trailing request was not retained: %+v", messages)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	if _, err := ai.NewAgent[deps, string](model).Run(
+		t.Context(), "continue", deps{}, ai.WithMessageHistory(history),
+	); err != nil {
+		t.Fatal(err)
 	}
 }
 

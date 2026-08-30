@@ -105,6 +105,8 @@ agent := ai.NewAgent[Deps, Weather](
 
 Use `ai.EndStrategyExhaustive` when every output and function tool must run. Independent calls run concurrently, and the first successful output in emission order wins.
 
+With native structured output, `ai.EndStrategyEarly` also lets valid JSON preempt function tools. Invalid JSON falls through to the tools without consuming a retry. Plain text never preempts a tool call because it may only describe the work the model is about to perform.
+
 ## Streaming
 
 `RunStream` yields events as the model produces them - text deltas, tool call starts, argument fragments - and the typed result is available once the stream completes:

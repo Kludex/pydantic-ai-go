@@ -246,6 +246,183 @@ func TestOutputRetryDoesNotSuppressExhaustiveWinner(t *testing.T) {
 	}
 }
 
+func TestEarlyNativeOutputSkipsFunctionTools(t *testing.T) {
+	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.TextPart{Content: `{"value":1}`},
+			strategyCall("work", "tool", `{}`),
+		}}, nil
+	})
+	agent := ai.NewAgent[deps, strategyOutput](
+		model,
+		ai.WithOutputMode(ai.OutputModeNative),
+		ai.WithEndStrategy(ai.EndStrategyEarly),
+	)
+	workRan := false
+	ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) {
+		workRan = true
+		return "", nil
+	})
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if workRan || result.Output.Value != 1 {
+		t.Fatalf("unexpected result %+v, work ran: %v", result.Output, workRan)
+	}
+	if got := trailingRequest(t, result, 0).Parts[0].(ai.ToolReturnPart).Content; got != "Tool not executed - a final result was already processed." {
+		t.Fatalf("unexpected skipped tool status %q", got)
+	}
+}
+
+func TestGracefulAndExhaustiveIgnoreNativeOutputAlongsideTools(t *testing.T) {
+	for _, strategy := range []ai.EndStrategy{ai.EndStrategyGraceful, ai.EndStrategyExhaustive} {
+		t.Run(string(strategy), func(t *testing.T) {
+			calls := 0
+			model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+				calls++
+				if calls == 1 {
+					return &ai.ModelResponse{Parts: []ai.ResponsePart{
+						ai.TextPart{Content: `{"value":1}`},
+						strategyCall("work", "tool", `{}`),
+					}}, nil
+				}
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: `{"value":2}`}}}, nil
+			})
+			agent := ai.NewAgent[deps, strategyOutput](
+				model,
+				ai.WithOutputMode(ai.OutputModeNative),
+				ai.WithEndStrategy(strategy),
+			)
+			workRan := false
+			ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) {
+				workRan = true
+				return "done", nil
+			})
+			result, err := agent.Run(t.Context(), "go", deps{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !workRan || result.Output.Value != 2 {
+				t.Fatalf("unexpected result %+v, work ran: %v", result.Output, workRan)
+			}
+		})
+	}
+}
+
+func TestInvalidEarlyNativeOutputFallsThroughToTools(t *testing.T) {
+	calls := 0
+	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		calls++
+		if calls == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.TextPart{Content: `{bad`},
+				strategyCall("work", "tool", `{}`),
+			}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: `{"value":2}`}}}, nil
+	})
+	agent := ai.NewAgent[deps, strategyOutput](
+		model,
+		ai.WithOutputMode(ai.OutputModeNative),
+		ai.WithEndStrategy(ai.EndStrategyEarly),
+	)
+	ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) { return "done", nil })
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output.Value != 2 {
+		t.Fatalf("unexpected output %+v", result.Output)
+	}
+	if _, ok := trailingRequest(t, result, 1).Parts[0].(ai.ToolReturnPart); !ok {
+		t.Fatalf("invalid native output surfaced a retry: %+v", result.Messages())
+	}
+}
+
+func TestEarlyNativeValidatorRetryFallsThroughToTools(t *testing.T) {
+	calls := 0
+	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		calls++
+		if calls == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.TextPart{Content: `{"value":1}`},
+				strategyCall("work", "tool", `{}`),
+			}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: `{"value":2}`}}}, nil
+	})
+	agent := ai.NewAgent[deps, strategyOutput](
+		model,
+		ai.WithOutputMode(ai.OutputModeNative),
+		ai.WithEndStrategy(ai.EndStrategyEarly),
+	)
+	ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) { return "done", nil })
+	agent.AddOutputValidator(func(_ context.Context, _ *ai.RunContext[deps], output strategyOutput) error {
+		if output.Value == 1 {
+			return ai.Retryf("not one")
+		}
+		return nil
+	})
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output.Value != 2 {
+		t.Fatalf("unexpected output %+v", result.Output)
+	}
+	if _, ok := trailingRequest(t, result, 1).Parts[0].(ai.ToolReturnPart); !ok {
+		t.Fatalf("candidate validation surfaced a retry: %+v", result.Messages())
+	}
+}
+
+func TestEarlyPlainTextDoesNotPreemptTools(t *testing.T) {
+	calls := 0
+	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		calls++
+		if calls == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.TextPart{Content: "working"},
+				strategyCall("work", "tool", `{}`),
+			}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model, ai.WithEndStrategy(ai.EndStrategyEarly))
+	workRan := false
+	ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) {
+		workRan = true
+		return "done", nil
+	})
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !workRan || result.Output != "done" {
+		t.Fatalf("unexpected output %q, work ran: %v", result.Output, workRan)
+	}
+}
+
+func TestEarlyNativeOutputValidatorErrorStopsRun(t *testing.T) {
+	boom := errors.New("boom")
+	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.TextPart{Content: `{"value":1}`},
+			strategyCall("work", "tool", `{}`),
+		}}, nil
+	})
+	agent := ai.NewAgent[deps, strategyOutput](
+		model,
+		ai.WithOutputMode(ai.OutputModeNative),
+		ai.WithEndStrategy(ai.EndStrategyEarly),
+	)
+	ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) { return "done", nil })
+	agent.AddOutputValidator(func(context.Context, *ai.RunContext[deps], strategyOutput) error { return boom })
+	if _, err := agent.Run(t.Context(), "go", deps{}); !errors.Is(err, boom) {
+		t.Fatalf("expected validator error, got %v", err)
+	}
+}
+
 func TestEndStrategyToolErrors(t *testing.T) {
 	boom := errors.New("boom")
 	tests := []struct {

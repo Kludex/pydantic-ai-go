@@ -160,6 +160,19 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return result, nil
 		}
 
+		if output, ok, err := r.earlyNativeOutput(ctx, resp); err != nil {
+			return nil, err
+		} else if ok {
+			parts := make([]RequestPart, 0, len(calls))
+			for _, call := range calls {
+				parts = append(parts, ToolReturnPart{
+					ToolName: call.ToolName, Content: toolSkipped, ToolCallID: call.ToolCallID,
+				})
+			}
+			r.messages = append(r.messages, ModelRequest{Parts: parts})
+			return r.result(*output), nil
+		}
+
 		parts, final, err := r.executeCalls(ctx, calls)
 		if err != nil {
 			return nil, err
@@ -169,6 +182,29 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return r.result(*final), nil
 		}
 	}
+}
+
+func (r *run[Deps, Output]) earlyNativeOutput(
+	ctx context.Context, resp *ModelResponse,
+) (*Output, bool, error) {
+	if r.agent.endStrategy != EndStrategyEarly || r.params.OutputSchema == nil || resp.Text() == "" {
+		return nil, false, nil
+	}
+	var out Output
+	if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
+		return nil, false, nil
+	}
+	for _, validate := range r.agent.outputValidators {
+		err := validate(ctx, r.rc, out)
+		var retry *RetryError
+		switch {
+		case errors.As(err, &retry):
+			return nil, false, nil
+		case err != nil:
+			return nil, false, fmt.Errorf("ai: output validation: %w", err)
+		}
+	}
+	return &out, true, nil
 }
 
 type callOutcome[Output any] struct {

@@ -118,8 +118,8 @@ Status:
 - [x] Text output.
 - [x] Tool output.
 - [~] Native output on supported providers.
-- [ ] Native/prompted output alongside function calls obeys end strategies; plain text must remain non-preemptive.
-- [ ] Prompted JSON output fallback.
+- [x] Native structured output alongside function calls obeys end strategies; plain text remains non-preemptive.
+- [ ] Prompted JSON output fallback, including end-strategy handling.
 - [ ] Multiple output alternatives / union outputs.
 - [ ] Image and binary outputs.
 - [ ] Output tool name/description customization and sequential flag.
@@ -191,7 +191,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Extend end-strategy handling to native output and streaming commitment semantics.
+2. Match streaming final-output commitment and validation semantics.
 3. Add per-step tool preparation, then provider-profile defaults for strict mode.
 4. Add Anthropic, Gemini, and OpenAI Responses streaming.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.

@@ -62,22 +62,33 @@ type run[Deps, Output any] struct {
 	retries     int
 }
 
+// modelRequest is the model-request interception point: tracing today,
+// capability middleware (WrapModelRequest) in v0.3.
+func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
+	a := r.agent
+	reqCtx, reqSpan := startRequestSpan(ctx, a.model.Name())
+	resp, err := a.model.Request(reqCtx, r.messages, r.params)
+	if err != nil {
+		endSpan(reqSpan, err)
+		return nil, err
+	}
+	recordUsage(reqSpan, resp.Usage)
+	endSpan(reqSpan, nil)
+	if resp.Timestamp.IsZero() {
+		resp.Timestamp = time.Now().UTC()
+	}
+	if resp.ModelName == "" {
+		resp.ModelName = a.model.Name()
+	}
+	return resp, nil
+}
+
 func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error) {
 	a := r.agent
 	for {
-		reqCtx, reqSpan := startRequestSpan(ctx, a.model.Name())
-		resp, err := a.model.Request(reqCtx, r.messages, r.params)
+		resp, err := r.modelRequest(ctx)
 		if err != nil {
-			endSpan(reqSpan, err)
 			return nil, err
-		}
-		recordUsage(reqSpan, resp.Usage)
-		endSpan(reqSpan, nil)
-		if resp.Timestamp.IsZero() {
-			resp.Timestamp = time.Now().UTC()
-		}
-		if resp.ModelName == "" {
-			resp.ModelName = a.model.Name()
 		}
 		r.usage.Add(resp.Usage)
 		if err := a.limits.check(r.usage); err != nil {

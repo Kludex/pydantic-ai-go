@@ -88,8 +88,9 @@ Status:
 - [x] Anthropic SSE streaming for text, thinking, function calls, usage, errors, and cancellation.
 - [x] Google Gemini SSE streaming for text, thinking, function calls with IDs, usage, errors, and cancellation.
 - [x] OpenAI Responses SSE streaming for text, reasoning summaries, function arguments, usage, errors, and cancellation.
-- [ ] Output validation during streaming and partial structured output.
-- [ ] Streaming final-output commitment: upstream `run_stream` locks the first matching output and behaves like `early`; Go currently accumulates the response and applies the configured strategy.
+- [x] Final streamed output validation; retry requests fail clearly because `RunStream` cannot start another model round after committing output.
+- [ ] Partial structured output validation while deltas arrive.
+- [x] Streaming final-output commitment: `RunStream` locks the first matching text, native, or output-tool result. Configured end strategies still govern co-emitted tools, but retries cannot revoke the committed result.
 - [ ] Stream event processors and capability wrapper.
 - [ ] Streamed tool execution events and deferred results.
 
@@ -197,7 +198,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Match streaming final-output commitment and validation semantics.
+2. Add partial structured-output validation while streaming deltas.
 3. Add inspectable diagnostics for Anthropic's lossy strict conversion of dynamic-map schemas.
 4. Add stable stream part IDs and keyed deltas before expanding streamed builtin tools.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.

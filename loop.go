@@ -252,6 +252,22 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		r.messages = append(r.messages, *resp)
 
 		calls := resp.ToolCalls()
+		if r.emit != nil {
+			output, winningCall, committed, err := r.streamedOutput(ctx, resp)
+			if err != nil {
+				return nil, err
+			}
+			if committed {
+				parts, err := r.executeCallsWithCommittedOutput(ctx, calls, winningCall)
+				if err != nil {
+					return nil, err
+				}
+				if len(parts) > 0 {
+					r.messages = append(r.messages, ModelRequest{Parts: parts})
+				}
+				return r.result(*output), nil
+			}
+		}
 		if len(calls) == 0 {
 			result, retry, err := r.finalizeText(ctx, resp)
 			if err != nil {

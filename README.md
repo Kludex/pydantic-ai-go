@@ -198,6 +198,8 @@ result := stream.Result()
 
 OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini stream text, thinking, tool arguments, and usage from their SSE APIs. Models that do not implement `ai.StreamingModel` still work: each response is replayed as events.
 
+`RunStream` commits the first matching text, native, or output-tool result. The configured end strategy still controls co-emitted tools, but a tool retry cannot revoke that result. If an output validator requests a retry, the streamed run returns `UnexpectedModelBehaviorError` because output has already been committed. Use `Run` when validation should start another model round.
+
 ## Multimodal input
 
 `RunParts` sends images and files alongside text:

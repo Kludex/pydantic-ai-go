@@ -104,6 +104,7 @@ func (a *Agent[Deps, Output]) newRun(
 		r.retryLimits = *cfg.retryLimits
 	}
 	history, interruptedReturns := repairDanglingToolCalls(dropOrphanedToolResults(cfg.history))
+	history = mergeConsecutiveMessages(history)
 	r.messages = append(r.messages, history...)
 	r.newMessages = len(r.messages)
 	settings := mergeModelSettings(a.settings, cfg.settings)
@@ -162,6 +163,46 @@ func dropOrphanedToolResults(messages []ModelMessage) []ModelMessage {
 		}
 	}
 	return repaired
+}
+
+func mergeConsecutiveMessages(messages []ModelMessage) []ModelMessage {
+	merged := make([]ModelMessage, 0, len(messages))
+	for _, message := range messages {
+		if len(merged) == 0 {
+			merged = append(merged, message)
+			continue
+		}
+		switch message := message.(type) {
+		case ModelRequest:
+			previous, ok := merged[len(merged)-1].(ModelRequest)
+			if !ok {
+				merged = append(merged, message)
+				continue
+			}
+			combined := append(slices.Clone(previous.Parts), message.Parts...)
+			parts := make([]RequestPart, 0, len(combined))
+			for _, part := range combined {
+				if _, _, isResult := toolResultIdentity(part); isResult {
+					parts = append(parts, part)
+				}
+			}
+			for _, part := range combined {
+				if _, _, isResult := toolResultIdentity(part); !isResult {
+					parts = append(parts, part)
+				}
+			}
+			merged[len(merged)-1] = ModelRequest{Parts: parts}
+		case ModelResponse:
+			previous, ok := merged[len(merged)-1].(ModelResponse)
+			if !ok || previous.ModelName != "" || message.ModelName != "" {
+				merged = append(merged, message)
+				continue
+			}
+			previous.Parts = append(slices.Clone(previous.Parts), message.Parts...)
+			merged[len(merged)-1] = previous
+		}
+	}
+	return merged
 }
 
 type trackedToolCall struct {

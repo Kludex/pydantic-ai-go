@@ -149,6 +149,58 @@ func TestRunKeepsEmptyTrailingRequestAfterDroppingOrphan(t *testing.T) {
 	}
 }
 
+func TestRunMergesConsecutiveSameRoleHistory(t *testing.T) {
+	history := []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.ToolCallPart{ToolName: "work", ToolCallID: "call", Args: []byte(`{}`)},
+		}},
+		ai.ModelRequest{State: ai.RequestStateInterrupted, Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "before result"},
+			ai.ToolReturnPart{ToolName: "work", ToolCallID: "call", Content: "done"},
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.RetryPromptPart{Content: "plain feedback"},
+			ai.UserPromptPart{Content: "after result"},
+		}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "one"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "two"}}},
+		ai.ModelResponse{ModelName: "provider", Parts: []ai.ResponsePart{ai.TextPart{Content: "three"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "four"}}},
+	}
+	var captured []ai.ModelMessage
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		captured = append([]ai.ModelMessage(nil), messages...)
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	result, err := ai.NewAgent[deps, string](model).Run(
+		t.Context(), "continue", deps{}, ai.WithMessageHistory(history),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 6 {
+		t.Fatalf("unexpected merged history: %+v", captured)
+	}
+	request := captured[1].(ai.ModelRequest)
+	if request.State == ai.RequestStateInterrupted || len(request.Parts) != 4 {
+		t.Fatalf("consecutive requests were not merged: %+v", request)
+	}
+	if resultPart, ok := request.Parts[0].(ai.ToolReturnPart); !ok || resultPart.ToolCallID != "call" {
+		t.Fatalf("tool results were not hoisted: %+v", request.Parts)
+	}
+	response := captured[2].(ai.ModelResponse)
+	if len(response.Parts) != 2 || response.Parts[0].(ai.TextPart).Content != "one" ||
+		response.Parts[1].(ai.TextPart).Content != "two" {
+		t.Fatalf("synthetic responses were not merged: %+v", response)
+	}
+	if len(result.NewMessages()) != 2 ||
+		result.NewMessages()[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart).Content != "continue" {
+		t.Fatalf("history merging changed the new-message boundary: %+v", result.NewMessages())
+	}
+}
+
 func TestRunDoesNotRepairFullyMatchedHistory(t *testing.T) {
 	history := []ai.ModelMessage{
 		ai.ModelResponse{Parts: []ai.ResponsePart{

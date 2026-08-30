@@ -47,7 +47,7 @@ Status:
 - [ ] Retry prompt structured validation errors.
 - [x] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
 - [x] Synthesized-return metadata markers and deterministic, idempotent repair of trailing, interior, shadowed-ID, malformed-order, and empty-ID dangling calls.
-- [~] Orphaned tool results are removed while plain validation feedback is preserved; consecutive same-role message normalization after history processors or hand-built history remains.
+- [x] Orphaned tool results are removed while plain validation feedback is preserved; consecutive requests and synthetic responses are merged with tool results hoisted before user-facing content.
 - [~] `ToolReturn` metadata is preserved; separate return value, extra content, and revealed tools remain.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, and tool-argument deltas across bundled providers and fallback replay.
 - [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, and `FinalResultEvent` with typed, applicable deltas.
@@ -205,7 +205,7 @@ Status:
 
 ## Next work
 
-1. Extend upstream message fixtures as remaining persisted part types land, and add consecutive-role history normalization.
+1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add per-run dynamic settings, typed output specialization, capabilities, and toolsets.
 3. Add configurable partial-output debouncing and broader schema constraint validation.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.

@@ -166,7 +166,9 @@ agent.AddToolsPrepareFunc(func(
 })
 ```
 
-The hook receives fresh copies, so you can safely change descriptions and nested schemas. Return an empty or nil slice to expose no function tools for that step. Output tools are prepared separately by the agent and are not included.
+The hook receives fresh copies, so you can safely change descriptions, nested schemas, and metadata. Return an empty or nil slice to expose no function tools for that step. Output tools are prepared separately by the agent and are not included.
+
+Use `ai.WithToolMetadata(map[string]any{"owner": "billing"})` to attach local data for preparation and filtering. Metadata is copied with the definition and is never sent to the model provider.
 
 ## Argument validation
 

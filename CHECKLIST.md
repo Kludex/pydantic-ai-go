@@ -71,7 +71,7 @@ Status:
 - [x] Failed and interrupted tool returns use Anthropic error results and Gemini error responses.
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
-- [ ] Tool metadata and provider-specific options.
+- [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
 - [ ] Toolsets: function, combined, filtered, prefixed, renamed, prepared, and approval-required.
 - [ ] Deferred/lazy tool loading and tool search.
 - [ ] Native/builtin tools distinct from function tools.

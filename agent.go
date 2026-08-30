@@ -138,7 +138,7 @@ func (a *Agent[Deps, Output]) addPreparedTool(
 	def ToolDefinition, fn toolFunc[Deps], prepare ToolPrepareFunc[Deps],
 ) {
 	a.checkNotStarted()
-	a.tools = append(a.tools, toolEntry[Deps]{def: def, call: fn, prepare: prepare})
+	a.tools = append(a.tools, toolEntry[Deps]{def: cloneToolDefinition(def), call: fn, prepare: prepare})
 }
 
 func (a *Agent[Deps, Output]) checkNotStarted() {

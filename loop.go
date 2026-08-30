@@ -437,6 +437,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 
 func cloneToolDefinition(def ToolDefinition) ToolDefinition {
 	def.Schema = cloneSchemaMap(def.Schema)
+	def.Metadata = cloneSchemaMap(def.Metadata)
 	if def.Strict != nil {
 		strict := *def.Strict
 		def.Strict = &strict

@@ -94,7 +94,10 @@ type ToolDefinition struct {
 	Sequential bool `json:"-"`
 	// Strict asks the provider to constrain generated arguments to Schema.
 	// Nil uses the provider default; true forces strict mode; false disables it.
-	Strict     *bool `json:"-"`
+	Strict *bool `json:"-"`
+	// Metadata is available to preparation and filtering hooks but is not sent
+	// to the model.
+	Metadata   map[string]any `json:"-"`
 	maxRetries *int
 	timeout    time.Duration
 }

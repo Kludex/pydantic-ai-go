@@ -238,6 +238,12 @@ func WithDescription(description string) ToolOption {
 	return func(d *ToolDefinition) { d.Description = description }
 }
 
+// WithToolMetadata attaches local metadata for preparation and filtering
+// hooks. Providers do not receive it.
+func WithToolMetadata(metadata map[string]any) ToolOption {
+	return func(d *ToolDefinition) { d.Metadata = cloneSchemaMap(metadata) }
+}
+
 // WithSequential makes a tool an execution barrier. Independent tools run
 // concurrently by default. Calls before this tool finish first, this tool
 // runs alone, and later calls start afterward.

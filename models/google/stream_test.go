@@ -58,24 +58,31 @@ func TestStreamEvents(t *testing.T) {
 		t.Fatalf("unexpected request path=%q query=%q accept=%q", path, query, accept)
 	}
 	var text, thinking, args string
+	var textPartID, thinkingPartID, argsPartID string
 	var start ai.ToolCallStartEvent
 	var finish ai.FinishEvent
 	for _, event := range events {
 		switch event := event.(type) {
 		case ai.TextDeltaEvent:
 			text += event.Delta
+			textPartID = event.PartID
 		case ai.ThinkingDeltaEvent:
 			thinking += event.Delta
+			thinkingPartID = event.PartID
 		case ai.ToolCallStartEvent:
 			start = event
 		case ai.ToolCallDeltaEvent:
 			args += event.ArgsDelta
+			argsPartID = event.PartID
 		case ai.FinishEvent:
 			finish = event
 		}
 	}
 	if text != "Hello" || thinking != "plan" || start.ToolName != "work" || start.ToolCallID != "c1" || args != `{"x":1}` {
 		t.Fatalf("unexpected events text=%q thinking=%q start=%+v args=%q", text, thinking, start, args)
+	}
+	if textPartID != "text:0" || thinkingPartID != "thinking:0" || start.PartID != "tool:0" || argsPartID != "tool:0" {
+		t.Fatalf("unstable Gemini part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
 	if finish.ModelName != "gemini-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 3 {
 		t.Fatalf("unexpected finish %+v", finish)

@@ -51,9 +51,13 @@ func (m *ResponsesModel) StreamRequest(
 }
 
 type responsesStreamEvent struct {
-	Type  string `json:"type"`
-	Delta string `json:"delta"`
-	Item  struct {
+	Type         string `json:"type"`
+	Delta        string `json:"delta"`
+	ItemID       string `json:"item_id"`
+	OutputIndex  int    `json:"output_index"`
+	ContentIndex int    `json:"content_index"`
+	SummaryIndex int    `json:"summary_index"`
+	Item         struct {
 		ID        string `json:"id"`
 		Type      string `json:"type"`
 		CallID    string `json:"call_id"`
@@ -102,28 +106,36 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.S
 			}
 			switch event.Type {
 			case "response.output_text.delta":
-				if !yield(ai.TextDeltaEvent{Delta: event.Delta}, nil) {
+				partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
+				if !yield(ai.TextDeltaEvent{PartID: partID, Delta: event.Delta}, nil) {
 					return
 				}
 			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
-				if !yield(ai.ThinkingDeltaEvent{Delta: event.Delta}, nil) {
+				partID := responsesThinkingPartID(event)
+				if !yield(ai.ThinkingDeltaEvent{PartID: partID, Delta: event.Delta}, nil) {
 					return
 				}
 			case "response.reasoning_summary_part.added":
-				if event.Part.Text != "" && !yield(ai.ThinkingDeltaEvent{Delta: event.Part.Text}, nil) {
+				partID := responsesThinkingPartID(event)
+				if event.Part.Text != "" && !yield(ai.ThinkingDeltaEvent{PartID: partID, Delta: event.Part.Text}, nil) {
 					return
 				}
 			case "response.output_item.added":
 				if event.Item.Type == "function_call" {
-					if !yield(ai.ToolCallStartEvent{ToolName: event.Item.Name, ToolCallID: event.Item.CallID}, nil) {
+					partID := responsesToolPartID(event)
+					if !yield(ai.ToolCallStartEvent{
+						PartID: partID, ToolName: event.Item.Name, ToolCallID: event.Item.CallID,
+					}, nil) {
 						return
 					}
-					if event.Item.Arguments != "" && !yield(ai.ToolCallDeltaEvent{ArgsDelta: event.Item.Arguments}, nil) {
+					if event.Item.Arguments != "" && !yield(ai.ToolCallDeltaEvent{
+						PartID: partID, ArgsDelta: event.Item.Arguments,
+					}, nil) {
 						return
 					}
 				}
 			case "response.function_call_arguments.delta":
-				if !yield(ai.ToolCallDeltaEvent{ArgsDelta: event.Delta}, nil) {
+				if !yield(ai.ToolCallDeltaEvent{PartID: responsesToolPartID(event), ArgsDelta: event.Delta}, nil) {
 					return
 				}
 			case "response.completed":
@@ -163,6 +175,23 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.S
 		}
 		yield(nil, fmt.Errorf("openai: Responses stream ended without response.completed"))
 	}
+}
+
+func responsesToolPartID(event responsesStreamEvent) string {
+	if event.ItemID != "" {
+		return "item:" + event.ItemID
+	}
+	if event.Item.ID != "" {
+		return "item:" + event.Item.ID
+	}
+	return fmt.Sprintf("output:%d:tool", event.OutputIndex)
+}
+
+func responsesThinkingPartID(event responsesStreamEvent) string {
+	if event.ItemID != "" {
+		return fmt.Sprintf("item:%s:thinking:%d", event.ItemID, event.SummaryIndex)
+	}
+	return fmt.Sprintf("output:%d:thinking:%d", event.OutputIndex, event.SummaryIndex)
 }
 
 var _ ai.StreamingModel = (*ResponsesModel)(nil)

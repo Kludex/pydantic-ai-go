@@ -79,7 +79,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error]
 		defer func() { _ = body.Close() }()
 		var usage ai.Usage
 		modelName := m.name
-		currentTool := -1
+		startedTools := map[int]bool{}
 
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -113,19 +113,22 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error]
 			}
 			delta := chunk.Choices[0].Delta
 			if delta.Content != "" {
-				if !yield(ai.TextDeltaEvent{Delta: delta.Content}, nil) {
+				if !yield(ai.TextDeltaEvent{PartID: "text", Delta: delta.Content}, nil) {
 					return
 				}
 			}
 			for _, call := range delta.ToolCalls {
-				if call.Index != currentTool {
-					currentTool = call.Index
-					if !yield(ai.ToolCallStartEvent{ToolName: call.Function.Name, ToolCallID: call.ID}, nil) {
+				partID := fmt.Sprintf("tool:%d", call.Index)
+				if !startedTools[call.Index] {
+					startedTools[call.Index] = true
+					if !yield(ai.ToolCallStartEvent{
+						PartID: partID, ToolName: call.Function.Name, ToolCallID: call.ID,
+					}, nil) {
 						return
 					}
 				}
 				if call.Function.Arguments != "" {
-					if !yield(ai.ToolCallDeltaEvent{ArgsDelta: call.Function.Arguments}, nil) {
+					if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: call.Function.Arguments}, nil) {
 						return
 					}
 				}

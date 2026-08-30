@@ -25,9 +25,9 @@ func TestResponsesStreamEvents(t *testing.T) {
 			`{"type":"response.created","response":{"model":"gpt-5"}}`,
 			`{"type":"response.output_item.added","item":{"id":"msg","type":"message"}}`,
 			`{"type":"response.output_text.delta","delta":"Hi"}`,
-			`{"type":"response.reasoning_summary_part.added","part":{"text":"A"}}`,
-			`{"type":"response.reasoning_summary_text.delta","delta":"B"}`,
-			`{"type":"response.reasoning_text.delta","delta":"C"}`,
+			`{"type":"response.reasoning_summary_part.added","item_id":"reason","part":{"text":"A"}}`,
+			`{"type":"response.reasoning_summary_text.delta","item_id":"reason","delta":"B"}`,
+			`{"type":"response.reasoning_text.delta","item_id":"reason","delta":"C"}`,
 			`{"type":"response.output_item.added","item":{"id":"fc","type":"function_call","call_id":"c1","name":"work","arguments":""}}`,
 			`{"type":"response.function_call_arguments.delta","item_id":"fc","delta":"{\"x\":"}`,
 			`{"type":"response.function_call_arguments.delta","item_id":"fc","delta":"1}"}`,
@@ -44,24 +44,32 @@ func TestResponsesStreamEvents(t *testing.T) {
 		t.Fatal("Responses request did not enable streaming")
 	}
 	var text, thinking, args string
+	var textPartID, thinkingPartID, argsPartID string
 	var start ai.ToolCallStartEvent
 	var finish ai.FinishEvent
 	for _, event := range events {
 		switch event := event.(type) {
 		case ai.TextDeltaEvent:
 			text += event.Delta
+			textPartID = event.PartID
 		case ai.ThinkingDeltaEvent:
 			thinking += event.Delta
+			thinkingPartID = event.PartID
 		case ai.ToolCallStartEvent:
 			start = event
 		case ai.ToolCallDeltaEvent:
 			args += event.ArgsDelta
+			argsPartID = event.PartID
 		case ai.FinishEvent:
 			finish = event
 		}
 	}
 	if text != "Hi" || thinking != "ABC" || start.ToolName != "work" || start.ToolCallID != "c1" || args != `{"x":1}` {
 		t.Fatalf("unexpected events text=%q thinking=%q start=%+v args=%q", text, thinking, start, args)
+	}
+	if textPartID != "output:0:content:0:text" || thinkingPartID != "item:reason:thinking:0" ||
+		start.PartID != "item:fc" || argsPartID != start.PartID {
+		t.Fatalf("unstable Responses part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
 	if finish.ModelName != "gpt-5" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 3 {
 		t.Fatalf("unexpected finish %+v", finish)

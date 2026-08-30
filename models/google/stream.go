@@ -79,8 +79,8 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error]
 			if len(chunk.Candidates) == 0 {
 				continue
 			}
-			for _, part := range chunk.Candidates[0].Content.Parts {
-				if !emitPart(yield, part) {
+			for index, part := range chunk.Candidates[0].Content.Parts {
+				if !emitPart(yield, part, index) {
 					return
 				}
 			}
@@ -97,20 +97,23 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error]
 	}
 }
 
-func emitPart(yield func(ai.StreamEvent, error) bool, part part) bool {
+func emitPart(yield func(ai.StreamEvent, error) bool, part part, index int) bool {
 	switch {
 	case part.FunctionCall != nil:
+		partID := fmt.Sprintf("tool:%d", index)
 		if !yield(ai.ToolCallStartEvent{
-			ToolName: part.FunctionCall.Name, ToolCallID: part.FunctionCall.ID,
+			PartID: partID, ToolName: part.FunctionCall.Name, ToolCallID: part.FunctionCall.ID,
 		}, nil) {
 			return false
 		}
 		args, _ := json.Marshal(part.FunctionCall.Args)
-		return yield(ai.ToolCallDeltaEvent{ArgsDelta: string(args)}, nil)
+		return yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(args)}, nil)
 	case part.Thought:
-		return part.Text == "" || yield(ai.ThinkingDeltaEvent{Delta: part.Text}, nil)
+		return part.Text == "" || yield(ai.ThinkingDeltaEvent{
+			PartID: fmt.Sprintf("thinking:%d", index), Delta: part.Text,
+		}, nil)
 	case part.Text != "":
-		return yield(ai.TextDeltaEvent{Delta: part.Text}, nil)
+		return yield(ai.TextDeltaEvent{PartID: fmt.Sprintf("text:%d", index), Delta: part.Text}, nil)
 	case part.InlineData != nil || part.FileData != nil:
 		return yield(nil, fmt.Errorf("google: streamed binary output is not supported"))
 	default:

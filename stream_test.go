@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"slices"
+	"sync"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -207,6 +209,116 @@ func TestRunStreamStructuredOutput(t *testing.T) {
 	}
 	if stream.Result().Output.City != "SF" {
 		t.Fatalf("unexpected output %+v", stream.Result().Output)
+	}
+}
+
+func TestRunStreamInterleavesKeyedToolCalls(t *testing.T) {
+	model := newStreamingModel(func(msgs []ai.ModelMessage) []ai.StreamEvent {
+		if len(msgs) == 1 {
+			return []ai.StreamEvent{
+				ai.ToolCallStartEvent{PartID: "first", ToolName: "lookup", ToolCallID: "a"},
+				ai.ToolCallStartEvent{PartID: "second", ToolName: "lookup", ToolCallID: "b"},
+				ai.ToolCallDeltaEvent{PartID: "first", ArgsDelta: `{"city":"S`},
+				ai.ToolCallDeltaEvent{PartID: "second", ArgsDelta: `{"city":"N`},
+				ai.ToolCallDeltaEvent{PartID: "first", ArgsDelta: `F"}`},
+				ai.ToolCallDeltaEvent{PartID: "second", ArgsDelta: `Y"}`},
+				ai.FinishEvent{Usage: ai.Usage{Requests: 1}},
+			}
+		}
+		return []ai.StreamEvent{ai.TextDeltaEvent{PartID: "answer", Delta: "done"}, ai.FinishEvent{}}
+	})
+	agent := ai.NewAgent[deps, string](model)
+	var mutex sync.Mutex
+	var cities []string
+	ai.AddSimpleTool(agent, "lookup", func(_ context.Context, args weatherArgs) (string, error) {
+		mutex.Lock()
+		defer mutex.Unlock()
+		cities = append(cities, args.City)
+		return args.City, nil
+	})
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	slices.Sort(cities)
+	if !slices.Equal(cities, []string{"NY", "SF"}) {
+		t.Fatalf("interleaved arguments were routed incorrectly: %v", cities)
+	}
+	response := stream.Result().Messages()[1].(ai.ModelResponse)
+	calls := response.ToolCalls()
+	if calls[0].ToolCallID != "a" || calls[1].ToolCallID != "b" {
+		t.Fatalf("first-seen part order was not preserved: %v", calls)
+	}
+}
+
+func TestRunStreamInterleavesKeyedTextAndThinking(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
+		return []ai.StreamEvent{
+			ai.TextDeltaEvent{PartID: "answer", Delta: "A"},
+			ai.ThinkingDeltaEvent{PartID: "reasoning", Delta: "why"},
+			ai.TextDeltaEvent{PartID: "answer", Delta: "B"},
+			ai.FinishEvent{},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	var IDs []string
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case ai.TextDeltaEvent:
+			IDs = append(IDs, event.PartID)
+		case ai.ThinkingDeltaEvent:
+			IDs = append(IDs, event.PartID)
+		}
+	}
+	if !slices.Equal(IDs, []string{"answer", "reasoning", "answer"}) {
+		t.Fatalf("part IDs changed: %v", IDs)
+	}
+	result := stream.Result()
+	if result.Output != "AB" {
+		t.Fatalf("unexpected interleaved output %q", result.Output)
+	}
+	parts := result.Messages()[1].(ai.ModelResponse).Parts
+	if parts[0].(ai.TextPart).Content != "AB" || parts[1].(ai.ThinkingPart).Content != "why" {
+		t.Fatalf("unexpected materialized parts: %v", parts)
+	}
+}
+
+func TestRunStreamRejectsInvalidPartIDs(t *testing.T) {
+	tests := map[string][]ai.StreamEvent{
+		"text to thinking": {
+			ai.TextDeltaEvent{PartID: "same", Delta: "text"},
+			ai.ThinkingDeltaEvent{PartID: "same", Delta: "thinking"},
+		},
+		"thinking to text": {
+			ai.ThinkingDeltaEvent{PartID: "same", Delta: "thinking"},
+			ai.TextDeltaEvent{PartID: "same", Delta: "text"},
+		},
+		"duplicate tool start": {
+			ai.ToolCallStartEvent{PartID: "same", ToolName: "one"},
+			ai.ToolCallStartEvent{PartID: "same", ToolName: "two"},
+		},
+		"unknown tool delta": {ai.ToolCallDeltaEvent{PartID: "missing", ArgsDelta: `{}`}},
+	}
+	for name, events := range tests {
+		t.Run(name, func(t *testing.T) {
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent { return events })
+			stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+			var got error
+			for _, err := range stream.Events() {
+				if err != nil {
+					got = err
+				}
+			}
+			var unexpected *ai.UnexpectedModelBehaviorError
+			if !errors.As(got, &unexpected) {
+				t.Fatalf("expected UnexpectedModelBehaviorError, got %v", got)
+			}
+		})
 	}
 }
 

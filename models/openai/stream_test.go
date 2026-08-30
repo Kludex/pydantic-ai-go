@@ -48,18 +48,19 @@ func TestStreamTextDeltas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var text string
+	var text, textPartID string
 	var finish ai.FinishEvent
 	for _, e := range events {
 		switch ev := e.(type) {
 		case ai.TextDeltaEvent:
 			text += ev.Delta
+			textPartID = ev.PartID
 		case ai.FinishEvent:
 			finish = ev
 		}
 	}
-	if text != "Hello" {
-		t.Fatalf("unexpected text %q", text)
+	if text != "Hello" || textPartID != "text" {
+		t.Fatalf("unexpected text %q with part ID %q", text, textPartID)
 	}
 	if finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 2 || finish.Usage.Requests != 1 {
 		t.Fatalf("unexpected usage %+v", finish.Usage)
@@ -98,6 +99,36 @@ func TestStreamToolCalls(t *testing.T) {
 	}
 	if args != `{"city":"SF"}` {
 		t.Fatalf("unexpected args %q", args)
+	}
+}
+
+func TestStreamInterleavedToolCallDeltas(t *testing.T) {
+	model := newServer(t, sseHandler(t, []string{
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"one","arguments":"{\"x\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"c2","function":{"name":"two","arguments":"{\"y\":"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"1}"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":1,"function":{"arguments":"2}"}}]}}]}`,
+		`[DONE]`,
+	}))
+	events, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	starts := map[string]int{}
+	args := map[string]string{}
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			starts[event.PartID]++
+		case ai.ToolCallDeltaEvent:
+			args[event.PartID] += event.ArgsDelta
+		}
+	}
+	if starts["tool:0"] != 1 || starts["tool:1"] != 1 {
+		t.Fatalf("tool part IDs were not stable: %v", starts)
+	}
+	if args["tool:0"] != `{"x":1}` || args["tool:1"] != `{"y":2}` {
+		t.Fatalf("interleaved arguments were not keyed: %v", args)
 	}
 }
 

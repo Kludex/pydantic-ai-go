@@ -46,7 +46,8 @@ Status:
 - [ ] Provider details, metadata, run ID, conversation ID, finish reason, and response IDs.
 - [ ] Retry prompt structured validation errors.
 - [ ] Rich `ToolReturn`: separate return value, extra content, metadata, and revealed tools.
-- [ ] Stream event parity: stable part IDs, keyed/interleaved deltas, part start/delta/end, final result, and enqueued-message events.
+- [x] Stable stream part IDs and keyed/interleaved text, thinking, and tool-argument deltas across bundled providers and fallback replay.
+- [ ] Explicit part start/delta/end, final-result, and enqueued-message events.
 
 ### Tools and toolsets
 
@@ -82,7 +83,7 @@ Status:
 ### Streaming
 
 - [x] Provider-optional `StreamingModel` and `Agent.RunStream`.
-- [x] Text, thinking, and partial tool-argument events.
+- [x] Text, thinking, and partial tool-argument events with stable part IDs and interleaved-delta routing.
 - [x] Non-streaming fallback replay.
 - [x] OpenAI Chat Completions SSE streaming.
 - [x] Anthropic SSE streaming for text, thinking, function calls, usage, errors, and cancellation.
@@ -200,6 +201,6 @@ Status:
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add partial structured-output validation while streaming deltas.
 3. Add inspectable diagnostics for Anthropic's lossy strict conversion of dynamic-map schemas.
-4. Add stable stream part IDs and keyed deltas before expanding streamed builtin tools.
+4. Add explicit part start/delta/end and final-result events on top of stable part IDs.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"iter"
+	"strconv"
 )
 
 // StreamedRun is a run in progress. Range over Events to consume it;
@@ -85,21 +86,24 @@ func (a *Agent[Deps, Output]) runStreamPrompt(ctx context.Context, prompt UserPr
 // model would have produced.
 func replayAsEvents(resp *ModelResponse) iter.Seq2[StreamEvent, error] {
 	return func(yield func(StreamEvent, error) bool) {
-		for _, part := range resp.Parts {
-			switch p := part.(type) {
+		for index, part := range resp.Parts {
+			partID := strconv.Itoa(index)
+			switch part := part.(type) {
 			case TextPart:
-				if !yield(TextDeltaEvent{Delta: p.Content}, nil) {
+				if !yield(TextDeltaEvent{PartID: partID, Delta: part.Content}, nil) {
 					return
 				}
 			case ThinkingPart:
-				if !yield(ThinkingDeltaEvent{Delta: p.Content}, nil) {
+				if !yield(ThinkingDeltaEvent{PartID: partID, Delta: part.Content}, nil) {
 					return
 				}
 			case ToolCallPart:
-				if !yield(ToolCallStartEvent{ToolName: p.ToolName, ToolCallID: p.ToolCallID}, nil) {
+				if !yield(ToolCallStartEvent{
+					PartID: partID, ToolName: part.ToolName, ToolCallID: part.ToolCallID,
+				}, nil) {
 					return
 				}
-				if !yield(ToolCallDeltaEvent{ArgsDelta: string(p.Args)}, nil) {
+				if !yield(ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(part.Args)}, nil) {
 					return
 				}
 			}

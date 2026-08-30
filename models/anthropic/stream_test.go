@@ -76,24 +76,31 @@ func TestStreamEvents(t *testing.T) {
 		t.Fatalf("stream request not configured: stream=%v accept=%q", gotStream, gotAccept)
 	}
 	var text, thinking, args string
+	var textPartID, thinkingPartID, argsPartID string
 	var start ai.ToolCallStartEvent
 	var finish ai.FinishEvent
 	for _, event := range events {
 		switch event := event.(type) {
 		case ai.TextDeltaEvent:
 			text += event.Delta
+			textPartID = event.PartID
 		case ai.ThinkingDeltaEvent:
 			thinking += event.Delta
+			thinkingPartID = event.PartID
 		case ai.ToolCallStartEvent:
 			start = event
 		case ai.ToolCallDeltaEvent:
 			args += event.ArgsDelta
+			argsPartID = event.PartID
 		case ai.FinishEvent:
 			finish = event
 		}
 	}
 	if text != "Hi" || thinking != "AB" || start.ToolName != "work" || start.ToolCallID != "c1" || args != `{"x":1}` {
 		t.Fatalf("unexpected events: text=%q thinking=%q start=%+v args=%q", text, thinking, start, args)
+	}
+	if textPartID != "0" || thinkingPartID != "1" || start.PartID != "2" || argsPartID != "2" {
+		t.Fatalf("unstable Anthropic part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
 	if finish.ModelName != "claude-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 8 {
 		t.Fatalf("unexpected finish %+v", finish)

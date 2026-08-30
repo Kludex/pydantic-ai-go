@@ -9,6 +9,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"strconv"
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -140,30 +141,36 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.StreamEvent, error]
 }
 
 func (m *Model) emitContentBlockStart(yield func(ai.StreamEvent, error) bool, event streamEvent) bool {
+	partID := strconv.Itoa(event.Index)
 	switch event.ContentBlock.Type {
 	case "text":
-		return event.ContentBlock.Text == "" || yield(ai.TextDeltaEvent{Delta: event.ContentBlock.Text}, nil)
+		return event.ContentBlock.Text == "" || yield(ai.TextDeltaEvent{PartID: partID, Delta: event.ContentBlock.Text}, nil)
 	case "thinking":
-		return event.ContentBlock.Thinking == "" || yield(ai.ThinkingDeltaEvent{Delta: event.ContentBlock.Thinking}, nil)
+		return event.ContentBlock.Thinking == "" || yield(ai.ThinkingDeltaEvent{
+			PartID: partID, Delta: event.ContentBlock.Thinking,
+		}, nil)
 	case "tool_use":
-		if !yield(ai.ToolCallStartEvent{ToolName: event.ContentBlock.Name, ToolCallID: event.ContentBlock.ID}, nil) {
+		if !yield(ai.ToolCallStartEvent{
+			PartID: partID, ToolName: event.ContentBlock.Name, ToolCallID: event.ContentBlock.ID,
+		}, nil) {
 			return false
 		}
 		input := strings.TrimSpace(string(event.ContentBlock.Input))
-		return input == "" || input == "{}" || yield(ai.ToolCallDeltaEvent{ArgsDelta: input}, nil)
+		return input == "" || input == "{}" || yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: input}, nil)
 	default:
 		return yield(nil, fmt.Errorf("anthropic: unsupported content block type %q", event.ContentBlock.Type))
 	}
 }
 
 func emitContentBlockDelta(yield func(ai.StreamEvent, error) bool, event streamEvent) bool {
+	partID := strconv.Itoa(event.Index)
 	switch event.Delta.Type {
 	case "text_delta":
-		return yield(ai.TextDeltaEvent{Delta: event.Delta.Text}, nil)
+		return yield(ai.TextDeltaEvent{PartID: partID, Delta: event.Delta.Text}, nil)
 	case "thinking_delta":
-		return yield(ai.ThinkingDeltaEvent{Delta: event.Delta.Thinking}, nil)
+		return yield(ai.ThinkingDeltaEvent{PartID: partID, Delta: event.Delta.Thinking}, nil)
 	case "input_json_delta":
-		return yield(ai.ToolCallDeltaEvent{ArgsDelta: event.Delta.PartialJSON}, nil)
+		return yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: event.Delta.PartialJSON}, nil)
 	case "signature_delta", "citations_delta":
 		return true
 	default:

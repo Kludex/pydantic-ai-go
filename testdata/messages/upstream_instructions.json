@@ -1,0 +1,18 @@
+[
+  {
+    "parts": [
+      {
+        "content": "hello",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "part_kind": "user-prompt"
+      }
+    ],
+    "timestamp": null,
+    "instructions": "Be concise.",
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

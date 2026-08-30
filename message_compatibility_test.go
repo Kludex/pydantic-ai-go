@@ -3,6 +3,7 @@ package ai_test
 import (
 	"encoding/json"
 	"os"
+	"strings"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -95,6 +96,28 @@ func TestUnmarshalUpstreamSynthesizedReturnFixture(t *testing.T) {
 	if part.Metadata[ai.SynthesizedToolReturnMetadataKey] != true ||
 		part.Outcome != ai.ToolReturnOutcomeInterrupted {
 		t.Fatalf("unexpected synthesized return fixture: %+v", part)
+	}
+}
+
+func TestUnmarshalUpstreamInstructionsFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_instructions.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := messages[0].(ai.ModelRequest)
+	if request.Instructions != "Be concise." {
+		t.Fatalf("unexpected persisted instructions: %+v", request)
+	}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"instructions":"Be concise."`) {
+		t.Fatalf("instructions were not serialized: %s", encoded)
 	}
 }
 

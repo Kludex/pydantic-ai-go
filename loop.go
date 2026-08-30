@@ -190,7 +190,8 @@ func mergeConsecutiveMessages(messages []ModelMessage) []ModelMessage {
 		switch message := message.(type) {
 		case ModelRequest:
 			previous, ok := merged[len(merged)-1].(ModelRequest)
-			if !ok {
+			if !ok || previous.Instructions != "" && message.Instructions != "" &&
+				previous.Instructions != message.Instructions {
 				merged = append(merged, message)
 				continue
 			}
@@ -206,7 +207,11 @@ func mergeConsecutiveMessages(messages []ModelMessage) []ModelMessage {
 					parts = append(parts, part)
 				}
 			}
-			merged[len(merged)-1] = ModelRequest{Parts: parts}
+			instructions := previous.Instructions
+			if instructions == "" {
+				instructions = message.Instructions
+			}
+			merged[len(merged)-1] = ModelRequest{Parts: parts, Instructions: instructions}
 		case ModelResponse:
 			previous, ok := merged[len(merged)-1].(ModelResponse)
 			if !ok || previous.ModelName != "" || message.ModelName != "" {
@@ -536,6 +541,8 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		r.recordSelectedModel(r.model.Name())
 	}
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+		setLatestRequestInstructions(msgs, params.Instructions)
+		setLatestRequestInstructions(r.messages, params.Instructions)
 		r.setCurrentTools(params)
 		reqCtx, reqSpan := startRequestSpan(ctx, r.model.Name())
 		resp, err := r.doModelRequest(reqCtx, msgs, params)
@@ -557,6 +564,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	if err != nil {
 		return nil, err
 	}
+	setLatestRequestInstructions(r.messages, params.Instructions)
 	next := inner
 	for i := len(r.capabilities) - 1; i >= 0; i-- {
 		if wrapper, ok := r.capabilities[i].(ModelRequestWrapper); ok {
@@ -568,6 +576,18 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	}
 	r.setCurrentTools(params)
 	return next(ctx, r.messages, params)
+}
+
+func setLatestRequestInstructions(messages []ModelMessage, instructions string) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		request, ok := messages[index].(ModelRequest)
+		if !ok {
+			continue
+		}
+		request.Instructions = instructions
+		messages[index] = request
+		return
+	}
 }
 
 func (r *run[Deps, Output]) setCurrentTools(params ModelRequestParams) {

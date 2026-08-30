@@ -26,8 +26,9 @@ const (
 
 // ModelRequest is a message sent to the model.
 type ModelRequest struct {
-	Parts []RequestPart
-	State RequestState
+	Parts        []RequestPart
+	Instructions string
+	State        RequestState
 }
 
 func (ModelRequest) messageKind() string { return "request" }

@@ -18,6 +18,41 @@ type Model interface {
 	Name() string
 }
 
+// ModelSelection selects either a concrete model or an ID resolved by a
+// registered ModelIDResolverFunc. The zero value makes no selection.
+type ModelSelection struct {
+	Model Model
+	ID    string
+}
+
+// ModelSelectionContext is a read-only snapshot passed to a model selector.
+// Step starts at 1. Model is the lower-precedence model on the first step and
+// the model used by the previous request thereafter.
+type ModelSelectionContext[Deps any] struct {
+	Deps     Deps
+	Model    Model
+	ModelID  string
+	Step     int
+	Messages []ModelMessage
+	Usage    Usage
+}
+
+// ModelSelectorFunc selects a model before one logical model request.
+type ModelSelectorFunc[Deps any] func(
+	ctx context.Context, selection ModelSelectionContext[Deps],
+) (ModelSelection, error)
+
+// ModelResolutionContext is passed when resolving an application model ID.
+type ModelResolutionContext[Deps any] struct {
+	Deps Deps
+}
+
+// ModelIDResolverFunc resolves an application model ID. Return nil, nil to
+// let the next resolver try. Resolved IDs are cached for one agent run.
+type ModelIDResolverFunc[Deps any] func(
+	ctx context.Context, resolution ModelResolutionContext[Deps], modelID string,
+) (Model, error)
+
 // ModelRequestParams carries everything a provider needs beyond the messages.
 type ModelRequestParams struct {
 	// Instructions is the joined instruction text for providers that do not

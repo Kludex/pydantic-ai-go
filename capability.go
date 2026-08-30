@@ -108,6 +108,29 @@ type ModelSettingsProvider interface {
 	ModelSettings(ctx context.Context, ri *RunInfo, current ModelSettings) (ModelSettings, error)
 }
 
+// ModelSelectionInfo is the untyped capability view of a model-selection
+// step. Step starts at 1. Messages is a detached snapshot.
+type ModelSelectionInfo struct {
+	Model    Model
+	ModelID  string
+	Step     int
+	Messages []ModelMessage
+	Usage    Usage
+}
+
+// ModelSelectionProvider adaptively contributes a model. Return the zero
+// ModelSelection to leave the current selection unchanged. Later capability
+// providers take precedence.
+type ModelSelectionProvider interface {
+	SelectModel(ctx context.Context, ri *RunInfo, selection ModelSelectionInfo) (ModelSelection, error)
+}
+
+// ModelIDResolver resolves application model IDs for a capability. Return
+// nil, nil to defer to the next resolver.
+type ModelIDResolver interface {
+	ResolveModelID(ctx context.Context, ri *RunInfo, modelID string) (Model, error)
+}
+
 type capabilitySettingsLayer struct {
 	static   []ModelSettings
 	provider ModelSettingsProvider

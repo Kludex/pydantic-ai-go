@@ -28,8 +28,10 @@ Status:
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
-- [~] Per-run overrides cover model, static and per-step settings/instructions, output mode, usage limits, retry limits, and history. Typed output specialization, capabilities, tools, and toolsets remain.
-- [ ] Model selection and model-ID resolution per request step.
+- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, and history. Typed output specialization, capabilities, tools, and toolsets remain.
+- [x] Typed agent/run and untyped capability model selectors run before every logical request with step, completed-history, prior-model, model-ID, deps, and usage context.
+- [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
+- [ ] Model-less agents, selected-model lifecycle hooks, and selected-model attribution on the outer run span.
 - [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, and optional USD cost, with projected tool-call and known-cost limits. Arbitrary provider detail keys and automatic pricing remain.
 
 ### Messages and persisted history
@@ -155,7 +157,7 @@ Status:
 - [x] Event-stream wrapper and per-event processor with standard capability middleware ordering.
 - [ ] Capability ordering constraints and outermost/innermost tiers.
 - [ ] Combined and wrapper capabilities.
-- [~] Capability-provided static and per-step model settings; adaptive model selection remains.
+- [x] Capability-provided static/per-step model settings and adaptive model selection.
 - [ ] Deferred-call handler hook.
 
 ### Built-in capabilities
@@ -207,7 +209,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run typed output specialization, capabilities, tools, and toolsets.
+2. Add per-run typed output specialization, capabilities, tools, and toolsets, then support model-less selector-driven agents.
 3. Add broader partial-output schema constraint validation.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.

@@ -81,6 +81,40 @@ result, err := agent.Run(
 
 Run settings merge over agent settings field by field. Dynamic callbacks run before every model request, so they can adapt after tool calls and retries. Settings resolve in agent, capability, then run order. Each callback sees prior layers through `RunContext.ModelSettings`. A zero `UsageLimits` value disables agent-level limits for that run.
 
+## Model selection
+
+Use `AddModelSelector` when later steps need a different model:
+
+```go
+agent.AddModelSelector(func(
+	ctx context.Context,
+	selection ai.ModelSelectionContext[Deps],
+) (ai.ModelSelection, error) {
+	if selection.Step == 1 {
+		return ai.ModelSelection{Model: fastModel}, nil
+	}
+	return ai.ModelSelection{Model: reasoningModel}, nil
+})
+```
+
+`Step` starts at 1. `Messages` is a detached snapshot of completed turns and excludes the pending request. `Usage` contains work completed before the step. Model selection runs before dynamic settings, instructions, and tool preparation.
+
+Application IDs keep tenant or deployment lookup outside the selector:
+
+```go
+agent.AddModelIDResolver(func(
+	ctx context.Context,
+	resolution ai.ModelResolutionContext[Deps],
+	modelID string,
+) (ai.Model, error) {
+	return resolution.Deps.Models.Lookup(ctx, modelID)
+})
+
+result, err := agent.Run(ctx, "hello", deps, ai.WithRunModelID("tenant-primary"))
+```
+
+Resolvers run in registration order, and each ID is resolved once per run. An unresolved ID returns `UnknownModelIDError` and matches `ErrUnknownModelID`. `WithRunModel` skips selectors. `WithRunModelSelector` replaces agent and capability selectors for one run.
+
 ## Concurrent tools
 
 Independent tool calls from one model response run concurrently. Results still go back to the model in the order it requested them.

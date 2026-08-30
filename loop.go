@@ -85,6 +85,20 @@ func (a *Agent[Deps, Output]) newRun(
 	if cfg.model != nil {
 		model = cfg.model
 	}
+	selectionModes := 0
+	if cfg.model != nil {
+		selectionModes++
+	}
+	if cfg.modelID != "" {
+		selectionModes++
+	}
+	if len(cfg.modelSelectors) > 0 {
+		selectionModes++
+	}
+	if selectionModes > 1 {
+		cancellation.finish()
+		return nil, fmt.Errorf("ai: run model, model ID, and model selector are mutually exclusive")
+	}
 	capabilities := slices.Clone(a.capabilities)
 	limits := a.usageLimits
 	if cfg.usageLimits != nil {
@@ -99,6 +113,8 @@ func (a *Agent[Deps, Output]) newRun(
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int), runSettings: cfg.settings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
+		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
+		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
 	}
 	if cfg.retryLimits != nil {
 		validateRetryLimits(*cfg.retryLimits)
@@ -324,15 +340,196 @@ type run[Deps, Output any] struct {
 	runSettings          *ModelSettings
 	runSettingsFuncs     []erasedModelSettingsFunc
 	runInstructionsFuncs []erasedInstructionsFunc
+	explicitRunModel     bool
+	staticModelID        string
+	runModelSelectors    []erasedModelSelectorFunc
+	resolvedModels       map[string]Model
+	runStep              int
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
 	emitMu               sync.Mutex
 	commitStreamedOutput bool
 }
 
+func (r *run[Deps, Output]) selectModel(ctx context.Context) error {
+	r.runStep++
+	r.rc.RunStep = r.runStep
+	if r.explicitRunModel {
+		r.rc.Model = r.model
+		r.rc.ModelID = ""
+		return nil
+	}
+	if r.staticModelID != "" {
+		return r.applyModelSelection(ctx, ModelSelection{ID: r.staticModelID})
+	}
+	if len(r.runModelSelectors) > 0 {
+		for _, selector := range r.runModelSelectors {
+			selection, err := selector(ctx, r.modelSelectionContext())
+			if err != nil {
+				return fmt.Errorf("ai: select model: %w", err)
+			}
+			if err := r.applyModelSelection(ctx, selection); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	for _, selector := range r.agent.modelSelectors {
+		selection, err := selector(ctx, r.modelSelectionContext())
+		if err != nil {
+			return fmt.Errorf("ai: select model: %w", err)
+		}
+		if err := r.applyModelSelection(ctx, selection); err != nil {
+			return err
+		}
+	}
+	for _, capability := range r.capabilities {
+		provider, ok := capability.(ModelSelectionProvider)
+		if !ok {
+			continue
+		}
+		selection, err := provider.SelectModel(ctx, r.info, r.modelSelectionInfo())
+		if err != nil {
+			return fmt.Errorf("ai: select model: %w", err)
+		}
+		if err := r.applyModelSelection(ctx, selection); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *run[Deps, Output]) modelSelectionContext() ModelSelectionContext[Deps] {
+	return ModelSelectionContext[Deps]{
+		Deps: r.rc.Deps, Model: r.model, ModelID: r.rc.ModelID, Step: r.runStep,
+		Messages: r.modelSelectionMessages(), Usage: r.info.Usage(),
+	}
+}
+
+func (r *run[Deps, Output]) modelSelectionInfo() ModelSelectionInfo {
+	return ModelSelectionInfo{
+		Model: r.model, ModelID: r.rc.ModelID, Step: r.runStep,
+		Messages: r.modelSelectionMessages(), Usage: r.info.Usage(),
+	}
+}
+
+func (r *run[Deps, Output]) modelSelectionMessages() []ModelMessage {
+	messages := r.messages
+	if len(messages) > 0 {
+		if _, pending := messages[len(messages)-1].(ModelRequest); pending {
+			messages = messages[:len(messages)-1]
+		}
+	}
+	return cloneModelMessages(messages)
+}
+
+func cloneModelMessages(messages []ModelMessage) []ModelMessage {
+	cloned := make([]ModelMessage, len(messages))
+	for index, message := range messages {
+		switch message := message.(type) {
+		case ModelRequest:
+			message.Parts = slices.Clone(message.Parts)
+			for partIndex, part := range message.Parts {
+				switch part := part.(type) {
+				case UserPromptPart:
+					part.Contents = slices.Clone(part.Contents)
+					for contentIndex, content := range part.Contents {
+						if binary, ok := content.(BinaryContent); ok {
+							binary.Data = slices.Clone(binary.Data)
+							part.Contents[contentIndex] = binary
+						}
+					}
+					message.Parts[partIndex] = part
+				case ToolReturnPart:
+					part.Metadata = cloneSchemaMap(part.Metadata)
+					message.Parts[partIndex] = part
+				}
+			}
+			cloned[index] = message
+		case ModelResponse:
+			message.Parts = slices.Clone(message.Parts)
+			for partIndex, part := range message.Parts {
+				if call, ok := part.(ToolCallPart); ok {
+					call.Args = slices.Clone(call.Args)
+					message.Parts[partIndex] = call
+				}
+			}
+			cloned[index] = message
+		}
+	}
+	return cloned
+}
+
+func (r *run[Deps, Output]) applyModelSelection(ctx context.Context, selection ModelSelection) error {
+	if selection.Model != nil {
+		value := reflect.ValueOf(selection.Model)
+		switch value.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+			if value.IsNil() {
+				return fmt.Errorf("ai: selected model must not be nil")
+			}
+		}
+	}
+	if selection.Model != nil && selection.ID != "" {
+		return fmt.Errorf("ai: model selection must contain either Model or ID, not both")
+	}
+	if selection.Model == nil && selection.ID == "" {
+		return nil
+	}
+	if selection.ID != "" {
+		model, err := r.resolveModelID(ctx, selection.ID)
+		if err != nil {
+			return err
+		}
+		r.model = model
+		r.rc.Model = model
+		r.rc.ModelID = selection.ID
+		return nil
+	}
+	r.model = selection.Model
+	r.rc.Model = selection.Model
+	r.rc.ModelID = ""
+	return nil
+}
+
+func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) (Model, error) {
+	if model, ok := r.resolvedModels[modelID]; ok {
+		return model, nil
+	}
+	resolution := ModelResolutionContext[Deps]{Deps: r.rc.Deps}
+	for _, resolver := range r.agent.modelIDResolvers {
+		model, err := resolver(ctx, resolution, modelID)
+		if err != nil {
+			return nil, fmt.Errorf("ai: resolve model ID %q: %w", modelID, err)
+		}
+		if model != nil {
+			r.resolvedModels[modelID] = model
+			return model, nil
+		}
+	}
+	for _, capability := range r.capabilities {
+		resolver, ok := capability.(ModelIDResolver)
+		if !ok {
+			continue
+		}
+		model, err := resolver.ResolveModelID(ctx, r.info, modelID)
+		if err != nil {
+			return nil, fmt.Errorf("ai: resolve model ID %q: %w", modelID, err)
+		}
+		if model != nil {
+			r.resolvedModels[modelID] = model
+			return model, nil
+		}
+	}
+	return nil, &UnknownModelIDError{ID: modelID}
+}
+
 // modelRequest is the model-request interception point: tracing plus
 // capability middleware (ModelRequestWrapper), outermost first.
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
+	if err := r.selectModel(ctx); err != nil {
+		return nil, err
+	}
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 		r.setCurrentTools(params)
 		reqCtx, reqSpan := startRequestSpan(ctx, r.model.Name())

@@ -16,6 +16,8 @@ type Agent[Deps, Output any] struct {
 	instructions       string
 	instructionsFuncs  []InstructionsFunc[Deps]
 	modelSettingsFuncs []ModelSettingsFunc[Deps]
+	modelSelectors     []ModelSelectorFunc[Deps]
+	modelIDResolvers   []ModelIDResolverFunc[Deps]
 	toolsPrepareFuncs  []ToolsPrepareFunc[Deps]
 	settings           ModelSettings
 	usageLimits        UsageLimits
@@ -104,6 +106,20 @@ type ModelSettingsFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps])
 func (a *Agent[Deps, Output]) AddModelSettingsFunc(fn ModelSettingsFunc[Deps]) {
 	a.checkNotStarted()
 	a.modelSettingsFuncs = append(a.modelSettingsFuncs, fn)
+}
+
+// AddModelSelector registers an adaptive model layer evaluated before every
+// model request. Later selectors see earlier selections and take precedence.
+func (a *Agent[Deps, Output]) AddModelSelector(fn ModelSelectorFunc[Deps]) {
+	a.checkNotStarted()
+	a.modelSelectors = append(a.modelSelectors, fn)
+}
+
+// AddModelIDResolver registers an application model-ID resolver. Resolvers
+// are tried in registration order until one returns a model.
+func (a *Agent[Deps, Output]) AddModelIDResolver(fn ModelIDResolverFunc[Deps]) {
+	a.checkNotStarted()
+	a.modelIDResolvers = append(a.modelIDResolvers, fn)
 }
 
 // ToolsPrepareFunc filters or modifies per-step copies of function tool
@@ -251,6 +267,7 @@ type RunOption func(*runConfig)
 
 type erasedModelSettingsFunc func(context.Context, any) (ModelSettings, error)
 type erasedInstructionsFunc func(context.Context, any) (string, error)
+type erasedModelSelectorFunc func(context.Context, any) (ModelSelection, error)
 
 type runConfig struct {
 	history           []ModelMessage
@@ -260,8 +277,10 @@ type runConfig struct {
 	usageLimits       *UsageLimits
 	retryLimits       *RetryLimits
 	outputMode        *OutputMode
+	modelID           string
 	settingsFuncs     []erasedModelSettingsFunc
 	instructionsFuncs []erasedInstructionsFunc
+	modelSelectors    []erasedModelSelectorFunc
 }
 
 // WithMessageHistory prepends prior conversation messages to the run.
@@ -278,6 +297,29 @@ func WithRunRetryLimits(limits RetryLimits) RunOption {
 // WithRunModel uses model for one run without changing the agent default.
 func WithRunModel(model Model) RunOption {
 	return func(c *runConfig) { c.model = model }
+}
+
+// WithRunModelID resolves modelID once for this run. It cannot be combined
+// with WithRunModel or WithRunModelSelector.
+func WithRunModelID(modelID string) RunOption {
+	if modelID == "" {
+		panic("ai: run model ID must not be empty")
+	}
+	return func(c *runConfig) { c.modelID = modelID }
+}
+
+// WithRunModelSelector selects the model before every request in one run.
+// It replaces agent and capability selectors for that run.
+func WithRunModelSelector[Deps any](fn ModelSelectorFunc[Deps]) RunOption {
+	return func(c *runConfig) {
+		c.modelSelectors = append(c.modelSelectors, func(ctx context.Context, value any) (ModelSelection, error) {
+			selection, ok := value.(ModelSelectionContext[Deps])
+			if !ok {
+				return ModelSelection{}, fmt.Errorf("ai: run model selector dependencies do not match agent")
+			}
+			return fn(ctx, selection)
+		})
+	}
 }
 
 // WithRunModelSettings merges settings over the agent defaults for one run.

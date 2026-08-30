@@ -15,6 +15,21 @@ var ErrMaxRetriesExceeded = errors.New("ai: max retries exceeded")
 // ErrRunCancelled identifies cancellation requested through RunContext.Cancel.
 var ErrRunCancelled = errors.New("ai: run cancelled")
 
+// ErrUnknownModelID identifies an application model ID no resolver accepted.
+var ErrUnknownModelID = errors.New("ai: unknown model ID")
+
+// UnknownModelIDError reports an unresolved application model ID.
+type UnknownModelIDError struct {
+	ID string
+}
+
+func (e *UnknownModelIDError) Error() string {
+	return fmt.Sprintf("%s %q", ErrUnknownModelID, e.ID)
+}
+
+// Unwrap supports errors.Is(err, ErrUnknownModelID).
+func (e *UnknownModelIDError) Unwrap() error { return ErrUnknownModelID }
+
 // RunCancelledError reports a run cancelled through RunContext.Cancel. It
 // retains the history and usage completed before cancellation took effect.
 type RunCancelledError struct {

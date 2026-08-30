@@ -55,7 +55,8 @@ Status:
 - [x] Raw-schema dynamic tool registration.
 - [x] Tool and argument-unmarshal retries use independent per-tool counters; output retries use a separate counter.
 - [~] JSON Schema supports common structs, arrays, maps, descriptions, and enums; it is not full JSON Schema parity.
-- [~] Explicit strict tool mode via `WithStrict()` / `WithoutStrict()` on OpenAI, Anthropic, and Gemini; automatic provider/model defaults and schema compatibility checks remain.
+- [~] Provider schema transforms: Gemini sends transformed full JSON Schema through `parametersJsonSchema`/`responseJsonSchema`; OpenAI and Anthropic transforms remain.
+- [~] Strict tool mode via `WithStrict()` / `WithoutStrict()` on OpenAI, Anthropic, and Gemini. Gemini 2.5+ defaults to request-wide `VALIDATED` with model-alias overrides; OpenAI inference and Anthropic model support gates remain.
 - [x] Per-tool and agent-wide per-step preparation and omission via `AddPreparedTool` and `AddToolsPrepareFunc`, applied in upstream order.
 - [ ] Argument validators before approval/execution.
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
@@ -98,7 +99,7 @@ Status:
 - [x] OpenAI Chat Completions.
 - [~] OpenAI Responses: text/reasoning/function-call streaming; native output, multimodal content, builtin tools, and background responses remain.
 - [~] Anthropic Messages: text/thinking/function-tool streaming and multimodal input; advanced thinking, citations, and native tools remain.
-- [~] Google Gemini: text/thinking/function-tool streaming, native output, multimodal input, and function-call IDs; native tools and advanced metadata remain.
+- [~] Google Gemini: text/thinking/function-tool streaming, native output, multimodal input, function-call IDs, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.
 - [ ] AWS Bedrock.
@@ -196,7 +197,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Match streaming final-output commitment and validation semantics.
-3. Add provider-profile defaults and schema compatibility checks for strict mode.
+3. Add OpenAI strict-schema inference/rewrites and gate Anthropic strict mode by model support.
 4. Add stable stream part IDs and keyed deltas before expanding streamed builtin tools.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

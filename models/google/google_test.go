@@ -15,13 +15,19 @@ import (
 
 func newServer(t *testing.T, handler http.HandlerFunc) *google.Model {
 	t.Helper()
+	return newNamedServer(t, "gemini-2.5-flash", handler)
+}
+
+func newNamedServer(t *testing.T, name string, handler http.HandlerFunc, extra ...google.Option) *google.Model {
+	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	return google.NewModel("gemini-2.5-flash",
+	opts := []google.Option{
 		google.WithAPIKey("test-key"),
 		google.WithBaseURL(server.URL),
 		google.WithHTTPClient(server.Client()),
-	)
+	}
+	return google.NewModel(name, append(opts, extra...)...)
 }
 
 func TestRequestTextResponse(t *testing.T) {
@@ -140,9 +146,9 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 		t.Fatalf("function response ID not sent: %v", toolTurn)
 	}
 	declared := gotBody["tools"].([]any)[0].(map[string]any)["functionDeclarations"].([]any)[0].(map[string]any)
-	schema := declared["parameters"].(map[string]any)
-	if _, ok := schema["additionalProperties"]; ok {
-		t.Fatal("additionalProperties should be sanitized for Gemini")
+	schema := declared["parametersJsonSchema"].(map[string]any)
+	if schema["additionalProperties"] != false {
+		t.Fatal("additionalProperties should be preserved in Gemini JSON Schema")
 	}
 }
 
@@ -392,9 +398,9 @@ func TestNativeJSONOutputMode(t *testing.T) {
 	if gen["responseMimeType"] != "application/json" {
 		t.Fatalf("unexpected generation config %v", gen)
 	}
-	schema := gen["responseSchema"].(map[string]any)
-	if _, ok := schema["additionalProperties"]; ok {
-		t.Fatal("schema should be sanitized")
+	schema := gen["responseJsonSchema"].(map[string]any)
+	if schema["additionalProperties"] != false {
+		t.Fatal("additionalProperties should be preserved in Gemini JSON Schema")
 	}
 }
 
@@ -426,6 +432,109 @@ func TestStrictToolModes(t *testing.T) {
 				t.Fatalf("expected %s, got %v", strict.mode, mode)
 			}
 		})
+	}
+}
+
+func TestStrictToolProfileDefaults(t *testing.T) {
+	tests := []struct {
+		name      string
+		modelName string
+		extra     []google.Option
+		mode      string
+	}{
+		{name: "Gemini 2.5", modelName: "gemini-2.5-flash", mode: "VALIDATED"},
+		{name: "Gemini 3", modelName: "gemini-3-pro", mode: "VALIDATED"},
+		{name: "Gemini 2.0", modelName: "gemini-2.0-flash", mode: "AUTO"},
+		{name: "image model", modelName: "gemini-3-pro-image-preview", mode: "AUTO"},
+		{name: "disabled override", modelName: "gemini-2.5-flash", extra: []google.Option{google.WithStrictToolSupport(false)}, mode: "AUTO"},
+		{name: "enabled override", modelName: "proxy-model", extra: []google.Option{google.WithStrictToolSupport(true)}, mode: "VALIDATED"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var gotBody map[string]any
+			model := newNamedServer(t, test.modelName, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{}}`))
+			}, test.extra...)
+			params := ai.ModelRequestParams{AllowText: true, Tools: []ai.ToolDefinition{{
+				Name: "search", Schema: map[string]any{"type": "object"},
+			}}}
+			if _, err := model.Request(t.Context(), nil, params); err != nil {
+				t.Fatal(err)
+			}
+			mode := gotBody["toolConfig"].(map[string]any)["functionCallingConfig"].(map[string]any)["mode"]
+			if mode != test.mode {
+				t.Fatalf("expected %s, got %v", test.mode, mode)
+			}
+		})
+	}
+}
+
+func TestGeminiJSONSchemaTransform(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{}}`))
+	})
+	params := ai.ModelRequestParams{AllowText: true, Tools: []ai.ToolDefinition{{
+		Name: "inspect", Schema: map[string]any{
+			"$schema": "https://json-schema.org/draft/2020-12/schema",
+			"title":   "Input",
+			"type":    "object",
+			"properties": map[string]any{
+				"when":    map[string]any{"type": "string", "format": "date-time", "description": "Start"},
+				"empty":   map[string]any{"type": "string", "format": "email"},
+				"id":      map[string]any{"const": "fixed", "examples": []any{"fixed"}},
+				"typed":   map[string]any{"type": "string", "const": "fixed"},
+				"unknown": map[string]any{"const": nil},
+				"choice": map[string]any{"anyOf": []any{
+					map[string]any{"type": "string", "title": "Text"}, map[string]any{"type": "integer"},
+				}},
+				"flag":  map[string]any{"const": true},
+				"count": map[string]any{"const": 2},
+				"ratio": map[string]any{"const": 1.5},
+				"items": map[string]any{"type": "array", "items": map[string]any{
+					"type": "number", "exclusiveMinimum": 0,
+				}},
+			},
+			"additionalProperties": false,
+			"discriminator":        map[string]any{"propertyName": "type"},
+		},
+	}}}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	declaration := gotBody["tools"].([]any)[0].(map[string]any)["functionDeclarations"].([]any)[0].(map[string]any)
+	schema := declaration["parametersJsonSchema"].(map[string]any)
+	if schema["additionalProperties"] != false || schema["title"] != nil || schema["$schema"] != nil || schema["discriminator"] != nil {
+		t.Fatalf("unexpected root schema %v", schema)
+	}
+	properties := schema["properties"].(map[string]any)
+	when := properties["when"].(map[string]any)
+	if when["format"] != nil || when["description"] != "Start (format: date-time)" {
+		t.Fatalf("unexpected formatted string schema %v", when)
+	}
+	empty := properties["empty"].(map[string]any)
+	if empty["format"] != nil || empty["description"] != "Format: email" {
+		t.Fatalf("unexpected empty-description format schema %v", empty)
+	}
+	choice := properties["choice"].(map[string]any)["anyOf"].([]any)
+	if choice[0].(map[string]any)["title"] != nil {
+		t.Fatalf("nested slice schema was not transformed: %v", choice)
+	}
+	for name, wantType := range map[string]string{"id": "string", "flag": "boolean", "count": "integer", "ratio": "number"} {
+		property := properties[name].(map[string]any)
+		if property["type"] != wantType || property["const"] != nil || property["examples"] != nil {
+			t.Fatalf("unexpected const schema for %s: %v", name, property)
+		}
+	}
+	items := properties["items"].(map[string]any)["items"].(map[string]any)
+	if items["exclusiveMinimum"] != nil {
+		t.Fatalf("exclusive minimum should be removed: %v", items)
 	}
 }
 

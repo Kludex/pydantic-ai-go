@@ -10,16 +10,18 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
 
 // Model calls the Gemini generateContent API. Create one with NewModel.
 type Model struct {
-	name       string
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
+	name              string
+	apiKey            string
+	baseURL           string
+	httpClient        *http.Client
+	strictToolSupport bool
 }
 
 // Option configures a Model.
@@ -35,13 +37,20 @@ func WithBaseURL(url string) Option { return func(m *Model) { m.baseURL = url } 
 // WithHTTPClient sets the HTTP client used for requests.
 func WithHTTPClient(c *http.Client) Option { return func(m *Model) { m.httpClient = c } }
 
+// WithStrictToolSupport overrides whether the model supports Gemini's
+// VALIDATED function-calling mode. Use it for aliases and compatible proxies.
+func WithStrictToolSupport(enabled bool) Option {
+	return func(m *Model) { m.strictToolSupport = enabled }
+}
+
 // NewModel creates a Model for the named Gemini model, e.g. "gemini-2.5-flash".
 func NewModel(name string, opts ...Option) *Model {
 	m := &Model{
-		name:       name,
-		apiKey:     os.Getenv("GEMINI_API_KEY"),
-		baseURL:    "https://generativelanguage.googleapis.com/v1beta",
-		httpClient: http.DefaultClient,
+		name:              name,
+		apiKey:            os.Getenv("GEMINI_API_KEY"),
+		baseURL:           "https://generativelanguage.googleapis.com/v1beta",
+		httpClient:        http.DefaultClient,
+		strictToolSupport: supportsStrictTools(name),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -54,7 +63,7 @@ func (m *Model) Name() string { return m.name }
 
 // Request implements ai.Model.
 func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
-	payload, err := buildPayload(msgs, params)
+	payload, err := m.buildPayload(msgs, params)
 	if err != nil {
 		return nil, err
 	}
@@ -167,9 +176,9 @@ type toolsParam struct {
 }
 
 type functionDeclaration struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters,omitempty"`
+	Name                 string         `json:"name"`
+	Description          string         `json:"description,omitempty"`
+	ParametersJSONSchema map[string]any `json:"parametersJsonSchema,omitempty"`
 }
 
 type toolConfig struct {
@@ -184,10 +193,10 @@ type generationConfig struct {
 	TopP             *float64       `json:"topP,omitempty"`
 	StopSequences    []string       `json:"stopSequences,omitempty"`
 	ResponseMimeType string         `json:"responseMimeType,omitempty"`
-	ResponseSchema   map[string]any `json:"responseSchema,omitempty"`
+	ResponseSchema   map[string]any `json:"responseJsonSchema,omitempty"`
 }
 
-func buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
+func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
 	req := &generateRequest{}
 	if params.Instructions != "" {
 		req.SystemInstruction = &content{Parts: []part{{Text: params.Instructions}}}
@@ -209,25 +218,24 @@ func buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*genera
 		req.Contents = append(req.Contents, converted...)
 	}
 	declarations := make([]functionDeclaration, 0, len(params.Tools)+1)
-	strictEnabled, strictDisabled := false, false
+	strictDisabled := false
 	for _, tool := range params.Tools {
 		declarations = append(declarations, convertTool(tool))
-		strictEnabled, strictDisabled = collectStrict(tool, strictEnabled, strictDisabled)
+		strictDisabled = strictDisabled || tool.Strict != nil && !*tool.Strict
 	}
 	if params.OutputTool != nil {
 		declarations = append(declarations, convertTool(*params.OutputTool))
-		strictEnabled, strictDisabled = collectStrict(*params.OutputTool, strictEnabled, strictDisabled)
+		strictDisabled = strictDisabled || params.OutputTool.Strict != nil && !*params.OutputTool.Strict
 		if !params.AllowText {
 			tc := &toolConfig{}
 			tc.FunctionCallingConfig.Mode = "ANY"
 			req.ToolConfig = tc
 		}
 	}
-	if req.ToolConfig == nil && (strictEnabled || strictDisabled) {
+	if req.ToolConfig == nil && len(declarations) > 0 {
 		tc := &toolConfig{}
-		if strictDisabled {
-			tc.FunctionCallingConfig.Mode = "AUTO"
-		} else {
+		tc.FunctionCallingConfig.Mode = "AUTO"
+		if m.strictToolSupport && !strictDisabled {
 			tc.FunctionCallingConfig.Mode = "VALIDATED"
 		}
 		req.ToolConfig = tc
@@ -237,7 +245,7 @@ func buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*genera
 			req.GenerationConfig = &generationConfig{}
 		}
 		req.GenerationConfig.ResponseMimeType = "application/json"
-		req.GenerationConfig.ResponseSchema = sanitizeSchema(params.OutputSchema)
+		req.GenerationConfig.ResponseSchema = transformSchema(params.OutputSchema)
 	}
 	if len(declarations) > 0 {
 		req.Tools = []toolsParam{{FunctionDeclarations: declarations}}
@@ -310,45 +318,69 @@ func convertResponse(m ai.ModelResponse) ([]content, error) {
 	return []content{{Role: "model", Parts: parts}}, nil
 }
 
-func collectStrict(def ai.ToolDefinition, enabled, disabled bool) (bool, bool) {
-	if def.Strict == nil {
-		return enabled, disabled
-	}
-	if *def.Strict {
-		return true, disabled
-	}
-	return enabled, true
-}
-
 func convertTool(def ai.ToolDefinition) functionDeclaration {
 	return functionDeclaration{
-		Name:        def.Name,
-		Description: def.Description,
-		Parameters:  sanitizeSchema(def.Schema),
+		Name:                 def.Name,
+		Description:          def.Description,
+		ParametersJSONSchema: transformSchema(def.Schema),
 	}
 }
 
-// sanitizeSchema drops JSON Schema fields Gemini rejects.
-func sanitizeSchema(schema map[string]any) map[string]any {
+func supportsStrictTools(name string) bool {
+	return (strings.Contains(name, "gemini-2.5") || strings.Contains(name, "gemini-3")) &&
+		!strings.Contains(name, "image")
+}
+
+func transformSchema(schema map[string]any) map[string]any {
 	out := make(map[string]any, len(schema))
 	for key, value := range schema {
-		if key == "additionalProperties" {
+		switch key {
+		case "$schema", "discriminator", "examples", "title", "exclusiveMinimum", "exclusiveMaximum":
 			continue
+		case "const":
+			out["enum"] = []any{value}
+			if _, ok := schema["type"]; !ok {
+				switch value.(type) {
+				case string:
+					out["type"] = "string"
+				case bool:
+					out["type"] = "boolean"
+				case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+					out["type"] = "integer"
+				case float32, float64:
+					out["type"] = "number"
+				}
+			}
+		default:
+			out[key] = transformSchemaValue(value)
 		}
-		if nested, ok := value.(map[string]any); ok {
-			out[key] = sanitizeSchema(nested)
-			continue
-		}
-		out[key] = value
 	}
-	if properties, ok := out["properties"].(map[string]any); ok {
-		for name, prop := range properties {
-			if nested, ok := prop.(map[string]any); ok {
-				properties[name] = sanitizeSchema(nested)
+	if out["type"] == "string" {
+		if format, ok := out["format"].(string); ok {
+			delete(out, "format")
+			if description, ok := out["description"].(string); ok && description != "" {
+				out["description"] = fmt.Sprintf("%s (format: %s)", description, format)
+			} else {
+				out["description"] = "Format: " + format
 			}
 		}
 	}
 	return out
+}
+
+func transformSchemaValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return transformSchema(value)
+	case []any:
+		out := make([]any, len(value))
+		for i, item := range value {
+			out[i] = transformSchemaValue(item)
+		}
+		return out
+	default:
+		return value
+	}
 }
 
 type generateResponse struct {

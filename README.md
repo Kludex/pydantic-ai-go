@@ -53,6 +53,18 @@ func main() {
 
 The tool's argument schema is reflected from `WeatherArgs` - the model sees the `json` names and the `jsonschema` descriptions. If the model sends arguments that fail to unmarshal, the error goes back to the model as a retry prompt instead of failing the run.
 
+## Concurrent tools
+
+Independent tool calls from one model response run concurrently. Results still go back to the model in the order it requested them.
+
+Use `ai.WithSequential()` when a tool changes shared state or must run alone:
+
+```go
+ai.AddTool(agent, "update_database", updateDatabase, ai.WithSequential())
+```
+
+The sequential tool is a barrier. Earlier calls finish before it starts. Later calls wait until it finishes.
+
 ## Structured output
 
 Use any struct as the `Output` type and the agent asks the model for it via a final output tool. The result arrives typed and validated:

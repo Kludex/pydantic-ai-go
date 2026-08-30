@@ -44,4 +44,7 @@ type ToolDefinition struct {
 	Name        string         `json:"name"`
 	Description string         `json:"description,omitempty"`
 	Schema      map[string]any `json:"parameters_json_schema"`
+	// Sequential makes this tool an execution barrier. Calls before it
+	// finish first; the tool then runs alone; later calls start afterward.
+	Sequential bool `json:"-"`
 }

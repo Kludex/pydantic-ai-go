@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Kludex/pydantic-ai-go/internal/schema"
@@ -78,6 +79,7 @@ type run[Deps, Output any] struct {
 	newMessages int
 	usage       Usage
 	retries     int
+	retriesMu   sync.Mutex
 	// emit forwards stream events during RunStream; nil for plain runs.
 	emit func(StreamEvent) bool
 }
@@ -158,25 +160,107 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return result, nil
 		}
 
-		var parts []RequestPart
-		var final *RunResult[Output]
-		for _, call := range calls {
-			part, result, err := r.executeCall(ctx, call)
-			if err != nil {
-				return nil, err
-			}
-			if result != nil && final == nil {
-				final = result
-			}
-			if part != nil {
-				parts = append(parts, part)
-			}
+		parts, final, err := r.executeCalls(ctx, calls)
+		if err != nil {
+			return nil, err
 		}
 		if final != nil {
 			return final, nil
 		}
 		r.messages = append(r.messages, ModelRequest{Parts: parts})
 	}
+}
+
+type callOutcome[Output any] struct {
+	part   RequestPart
+	result *RunResult[Output]
+	err    error
+}
+
+// executeCalls runs independent tool calls concurrently and preserves their
+// original order in the request sent back to the model. Sequential tools and
+// output tools form barriers.
+func (r *run[Deps, Output]) executeCalls(
+	ctx context.Context, calls []ToolCallPart,
+) ([]RequestPart, *RunResult[Output], error) {
+	outcomes := make([]callOutcome[Output], len(calls))
+	batchStart := 0
+	for i, call := range calls {
+		if !r.callIsSequential(call) {
+			continue
+		}
+		r.executeCallBatch(ctx, calls, outcomes, batchStart, i)
+		if err := firstCallError(outcomes[batchStart:i]); err != nil {
+			return nil, nil, err
+		}
+		part, result, err := r.executeCall(ctx, call)
+		outcomes[i] = callOutcome[Output]{part: part, result: result, err: err}
+		if err != nil {
+			return nil, nil, err
+		}
+		batchStart = i + 1
+	}
+	r.executeCallBatch(ctx, calls, outcomes, batchStart, len(calls))
+	if err := firstCallError(outcomes[batchStart:]); err != nil {
+		return nil, nil, err
+	}
+
+	parts := make([]RequestPart, 0, len(calls))
+	var final *RunResult[Output]
+	for _, outcome := range outcomes {
+		if outcome.part != nil {
+			parts = append(parts, outcome.part)
+		}
+		if final == nil && outcome.result != nil {
+			final = outcome.result
+		}
+	}
+	return parts, final, nil
+}
+
+func (r *run[Deps, Output]) executeCallBatch(
+	ctx context.Context, calls []ToolCallPart, outcomes []callOutcome[Output], start, end int,
+) {
+	if start >= end {
+		return
+	}
+	if end-start == 1 {
+		part, result, err := r.executeCall(ctx, calls[start])
+		outcomes[start] = callOutcome[Output]{part: part, result: result, err: err}
+		return
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var wg sync.WaitGroup
+	for i := start; i < end; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			part, result, err := r.executeCall(ctx, calls[i])
+			outcomes[i] = callOutcome[Output]{part: part, result: result, err: err}
+			if err != nil {
+				cancel()
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func (r *run[Deps, Output]) callIsSequential(call ToolCallPart) bool {
+	if r.params.OutputTool != nil && call.ToolName == outputToolName {
+		return true
+	}
+	entry, ok := r.agent.findTool(call.ToolName)
+	return ok && entry.def.Sequential
+}
+
+func firstCallError[Output any](outcomes []callOutcome[Output]) error {
+	for _, outcome := range outcomes {
+		if outcome.err != nil {
+			return outcome.err
+		}
+	}
+	return nil
 }
 
 // executeCall runs one tool call. It returns the request part to send back
@@ -189,12 +273,12 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	if !ok {
 		return nil, nil, &UnexpectedModelBehaviorError{Message: fmt.Sprintf("model called unknown tool %q", call.ToolName)}
 	}
-	r.rc.ToolCallID = call.ToolCallID
-	r.rc.Retry = r.retries
+	toolRC := *r.rc
+	toolRC.ToolCallID = call.ToolCallID
+	toolRC.Retry = r.retryCount()
 	toolCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
-	content, err := r.callTool(toolCtx, entry, call)
+	content, err := r.callTool(toolCtx, &toolRC, entry, call)
 	endSpan(toolSpan, err)
-	r.rc.ToolCallID = ""
 	var retry *RetryError
 	switch {
 	case errors.As(err, &retry):
@@ -281,11 +365,19 @@ func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) {
 }
 
 func (r *run[Deps, Output]) countRetry() error {
+	r.retriesMu.Lock()
+	defer r.retriesMu.Unlock()
 	r.retries++
 	if r.retries > r.agent.maxRetries {
 		return fmt.Errorf("%w: %d retries", ErrMaxRetriesExceeded, r.retries)
 	}
 	return nil
+}
+
+func (r *run[Deps, Output]) retryCount() int {
+	r.retriesMu.Lock()
+	defer r.retriesMu.Unlock()
+	return r.retries
 }
 
 func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
@@ -367,9 +459,11 @@ func newRunID() string {
 
 // callTool is the tool-call interception point: capability middleware
 // (ToolCallWrapper) around the tool itself, outermost first.
-func (r *run[Deps, Output]) callTool(ctx context.Context, entry toolEntry[Deps], call ToolCallPart) (any, error) {
+func (r *run[Deps, Output]) callTool(
+	ctx context.Context, rc *RunContext[Deps], entry toolEntry[Deps], call ToolCallPart,
+) (any, error) {
 	next := ToolCallFunc(func(ctx context.Context, call ToolCallPart) (any, error) {
-		return entry.call(ctx, r.rc, call.Args)
+		return entry.call(ctx, rc, call.Args)
 	})
 	for i := len(r.agent.capabilities) - 1; i >= 0; i-- {
 		if wrapper, ok := r.agent.capabilities[i].(ToolCallWrapper); ok {

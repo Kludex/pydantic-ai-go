@@ -79,6 +79,13 @@ func WithDescription(description string) ToolOption {
 	return func(d *ToolDefinition) { d.Description = description }
 }
 
+// WithSequential makes a tool an execution barrier. Independent tools run
+// concurrently by default. Calls before this tool finish first, this tool
+// runs alone, and later calls start afterward.
+func WithSequential() ToolOption {
+	return func(d *ToolDefinition) { d.Sequential = true }
+}
+
 func toolDefinition[Args any](name string, opts []ToolOption) ToolDefinition {
 	s, err := schema.For(reflect.TypeFor[Args]())
 	if err != nil {

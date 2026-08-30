@@ -23,8 +23,9 @@ Status:
 - [x] Message history input and complete/new message results.
 - [x] Request, token, output, and total usage limits.
 - [x] Run, model-request, and tool-call capability middleware.
-- [ ] Execute independent tool calls concurrently by default while preserving model order.
-- [ ] Per-tool sequential execution barrier and run-wide sequential execution mode.
+- [x] Execute independent tool calls concurrently by default while preserving model order.
+- [x] Per-tool sequential execution barrier via `WithSequential()`.
+- [ ] Agent/run-wide sequential tool execution mode.
 - [ ] End strategy when a final output and function tools appear together (`early` / `exhaustive`).
 - [ ] Run cancellation initiated from `RunContext`, including draining concurrent tools.
 - [ ] Per-run overrides for model, settings, instructions, output type/mode, limits, and tools.
@@ -187,8 +188,8 @@ Status:
 
 ## Next work
 
-1. Implement concurrent tool execution with ordered results and sequential barriers.
-2. Prove exact message-history compatibility with upstream-generated fixtures; fix the wire format before adding more persisted part types.
+1. Prove exact message-history compatibility with upstream-generated fixtures; fix the wire format before adding more persisted part types.
+2. Add agent/run-wide sequential execution and final-output end strategies.
 3. Add strict tool definitions and per-step tool preparation.
 4. Add Anthropic, Gemini, and OpenAI Responses streaming.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.

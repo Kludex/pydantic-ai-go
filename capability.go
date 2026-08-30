@@ -68,7 +68,9 @@ type ToolCallFunc func(ctx context.Context, call ToolCallPart) (any, error)
 
 // ToolCallWrapper intercepts every tool execution. Implementations call
 // next to continue; returning an error created with Retryf sends a retry
-// prompt to the model instead of failing the run.
+// prompt to the model instead of failing the run. Independent tool calls
+// invoke this method concurrently, so implementations must synchronize
+// mutable state.
 type ToolCallWrapper interface {
 	WrapToolCall(ctx context.Context, ri *RunInfo, call ToolCallPart, next ToolCallFunc) (any, error)
 }

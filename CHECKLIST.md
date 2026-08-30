@@ -46,7 +46,7 @@ Status:
 - [ ] Provider details, metadata, run ID, conversation ID, finish reason, and response IDs.
 - [ ] Retry prompt structured validation errors.
 - [ ] Rich `ToolReturn`: separate return value, extra content, metadata, and revealed tools.
-- [ ] Stream event parity: part start/delta/end, final result, and enqueued-message events.
+- [ ] Stream event parity: stable part IDs, keyed/interleaved deltas, part start/delta/end, final result, and enqueued-message events.
 
 ### Tools and toolsets
 
@@ -85,7 +85,7 @@ Status:
 - [x] OpenAI Chat Completions SSE streaming.
 - [x] Anthropic SSE streaming for text, thinking, function calls, usage, errors, and cancellation.
 - [x] Google Gemini SSE streaming for text, thinking, function calls with IDs, usage, errors, and cancellation.
-- [ ] OpenAI Responses streaming.
+- [x] OpenAI Responses SSE streaming for text, reasoning summaries, function arguments, usage, errors, and cancellation.
 - [ ] Output validation during streaming and partial structured output.
 - [ ] Streaming final-output commitment: upstream `run_stream` locks the first matching output and behaves like `early`; Go currently accumulates the response and applies the configured strategy.
 - [ ] Stream event processors and capability wrapper.
@@ -96,7 +96,7 @@ Status:
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: non-streaming text, reasoning summaries, and function calls; native output, multimodal content, builtin tools, and streaming remain.
+- [~] OpenAI Responses: text/reasoning/function-call streaming; native output, multimodal content, builtin tools, and background responses remain.
 - [~] Anthropic Messages: text/thinking/function-tool streaming and multimodal input; advanced thinking, citations, and native tools remain.
 - [~] Google Gemini: text/thinking/function-tool streaming, native output, multimodal input, and function-call IDs; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
@@ -197,6 +197,6 @@ Status:
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Match streaming final-output commitment and validation semantics.
 3. Add provider-profile defaults and schema compatibility checks for strict mode.
-4. Add OpenAI Responses streaming.
+4. Add stable stream part IDs and keyed deltas before expanding streamed builtin tools.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

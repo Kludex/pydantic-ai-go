@@ -72,6 +72,7 @@ type responsesRequest struct {
 	MaxTokens         int              `json:"max_output_tokens,omitempty"`
 	Temperature       *float64         `json:"temperature,omitempty"`
 	TopP              *float64         `json:"top_p,omitempty"`
+	Stream            bool             `json:"stream,omitempty"`
 }
 
 type responsesInput struct {

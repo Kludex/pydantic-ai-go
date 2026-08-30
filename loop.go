@@ -45,7 +45,8 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 	if err != nil {
 		return nil, err
 	}
-	return r.wrappedLoop(ctx)
+	defer r.cancellation.finish()
+	return r.wrappedLoop(r.ctx)
 }
 
 func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (*run[Deps, Output], error) {
@@ -54,7 +55,12 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	r := &run[Deps, Output]{agent: a, retryLimits: a.retryLimits, toolRetries: make(map[string]int)}
+	runCtx, cancel := context.WithCancelCause(ctx)
+	cancellation := &runCancellation{cancel: cancel, active: true}
+	r := &run[Deps, Output]{
+		agent: a, ctx: runCtx, cancellation: cancellation,
+		retryLimits: a.retryLimits, toolRetries: make(map[string]int),
+	}
 	if cfg.retryLimits != nil {
 		validateRetryLimits(*cfg.retryLimits)
 		r.retryLimits = *cfg.retryLimits
@@ -63,14 +69,17 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 	r.newMessages = len(r.messages)
 	r.rc = &RunContext[Deps]{
 		Deps: deps, MaxRetries: r.retryLimits.Output, RunID: newRunID(), usage: &r.usage, messages: &r.messages,
+		cancellation: cancellation,
 	}
 	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, messages: &r.messages}
-	instructions, err := a.buildInstructions(ctx, r.rc, r.info)
+	instructions, err := a.buildInstructions(runCtx, r.rc, r.info)
 	if err != nil {
+		cancellation.finish()
 		return nil, err
 	}
 	r.params, err = a.buildParams(instructions)
 	if err != nil {
+		cancellation.finish()
 		return nil, err
 	}
 	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{prompt}})
@@ -79,6 +88,8 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 
 type run[Deps, Output any] struct {
 	agent        *Agent[Deps, Output]
+	ctx          context.Context
+	cancellation *runCancellation
 	rc           *RunContext[Deps]
 	info         *RunInfo
 	params       ModelRequestParams
@@ -883,7 +894,11 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 			}
 		}
 	}
-	if err := next(ctx); err != nil {
+	err := next(ctx)
+	if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
+		return nil, &RunCancelledError{messages: slices.Clone(r.messages), usage: r.usage}
+	}
+	if err != nil {
 		return nil, err
 	}
 	return result, nil

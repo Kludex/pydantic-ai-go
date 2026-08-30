@@ -5,13 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 	"time"
 
 	"github.com/Kludex/pydantic-ai-go/internal/schema"
 )
 
-// RunContext carries run-scoped data into tools and dynamic hooks.
-// It is pure data: ctx stays the sole cancellation carrier.
+// RunContext carries run-scoped data into tools and dynamic hooks. The
+// context.Context argument remains the cancellation signal carrier.
 type RunContext[Deps any] struct {
 	Deps       Deps
 	Retry      int
@@ -19,8 +20,9 @@ type RunContext[Deps any] struct {
 	RunID      string
 	ToolCallID string
 
-	usage    *Usage
-	messages *[]ModelMessage
+	usage        *Usage
+	messages     *[]ModelMessage
+	cancellation *runCancellation
 }
 
 // Usage returns the usage accumulated so far in this run.
@@ -28,6 +30,37 @@ func (rc *RunContext[Deps]) Usage() Usage { return *rc.usage }
 
 // Messages returns the conversation so far in this run.
 func (rc *RunContext[Deps]) Messages() []ModelMessage { return *rc.messages }
+
+// Cancel requests cancellation of this run. In-flight model and tool calls
+// receive cancellation through their context.Context. Concurrent tool calls
+// are drained before the run returns a RunCancelledError. Cancel is
+// idempotent and becomes a no-op after the run ends.
+func (rc *RunContext[Deps]) Cancel() {
+	if rc.cancellation != nil {
+		rc.cancellation.cancelRun()
+	}
+}
+
+type runCancellation struct {
+	mutex  sync.Mutex
+	cancel context.CancelCauseFunc
+	active bool
+}
+
+func (c *runCancellation) cancelRun() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if c.active {
+		c.cancel(ErrRunCancelled)
+	}
+}
+
+func (c *runCancellation) finish() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	c.active = false
+	c.cancel(nil)
+}
 
 // ToolPrepareFunc customizes one tool definition before each model request.
 // Return nil to omit the tool for that step.

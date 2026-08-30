@@ -75,6 +75,21 @@ agent := ai.NewAgent[Deps, string](
 )
 ```
 
+A tool can stop its run through `RunContext.Cancel`. Cancellation reaches sibling tools through `context.Context`, waits for their cleanup, and returns an error matching `ai.ErrRunCancelled`:
+
+```go
+ai.AddTool(agent, "stop", func(
+	ctx context.Context,
+	rc *ai.RunContext[Deps],
+	args StopArgs,
+) (string, error) {
+	rc.Cancel()
+	return "", nil
+})
+```
+
+Use `errors.As` with `*ai.RunCancelledError` to inspect the history and usage retained before cancellation.
+
 Use `ai.WithStrict()` to ask the provider to constrain generated arguments to the tool schema:
 
 ```go

@@ -59,6 +59,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(ctx context.Context, prompt UserPr
 			yield(nil, err)
 			return
 		}
+		defer r.cancellation.finish()
 		stopped := false
 		r.emit = func(event StreamEvent) bool {
 			if !yield(event, nil) {
@@ -68,7 +69,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(ctx context.Context, prompt UserPr
 			return true
 		}
 		var result *RunResult[Output]
-		result, err = r.wrappedLoop(ctx)
+		result, err = r.wrappedLoop(r.ctx)
 		if stopped {
 			err = nil // the consumer broke out; not a run failure
 			return

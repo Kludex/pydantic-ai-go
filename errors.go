@@ -12,6 +12,29 @@ var ErrUsageLimitExceeded = errors.New("ai: usage limit exceeded")
 // validator keeps asking the model to retry past the configured cap.
 var ErrMaxRetriesExceeded = errors.New("ai: max retries exceeded")
 
+// ErrRunCancelled identifies cancellation requested through RunContext.Cancel.
+var ErrRunCancelled = errors.New("ai: run cancelled")
+
+// RunCancelledError reports a run cancelled through RunContext.Cancel. It
+// retains the history and usage completed before cancellation took effect.
+type RunCancelledError struct {
+	messages []ModelMessage
+	usage    Usage
+}
+
+func (e *RunCancelledError) Error() string { return ErrRunCancelled.Error() }
+
+// Unwrap supports errors.Is(err, ErrRunCancelled).
+func (e *RunCancelledError) Unwrap() error { return ErrRunCancelled }
+
+// Messages returns a copy of the history retained at cancellation.
+func (e *RunCancelledError) Messages() []ModelMessage {
+	return append([]ModelMessage(nil), e.messages...)
+}
+
+// Usage returns usage accumulated before cancellation.
+func (e *RunCancelledError) Usage() Usage { return e.usage }
+
 // UnexpectedModelBehaviorError is returned when the model produces a
 // response the loop cannot interpret or recover from.
 type UnexpectedModelBehaviorError struct {

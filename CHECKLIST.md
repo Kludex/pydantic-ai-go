@@ -27,7 +27,7 @@ Status:
 - [x] Per-tool sequential execution barrier via `WithSequential()`.
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
-- [ ] Run cancellation initiated from `RunContext`, including draining concurrent tools.
+- [~] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, and drained concurrent tools. Interrupted request state, completed sibling results, and resumable cancellation history remain.
 - [ ] Per-run overrides for model, settings, instructions, output type/mode, limits, and tools.
 - [ ] Model selection and model-ID resolution per request step.
 - [ ] Usage/cost details beyond basic token counts, including cached, audio, and reasoning tokens.
@@ -45,6 +45,7 @@ Status:
 - [ ] Tool availability delta parts.
 - [ ] Provider details, metadata, run ID, conversation ID, finish reason, and response IDs.
 - [ ] Retry prompt structured validation errors.
+- [ ] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
 - [ ] Rich `ToolReturn`: separate return value, extra content, metadata, and revealed tools.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, and tool-argument deltas across bundled providers and fallback replay.
 - [ ] Explicit part start/delta/end, final-result, and enqueued-message events.

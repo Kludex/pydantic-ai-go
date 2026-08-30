@@ -63,7 +63,7 @@ Status:
 - [x] Provider-aware strict tool mode via `WithStrict()` / `WithoutStrict()`: OpenAI infers schema compatibility, Anthropic is explicit and model-gated, and Gemini 2.5+ defaults to request-wide `VALIDATED`; each provider supports alias/proxy overrides.
 - [x] Surface Anthropic's lossy strict transformation of dynamic-map schemas through `anthropic.WithSchemaWarningHandler`.
 - [x] Per-tool and agent-wide per-step preparation and omission via `AddPreparedTool` and `AddToolsPrepareFunc`, applied in upstream order.
-- [ ] Argument validators before approval/execution.
+- [x] Typed semantic argument validators run after JSON decoding and before execution for dependency-aware, simple, prepared, and raw-schema tools, with retry and terminal-failure semantics.
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
 - [ ] Per-toolset retry defaults and output-tool-specific overrides once those abstractions land.
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
@@ -207,6 +207,6 @@ Status:
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add per-run dynamic settings, typed output specialization, capabilities, and toolsets.
 3. Add configurable partial-output debouncing and broader schema constraint validation.
-4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
+4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

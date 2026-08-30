@@ -156,6 +156,28 @@ agent.AddToolsPrepareFunc(func(
 
 The hook receives fresh copies, so you can safely change descriptions and nested schemas. Return an empty or nil slice to expose no function tools for that step. Output tools are prepared separately by the agent and are not included.
 
+## Argument validation
+
+Use `AddToolWithArgsValidator` when valid JSON is not enough. The validator receives typed arguments and the same `RunContext` as the tool:
+
+```go
+ai.AddToolWithArgsValidator(
+	agent,
+	"get_weather",
+	func(_ context.Context, rc *ai.RunContext[Deps], args WeatherArgs) (string, error) {
+		return fmt.Sprintf("sunny, 21 %s in %s", rc.Deps.DefaultUnit, args.City), nil
+	},
+	func(_ context.Context, _ *ai.RunContext[Deps], args WeatherArgs) error {
+		if args.City == "" {
+			return ai.Retryf("city must not be empty")
+		}
+		return nil
+	},
+)
+```
+
+The validator runs after JSON decoding and before the tool. `Retryf` asks the model for corrected arguments and consumes that tool's retry budget. `ToolFailedf` records a terminal failed result without running the tool. Other errors abort the run. Use `AddPreparedToolWithArgsValidator`, `AddSimpleToolWithArgsValidator`, or `AddRawToolWithArgsValidator` for the corresponding registration style.
+
 ## Retry budgets
 
 Function tools track retries independently. Output validation has a separate budget. Both default to one retry:

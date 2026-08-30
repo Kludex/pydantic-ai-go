@@ -20,7 +20,14 @@ type toolFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps], rawArgs 
 
 // Run executes the agent loop: send the conversation to the model, execute
 // any tool calls, repeat until the model produces a final output.
-func (a *Agent[Deps, Output]) Run(ctx context.Context, prompt string, deps Deps, opts ...RunOption) (*RunResult[Output], error) {
+func (a *Agent[Deps, Output]) Run(ctx context.Context, prompt string, deps Deps, opts ...RunOption) (result *RunResult[Output], err error) {
+	ctx, span := startRunSpan(ctx, a.model.Name())
+	defer func() {
+		if result != nil {
+			recordUsage(span, result.usage)
+		}
+		endSpan(span, err)
+	}()
 	a.started.Store(true)
 	var cfg runConfig
 	for _, opt := range opts {
@@ -58,10 +65,14 @@ type run[Deps, Output any] struct {
 func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error) {
 	a := r.agent
 	for {
-		resp, err := a.model.Request(ctx, r.messages, r.params)
+		reqCtx, reqSpan := startRequestSpan(ctx, a.model.Name())
+		resp, err := a.model.Request(reqCtx, r.messages, r.params)
 		if err != nil {
+			endSpan(reqSpan, err)
 			return nil, err
 		}
+		recordUsage(reqSpan, resp.Usage)
+		endSpan(reqSpan, nil)
 		if resp.Timestamp.IsZero() {
 			resp.Timestamp = time.Now().UTC()
 		}
@@ -122,7 +133,9 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	}
 	r.rc.ToolCallID = call.ToolCallID
 	r.rc.Retry = r.retries
-	content, err := entry.call(ctx, r.rc, call.Args)
+	toolCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
+	content, err := entry.call(toolCtx, r.rc, call.Args)
+	endSpan(toolSpan, err)
 	r.rc.ToolCallID = ""
 	var retry *RetryError
 	switch {

@@ -316,3 +316,42 @@ func TestRunStreamParts(t *testing.T) {
 		t.Fatal("expected result")
 	}
 }
+
+func TestNativeOutputMode(t *testing.T) {
+	var gotSchema map[string]any
+	responses := []string{`not json`, `{"city":"SF","temp_c":18}`}
+	i := 0
+	model := fakes.NewFunctionModel(func(_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		gotSchema = params.OutputSchema
+		if params.OutputTool != nil {
+			t.Error("output tool should not be set in native mode")
+		}
+		resp := responses[i]
+		i++
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: resp}}}, nil
+	})
+	agent := ai.NewAgent[deps, weather](model, ai.WithOutputMode(ai.OutputModeNative))
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output.City != "SF" {
+		t.Fatalf("unexpected output %+v", result.Output)
+	}
+	if gotSchema == nil {
+		t.Fatal("output schema not sent to the model")
+	}
+	if i != 2 {
+		t.Fatalf("expected an invalid-JSON retry, got %d requests", i)
+	}
+}
+
+func TestNativeOutputModeRetriesExhausted(t *testing.T) {
+	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "never json"}}}, nil
+	})
+	agent := ai.NewAgent[deps, weather](model, ai.WithOutputMode(ai.OutputModeNative))
+	if _, err := agent.Run(t.Context(), "go", deps{}); !errors.Is(err, ai.ErrMaxRetriesExceeded) {
+		t.Fatalf("expected ErrMaxRetriesExceeded, got %v", err)
+	}
+}

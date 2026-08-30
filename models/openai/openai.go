@@ -96,17 +96,18 @@ func (e *APIError) Error() string {
 }
 
 type chatRequest struct {
-	Model         string         `json:"model"`
-	Messages      []chatMessage  `json:"messages"`
-	Tools         []chatTool     `json:"tools,omitempty"`
-	ToolChoice    any            `json:"tool_choice,omitempty"`
-	MaxTokens     int            `json:"max_completion_tokens,omitempty"`
-	Temperature   *float64       `json:"temperature,omitempty"`
-	TopP          *float64       `json:"top_p,omitempty"`
-	Seed          *int           `json:"seed,omitempty"`
-	Stop          []string       `json:"stop,omitempty"`
-	Stream        bool           `json:"stream,omitempty"`
-	StreamOptions *streamOptions `json:"stream_options,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []chatMessage   `json:"messages"`
+	Tools          []chatTool      `json:"tools,omitempty"`
+	ToolChoice     any             `json:"tool_choice,omitempty"`
+	MaxTokens      int             `json:"max_completion_tokens,omitempty"`
+	Temperature    *float64        `json:"temperature,omitempty"`
+	TopP           *float64        `json:"top_p,omitempty"`
+	Seed           *int            `json:"seed,omitempty"`
+	Stop           []string        `json:"stop,omitempty"`
+	Stream         bool            `json:"stream,omitempty"`
+	StreamOptions  *streamOptions  `json:"stream_options,omitempty"`
+	ResponseFormat *responseFormat `json:"response_format,omitempty"`
 }
 
 type chatMessage struct {
@@ -176,7 +177,24 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			req.ToolChoice = "required"
 		}
 	}
+	if params.OutputSchema != nil {
+		req.ResponseFormat = &responseFormat{
+			Type:       "json_schema",
+			JSONSchema: jsonSchemaFormat{Name: "final_result", Schema: params.OutputSchema, Strict: true},
+		}
+	}
 	return req, nil
+}
+
+type responseFormat struct {
+	Type       string           `json:"type"`
+	JSONSchema jsonSchemaFormat `json:"json_schema"`
+}
+
+type jsonSchemaFormat struct {
+	Name   string         `json:"name"`
+	Schema map[string]any `json:"schema"`
+	Strict bool           `json:"strict"`
 }
 
 func convertMessage(msg ai.ModelMessage) ([]chatMessage, error) {

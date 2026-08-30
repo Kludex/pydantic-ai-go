@@ -218,9 +218,9 @@ func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCal
 	return nil, r.result(out), nil
 }
 
-// finalizeText handles a response with no tool calls. For string outputs the
-// text is the result; for structured outputs the model must call the output
-// tool, so text-only responses trigger a retry.
+// finalizeText handles a response with no tool calls. String outputs take
+// the text as-is; native-mode structured outputs unmarshal it; tool-mode
+// structured outputs must call the output tool, so text triggers a retry.
 func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelResponse) (*RunResult[Output], *RetryPromptPart, error) {
 	if !r.params.AllowText {
 		if err := r.countRetry(); err != nil {
@@ -228,9 +228,19 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 		}
 		return nil, &RetryPromptPart{Content: fmt.Sprintf("Respond by calling the %s tool to provide the final result.", outputToolName)}, nil
 	}
-	// buildParams sets AllowText only when Output is string, so this
-	// assertion cannot fail.
-	out := any(resp.Text()).(Output)
+	var out Output
+	if r.params.OutputSchema != nil {
+		if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
+			if err := r.countRetry(); err != nil {
+				return nil, nil, err
+			}
+			return nil, &RetryPromptPart{Content: fmt.Sprintf("invalid JSON output: %v", err)}, nil
+		}
+	} else {
+		// buildParams sets AllowText without a schema only when Output is
+		// string, so this assertion cannot fail.
+		out = any(resp.Text()).(Output)
+	}
 	if retry, err := r.validate(ctx, out); err != nil {
 		return nil, nil, err
 	} else if retry != nil {
@@ -311,6 +321,11 @@ func (a *Agent[Deps, Output]) buildParams(instructions string) (ModelRequestPara
 	s, err := schema.For(reflect.TypeFor[Output]())
 	if err != nil {
 		return params, fmt.Errorf("ai: output type: %w", err)
+	}
+	if a.outputMode == OutputModeNative {
+		params.OutputSchema = s
+		params.AllowText = true
+		return params, nil
 	}
 	params.OutputTool = &ToolDefinition{
 		Name:        outputToolName,

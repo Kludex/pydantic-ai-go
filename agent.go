@@ -16,6 +16,7 @@ type Agent[Deps, Output any] struct {
 	settings          ModelSettings
 	limits            UsageLimits
 	maxRetries        int
+	outputMode        OutputMode
 	outputValidators  []func(ctx context.Context, rc *RunContext[Deps], out Output) error
 
 	tools   []toolEntry[Deps]
@@ -37,6 +38,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	a.instructions = cfg.instructions
 	a.settings = cfg.settings
 	a.limits = cfg.limits
+	a.outputMode = cfg.outputMode
 	if cfg.maxRetries > 0 {
 		a.maxRetries = cfg.maxRetries
 	}
@@ -76,6 +78,26 @@ type config struct {
 	settings     ModelSettings
 	limits       UsageLimits
 	maxRetries   int
+	outputMode   OutputMode
+}
+
+// OutputMode selects how structured output is requested from the model.
+type OutputMode int
+
+const (
+	// OutputModeTool asks for structured output via a final output tool
+	// the model must call. It works with every provider and is the default.
+	OutputModeTool OutputMode = iota
+	// OutputModeNative uses the provider's native JSON mode: the model
+	// responds with JSON text conforming to the output schema. The
+	// provider must support it; validation retries still apply.
+	OutputModeNative
+)
+
+// WithOutputMode selects how structured output is requested. It has no
+// effect when Output is string.
+func WithOutputMode(mode OutputMode) Option {
+	return func(c *config) { c.outputMode = mode }
 }
 
 // WithInstructions sets the static system instructions.

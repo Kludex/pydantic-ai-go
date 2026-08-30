@@ -177,10 +177,12 @@ type toolConfig struct {
 }
 
 type generationConfig struct {
-	MaxOutputTokens int      `json:"maxOutputTokens,omitempty"`
-	Temperature     *float64 `json:"temperature,omitempty"`
-	TopP            *float64 `json:"topP,omitempty"`
-	StopSequences   []string `json:"stopSequences,omitempty"`
+	MaxOutputTokens  int            `json:"maxOutputTokens,omitempty"`
+	Temperature      *float64       `json:"temperature,omitempty"`
+	TopP             *float64       `json:"topP,omitempty"`
+	StopSequences    []string       `json:"stopSequences,omitempty"`
+	ResponseMimeType string         `json:"responseMimeType,omitempty"`
+	ResponseSchema   map[string]any `json:"responseSchema,omitempty"`
 }
 
 func buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
@@ -215,6 +217,13 @@ func buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*genera
 			tc.FunctionCallingConfig.Mode = "ANY"
 			req.ToolConfig = tc
 		}
+	}
+	if params.OutputSchema != nil {
+		if req.GenerationConfig == nil {
+			req.GenerationConfig = &generationConfig{}
+		}
+		req.GenerationConfig.ResponseMimeType = "application/json"
+		req.GenerationConfig.ResponseSchema = sanitizeSchema(params.OutputSchema)
 	}
 	if len(declarations) > 0 {
 		req.Tools = []toolsParam{{FunctionDeclarations: declarations}}

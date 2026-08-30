@@ -199,6 +199,9 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			req.ToolChoice = &toolChoiceParam{Type: "any"}
 		}
 	}
+	if params.OutputSchema != nil {
+		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")
+	}
 	return req, nil
 }
 

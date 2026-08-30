@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -389,5 +390,14 @@ func TestMultimodalUnknownContent(t *testing.T) {
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{nil}}}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestNativeJSONOutputModeUnsupported(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	params := ai.ModelRequestParams{OutputSchema: map[string]any{"type": "object"}}
+	_, err := model.Request(t.Context(), nil, params)
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("expected unsupported error, got %v", err)
 	}
 }

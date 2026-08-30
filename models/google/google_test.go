@@ -367,3 +367,31 @@ func TestMultimodalUnknownContent(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestNativeJSONOutputMode(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"{}"}]}}],"usageMetadata":{}}`))
+	})
+	params := ai.ModelRequestParams{
+		AllowText: true,
+		OutputSchema: map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+		},
+	}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	gen := gotBody["generationConfig"].(map[string]any)
+	if gen["responseMimeType"] != "application/json" {
+		t.Fatalf("unexpected generation config %v", gen)
+	}
+	schema := gen["responseSchema"].(map[string]any)
+	if _, ok := schema["additionalProperties"]; ok {
+		t.Fatal("schema should be sanitized")
+	}
+}

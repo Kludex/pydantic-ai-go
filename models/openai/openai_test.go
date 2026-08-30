@@ -423,3 +423,28 @@ func TestMultimodalUnknownContent(t *testing.T) {
 		t.Fatal("expected error for unknown content type")
 	}
 }
+
+func TestNativeJSONOutputMode(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","created":0,"choices":[{"message":{"role":"assistant","content":"{}"}}],"usage":{}}`))
+	})
+	params := ai.ModelRequestParams{
+		AllowText:    true,
+		OutputSchema: map[string]any{"type": "object"},
+	}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	format := gotBody["response_format"].(map[string]any)
+	if format["type"] != "json_schema" {
+		t.Fatalf("unexpected response format %v", format)
+	}
+	js := format["json_schema"].(map[string]any)
+	if js["name"] != "final_result" || js["strict"] != true {
+		t.Fatalf("unexpected json_schema %v", js)
+	}
+}

@@ -3,7 +3,12 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"iter"
 )
+
+// EventStream is a consumer-facing stream from Agent.RunStream. It may be
+// transformed by RunEventStreamWrapper capabilities.
+type EventStream iter.Seq2[StreamEvent, error]
 
 // ResponsePartKind identifies a streamed response part.
 type ResponsePartKind string

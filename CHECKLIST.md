@@ -96,7 +96,7 @@ Status:
 - [x] Final streamed output validation; retry requests fail clearly because `RunStream` cannot start another model round after committing output.
 - [ ] Partial structured output validation while deltas arrive.
 - [x] Streaming final-output commitment: `RunStream` locks the first matching text, native, or output-tool result. Configured end strategies still govern co-emitted tools, but retries cannot revoke the committed result.
-- [ ] Stream event processors and capability wrapper.
+- [x] Consumer-only stream transformation through `RunEventStreamWrapper` and `StreamEventProcessor`, including automatic streaming for `Run`.
 - [ ] Streamed tool execution events and deferred results.
 
 ## P1 - Providers and model behavior
@@ -148,7 +148,7 @@ Status:
 - [ ] Before/after/error hooks in addition to wrappers.
 - [ ] Output validation/processing hooks.
 - [ ] Tool validation hook separate from tool execution.
-- [ ] Event-stream wrapper and per-event processor.
+- [x] Event-stream wrapper and per-event processor with standard capability middleware ordering.
 - [ ] Capability ordering constraints and outermost/innermost tiers.
 - [ ] Combined and wrapper capabilities.
 - [ ] Capability-provided model settings and adaptive model selection.
@@ -204,6 +204,6 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add partial structured-output validation while streaming deltas.
-3. Add event-stream capability wrappers and per-event processors.
-4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
+3. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
+4. Add streamed tool execution events and deferred results.
 5. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

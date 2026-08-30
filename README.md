@@ -258,7 +258,9 @@ func (Redactor) WrapToolCall(ctx context.Context, ri *ai.RunInfo, call ai.ToolCa
 agent := ai.NewAgent[Deps, string](model, ai.WithCapabilities(Redactor{}))
 ```
 
-Implement any of `RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, or `InstructionsProvider` - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Slice order is middleware order: the first capability is outermost. Usage limits are implemented on this same surface internally.
+Implement any of `RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, `RunEventStreamWrapper`, `StreamEventProcessor`, or `InstructionsProvider` - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Slice order is middleware order: the first capability is outermost. Usage limits are implemented on this same surface internally.
+
+Stream wrappers only change events seen by the consumer. They do not change accumulated history, tool execution, or final output. Adding one also enables provider streaming for `Run`, so processors run whether you call `Run` or `RunStream`.
 
 ## Why no graph?
 

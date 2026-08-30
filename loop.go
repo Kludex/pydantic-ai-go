@@ -33,6 +33,18 @@ func (a *Agent[Deps, Output]) RunParts(ctx context.Context, contents []UserConte
 }
 
 func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (result *RunResult[Output], err error) {
+	if hasEventStreamCapability(a.capabilities) {
+		stream := a.runStreamPrompt(ctx, prompt, deps, opts)
+		for _, streamErr := range stream.Events() {
+			if streamErr != nil {
+				return nil, streamErr
+			}
+		}
+		if stream.Result() == nil {
+			return nil, &UnexpectedModelBehaviorError{Message: "event stream ended before the run completed"}
+		}
+		return stream.Result(), nil
+	}
 	ctx, span := startRunSpan(ctx, a.model.Name())
 	defer func() {
 		if result != nil {

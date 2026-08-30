@@ -8,8 +8,9 @@ import (
 // A Capability is a reusable, composable unit of agent behavior. Setup runs
 // once per agent at registration and contributes tools, instructions, and
 // settings. A capability opts into loop interception by also implementing
-// any of RunWrapper, ModelRequestWrapper, ToolCallWrapper, or
-// InstructionsProvider - the agent discovers them by type assertion.
+// any of RunWrapper, ModelRequestWrapper, ToolCallWrapper,
+// RunEventStreamWrapper, StreamEventProcessor, or InstructionsProvider - the
+// agent discovers them by type assertion.
 //
 // Capabilities are untyped so one implementation works with every agent
 // regardless of its Deps and Output types.
@@ -88,6 +89,20 @@ type RunWrapper interface {
 // start of every run and appended to the agent's.
 type InstructionsProvider interface {
 	Instructions(ctx context.Context, ri *RunInfo) (string, error)
+}
+
+// RunEventStreamWrapper transforms the consumer-facing event stream. Changes
+// do not affect accumulated messages, tool execution, or final output. The
+// wrapper must consume stream and stop when its downstream yield returns false.
+type RunEventStreamWrapper interface {
+	WrapRunEventStream(ctx context.Context, ri *RunInfo, stream EventStream) EventStream
+}
+
+// StreamEventProcessor is a per-event shorthand for RunEventStreamWrapper.
+// Return nil to hide an event from the consumer. An error stops the stream.
+// If a capability implements both interfaces, RunEventStreamWrapper wins.
+type StreamEventProcessor interface {
+	ProcessStreamEvent(ctx context.Context, ri *RunInfo, event StreamEvent) (StreamEvent, error)
 }
 
 // WithCapabilities registers capabilities on the agent. Slice order is

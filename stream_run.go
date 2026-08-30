@@ -9,14 +9,13 @@ import (
 // StreamedRun is a run in progress. Range over Events to consume it;
 // Result is valid once the range completes without error.
 type StreamedRun[Output any] struct {
-	events iter.Seq2[StreamEvent, error]
+	events EventStream
 	result *RunResult[Output]
 }
 
-// Events streams the run's events across every loop iteration: model
-// output deltas, tool call starts and argument fragments, and one
-// FinishEvent per model request. The sequence can be ranged once.
-func (s *StreamedRun[Output]) Events() iter.Seq2[StreamEvent, error] { return s.events }
+// Events streams normalized part lifecycle, final-result, and finish events
+// across every model request in the run. The sequence can be ranged once.
+func (s *StreamedRun[Output]) Events() EventStream { return s.events }
 
 // Result returns the final result. It is nil until the event stream has
 // been fully consumed without error.
@@ -29,65 +28,134 @@ func (s *StreamedRun[Output]) Result() *RunResult[Output] { return s.result }
 //	stream := agent.RunStream(ctx, "hello", deps)
 //	for event, err := range stream.Events() {
 //	    if err != nil { ... }
-//	    if delta, ok := event.(ai.TextDeltaEvent); ok { fmt.Print(delta.Delta) }
+//	    switch event := event.(type) {
+//	    case ai.PartStartEvent:
+//	        // Handle the first content for event.Part.
+//	    case ai.PartDeltaEvent:
+//	        // Apply or render event.Delta.
+//	    }
 //	}
 //	result := stream.Result()
-func (a *Agent[Deps, Output]) RunStream(ctx context.Context, prompt string, deps Deps, opts ...RunOption) *StreamedRun[Output] {
+func (a *Agent[Deps, Output]) RunStream(
+	ctx context.Context, prompt string, deps Deps, opts ...RunOption,
+) *StreamedRun[Output] {
 	return a.runStreamPrompt(ctx, UserPromptPart{Content: prompt}, deps, opts)
 }
 
 // RunStreamParts is RunStream with a multimodal prompt.
-func (a *Agent[Deps, Output]) RunStreamParts(ctx context.Context, contents []UserContent, deps Deps, opts ...RunOption) *StreamedRun[Output] {
+func (a *Agent[Deps, Output]) RunStreamParts(
+	ctx context.Context, contents []UserContent, deps Deps, opts ...RunOption,
+) *StreamedRun[Output] {
 	return a.runStreamPrompt(ctx, UserPromptPart{Contents: contents}, deps, opts)
 }
 
-func (a *Agent[Deps, Output]) runStreamPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) *StreamedRun[Output] {
-	s := &StreamedRun[Output]{}
-	s.events = func(yield func(StreamEvent, error) bool) {
+func (a *Agent[Deps, Output]) runStreamPrompt(
+	ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption,
+) *StreamedRun[Output] {
+	streamedRun := &StreamedRun[Output]{}
+	streamedRun.events = func(yield func(StreamEvent, error) bool) {
 		ctx, span := startRunSpan(ctx, a.model.Name())
-		var err error
+		var runErr error
 		defer func() {
-			if s.result != nil {
-				recordUsage(span, s.result.usage)
+			if streamedRun.result != nil {
+				recordUsage(span, streamedRun.result.usage)
 			}
-			endSpan(span, err)
+			endSpan(span, runErr)
 		}()
 
-		var r *run[Deps, Output]
-		r, err = a.newRun(ctx, prompt, deps, opts)
+		run, err := a.newRun(ctx, prompt, deps, opts)
 		if err != nil {
+			runErr = err
 			yield(nil, err)
 			return
 		}
-		defer r.cancellation.finish()
+		defer run.cancellation.finish()
+
 		stopped := false
-		r.emit = func(event StreamEvent) bool {
-			if !yield(event, nil) {
-				stopped = true
-				return false
+		core := EventStream(func(yieldCore func(StreamEvent, error) bool) {
+			run.emit = func(event StreamEvent) bool {
+				if !yieldCore(event, nil) {
+					stopped = true
+					return false
+				}
+				return true
 			}
+			result, err := run.wrappedLoop(run.ctx)
+			if stopped {
+				return
+			}
+			if err != nil {
+				runErr = err
+				yieldCore(nil, err)
+				return
+			}
+			streamedRun.result = result
+		})
+		stream := wrapEventStream(run.ctx, run.info, core, a.capabilities)
+		for event, err := range stream {
+			if err != nil {
+				runErr = err
+			}
+			if !yield(event, err) {
+				return
+			}
+		}
+	}
+	return streamedRun
+}
+
+func hasEventStreamCapability(capabilities []Capability) bool {
+	for _, capability := range capabilities {
+		if _, ok := capability.(RunEventStreamWrapper); ok {
 			return true
 		}
-		var result *RunResult[Output]
-		result, err = r.wrappedLoop(r.ctx)
-		if stopped {
-			err = nil // the consumer broke out; not a run failure
-			return
+		if _, ok := capability.(StreamEventProcessor); ok {
+			return true
 		}
-		if err != nil {
-			yield(nil, err)
-			return
-		}
-		s.result = result
 	}
-	return s
+	return false
+}
+
+func wrapEventStream(
+	ctx context.Context, runInfo *RunInfo, stream EventStream, capabilities []Capability,
+) EventStream {
+	for index := len(capabilities) - 1; index >= 0; index-- {
+		capability := capabilities[index]
+		if wrapper, ok := capability.(RunEventStreamWrapper); ok {
+			stream = wrapper.WrapRunEventStream(ctx, runInfo, stream)
+		} else if processor, ok := capability.(StreamEventProcessor); ok {
+			stream = processEventStream(ctx, runInfo, stream, processor)
+		}
+	}
+	return stream
+}
+
+func processEventStream(
+	ctx context.Context, runInfo *RunInfo, stream EventStream, processor StreamEventProcessor,
+) EventStream {
+	return func(yield func(StreamEvent, error) bool) {
+		for event, err := range stream {
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			event, err = processor.ProcessStreamEvent(ctx, runInfo, event)
+			if err != nil {
+				yield(nil, err)
+				return
+			}
+			if event != nil && !yield(event, nil) {
+				return
+			}
+		}
+	}
 }
 
 // replayAsEvents converts a complete response into the provider deltas a
 // streaming model would have produced.
-func replayAsEvents(resp *ModelResponse) iter.Seq2[ModelStreamEvent, error] {
+func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] {
 	return func(yield func(ModelStreamEvent, error) bool) {
-		for index, part := range resp.Parts {
+		for index, part := range response.Parts {
 			partID := strconv.Itoa(index)
 			switch part := part.(type) {
 			case TextPart:
@@ -109,6 +177,6 @@ func replayAsEvents(resp *ModelResponse) iter.Seq2[ModelStreamEvent, error] {
 				}
 			}
 		}
-		yield(FinishEvent{Usage: resp.Usage, ModelName: resp.ModelName}, nil)
+		yield(FinishEvent{Usage: response.Usage, ModelName: response.ModelName}, nil)
 	}
 }

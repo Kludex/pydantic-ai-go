@@ -106,7 +106,7 @@ ai.AddTool(agent, "stop", func(
 })
 ```
 
-Use `errors.As` with `*ai.RunCancelledError` to inspect the history and usage retained before cancellation. Pass `cancelled.Messages()` to `ai.WithMessageHistory` to resume; dangling calls receive synthesized `interrupted` returns before the new prompt.
+Use `errors.As` with `*ai.RunCancelledError` to inspect the history and usage retained before cancellation. Pass `cancelled.Messages()` to `ai.WithMessageHistory` to resume. Dangling calls receive synthesized `interrupted` returns beside the matching turn, before user-facing content. Inspect `ToolReturnPart.Metadata[ai.SynthesizedToolReturnMetadataKey]` to distinguish a repaired return from an executed tool result.
 
 Use `ai.WithStrict()` to ask the provider to constrain generated arguments to the tool schema:
 

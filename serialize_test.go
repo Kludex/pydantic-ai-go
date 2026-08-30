@@ -71,7 +71,8 @@ func TestInterruptedRequestRoundTrip(t *testing.T) {
 		State: ai.RequestStateInterrupted,
 		Parts: []ai.RequestPart{ai.ToolReturnPart{
 			ToolName: "work", ToolCallID: "call", Content: "interrupted",
-			Outcome: ai.ToolReturnOutcomeInterrupted,
+			Outcome:  ai.ToolReturnOutcomeInterrupted,
+			Metadata: map[string]any{ai.SynthesizedToolReturnMetadataKey: true},
 		}},
 	}}
 	data, err := ai.MarshalMessages(messages)
@@ -79,7 +80,8 @@ func TestInterruptedRequestRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(data), `"state":"interrupted"`) ||
-		!strings.Contains(string(data), `"outcome":"interrupted"`) {
+		!strings.Contains(string(data), `"outcome":"interrupted"`) ||
+		!strings.Contains(string(data), `"pydantic_ai_synthesized_tool_return":true`) {
 		t.Fatalf("interrupted state was not serialized: %s", data)
 	}
 	decoded, err := ai.UnmarshalMessages(data)
@@ -88,7 +90,8 @@ func TestInterruptedRequestRoundTrip(t *testing.T) {
 	}
 	request := decoded[0].(ai.ModelRequest)
 	part := request.Parts[0].(ai.ToolReturnPart)
-	if request.State != ai.RequestStateInterrupted || part.Outcome != ai.ToolReturnOutcomeInterrupted {
+	if request.State != ai.RequestStateInterrupted || part.Outcome != ai.ToolReturnOutcomeInterrupted ||
+		part.Metadata[ai.SynthesizedToolReturnMetadataKey] != true {
 		t.Fatalf("interrupted state was not restored: %+v %+v", request, part)
 	}
 }

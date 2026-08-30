@@ -103,7 +103,8 @@ func (a *Agent[Deps, Output]) newRun(
 		validateRetryLimits(*cfg.retryLimits)
 		r.retryLimits = *cfg.retryLimits
 	}
-	r.messages = append(r.messages, cfg.history...)
+	history, interruptedReturns := repairDanglingToolCalls(cfg.history)
+	r.messages = append(r.messages, history...)
 	r.newMessages = len(r.messages)
 	settings := mergeModelSettings(a.settings, cfg.settings)
 	r.rc = &RunContext[Deps]{
@@ -127,49 +128,109 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, err
 	}
-	requestParts := interruptedToolReturns(r.messages)
+	requestParts := slices.Clone(interruptedReturns)
 	requestParts = append(requestParts, prompt)
 	r.messages = append(r.messages, ModelRequest{Parts: requestParts})
 	return r, nil
 }
 
-func interruptedToolReturns(messages []ModelMessage) []RequestPart {
-	var open []ToolCallPart
-	for _, message := range messages {
+type trackedToolCall struct {
+	responseIndex int
+	call          ToolCallPart
+	active        bool
+	dangling      bool
+}
+
+func repairDanglingToolCalls(messages []ModelMessage) ([]ModelMessage, []RequestPart) {
+	tracked := make([]*trackedToolCall, 0)
+	open := map[string]*trackedToolCall{}
+	for index, message := range messages {
 		switch message := message.(type) {
 		case ModelResponse:
-			open = append(open, message.ToolCalls()...)
+			for _, call := range message.ToolCalls() {
+				key := toolCallMatchKey(call.ToolName, call.ToolCallID)
+				if shadowed := open[key]; shadowed != nil {
+					shadowed.active = false
+					shadowed.dangling = true
+				}
+				item := &trackedToolCall{responseIndex: index, call: call, active: true}
+				tracked = append(tracked, item)
+				open[key] = item
+			}
 		case ModelRequest:
 			for _, part := range message.Parts {
-				var toolName, toolCallID string
-				switch part := part.(type) {
-				case ToolReturnPart:
-					toolName, toolCallID = part.ToolName, part.ToolCallID
-				case RetryPromptPart:
-					toolName, toolCallID = part.ToolName, part.ToolCallID
-				default:
+				toolName, toolCallID, ok := toolResultIdentity(part)
+				if !ok {
 					continue
 				}
-				for index, call := range open {
-					idMatches := toolCallID != "" && call.ToolCallID == toolCallID
-					nameMatches := toolCallID == "" && call.ToolCallID == "" && call.ToolName == toolName
-					if idMatches || nameMatches {
-						open = append(open[:index], open[index+1:]...)
-						break
-					}
+				key := toolCallMatchKey(toolName, toolCallID)
+				if item := open[key]; item != nil {
+					item.active = false
+					delete(open, key)
 				}
 			}
 		}
 	}
-	parts := make([]RequestPart, 0, len(open))
-	for _, call := range open {
-		parts = append(parts, ToolReturnPart{
-			ToolName: call.ToolName, ToolCallID: call.ToolCallID,
-			Content: "The tool call was interrupted before a result was produced.",
-			Outcome: ToolReturnOutcomeInterrupted,
-		})
+	dangling := map[int][]RequestPart{}
+	for _, item := range tracked {
+		if item.active || item.dangling {
+			call := item.call
+			dangling[item.responseIndex] = append(dangling[item.responseIndex], ToolReturnPart{
+				ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+				Content:  "The tool call was interrupted before a result was produced.",
+				Outcome:  ToolReturnOutcomeInterrupted,
+				Metadata: map[string]any{SynthesizedToolReturnMetadataKey: true},
+			})
+		}
 	}
-	return parts
+	if len(dangling) == 0 {
+		return slices.Clone(messages), nil
+	}
+	repaired := make([]ModelMessage, 0, len(messages)+len(dangling))
+	var pending []RequestPart
+	for index, message := range messages {
+		switch message := message.(type) {
+		case ModelResponse:
+			if len(pending) > 0 {
+				repaired = append(repaired, ModelRequest{Parts: pending})
+			}
+			repaired = append(repaired, message)
+			pending = dangling[index]
+		case ModelRequest:
+			if len(pending) > 0 {
+				parts := slices.Clone(message.Parts)
+				insertAt := 0
+				for partIndex, part := range parts {
+					if _, _, ok := toolResultIdentity(part); ok {
+						insertAt = partIndex + 1
+					}
+				}
+				parts = slices.Insert(parts, insertAt, pending...)
+				message.Parts = parts
+				pending = nil
+			}
+			repaired = append(repaired, message)
+		}
+	}
+	return repaired, pending
+}
+
+func toolCallMatchKey(toolName, toolCallID string) string {
+	if toolCallID != "" {
+		return "id:" + toolCallID
+	}
+	return "name:" + toolName
+}
+
+func toolResultIdentity(part RequestPart) (toolName, toolCallID string, ok bool) {
+	switch part := part.(type) {
+	case ToolReturnPart:
+		return part.ToolName, part.ToolCallID, true
+	case RetryPromptPart:
+		return part.ToolName, part.ToolCallID, part.ToolName != ""
+	default:
+		return "", "", false
+	}
 }
 
 type run[Deps, Output any] struct {

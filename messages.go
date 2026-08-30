@@ -124,12 +124,17 @@ const (
 	ToolReturnOutcomeInterrupted ToolReturnOutcome = "interrupted"
 )
 
+// SynthesizedToolReturnMetadataKey marks tool returns created while repairing
+// incomplete history rather than produced by tool execution.
+const SynthesizedToolReturnMetadataKey = "pydantic_ai_synthesized_tool_return"
+
 // ToolReturnPart carries the result of a tool call back to the model.
 type ToolReturnPart struct {
 	ToolName   string
 	Content    any
 	ToolCallID string
 	Outcome    ToolReturnOutcome
+	Metadata   map[string]any
 }
 
 func (ToolReturnPart) requestPartKind() string { return "tool-return" }

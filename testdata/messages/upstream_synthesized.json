@@ -1,0 +1,25 @@
+[
+  {
+    "parts": [
+      {
+        "tool_name": "work",
+        "content": "The tool call was interrupted before a result was produced.",
+        "tool_call_id": "call",
+        "tool_kind": null,
+        "metadata": {
+          "pydantic_ai_synthesized_tool_return": true
+        },
+        "timestamp": "2026-01-01T00:00:00Z",
+        "outcome": "interrupted",
+        "part_kind": "tool-return"
+      }
+    ],
+    "timestamp": "2026-01-01T00:00:00Z",
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

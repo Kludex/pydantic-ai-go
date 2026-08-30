@@ -37,7 +37,7 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, and interrupted histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, and synthesized-return histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [~] Provider request parameters preserve static and dynamic instruction parts while retaining joined text compatibility; persisted dynamic instruction IDs and history reevaluation remain.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
@@ -46,8 +46,9 @@ Status:
 - [ ] Provider details, metadata, run ID, conversation ID, finish reason, and response IDs.
 - [ ] Retry prompt structured validation errors.
 - [x] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
-- [ ] Synthesized-return metadata markers and deterministic repair of arbitrary interior dangling calls.
-- [ ] Rich `ToolReturn`: separate return value, extra content, metadata, and revealed tools.
+- [x] Synthesized-return metadata markers and deterministic, idempotent repair of trailing, interior, shadowed-ID, malformed-order, and empty-ID dangling calls.
+- [ ] Drop orphaned tool results and normalize consecutive same-role messages after history processors or hand-built history.
+- [~] `ToolReturn` metadata is preserved; separate return value, extra content, and revealed tools remain.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, and tool-argument deltas across bundled providers and fallback replay.
 - [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, and `FinalResultEvent` with typed, applicable deltas.
 - [ ] Enqueued-message events.
@@ -204,7 +205,7 @@ Status:
 
 ## Next work
 
-1. Extend upstream message fixtures as remaining persisted part types land.
+1. Extend upstream message fixtures as remaining persisted part types land, and add orphan-result/consecutive-role history normalization.
 2. Add per-run dynamic settings, typed output specialization, capabilities, and toolsets.
 3. Add configurable partial-output debouncing and broader schema constraint validation.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.

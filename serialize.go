@@ -57,6 +57,7 @@ type wirePart struct {
 	ToolCallID string            `json:"tool_call_id,omitempty"`
 	Args       json.RawMessage   `json:"args,omitempty"`
 	Outcome    ToolReturnOutcome `json:"outcome,omitempty"`
+	Metadata   map[string]any    `json:"metadata,omitempty"`
 }
 
 func marshalMessage(m ModelMessage) ([]byte, error) {
@@ -111,7 +112,7 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 		}
 		return wirePart{
 			PartKind: "tool-return", Content: content, ToolName: part.ToolName,
-			ToolCallID: part.ToolCallID, Outcome: part.Outcome,
+			ToolCallID: part.ToolCallID, Outcome: part.Outcome, Metadata: part.Metadata,
 		}, nil
 	case RetryPromptPart:
 		return wirePart{PartKind: "retry-prompt", Content: mustJSON(part.Content), ToolName: part.ToolName, ToolCallID: part.ToolCallID}, nil
@@ -194,7 +195,8 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 			_ = json.Unmarshal(wp.Content, &content)
 		}
 		return ToolReturnPart{
-			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID, Outcome: wp.Outcome,
+			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID,
+			Outcome: wp.Outcome, Metadata: wp.Metadata,
 		}, nil
 	case "retry-prompt":
 		return RetryPromptPart{Content: stringContent(wp.Content), ToolName: wp.ToolName, ToolCallID: wp.ToolCallID}, nil

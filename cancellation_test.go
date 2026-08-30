@@ -89,18 +89,20 @@ func TestRunContextCancelDrainsConcurrentTools(t *testing.T) {
 	if err != nil || resumeResult.Output != "resumed" {
 		t.Fatalf("cancellation history did not resume: result=%+v err=%v", resumeResult, err)
 	}
-	request := resumed[len(resumed)-1].(ai.ModelRequest)
+	request := resumed[len(resumed)-2].(ai.ModelRequest)
 	if len(request.Parts) != 3 {
-		t.Fatalf("dangling tool calls were not repaired: %+v", request)
+		t.Fatalf("dangling tool calls were not repaired beside completed results: %+v", request)
 	}
 	for index, name := range []string{"cancel", "sibling"} {
-		interrupted := request.Parts[index].(ai.ToolReturnPart)
-		if interrupted.ToolName != name || interrupted.Outcome != ai.ToolReturnOutcomeInterrupted {
+		interrupted := request.Parts[index+1].(ai.ToolReturnPart)
+		if interrupted.ToolName != name || interrupted.Outcome != ai.ToolReturnOutcomeInterrupted ||
+			interrupted.Metadata[ai.SynthesizedToolReturnMetadataKey] != true {
 			t.Fatalf("unexpected synthesized return: %+v", interrupted)
 		}
 	}
-	if request.Parts[2].(ai.UserPromptPart).Content != "continue" {
-		t.Fatalf("resume prompt was not appended after repairs: %+v", request)
+	prompt := resumed[len(resumed)-1].(ai.ModelRequest)
+	if len(prompt.Parts) != 1 || prompt.Parts[0].(ai.UserPromptPart).Content != "continue" {
+		t.Fatalf("resume prompt was not preserved after repairs: %+v", prompt)
 	}
 }
 

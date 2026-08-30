@@ -24,6 +24,7 @@ type Model struct {
 	baseURL           string
 	httpClient        *http.Client
 	strictToolSupport bool
+	schemaWarning     func(SchemaWarning)
 }
 
 // Option configures a Model.
@@ -43,6 +44,19 @@ func WithHTTPClient(c *http.Client) Option { return func(m *Model) { m.httpClien
 // tool definitions. Use it for aliases and newly released model versions.
 func WithStrictToolSupport(enabled bool) Option {
 	return func(m *Model) { m.strictToolSupport = enabled }
+}
+
+// SchemaWarning describes a lossy strict-schema conversion.
+type SchemaWarning struct {
+	ToolName string
+	Message  string
+}
+
+// WithSchemaWarningHandler receives inspectable warnings when Anthropic's
+// strict-schema conversion cannot preserve a tool schema. The handler may be
+// called concurrently when the model is shared by concurrent runs.
+func WithSchemaWarningHandler(handler func(SchemaWarning)) Option {
+	return func(m *Model) { m.schemaWarning = handler }
 }
 
 // NewModel creates a Model for the named Anthropic model, e.g. "claude-sonnet-4-5".
@@ -203,14 +217,14 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Messages = append(req.Messages, converted...)
 	}
 	for _, tool := range params.Tools {
-		converted, err := prepareAnthropicTool(tool, m.strictToolSupport)
+		converted, err := prepareAnthropicTool(tool, m.strictToolSupport, m.schemaWarning)
 		if err != nil {
 			return nil, err
 		}
 		req.Tools = append(req.Tools, converted)
 	}
 	if params.OutputTool != nil {
-		converted, err := prepareAnthropicTool(*params.OutputTool, m.strictToolSupport)
+		converted, err := prepareAnthropicTool(*params.OutputTool, m.strictToolSupport, m.schemaWarning)
 		if err != nil {
 			return nil, err
 		}

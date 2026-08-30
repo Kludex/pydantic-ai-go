@@ -71,6 +71,48 @@ func TestAnthropicStrictIsOptIn(t *testing.T) {
 	}
 }
 
+func TestAnthropicStrictSchemaWarnings(t *testing.T) {
+	var warnings []anthropic.SchemaWarning
+	handler := func(warning anthropic.SchemaWarning) { warnings = append(warnings, warning) }
+	model := newNamedAnthropicServer(
+		t, "claude-sonnet-4-5", anthropicRecorder(t, new(map[string]any)),
+		anthropic.WithSchemaWarningHandler(handler),
+	)
+	strict, notStrict := true, false
+	params := ai.ModelRequestParams{Tools: []ai.ToolDefinition{
+		{
+			Name: "typed_map", Strict: &strict,
+			Schema: map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+		},
+		{
+			Name: "any_map", Strict: &strict,
+			Schema: map[string]any{"type": "object", "properties": map[string]any{
+				"metadata": map[string]any{"type": "object", "additionalProperties": true},
+			}},
+		},
+		{
+			Name: "non_strict_map", Strict: &notStrict,
+			Schema: map[string]any{"type": "object", "additionalProperties": true},
+		},
+		{
+			Name: "fixed_object", Strict: &strict,
+			Schema: map[string]any{"type": "object", "additionalProperties": false},
+		},
+	}}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 2 || warnings[0].ToolName != "typed_map" || warnings[1].ToolName != "any_map" {
+		t.Fatalf("unexpected strict-schema warnings: %+v", warnings)
+	}
+	for _, warning := range warnings {
+		if !strings.Contains(warning.Message, "`additionalProperties` to `false`") ||
+			!strings.Contains(warning.Message, "disable strict mode") {
+			t.Fatalf("warning does not explain the lossy conversion: %+v", warning)
+		}
+	}
+}
+
 func TestAnthropicStrictSchemaTransform(t *testing.T) {
 	var body map[string]any
 	model := newServer(t, anthropicRecorder(t, &body))

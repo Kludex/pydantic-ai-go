@@ -22,13 +22,23 @@ var anthropicStrictFormats = map[string]bool{
 	"uuid":      true,
 }
 
-func prepareAnthropicTool(def ai.ToolDefinition, supportsStrict bool) (toolParam, error) {
+func prepareAnthropicTool(
+	def ai.ToolDefinition, supportsStrict bool, warningHandler func(SchemaWarning),
+) (toolParam, error) {
 	strict := def.Strict != nil && *def.Strict
 	schema := jsonschema.Transform(def.Schema, func(node map[string]any) {
 		delete(node, "title")
 		delete(node, "$schema")
 	})
 	if strict {
+		if warningHandler != nil && hasDynamicMapSchema(schema) {
+			warningHandler(SchemaWarning{
+				ToolName: def.Name,
+				Message: "`dict` fields are not supported by Anthropic in strict mode. " +
+					"Anthropic sets `additionalProperties` to `false`, which forces the model to return `{}`. " +
+					"Use entries with explicit `key` and `value` fields, or disable strict mode.",
+			})
+		}
 		var err error
 		schema, err = transformAnthropicStrictSchema(schema)
 		if err != nil {
@@ -42,6 +52,21 @@ func prepareAnthropicTool(def ai.ToolDefinition, supportsStrict bool) (toolParam
 	return toolParam{
 		Name: def.Name, Description: def.Description, InputSchema: schema, Strict: strictFlag,
 	}, nil
+}
+
+func hasDynamicMapSchema(source map[string]any) bool {
+	found := false
+	jsonschema.Transform(source, func(node map[string]any) {
+		additionalProperties := node["additionalProperties"]
+		if allowed, ok := additionalProperties.(bool); ok && allowed {
+			found = true
+			return
+		}
+		if _, ok := additionalProperties.(map[string]any); ok {
+			found = true
+		}
+	})
+	return found
 }
 
 func transformAnthropicStrictSchema(source map[string]any) (map[string]any, error) {

@@ -58,7 +58,7 @@ Status:
 - [~] JSON Schema supports common structs, arrays, maps, descriptions, and enums; it is not full JSON Schema parity.
 - [x] Provider schema transforms for implemented providers: Gemini full JSON Schema wire fields, OpenAI compatibility inference/forced rewrites including recursive roots, and opt-in Anthropic strict-subset conversion.
 - [x] Provider-aware strict tool mode via `WithStrict()` / `WithoutStrict()`: OpenAI infers schema compatibility, Anthropic is explicit and model-gated, and Gemini 2.5+ defaults to request-wide `VALIDATED`; each provider supports alias/proxy overrides.
-- [ ] Surface Anthropic's lossy strict transformation of dynamic-map schemas as a warning or other inspectable diagnostic.
+- [x] Surface Anthropic's lossy strict transformation of dynamic-map schemas through `anthropic.WithSchemaWarningHandler`.
 - [x] Per-tool and agent-wide per-step preparation and omission via `AddPreparedTool` and `AddToolsPrepareFunc`, applied in upstream order.
 - [ ] Argument validators before approval/execution.
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
@@ -200,7 +200,6 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add partial structured-output validation while streaming deltas.
-3. Add inspectable diagnostics for Anthropic's lossy strict conversion of dynamic-map schemas.
-4. Add explicit part start/delta/end and final-result events on top of stable part IDs.
-5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
-6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.
+3. Add explicit part start/delta/end and final-result events on top of stable part IDs.
+4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
+5. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

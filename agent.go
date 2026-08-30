@@ -15,6 +15,7 @@ type Agent[Deps, Output any] struct {
 	model             Model
 	instructions      string
 	instructionsFuncs []func(ctx context.Context, rc *RunContext[Deps]) (string, error)
+	toolsPrepareFuncs []ToolsPrepareFunc[Deps]
 	settings          ModelSettings
 	maxRetries        int
 	outputMode        OutputMode
@@ -80,6 +81,21 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 func (a *Agent[Deps, Output]) AddInstructionsFunc(fn func(ctx context.Context, rc *RunContext[Deps]) (string, error)) {
 	a.checkNotStarted()
 	a.instructionsFuncs = append(a.instructionsFuncs, fn)
+}
+
+// ToolsPrepareFunc filters or modifies per-step copies of function tool
+// definitions. Output tools are not included.
+type ToolsPrepareFunc[Deps any] func(
+	ctx context.Context, rc *RunContext[Deps], tools []ToolDefinition,
+) ([]ToolDefinition, error)
+
+// AddToolsPrepareFunc registers a tool preparation hook. Hooks run in
+// registration order before every model request. Returning an empty or nil
+// slice exposes no function tools for that step. Concurrent runs may invoke
+// hooks concurrently, so hooks must synchronize mutable state.
+func (a *Agent[Deps, Output]) AddToolsPrepareFunc(fn ToolsPrepareFunc[Deps]) {
+	a.checkNotStarted()
+	a.toolsPrepareFuncs = append(a.toolsPrepareFuncs, fn)
 }
 
 // AddOutputValidator registers a semantic check on the final output.

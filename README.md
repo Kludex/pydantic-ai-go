@@ -73,6 +73,25 @@ ai.AddTool(agent, "book_table", bookTable, ai.WithStrict())
 
 Strict mode prevents malformed arguments before they reach your code. OpenAI and Anthropic configure it per tool. Gemini applies its request-wide `VALIDATED` mode. Use `ai.WithoutStrict()` when you need to disable a provider default explicitly.
 
+## Dynamic tools
+
+Prepare function tools before each model request when their availability or schema depends on the run:
+
+```go
+agent.AddToolsPrepareFunc(func(
+	_ context.Context,
+	rc *ai.RunContext[Deps],
+	tools []ai.ToolDefinition,
+) ([]ai.ToolDefinition, error) {
+	if rc.Deps.DefaultUnit == "" {
+		return nil, nil
+	}
+	return tools, nil
+})
+```
+
+The hook receives fresh copies, so you can safely change descriptions and nested schemas. Return an empty or nil slice to expose no function tools for that step. Output tools are prepared separately by the agent and are not included.
+
 ## Structured output
 
 Use any struct as the `Output` type and the agent asks the model for it via a final output tool. The result arrives typed and validated:

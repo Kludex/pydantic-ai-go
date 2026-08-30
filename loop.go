@@ -105,6 +105,10 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		}
 		return resp, nil
 	}
+	params, err := r.prepareModelParams(ctx)
+	if err != nil {
+		return nil, err
+	}
 	next := inner
 	for i := len(a.capabilities) - 1; i >= 0; i-- {
 		if wrapper, ok := a.capabilities[i].(ModelRequestWrapper); ok {
@@ -114,7 +118,75 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			}
 		}
 	}
-	return next(ctx, r.messages, r.params)
+	return next(ctx, r.messages, params)
+}
+
+func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
+	params := r.params
+	tools := make([]ToolDefinition, len(params.Tools))
+	for i, def := range params.Tools {
+		tools[i] = cloneToolDefinition(def)
+	}
+	rc := *r.rc
+	rc.Retry = r.retryCount()
+	for _, prepare := range r.agent.toolsPrepareFuncs {
+		var err error
+		tools, err = prepare(ctx, &rc, tools)
+		if err != nil {
+			return ModelRequestParams{}, fmt.Errorf("ai: prepare tools: %w", err)
+		}
+	}
+	known := make(map[string]struct{}, len(r.agent.tools))
+	for _, entry := range r.agent.tools {
+		known[entry.def.Name] = struct{}{}
+	}
+	seen := make(map[string]struct{}, len(tools))
+	for _, def := range tools {
+		if _, ok := known[def.Name]; !ok {
+			return ModelRequestParams{}, fmt.Errorf("ai: prepare tools returned unknown tool %q", def.Name)
+		}
+		if _, ok := seen[def.Name]; ok {
+			return ModelRequestParams{}, fmt.Errorf("ai: prepare tools returned duplicate tool %q", def.Name)
+		}
+		seen[def.Name] = struct{}{}
+	}
+	params.Tools = tools
+	return params, nil
+}
+
+func cloneToolDefinition(def ToolDefinition) ToolDefinition {
+	def.Schema = cloneSchemaMap(def.Schema)
+	if def.Strict != nil {
+		strict := *def.Strict
+		def.Strict = &strict
+	}
+	return def
+}
+
+func cloneSchemaMap(schema map[string]any) map[string]any {
+	if schema == nil {
+		return nil
+	}
+	cloned := make(map[string]any, len(schema))
+	for key, value := range schema {
+		cloned[key] = cloneSchemaValue(value)
+	}
+	return cloned
+}
+
+func cloneSchemaValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return cloneSchemaMap(value)
+	case []any:
+		cloned := make([]any, len(value))
+		for i, item := range value {
+			cloned[i] = cloneSchemaValue(item)
+		}
+		return cloned
+	default:
+		return value
+	}
 }
 
 // doModelRequest streams when the run has an emit callback and the model

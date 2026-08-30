@@ -73,7 +73,10 @@ func TestRequestTextResponse(t *testing.T) {
 	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 9 || resp.Usage.Requests != 1 ||
 		resp.Usage.CacheReadTokens != 4 || resp.Usage.InputAudioTokens != 2 ||
 		resp.Usage.OutputAudioTokens != 1 || resp.Usage.ReasoningTokens != 3 ||
-		resp.Usage.AcceptedPredictionTokens != 2 || resp.Usage.RejectedPredictionTokens != 1 {
+		resp.Usage.AcceptedPredictionTokens != 2 || resp.Usage.RejectedPredictionTokens != 1 ||
+		resp.Usage.Details["reasoning_tokens"] != 3 || resp.Usage.Details["audio_tokens"] != 1 ||
+		resp.Usage.Details["accepted_prediction_tokens"] != 2 ||
+		resp.Usage.Details["rejected_prediction_tokens"] != 1 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
 	if resp.ModelName != "gpt-5" {

@@ -333,6 +333,12 @@ func (u chatUsage) usage() ai.Usage {
 		ReasoningTokens:          u.CompletionTokensDetails.ReasoningTokens,
 		AcceptedPredictionTokens: u.CompletionTokensDetails.AcceptedPredictionTokens,
 		RejectedPredictionTokens: u.CompletionTokensDetails.RejectedPredictionTokens,
+		Details: map[string]int{
+			"reasoning_tokens":           u.CompletionTokensDetails.ReasoningTokens,
+			"audio_tokens":               u.CompletionTokensDetails.AudioTokens,
+			"accepted_prediction_tokens": u.CompletionTokensDetails.AcceptedPredictionTokens,
+			"rejected_prediction_tokens": u.CompletionTokensDetails.RejectedPredictionTokens,
+		},
 	}
 }
 

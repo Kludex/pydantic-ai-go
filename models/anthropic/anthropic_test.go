@@ -66,7 +66,10 @@ func TestRequestTextResponse(t *testing.T) {
 		t.Fatalf("unexpected text %q", resp.Text())
 	}
 	if resp.Usage.InputTokens != 19 || resp.Usage.OutputTokens != 3 ||
-		resp.Usage.CacheWriteTokens != 3 || resp.Usage.CacheReadTokens != 4 {
+		resp.Usage.CacheWriteTokens != 3 || resp.Usage.CacheReadTokens != 4 ||
+		resp.Usage.Details["input_tokens"] != 12 || resp.Usage.Details["output_tokens"] != 3 ||
+		resp.Usage.Details["cache_creation_input_tokens"] != 3 ||
+		resp.Usage.Details["cache_read_input_tokens"] != 4 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
 }

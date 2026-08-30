@@ -58,7 +58,7 @@ type RunInfo struct {
 
 // Usage returns the usage accumulated so far in this run.
 func (ri *RunInfo) Usage() Usage {
-	usage := *ri.usage
+	usage := ri.usage.Clone()
 	usage.ToolCalls = int(ri.toolCalls.Load())
 	return usage
 }

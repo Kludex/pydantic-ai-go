@@ -252,7 +252,7 @@ Use `ai.WithToolTimeout(5 * time.Second)` to give one tool call a deadline. The 
 
 ## Usage
 
-`result.Usage()` includes requests, successful function-tool calls, token totals, cache reads and writes, audio tokens, reasoning tokens, and prediction tokens when the provider reports them. `Usage.CacheHitRatio()` returns the fraction of input tokens read from cache.
+`result.Usage()` includes requests, successful function-tool calls, token totals, cache reads and writes, audio tokens, reasoning tokens, and prediction tokens when the provider reports them. Provider-specific integer counters are preserved and accumulated in `Usage.Details`. Values returned by `Usage()` and `Usage.Clone()` are detached, so callers can safely modify detail maps. `Usage.CacheHitRatio()` returns the fraction of input tokens read from cache.
 
 Providers do not calculate prices. A model or capability can set `Usage.CostUSD`. `UsageLimits.CostLimitUSD` enforces known costs and does not reject a run when cost is unavailable. `UsageLimits.ToolCallLimit` rejects a batch before any function tool runs when its projected successful-call count exceeds the limit.
 
@@ -370,7 +370,7 @@ func (Redactor) WrapToolCall(ctx context.Context, ri *ai.RunInfo, call ai.ToolCa
 agent := ai.NewAgent[Deps, string](model, ai.WithCapabilities(Redactor{}))
 ```
 
-Implement any of `RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, `RunEventStreamWrapper`, `StreamEventProcessor`, or `InstructionsProvider` - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Slice order is middleware order: the first capability is outermost. Usage limits are implemented on this same surface internally.
+Implement any of `RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, `RunEventStreamWrapper`, `StreamEventProcessor`, `InstructionsProvider`, `ModelSettingsProvider`, `ModelSelectionProvider`, or `ModelIDResolver` - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Slice order is middleware order: the first capability is outermost. Usage limits are implemented on this same surface internally.
 
 Stream wrappers only change events seen by the consumer. They do not change accumulated history, tool execution, or final output. Adding one also enables provider streaming for `Run`, so processors run whether you call `Run` or `RunStream`.
 

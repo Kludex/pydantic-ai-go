@@ -20,7 +20,10 @@ func TestMessagesRoundTrip(t *testing.T) {
 				ai.ThinkingPart{Content: "hmm"},
 				ai.ToolCallPart{ToolName: "get_weather", Args: json.RawMessage(`{"city":"SF"}`), ToolCallID: "c1"},
 			},
-			Usage:     ai.Usage{Requests: 1, InputTokens: 10, OutputTokens: 5},
+			Usage: ai.Usage{
+				Requests: 1, InputTokens: 10, OutputTokens: 5,
+				Details: map[string]int{"provider_units": 7},
+			},
 			ModelName: "test-model",
 			Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		},
@@ -51,7 +54,8 @@ func TestMessagesRoundTrip(t *testing.T) {
 		t.Fatalf("expected %d messages, got %d", len(msgs), len(back))
 	}
 	resp := back[1].(ai.ModelResponse)
-	if resp.ModelName != "test-model" || resp.Usage.InputTokens != 10 {
+	if resp.ModelName != "test-model" || resp.Usage.InputTokens != 10 ||
+		resp.Usage.Details["provider_units"] != 7 {
 		t.Fatalf("unexpected response %+v", resp)
 	}
 	if resp.ToolCalls()[0].ToolName != "get_weather" {

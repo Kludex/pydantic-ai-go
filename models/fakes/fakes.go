@@ -26,7 +26,7 @@ func (m *FunctionModel) Request(ctx context.Context, msgs []ai.ModelMessage, par
 	if err != nil {
 		return nil, err
 	}
-	if resp.Usage == (ai.Usage{}) {
+	if resp.Usage.IsZero() {
 		resp.Usage = ai.Usage{Requests: 1}
 	}
 	return resp, nil

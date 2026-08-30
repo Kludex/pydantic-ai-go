@@ -230,6 +230,7 @@ func (u responsesUsage) usage() ai.Usage {
 		Requests: 1, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
 		CacheReadTokens: u.InputTokensDetails.CachedTokens,
 		ReasoningTokens: u.OutputTokensDetails.ReasoningTokens,
+		Details:         map[string]int{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens},
 	}
 }
 

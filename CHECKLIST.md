@@ -33,14 +33,14 @@ Status:
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
 - [ ] Lifecycle entry/exit hooks for models selected during a run.
-- [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, and optional USD cost, with projected tool-call and known-cost limits. Arbitrary provider detail keys and automatic pricing remain.
+- [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, arbitrary integer detail keys, and optional USD cost, with projected tool-call and known-cost limits. Automatic pricing remains.
 
 ### Messages and persisted history
 
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, and synthesized-return histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [~] Provider request parameters preserve static and dynamic instruction parts while retaining joined text compatibility; persisted dynamic instruction IDs and history reevaluation remain.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
@@ -175,7 +175,7 @@ Status:
 ### Integrations
 
 - [ ] First-class `pydantic-evals-go` task adapter.
-- [ ] OpenTelemetry parity with PydanticAI span names, attributes, events, and privacy controls.
+- [ ] OpenTelemetry parity with PydanticAI span names, attributes, events, arbitrary usage-detail attributes, and privacy controls.
 - [ ] Logfire guidance and examples.
 - [ ] AG-UI adapter.
 - [ ] Vercel AI protocol adapter.

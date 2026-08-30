@@ -98,6 +98,22 @@ func TestUnmarshalUpstreamSynthesizedReturnFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamUsageDetailsFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_usage_details.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := messages[0].(ai.ModelResponse)
+	if response.Usage.InputTokens != 10 || response.Usage.OutputTokens != 4 ||
+		response.Usage.Details["provider_units"] != 7 {
+		t.Fatalf("unexpected detailed usage fixture: %+v", response.Usage)
+	}
+}
+
 func TestMarshalMultimodalMessageUsesUpstreamDiscriminators(t *testing.T) {
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
 		ai.UserPromptPart{Contents: []ai.UserContent{

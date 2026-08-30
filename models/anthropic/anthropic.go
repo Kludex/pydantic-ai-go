@@ -345,6 +345,12 @@ func (u anthropicUsage) usage() ai.Usage {
 		InputTokens:      u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
 		CacheWriteTokens: u.CacheCreationInputTokens, CacheReadTokens: u.CacheReadInputTokens,
 		OutputTokens: u.OutputTokens,
+		Details: map[string]int{
+			"input_tokens":                u.InputTokens,
+			"output_tokens":               u.OutputTokens,
+			"cache_creation_input_tokens": u.CacheCreationInputTokens,
+			"cache_read_input_tokens":     u.CacheReadInputTokens,
+		},
 	}
 }
 

@@ -379,13 +379,15 @@ type generateResponse struct {
 }
 
 type googleUsage struct {
-	PromptTokenCount        int           `json:"promptTokenCount"`
-	CandidatesTokenCount    int           `json:"candidatesTokenCount"`
-	CachedContentTokenCount int           `json:"cachedContentTokenCount"`
-	ThoughtsTokenCount      int           `json:"thoughtsTokenCount"`
-	PromptTokensDetails     []tokenDetail `json:"promptTokensDetails"`
-	CacheTokensDetails      []tokenDetail `json:"cacheTokensDetails"`
-	CandidatesTokensDetails []tokenDetail `json:"candidatesTokensDetails"`
+	PromptTokenCount           int           `json:"promptTokenCount"`
+	CandidatesTokenCount       int           `json:"candidatesTokenCount"`
+	CachedContentTokenCount    int           `json:"cachedContentTokenCount"`
+	ThoughtsTokenCount         int           `json:"thoughtsTokenCount"`
+	ToolUsePromptTokenCount    int           `json:"toolUsePromptTokenCount"`
+	PromptTokensDetails        []tokenDetail `json:"promptTokensDetails"`
+	CacheTokensDetails         []tokenDetail `json:"cacheTokensDetails"`
+	CandidatesTokensDetails    []tokenDetail `json:"candidatesTokensDetails"`
+	ToolUsePromptTokensDetails []tokenDetail `json:"toolUsePromptTokensDetails"`
 }
 
 type tokenDetail struct {
@@ -398,20 +400,44 @@ func (u googleUsage) usage() ai.Usage {
 		Requests: 1, InputTokens: u.PromptTokenCount,
 		OutputTokens:    u.CandidatesTokenCount + u.ThoughtsTokenCount,
 		CacheReadTokens: u.CachedContentTokenCount, ReasoningTokens: u.ThoughtsTokenCount,
+		Details: map[string]int{},
+	}
+	if u.CachedContentTokenCount != 0 {
+		usage.Details["cached_content_tokens"] = u.CachedContentTokenCount
+	}
+	if u.ThoughtsTokenCount != 0 {
+		usage.Details["thoughts_tokens"] = u.ThoughtsTokenCount
+	}
+	if u.ToolUsePromptTokenCount != 0 {
+		usage.Details["tool_use_prompt_tokens"] = u.ToolUsePromptTokenCount
 	}
 	for _, detail := range u.PromptTokensDetails {
+		if detail.Modality != "" && detail.TokenCount != 0 {
+			usage.Details[strings.ToLower(detail.Modality)+"_prompt_tokens"] = detail.TokenCount
+		}
 		if detail.Modality == "AUDIO" {
 			usage.InputAudioTokens += detail.TokenCount
 		}
 	}
 	for _, detail := range u.CacheTokensDetails {
+		if detail.Modality != "" && detail.TokenCount != 0 {
+			usage.Details[strings.ToLower(detail.Modality)+"_cache_tokens"] = detail.TokenCount
+		}
 		if detail.Modality == "AUDIO" {
 			usage.CacheAudioReadTokens += detail.TokenCount
 		}
 	}
 	for _, detail := range u.CandidatesTokensDetails {
+		if detail.Modality != "" && detail.TokenCount != 0 {
+			usage.Details[strings.ToLower(detail.Modality)+"_candidates_tokens"] = detail.TokenCount
+		}
 		if detail.Modality == "AUDIO" {
 			usage.OutputAudioTokens += detail.TokenCount
+		}
+	}
+	for _, detail := range u.ToolUsePromptTokensDetails {
+		if detail.Modality != "" && detail.TokenCount != 0 {
+			usage.Details[strings.ToLower(detail.Modality)+"_tool_use_prompt_tokens"] = detail.TokenCount
 		}
 	}
 	return usage

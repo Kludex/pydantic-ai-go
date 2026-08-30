@@ -51,7 +51,7 @@ func (e *RunCancelledError) Messages() []ModelMessage {
 }
 
 // Usage returns usage accumulated before cancellation.
-func (e *RunCancelledError) Usage() Usage { return e.usage }
+func (e *RunCancelledError) Usage() Usage { return e.usage.Clone() }
 
 // UnexpectedModelBehaviorError is returned when the model produces a
 // response the loop cannot interpret or recover from.

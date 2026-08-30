@@ -40,6 +40,7 @@ func TestRichUsageAccumulatesAcrossRequestsAndTools(t *testing.T) {
 			InputAudioTokens: 3, CacheAudioReadTokens: 1, OutputTokens: 8,
 			OutputAudioTokens: 2, ReasoningTokens: 5,
 			AcceptedPredictionTokens: 2, RejectedPredictionTokens: 1,
+			Details: map[string]int{"provider_units": request + 1},
 		}
 		if request == 1 {
 			usage.CostUSD = &firstCost
@@ -56,9 +57,10 @@ func TestRichUsageAccumulatesAcrossRequestsAndTools(t *testing.T) {
 		_ context.Context, runContext *ai.RunContext[deps], _ struct{},
 	) (string, error) {
 		usage := runContext.Usage()
-		if usage.InputTokens != 10 || usage.ToolCalls != 0 {
+		if usage.InputTokens != 10 || usage.ToolCalls != 0 || usage.Details["provider_units"] != 2 {
 			t.Fatalf("tool saw unexpected usage: %+v", usage)
 		}
+		usage.Details["provider_units"] = 0
 		return "ok", nil
 	})
 
@@ -71,14 +73,22 @@ func TestRichUsageAccumulatesAcrossRequestsAndTools(t *testing.T) {
 		usage.CacheWriteTokens != 4 || usage.CacheReadTokens != 8 || usage.InputAudioTokens != 6 ||
 		usage.CacheAudioReadTokens != 2 || usage.OutputTokens != 16 || usage.OutputAudioTokens != 4 ||
 		usage.ReasoningTokens != 10 || usage.AcceptedPredictionTokens != 4 ||
-		usage.RejectedPredictionTokens != 2 || usage.CostUSD == nil || *usage.CostUSD != 1 {
+		usage.RejectedPredictionTokens != 2 || usage.Details["provider_units"] != 5 ||
+		usage.CostUSD == nil || *usage.CostUSD != 1 {
 		t.Fatalf("unexpected accumulated usage: %+v", usage)
 	}
-	if math.Abs(usage.CacheHitRatio()-0.4) > 1e-9 || (ai.Usage{}).CacheHitRatio() != 0 {
+	if usage.IsZero() || !(ai.Usage{}).IsZero() ||
+		math.Abs(usage.CacheHitRatio()-0.4) > 1e-9 || (ai.Usage{}).CacheHitRatio() != 0 {
 		t.Fatalf("unexpected cache ratios: rich=%g empty=%g", usage.CacheHitRatio(), (ai.Usage{}).CacheHitRatio())
 	}
 	if len(capture.seen) != 2 || capture.seen[0].ToolCalls != 0 || capture.seen[1].ToolCalls != 1 {
 		t.Fatalf("capability did not observe tool usage: %+v", capture.seen)
+	}
+	detached := result.Usage()
+	detached.Details["provider_units"] = 0
+	*detached.CostUSD = 99
+	if result.Usage().Details["provider_units"] != 5 || *result.Usage().CostUSD != 1 {
+		t.Fatalf("Usage returned mutable run state: %+v", result.Usage())
 	}
 }
 

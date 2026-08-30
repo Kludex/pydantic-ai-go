@@ -65,7 +65,8 @@ func TestResponsesTextResponse(t *testing.T) {
 		t.Fatalf("reasoning summary lost: %+v", resp.Parts)
 	}
 	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 ||
-		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 {
+		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 ||
+		resp.Usage.Details["reasoning_tokens"] != 2 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
 }

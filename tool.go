@@ -35,7 +35,7 @@ type RunContext[Deps any] struct {
 
 // Usage returns the usage accumulated so far in this run.
 func (rc *RunContext[Deps]) Usage() Usage {
-	usage := *rc.usage
+	usage := rc.usage.Clone()
 	usage.ToolCalls = int(rc.toolCalls.Load())
 	return usage
 }

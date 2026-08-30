@@ -74,7 +74,7 @@ func marshalMessage(m ModelMessage) ([]byte, error) {
 		return json.Marshal(w)
 	case ModelResponse:
 		w := wireResponse{Kind: "response", ModelName: msg.ModelName}
-		if msg.Usage != (Usage{}) {
+		if !msg.Usage.IsZero() {
 			u := msg.Usage
 			w.Usage = &u
 		}

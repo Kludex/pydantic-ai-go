@@ -394,7 +394,7 @@ type RunResult[Output any] struct {
 }
 
 // Usage returns the tokens and requests consumed by the run.
-func (r *RunResult[Output]) Usage() Usage { return r.usage }
+func (r *RunResult[Output]) Usage() Usage { return r.usage.Clone() }
 
 // Messages returns the full conversation, including any history passed in.
 func (r *RunResult[Output]) Messages() []ModelMessage { return r.messages }

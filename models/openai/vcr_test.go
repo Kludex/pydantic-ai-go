@@ -95,3 +95,25 @@ func TestRecordedStructuredOutput(t *testing.T) {
 		t.Fatalf("expected populated output, got %+v", result.Output)
 	}
 }
+
+func TestRecordedStreamingRun(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](vcrModel(t, "streaming_run"),
+		ai.WithInstructions("Answer with a single word."),
+	)
+	stream := agent.RunStream(t.Context(), "What is the capital of Italy?", struct{}{})
+	var text string
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if delta, ok := event.(ai.TextDeltaEvent); ok {
+			text += delta.Delta
+		}
+	}
+	if text == "" || stream.Result() == nil {
+		t.Fatalf("expected streamed text and result, got %q", text)
+	}
+	if stream.Result().Usage().TotalTokens() == 0 {
+		t.Fatal("expected usage from the API")
+	}
+}

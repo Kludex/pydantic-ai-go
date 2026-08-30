@@ -1,0 +1,86 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 205
+        host: api.openai.com
+        body: '{"model":"gpt-4o-mini","messages":[{"role":"system","content":"Answer with a single word."},{"role":"user","content":"What is the capital of Italy?"}],"stream":true,"stream_options":{"include_usage":true}}'
+        headers:
+            Accept:
+                - text/event-stream
+            Content-Type:
+                - application/json
+        url: https://api.openai.com/v1/chat/completions
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        body: |+
+            data: {"id":"chatcmpl-EIbEVueDp3ynqdobgTW1Xa0CxZtht","object":"chat.completion.chunk","created":1788101735,"model":"gpt-4o-mini-2024-07-18","service_tier":"default","system_fingerprint":"fp_14f4ce979a","choices":[{"index":0,"delta":{"role":"assistant","content":"","refusal":null},"logprobs":null,"finish_reason":null}],"usage":null,"obfuscation":"Tq8ithrDM"}
+
+            data: {"id":"chatcmpl-EIbEVueDp3ynqdobgTW1Xa0CxZtht","object":"chat.completion.chunk","created":1788101735,"model":"gpt-4o-mini-2024-07-18","service_tier":"default","system_fingerprint":"fp_14f4ce979a","choices":[{"index":0,"delta":{"content":"Rome"},"logprobs":null,"finish_reason":null}],"usage":null,"obfuscation":"z3X2w5p"}
+
+            data: {"id":"chatcmpl-EIbEVueDp3ynqdobgTW1Xa0CxZtht","object":"chat.completion.chunk","created":1788101735,"model":"gpt-4o-mini-2024-07-18","service_tier":"default","system_fingerprint":"fp_14f4ce979a","choices":[{"index":0,"delta":{"content":"."},"logprobs":null,"finish_reason":null}],"usage":null,"obfuscation":"zBgES9pnnY"}
+
+            data: {"id":"chatcmpl-EIbEVueDp3ynqdobgTW1Xa0CxZtht","object":"chat.completion.chunk","created":1788101735,"model":"gpt-4o-mini-2024-07-18","service_tier":"default","system_fingerprint":"fp_14f4ce979a","choices":[{"index":0,"delta":{},"logprobs":null,"finish_reason":"stop"}],"usage":null,"obfuscation":"rMbto"}
+
+            data: {"id":"chatcmpl-EIbEVueDp3ynqdobgTW1Xa0CxZtht","object":"chat.completion.chunk","created":1788101735,"model":"gpt-4o-mini-2024-07-18","service_tier":"default","system_fingerprint":"fp_14f4ce979a","choices":[],"usage":{"prompt_tokens":24,"completion_tokens":2,"total_tokens":26,"prompt_tokens_details":{"cached_tokens":0,"audio_tokens":0},"completion_tokens_details":{"reasoning_tokens":0,"audio_tokens":0,"accepted_prediction_tokens":0,"rejected_prediction_tokens":0}},"obfuscation":"6zyXtcJHMQM"}
+
+            data: [DONE]
+
+        headers:
+            Access-Control-Expose-Headers:
+                - X-Request-ID
+                - CF-Ray
+                - CF-Ray
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a334a321b8c49f64-AMS
+            Content-Type:
+                - text/event-stream; charset=utf-8
+            Date:
+                - Sun, 30 Aug 2026 14:55:36 GMT
+            Openai-Organization:
+                - pydantic-28gund
+            Openai-Processing-Ms:
+                - "274"
+            Openai-Project:
+                - proj_dKobscVY9YJxeEaDJen54e3d
+            Openai-Version:
+                - "2020-10-01"
+            Server:
+                - cloudflare
+            Set-Cookie:
+                - __cf_bm=bMltlcAqTB6a4jVs8uresKrdHlbqJLETtmlj1EMf9yY-1788101734.6724133-1.0.1.1-rraUfxKhr7INmeo0M0irotiEQcKNgBqwPFXOpIy5yvQ3b2AkCJGl5BL1BntjlJVlKodDANUAWPbhKIC5zJaLZQ5TEkzEImFjBa9qlQGzMEhCI0TTXgLiN8ZVDgLj4N7Q; HttpOnly; SameSite=None; Secure; Path=/; Domain=api.openai.com; Expires=Sun, 30 Aug 2026 15:25:36 GMT
+            Strict-Transport-Security:
+                - max-age=31536000; includeSubDomains; preload
+            X-Content-Type-Options:
+                - nosniff
+            X-Openai-Proxy-Wasm:
+                - v0.1
+            X-Ratelimit-Limit-Requests:
+                - "30000"
+            X-Ratelimit-Limit-Tokens:
+                - "150000000"
+            X-Ratelimit-Remaining-Requests:
+                - "29999"
+            X-Ratelimit-Remaining-Tokens:
+                - "149999985"
+            X-Ratelimit-Reset-Requests:
+                - 2ms
+            X-Ratelimit-Reset-Tokens:
+                - 0s
+            X-Request-Id:
+                - req_89338fac172c43829326e45a6e942271
+        status: 200 OK
+        code: 200
+        duration: 1.439853417s

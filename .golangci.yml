@@ -1,0 +1,10 @@
+version: "2"
+linters:
+  enable:
+    - gocritic
+    - ineffassign
+    - staticcheck
+    - unused
+formatters:
+  enable:
+    - gofmt

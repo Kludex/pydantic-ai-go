@@ -34,7 +34,7 @@ func (a *Agent[Deps, Output]) RunParts(ctx context.Context, contents []UserConte
 
 func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (result *RunResult[Output], err error) {
 	if hasEventStreamCapability(a.capabilities) {
-		stream := a.runStreamPrompt(ctx, prompt, deps, opts)
+		stream := a.runStreamPrompt(ctx, prompt, deps, opts, false)
 		for _, streamErr := range stream.Events() {
 			if streamErr != nil {
 				return nil, streamErr
@@ -154,8 +154,10 @@ type run[Deps, Output any] struct {
 	outputRetry  int
 	retriesMu    sync.Mutex
 	currentTools map[string]struct{}
-	// emit forwards stream events during RunStream; nil for plain runs.
-	emit func(StreamEvent) bool
+	// emit forwards stream events during streamed model execution.
+	emit                 func(StreamEvent) bool
+	emitMu               sync.Mutex
+	commitStreamedOutput bool
 }
 
 // modelRequest is the model-request interception point: tracing plus
@@ -297,13 +299,13 @@ func (r *run[Deps, Output]) doModelRequest(ctx context.Context, msgs []ModelMess
 		if err != nil {
 			return nil, err
 		}
-		return accumulate(events, params, r.emit)
+		return accumulate(events, params, r.emitStreamEvent)
 	}
 	resp, err := r.agent.model.Request(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
-	return accumulate(replayAsEvents(resp), params, r.emit)
+	return accumulate(replayAsEvents(resp), params, r.emitStreamEvent)
 }
 
 func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error) {
@@ -316,7 +318,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		r.messages = append(r.messages, *resp)
 
 		calls := resp.ToolCalls()
-		if r.emit != nil {
+		if r.emit != nil && r.commitStreamedOutput {
 			output, winningCall, committed, err := r.streamedOutput(ctx, resp)
 			if err != nil {
 				return nil, err
@@ -353,12 +355,19 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		if output, ok, err := r.earlyNativeOutput(ctx, resp); err != nil {
 			return nil, err
 		} else if ok {
+			if !r.emitToolCallEvents(calls) {
+				return nil, context.Canceled
+			}
 			parts := make([]RequestPart, 0, len(calls))
 			for _, call := range calls {
-				parts = append(parts, ToolReturnPart{
+				part := ToolReturnPart{
 					ToolName: call.ToolName, Content: toolSkipped, ToolCallID: call.ToolCallID,
 					Outcome: ToolReturnOutcomeSuccess,
-				})
+				}
+				parts = append(parts, part)
+				if !r.emitStreamEvent(FunctionToolResultEvent{Part: part}) {
+					return nil, context.Canceled
+				}
 			}
 			r.messages = append(r.messages, ModelRequest{Parts: parts})
 			return r.result(*output), nil
@@ -406,11 +415,12 @@ func (r *run[Deps, Output]) earlyNativeOutput(
 }
 
 type callOutcome[Output any] struct {
-	part         RequestPart
-	output       *Output
-	outputCall   bool
-	functionCall bool
-	err          error
+	part          RequestPart
+	output        *Output
+	outputCall    bool
+	functionCall  bool
+	resultEmitted bool
+	err           error
 }
 
 const (
@@ -421,11 +431,36 @@ const (
 	toolSkipped          = "Tool not executed - a final result was already processed."
 )
 
+func (r *run[Deps, Output]) emitStreamEvent(event StreamEvent) bool {
+	if r.emit == nil {
+		return true
+	}
+	r.emitMu.Lock()
+	defer r.emitMu.Unlock()
+	return r.emit(event)
+}
+
+func (r *run[Deps, Output]) emitToolCallEvents(calls []ToolCallPart) bool {
+	for _, call := range calls {
+		var event StreamEvent = FunctionToolCallEvent{Part: call}
+		if r.isOutputCall(call) {
+			event = OutputToolCallEvent{Part: call}
+		}
+		if !r.emitStreamEvent(event) {
+			return false
+		}
+	}
+	return true
+}
+
 // executeCalls honors the configured end strategy while preserving emission
 // order in the request sent back to the model.
 func (r *run[Deps, Output]) executeCalls(
 	ctx context.Context, calls []ToolCallPart,
 ) ([]RequestPart, *Output, error) {
+	if !r.emitToolCallEvents(calls) {
+		return nil, nil, context.Canceled
+	}
 	if r.agent.endStrategy == EndStrategyEarly {
 		return r.executeCallsEarly(ctx, calls)
 	}
@@ -466,12 +501,12 @@ func (r *run[Deps, Output]) executeCallsEarly(
 				}
 			}
 		}
-		return collectCallOutcomes(outcomes, false)
+		return r.collectCallOutcomes(outcomes, false)
 	}
 	if err := r.executeSelected(ctx, calls, outcomes, r.functionCallIndexes(calls), false); err != nil {
 		return completedCallParts(outcomes), nil, err
 	}
-	return collectCallOutcomes(outcomes, false)
+	return r.collectCallOutcomes(outcomes, false)
 }
 
 func (r *run[Deps, Output]) executeCallsGraceful(
@@ -507,7 +542,7 @@ func (r *run[Deps, Output]) executeCallsGraceful(
 	if err := r.executeIndexBatch(ctx, calls, outcomes, batch); err != nil {
 		return completedCallParts(outcomes), nil, err
 	}
-	return collectCallOutcomes(outcomes, true)
+	return r.collectCallOutcomes(outcomes, true)
 }
 
 func (r *run[Deps, Output]) executeCallsExhaustive(
@@ -521,7 +556,7 @@ func (r *run[Deps, Output]) executeCallsExhaustive(
 	if err := r.executeSelected(ctx, calls, outcomes, indexes, true); err != nil {
 		return completedCallParts(outcomes), nil, err
 	}
-	return collectCallOutcomes(outcomes, true)
+	return r.collectCallOutcomes(outcomes, true)
 }
 
 func (r *run[Deps, Output]) executeSelected(
@@ -592,6 +627,13 @@ func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) c
 		outcome.part = nil
 		outcome.output = nil
 	}
+	if outcome.err == nil && outcome.part != nil && !outcome.outputCall {
+		if !r.emitStreamEvent(FunctionToolResultEvent{Part: outcome.part}) {
+			outcome.err = context.Canceled
+		} else {
+			outcome.resultEmitted = true
+		}
+	}
 	return outcome
 }
 
@@ -630,16 +672,21 @@ func completedCallParts[Output any](outcomes []callOutcome[Output]) []RequestPar
 	return parts
 }
 
-func collectCallOutcomes[Output any](
+func (r *run[Deps, Output]) collectCallOutcomes(
 	outcomes []callOutcome[Output], retryCanWin bool,
 ) ([]RequestPart, *Output, error) {
 	parts := make([]RequestPart, 0, len(outcomes))
+	partPositions := make([]int, len(outcomes))
+	for index := range partPositions {
+		partPositions[index] = -1
+	}
 	var winner *Output
 	winningPart := -1
 	functionRetry := false
-	for _, outcome := range outcomes {
+	for index, outcome := range outcomes {
 		if outcome.part != nil {
 			parts = append(parts, outcome.part)
+			partPositions[index] = len(parts) - 1
 		}
 		if outcome.output != nil {
 			if winner == nil {
@@ -648,7 +695,7 @@ func collectCallOutcomes[Output any](
 			} else {
 				part := outcome.part.(ToolReturnPart)
 				part.Content = outputNotFinal
-				parts[len(parts)-1] = part
+				parts[partPositions[index]] = part
 			}
 		} else if _, ok := outcome.part.(RetryPromptPart); ok && outcome.functionCall {
 			functionRetry = true
@@ -660,7 +707,32 @@ func collectCallOutcomes[Output any](
 		parts[winningPart] = part
 		winner = nil
 	}
+	for index := range outcomes {
+		if partPositions[index] >= 0 {
+			outcomes[index].part = parts[partPositions[index]]
+		}
+	}
+	if err := r.emitPendingCallResults(outcomes); err != nil {
+		return nil, nil, err
+	}
 	return parts, winner, nil
+}
+
+func (r *run[Deps, Output]) emitPendingCallResults(outcomes []callOutcome[Output]) error {
+	for index := range outcomes {
+		if outcomes[index].resultEmitted || outcomes[index].part == nil {
+			continue
+		}
+		var event StreamEvent = FunctionToolResultEvent{Part: outcomes[index].part}
+		if outcomes[index].outputCall {
+			event = OutputToolResultEvent{Part: outcomes[index].part}
+		}
+		if !r.emitStreamEvent(event) {
+			return context.Canceled
+		}
+		outcomes[index].resultEmitted = true
+	}
+	return nil
 }
 
 // executeCall runs one tool call. It returns the request part to send back

@@ -39,18 +39,18 @@ func (s *StreamedRun[Output]) Result() *RunResult[Output] { return s.result }
 func (a *Agent[Deps, Output]) RunStream(
 	ctx context.Context, prompt string, deps Deps, opts ...RunOption,
 ) *StreamedRun[Output] {
-	return a.runStreamPrompt(ctx, UserPromptPart{Content: prompt}, deps, opts)
+	return a.runStreamPrompt(ctx, UserPromptPart{Content: prompt}, deps, opts, true)
 }
 
 // RunStreamParts is RunStream with a multimodal prompt.
 func (a *Agent[Deps, Output]) RunStreamParts(
 	ctx context.Context, contents []UserContent, deps Deps, opts ...RunOption,
 ) *StreamedRun[Output] {
-	return a.runStreamPrompt(ctx, UserPromptPart{Contents: contents}, deps, opts)
+	return a.runStreamPrompt(ctx, UserPromptPart{Contents: contents}, deps, opts, true)
 }
 
 func (a *Agent[Deps, Output]) runStreamPrompt(
-	ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption,
+	ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption, commitFirstOutput bool,
 ) *StreamedRun[Output] {
 	streamedRun := &StreamedRun[Output]{}
 	streamedRun.events = func(yield func(StreamEvent, error) bool) {
@@ -70,12 +70,14 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 			return
 		}
 		defer run.cancellation.finish()
+		run.commitStreamedOutput = commitFirstOutput
 
 		stopped := false
 		core := EventStream(func(yieldCore func(StreamEvent, error) bool) {
 			run.emit = func(event StreamEvent) bool {
 				if !yieldCore(event, nil) {
 					stopped = true
+					run.cancellation.stopStream()
 					return false
 				}
 				return true

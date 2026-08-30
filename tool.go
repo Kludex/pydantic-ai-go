@@ -55,6 +55,14 @@ func (c *runCancellation) cancelRun() {
 	}
 }
 
+func (c *runCancellation) stopStream() {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	if c.active {
+		c.cancel(context.Canceled)
+	}
+}
+
 func (c *runCancellation) finish() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()

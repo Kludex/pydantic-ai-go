@@ -128,3 +128,35 @@ type FinalResultEvent struct {
 }
 
 func (FinalResultEvent) streamEventKind() string { return "final-result" }
+
+// FunctionToolCallEvent announces a function tool call before execution.
+type FunctionToolCallEvent struct {
+	Part      ToolCallPart
+	ArgsValid *bool
+}
+
+func (FunctionToolCallEvent) streamEventKind() string { return "function-tool-call" }
+
+// OutputToolCallEvent announces an output tool call before validation.
+type OutputToolCallEvent struct {
+	Part      ToolCallPart
+	ArgsValid *bool
+}
+
+func (OutputToolCallEvent) streamEventKind() string { return "output-tool-call" }
+
+// FunctionToolResultEvent carries the request part produced by a function
+// tool. Part is a ToolReturnPart or RetryPromptPart.
+type FunctionToolResultEvent struct {
+	Part RequestPart
+}
+
+func (FunctionToolResultEvent) streamEventKind() string { return "function-tool-result" }
+
+// OutputToolResultEvent carries the request part produced by an output tool.
+// Part is a ToolReturnPart or RetryPromptPart.
+type OutputToolResultEvent struct {
+	Part RequestPart
+}
+
+func (OutputToolResultEvent) streamEventKind() string { return "output-tool-result" }

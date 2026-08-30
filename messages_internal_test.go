@@ -61,6 +61,10 @@ func TestStreamEventKinds(t *testing.T) {
 		{PartDeltaEvent{}, "part-delta"},
 		{PartEndEvent{}, "part-end"},
 		{FinalResultEvent{}, "final-result"},
+		{FunctionToolCallEvent{}, "function-tool-call"},
+		{OutputToolCallEvent{}, "output-tool-call"},
+		{FunctionToolResultEvent{}, "function-tool-result"},
+		{OutputToolResultEvent{}, "output-tool-result"},
 		{FinishEvent{}, "finish"},
 	}
 	for _, test := range streamKinds {

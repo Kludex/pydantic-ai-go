@@ -226,6 +226,8 @@ OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini
 
 Bundled providers populate part IDs. A custom `StreamingModel` emits provider-facing `ModelStreamEvent` values and can leave `PartID` empty only when its parts are strictly sequential.
 
+Function and output tools emit call events before execution and result events when each call settles. Concurrent result events use completion order, while the request parts stored in history keep model order.
+
 `RunStream` commits the first matching text, native, or output-tool result. The configured end strategy still controls co-emitted tools, but a tool retry cannot revoke that result. If an output validator requests a retry, the streamed run returns `UnexpectedModelBehaviorError` because output has already been committed. Use `Run` when validation should start another model round.
 
 ## Multimodal input

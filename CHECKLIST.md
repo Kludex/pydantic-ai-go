@@ -97,7 +97,8 @@ Status:
 - [ ] Partial structured output validation while deltas arrive.
 - [x] Streaming final-output commitment: `RunStream` locks the first matching text, native, or output-tool result. Configured end strategies still govern co-emitted tools, but retries cannot revoke the committed result.
 - [x] Consumer-only stream transformation through `RunEventStreamWrapper` and `StreamEventProcessor`, including automatic streaming for `Run`.
-- [ ] Streamed tool execution events and deferred results.
+- [x] `FunctionToolCallEvent`, `FunctionToolResultEvent`, `OutputToolCallEvent`, and `OutputToolResultEvent`, with concurrent results emitted in completion order.
+- [ ] Streamed deferred request and result events.
 
 ## P1 - Providers and model behavior
 
@@ -205,5 +206,5 @@ Status:
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add partial structured-output validation while streaming deltas.
 3. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
-4. Add streamed tool execution events and deferred results.
+4. Add streamed deferred request and result events with that lifecycle.
 5. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

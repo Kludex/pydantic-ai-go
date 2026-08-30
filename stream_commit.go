@@ -76,10 +76,16 @@ func streamOutputValidationError() error {
 func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 	ctx context.Context, calls []ToolCallPart, winningCall int,
 ) ([]RequestPart, error) {
+	if !r.emitToolCallEvents(calls) {
+		return nil, context.Canceled
+	}
 	outcomes := make([]callOutcome[Output], len(calls))
 	if r.agent.endStrategy == EndStrategyEarly {
 		for index, call := range calls {
 			outcomes[index] = r.committedCallOutcome(call, index == winningCall)
+		}
+		if err := r.emitPendingCallResults(outcomes); err != nil {
+			return nil, err
 		}
 		return committedParts(outcomes), nil
 	}
@@ -106,6 +112,9 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 		if err := r.executeCommittedBatch(ctx, calls, outcomes, batch); err != nil {
 			return committedParts(outcomes), err
 		}
+		if err := r.emitPendingCallResults(outcomes); err != nil {
+			return nil, err
+		}
 		return committedParts(outcomes), nil
 	}
 
@@ -119,6 +128,9 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 	}
 	if err := r.executeCommittedSelected(ctx, calls, outcomes, indexes); err != nil {
 		return committedParts(outcomes), err
+	}
+	if err := r.emitPendingCallResults(outcomes); err != nil {
+		return nil, err
 	}
 	return committedParts(outcomes), nil
 }

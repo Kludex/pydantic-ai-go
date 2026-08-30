@@ -84,7 +84,7 @@ type TextContent struct {
 	Text string
 }
 
-func (TextContent) userContentKind() string { return "text" }
+func (TextContent) userContentKind() string { return "text-content" }
 
 // ImageURL references an image by URL.
 type ImageURL struct {

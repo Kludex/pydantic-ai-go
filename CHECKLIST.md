@@ -34,10 +34,10 @@ Status:
 
 ### Messages and persisted history
 
-- [~] Request/response and basic part discriminators resemble PydanticAI, but exact persisted-history compatibility is not yet proven against upstream fixtures.
+- [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [ ] Exact upstream message fixtures and cross-language round-trip tests using `ModelMessagesTypeAdapter`.
+- [~] Pinned upstream fixtures cover basic and multimodal histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [ ] Instruction parts and stable instruction IDs.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content.
@@ -188,7 +188,7 @@ Status:
 
 ## Next work
 
-1. Prove exact message-history compatibility with upstream-generated fixtures; fix the wire format before adding more persisted part types.
+1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add agent/run-wide sequential execution and final-output end strategies.
 3. Add strict tool definitions and per-step tool preparation.
 4. Add Anthropic, Gemini, and OpenAI Responses streaming.

@@ -1,0 +1,39 @@
+[
+  {
+    "parts": [
+      {
+        "content": [
+          {
+            "content": "look",
+            "metadata": null,
+            "kind": "text-content"
+          },
+          {
+            "url": "https://example.com/a.png",
+            "force_download": false,
+            "vendor_metadata": null,
+            "kind": "image-url",
+            "media_type": "image/png",
+            "identifier": "b86daf"
+          },
+          {
+            "data": "aGk=",
+            "media_type": "image/png",
+            "vendor_metadata": null,
+            "kind": "binary",
+            "identifier": "c22b5f"
+          }
+        ],
+        "timestamp": "2026-08-30T20:11:52.804808Z",
+        "part_kind": "user-prompt"
+      }
+    ],
+    "timestamp": null,
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

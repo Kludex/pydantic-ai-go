@@ -60,7 +60,7 @@ func TestUserContentKinds(t *testing.T) {
 		c    UserContent
 		want string
 	}{
-		{TextContent{}, "text"},
+		{TextContent{}, "text-content"},
 		{ImageURL{}, "image-url"},
 		{BinaryContent{}, "binary"},
 	}

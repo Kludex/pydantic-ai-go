@@ -224,7 +224,7 @@ func stringContent(raw json.RawMessage) string {
 
 type wireUserContent struct {
 	Kind      string `json:"kind"`
-	Text      string `json:"text,omitempty"`
+	Content   string `json:"content,omitempty"`
 	URL       string `json:"url,omitempty"`
 	Data      []byte `json:"data,omitempty"`
 	MediaType string `json:"media_type,omitempty"`
@@ -238,7 +238,7 @@ func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
 	for _, c := range part.Contents {
 		switch item := c.(type) {
 		case TextContent:
-			items = append(items, wireUserContent{Kind: "text", Text: item.Text})
+			items = append(items, wireUserContent{Kind: "text-content", Content: item.Text})
 		case ImageURL:
 			items = append(items, wireUserContent{Kind: "image-url", URL: item.URL})
 		case BinaryContent:
@@ -263,8 +263,8 @@ func unmarshalUserContent(raw json.RawMessage) (UserPromptPart, error) {
 	part := UserPromptPart{}
 	for _, item := range items {
 		switch item.Kind {
-		case "text":
-			part.Contents = append(part.Contents, TextContent{Text: item.Text})
+		case "text-content":
+			part.Contents = append(part.Contents, TextContent{Text: item.Content})
 		case "image-url":
 			part.Contents = append(part.Contents, ImageURL{URL: item.URL})
 		case "binary":

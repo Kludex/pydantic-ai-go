@@ -104,7 +104,7 @@ func TestMarshalUnmarshalEdgeCases(t *testing.T) {
 
 func TestUnmarshalUserContentForms(t *testing.T) {
 	msgs, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":[
-		{"kind":"text","text":"look at this"},
+		{"kind":"text-content","content":"look at this"},
 		{"kind":"image-url","url":"https://example.com/cat.png"},
 		{"kind":"binary","data":"aGk=","media_type":"image/png"}
 	]}]}]`))

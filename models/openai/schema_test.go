@@ -169,6 +169,47 @@ func TestOpenAIExplicitStrictSchemaRewrite(t *testing.T) {
 	}
 }
 
+func TestOpenAIRecursiveRootSchema(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, openAIRequestRecorder(t, &gotBody))
+	params := ai.ModelRequestParams{Tools: []ai.ToolDefinition{{
+		Name: "tree",
+		Schema: map[string]any{
+			"$ref": "#/$defs/Node",
+			"$defs": map[string]any{
+				"Node": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"name": map[string]any{"type": "string"},
+						"next": map[string]any{"$ref": "#/$defs/Node", "description": "Next node"},
+					},
+					"required": []string{"name", "next"},
+				},
+			},
+		},
+	}}}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	function := gotBody["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)
+	if function["strict"] != true {
+		t.Fatalf("recursive schema should infer strict mode: %v", function)
+	}
+	schema := function["parameters"].(map[string]any)
+	if schema["$ref"] != nil || schema["type"] != "object" || schema["additionalProperties"] != false {
+		t.Fatalf("root definition was not expanded: %v", schema)
+	}
+	next := schema["properties"].(map[string]any)["next"].(map[string]any)
+	refs := next["anyOf"].([]any)
+	if refs[0].(map[string]any)["$ref"] != "#" || next["description"] != "Next node" {
+		t.Fatalf("recursive reference was not normalized: %v", next)
+	}
+	definition := schema["$defs"].(map[string]any)["Node"].(map[string]any)
+	if definition["additionalProperties"] != false {
+		t.Fatalf("recursive definition was not transformed: %v", definition)
+	}
+}
+
 func TestOpenAIStrictSchemaErrors(t *testing.T) {
 	strict := true
 	tests := []struct {
@@ -177,6 +218,10 @@ func TestOpenAIStrictSchemaErrors(t *testing.T) {
 		want   string
 	}{
 		{name: "root", schema: map[string]any{"type": "string"}, want: "root must have type object"},
+		{name: "root defs", schema: map[string]any{"$ref": "#/$defs/Missing"}, want: "has no $defs"},
+		{name: "root definition", schema: map[string]any{
+			"$ref": "#/$defs/Missing", "$defs": map[string]any{"Other": map[string]any{"type": "object"}},
+		}, want: "no matching definition"},
 		{name: "array", schema: map[string]any{
 			"type": "object", "properties": map[string]any{"values": map[string]any{"type": "array", "items": true}},
 		}, want: "array items"},

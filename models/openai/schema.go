@@ -48,10 +48,9 @@ func prepareOpenAITool(def ai.ToolDefinition, supportsStrict bool) (map[string]a
 }
 
 func prepareOpenAISchema(source map[string]any, requested *bool) (map[string]any, bool, error) {
-	if source["type"] != "object" {
-		if _, recursive := source["$ref"]; !recursive {
-			return nil, false, fmt.Errorf("tool schema root must have type object")
-		}
+	rootRef, recursive := source["$ref"].(string)
+	if source["type"] != "object" && !recursive {
+		return nil, false, fmt.Errorf("tool schema root must have type object")
 	}
 	compatible := true
 	var transformErr error
@@ -59,6 +58,16 @@ func prepareOpenAISchema(source map[string]any, requested *bool) (map[string]any
 		delete(schema, "title")
 		delete(schema, "$schema")
 		delete(schema, "discriminator")
+		if ref, ok := schema["$ref"].(string); ok {
+			if ref == rootRef {
+				schema["$ref"] = "#"
+			}
+			if len(schema) > 1 && (ref != rootRef || schema["$defs"] == nil) {
+				ref = schema["$ref"].(string)
+				delete(schema, "$ref")
+				schema["anyOf"] = []any{map[string]any{"$ref": ref}}
+			}
+		}
 
 		if _, ok := schema["default"]; ok {
 			if requested != nil && *requested {
@@ -165,6 +174,21 @@ func prepareOpenAISchema(source map[string]any, requested *bool) (map[string]any
 	})
 	if transformErr != nil {
 		return nil, false, transformErr
+	}
+	if recursive {
+		definitions, ok := result["$defs"].(map[string]any)
+		if !ok {
+			return nil, false, fmt.Errorf("root reference %q has no $defs", rootRef)
+		}
+		key := strings.TrimPrefix(rootRef, "#/$defs/")
+		root, ok := definitions[key].(map[string]any)
+		if !ok {
+			return nil, false, fmt.Errorf("root reference %q has no matching definition", rootRef)
+		}
+		delete(result, "$ref")
+		for key, value := range root {
+			result[key] = value
+		}
 	}
 	if requested != nil {
 		return result, *requested, nil

@@ -55,7 +55,7 @@ Status:
 - [x] Raw-schema dynamic tool registration.
 - [x] Tool and argument-unmarshal retries use independent per-tool counters; output retries use a separate counter.
 - [~] JSON Schema supports common structs, arrays, maps, descriptions, and enums; it is not full JSON Schema parity.
-- [~] Provider schema transforms: Gemini sends transformed full JSON Schema through `parametersJsonSchema`/`responseJsonSchema`; OpenAI handles strict-compatible constraints, required properties, typed arrays, and deterministic forced rewrites; Anthropic applies its strict subset only when requested. OpenAI recursive-root references remain.
+- [x] Provider schema transforms for implemented providers: Gemini full JSON Schema wire fields, OpenAI compatibility inference/forced rewrites including recursive roots, and opt-in Anthropic strict-subset conversion.
 - [x] Provider-aware strict tool mode via `WithStrict()` / `WithoutStrict()`: OpenAI infers schema compatibility, Anthropic is explicit and model-gated, and Gemini 2.5+ defaults to request-wide `VALIDATED`; each provider supports alias/proxy overrides.
 - [ ] Surface Anthropic's lossy strict transformation of dynamic-map schemas as a warning or other inspectable diagnostic.
 - [x] Per-tool and agent-wide per-step preparation and omission via `AddPreparedTool` and `AddToolsPrepareFunc`, applied in upstream order.
@@ -198,7 +198,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Match streaming final-output commitment and validation semantics.
-3. Complete OpenAI recursive-root strict schema transformation.
+3. Add inspectable diagnostics for Anthropic's lossy strict conversion of dynamic-map schemas.
 4. Add stable stream part IDs and keyed deltas before expanding streamed builtin tools.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

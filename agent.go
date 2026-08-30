@@ -18,6 +18,7 @@ type Agent[Deps, Output any] struct {
 	settings          ModelSettings
 	maxRetries        int
 	outputMode        OutputMode
+	sequentialTools   bool
 	capabilities      []Capability
 	capInstructions   []string
 	outputValidators  []func(ctx context.Context, rc *RunContext[Deps], out Output) error
@@ -41,6 +42,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	a.instructions = cfg.instructions
 	a.settings = cfg.settings
 	a.outputMode = cfg.outputMode
+	a.sequentialTools = cfg.sequentialTools
 	a.capabilities = cfg.capabilities
 	if cfg.limits != (UsageLimits{}) {
 		a.capabilities = append([]Capability{usageLimitsCapability{limits: cfg.limits}}, a.capabilities...)
@@ -93,12 +95,13 @@ func (a *Agent[Deps, Output]) checkNotStarted() {
 type Option func(*config)
 
 type config struct {
-	instructions string
-	settings     ModelSettings
-	limits       UsageLimits
-	maxRetries   int
-	outputMode   OutputMode
-	capabilities []Capability
+	instructions    string
+	settings        ModelSettings
+	limits          UsageLimits
+	maxRetries      int
+	outputMode      OutputMode
+	sequentialTools bool
+	capabilities    []Capability
 }
 
 // OutputMode selects how structured output is requested from the model.
@@ -118,6 +121,13 @@ const (
 // effect when Output is string.
 func WithOutputMode(mode OutputMode) Option {
 	return func(c *config) { c.outputMode = mode }
+}
+
+// WithSequentialToolExecution runs every tool call serially for every run
+// of the agent. Without it, independent calls run concurrently and tools
+// registered with WithSequential form barriers.
+func WithSequentialToolExecution() Option {
+	return func(c *config) { c.sequentialTools = true }
 }
 
 // WithInstructions sets the static system instructions.

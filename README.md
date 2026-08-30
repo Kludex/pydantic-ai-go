@@ -63,7 +63,7 @@ Use `ai.WithSequential()` when a tool changes shared state or must run alone:
 ai.AddTool(agent, "update_database", updateDatabase, ai.WithSequential())
 ```
 
-The sequential tool is a barrier. Earlier calls finish before it starts. Later calls wait until it finishes.
+The sequential tool is a barrier. Earlier calls finish before it starts. Later calls wait until it finishes. Use `ai.WithSequentialToolExecution()` on the agent when every tool must run serially.
 
 Use `ai.WithStrict()` to ask the provider to constrain generated arguments to the tool schema:
 

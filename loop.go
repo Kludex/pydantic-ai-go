@@ -247,6 +247,9 @@ func (r *run[Deps, Output]) executeCallBatch(
 }
 
 func (r *run[Deps, Output]) callIsSequential(call ToolCallPart) bool {
+	if r.agent.sequentialTools {
+		return true
+	}
 	if r.params.OutputTool != nil && call.ToolName == outputToolName {
 		return true
 	}

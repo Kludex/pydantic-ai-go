@@ -25,7 +25,7 @@ Status:
 - [x] Run, model-request, and tool-call capability middleware.
 - [x] Execute independent tool calls concurrently by default while preserving model order.
 - [x] Per-tool sequential execution barrier via `WithSequential()`.
-- [ ] Agent/run-wide sequential tool execution mode.
+- [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [ ] End strategy when a final output and function tools appear together (`early` / `exhaustive`).
 - [ ] Run cancellation initiated from `RunContext`, including draining concurrent tools.
 - [ ] Per-run overrides for model, settings, instructions, output type/mode, limits, and tools.
@@ -189,7 +189,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add agent/run-wide sequential execution and final-output end strategies.
+2. Add final-output end strategies for responses that mix output and function tools.
 3. Add per-step tool preparation, then provider-profile defaults for strict mode.
 4. Add Anthropic, Gemini, and OpenAI Responses streaming.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.

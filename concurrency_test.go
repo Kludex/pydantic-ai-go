@@ -126,6 +126,29 @@ func TestSequentialToolCreatesBarrier(t *testing.T) {
 	}
 }
 
+func TestAgentWideSequentialToolExecution(t *testing.T) {
+	model := twoToolModel(t, "first", "second")
+	agent := ai.NewAgent[deps, string](model, ai.WithSequentialToolExecution())
+	var mu sync.Mutex
+	var events []string
+	tool := func(name string) func(context.Context, struct{}) (string, error) {
+		return func(context.Context, struct{}) (string, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			events = append(events, name)
+			return "", nil
+		}
+	}
+	ai.AddSimpleTool(agent, "first", tool("first"))
+	ai.AddSimpleTool(agent, "second", tool("second"))
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(events, []string{"first", "second"}) {
+		t.Fatalf("unexpected execution order %v", events)
+	}
+}
+
 func TestToolCallContextIsIsolated(t *testing.T) {
 	model := twoToolModel(t, "first", "second")
 	agent := ai.NewAgent[deps, string](model)

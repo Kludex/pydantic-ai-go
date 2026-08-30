@@ -20,8 +20,13 @@ type Model interface {
 
 // ModelRequestParams carries everything a provider needs beyond the messages.
 type ModelRequestParams struct {
+	// Instructions is the joined instruction text for providers that do not
+	// need origin metadata.
 	Instructions string
-	Tools        []ToolDefinition
+	// InstructionParts preserves static and dynamic instruction boundaries.
+	// Providers may use these boundaries for prompt caching.
+	InstructionParts []InstructionPart
+	Tools            []ToolDefinition
 	// OutputTool, when non-nil, is the tool the model must call to
 	// produce the final structured output.
 	OutputTool *ToolDefinition
@@ -32,6 +37,12 @@ type ModelRequestParams struct {
 	// AllowText reports whether plain text is an acceptable final output.
 	AllowText bool
 	Settings  ModelSettings
+}
+
+// InstructionPart is one model instruction block.
+type InstructionPart struct {
+	Content string
+	Dynamic bool
 }
 
 // ModelSettings tunes a model request. The zero value uses provider defaults.

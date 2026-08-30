@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -82,9 +83,11 @@ func (staticCapability) Setup(reg *ai.CapabilityRegistry) error {
 
 func TestCapabilityContributesToolsAndInstructions(t *testing.T) {
 	var gotInstructions string
+	var gotInstructionParts []ai.InstructionPart
 	var toolReturn any
 	model := fakes.NewFunctionModel(func(_ context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 		gotInstructions = params.Instructions
+		gotInstructionParts = params.InstructionParts
 		if len(msgs) == 1 {
 			return &ai.ModelResponse{Parts: []ai.ResponsePart{
 				ai.ToolCallPart{ToolName: "cap_tool", Args: json.RawMessage(`{}`), ToolCallID: "c1"},
@@ -102,6 +105,11 @@ func TestCapabilityContributesToolsAndInstructions(t *testing.T) {
 	}
 	if gotInstructions != "Base.\n\nAlways be brief." {
 		t.Fatalf("unexpected instructions %q", gotInstructions)
+	}
+	if !reflect.DeepEqual(gotInstructionParts, []ai.InstructionPart{
+		{Content: "Base."}, {Content: "Always be brief."},
+	}) {
+		t.Fatalf("unexpected instruction parts %+v", gotInstructionParts)
 	}
 	if toolReturn != "from capability" {
 		t.Fatalf("capability tool not executed: %v", toolReturn)
@@ -122,8 +130,10 @@ func (c dynamicInstructions) Instructions(_ context.Context, ri *ai.RunInfo) (st
 
 func TestCapabilityInstructionsProvider(t *testing.T) {
 	var got string
+	var gotParts []ai.InstructionPart
 	model := fakes.NewFunctionModel(func(_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 		got = params.Instructions
+		gotParts = params.InstructionParts
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "ok"}}}, nil
 	})
 	agent := ai.NewAgent[deps, string](model, ai.WithCapabilities(dynamicInstructions{}))
@@ -132,6 +142,9 @@ func TestCapabilityInstructionsProvider(t *testing.T) {
 	}
 	if len(got) == 0 || got[:4] != "run " {
 		t.Fatalf("unexpected instructions %q", got)
+	}
+	if len(gotParts) != 1 || gotParts[0].Content != got || !gotParts[0].Dynamic {
+		t.Fatalf("dynamic instruction boundary was lost: %+v", gotParts)
 	}
 }
 

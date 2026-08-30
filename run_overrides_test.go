@@ -110,6 +110,14 @@ func TestRunMergesSettingsAndAppendsInstructions(t *testing.T) {
 		got.Instructions != "Base instructions.\n\nRun instructions.\n\nDynamic instructions." {
 		t.Fatalf("unexpected run parameters: output=%q instructions=%q", result.Output, got.Instructions)
 	}
+	wantInstructions := []ai.InstructionPart{
+		{Content: "Base instructions."},
+		{Content: "Run instructions."},
+		{Content: "Dynamic instructions.", Dynamic: true},
+	}
+	if !reflect.DeepEqual(got.InstructionParts, wantInstructions) {
+		t.Fatalf("instruction boundaries were lost: got=%+v want=%+v", got.InstructionParts, wantInstructions)
+	}
 	want := ai.ModelSettings{
 		MaxTokens: 200, Temperature: &runTemperature, TopP: &runTopP, Seed: &runSeed,
 		StopSequences: []string{}, ParallelToolCalls: &runParallel,

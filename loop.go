@@ -111,7 +111,7 @@ func (a *Agent[Deps, Output]) newRun(
 		usage: &r.usage, messages: &r.messages, cancellation: cancellation,
 	}
 	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, messages: &r.messages}
-	instructions, err := a.buildInstructions(runCtx, r.rc, r.info, cfg.instructions)
+	instructionParts, err := a.buildInstructions(runCtx, r.rc, r.info, cfg.instructions)
 	if err != nil {
 		cancellation.finish()
 		return nil, err
@@ -121,7 +121,7 @@ func (a *Agent[Deps, Output]) newRun(
 		outputMode = *cfg.outputMode
 	}
 	validateOutputMode(outputMode)
-	r.params, err = a.buildParams(instructions, settings, outputMode)
+	r.params, err = a.buildParams(instructionParts, settings, outputMode)
 	if err != nil {
 		cancellation.finish()
 		return nil, err
@@ -241,6 +241,7 @@ func (r *run[Deps, Output]) setCurrentTools(params ModelRequestParams) {
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
 	params := r.params
+	params.InstructionParts = slices.Clone(params.InstructionParts)
 	tools := make([]ToolDefinition, 0, len(params.Tools))
 	rc := *r.rc
 	rc.Retry = r.outputRetryCount()
@@ -980,44 +981,52 @@ func (a *Agent[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
 
 func (a *Agent[Deps, Output]) buildInstructions(
 	ctx context.Context, rc *RunContext[Deps], info *RunInfo, additional string,
-) (string, error) {
-	parts := make([]string, 0, len(a.instructionsFuncs)+len(a.capInstructions)+2)
+) ([]InstructionPart, error) {
+	parts := make([]InstructionPart, 0, len(a.instructionsFuncs)+len(a.capInstructions)+2)
 	if a.instructions != "" {
-		parts = append(parts, a.instructions)
+		parts = append(parts, InstructionPart{Content: a.instructions})
 	}
-	parts = append(parts, a.capInstructions...)
+	for _, instructions := range a.capInstructions {
+		parts = append(parts, InstructionPart{Content: instructions})
+	}
 	if additional != "" {
-		parts = append(parts, additional)
+		parts = append(parts, InstructionPart{Content: additional})
 	}
 	for _, capability := range a.capabilities {
 		provider, ok := capability.(InstructionsProvider)
 		if !ok {
 			continue
 		}
-		s, err := provider.Instructions(ctx, info)
+		instructions, err := provider.Instructions(ctx, info)
 		if err != nil {
-			return "", fmt.Errorf("ai: instructions: %w", err)
+			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
-		if s != "" {
-			parts = append(parts, s)
+		if instructions != "" {
+			parts = append(parts, InstructionPart{Content: instructions, Dynamic: true})
 		}
 	}
 	for _, fn := range a.instructionsFuncs {
-		s, err := fn(ctx, rc)
+		instructions, err := fn(ctx, rc)
 		if err != nil {
-			return "", fmt.Errorf("ai: instructions: %w", err)
+			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
-		if s != "" {
-			parts = append(parts, s)
+		if instructions != "" {
+			parts = append(parts, InstructionPart{Content: instructions, Dynamic: true})
 		}
 	}
-	return strings.Join(parts, "\n\n"), nil
+	return parts, nil
 }
 
 func (a *Agent[Deps, Output]) buildParams(
-	instructions string, settings ModelSettings, outputMode OutputMode,
+	instructionParts []InstructionPart, settings ModelSettings, outputMode OutputMode,
 ) (ModelRequestParams, error) {
-	params := ModelRequestParams{Instructions: instructions, Settings: settings}
+	instructions := make([]string, 0, len(instructionParts))
+	for _, part := range instructionParts {
+		instructions = append(instructions, part.Content)
+	}
+	params := ModelRequestParams{
+		Instructions: strings.Join(instructions, "\n\n"), InstructionParts: instructionParts, Settings: settings,
+	}
 	for _, entry := range a.tools {
 		params.Tools = append(params.Tools, entry.def)
 	}

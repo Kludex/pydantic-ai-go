@@ -93,7 +93,9 @@ ai.AddTool(agent, "update_database", updateDatabase, ai.WithSequential())
 
 The sequential tool is a barrier. Earlier calls finish before it starts. Later calls wait until it finishes. Use `ai.WithSequentialToolExecution()` on the agent when every tool must run serially.
 
-Local execution is separate from model generation. Set `ModelSettings.ParallelToolCalls` to tell OpenAI or Anthropic whether the model may emit parallel calls:
+Local execution is separate from model generation. Set `ModelSettings.RequestTimeout` to limit each model request, including consumption of a streaming response. It does not limit tools or the whole run.
+
+Set `ModelSettings.ParallelToolCalls` to tell OpenAI or Anthropic whether the model may emit parallel calls:
 
 ```go
 parallel := false

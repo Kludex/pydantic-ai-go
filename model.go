@@ -48,6 +48,7 @@ type InstructionPart struct {
 // ModelSettings tunes a model request. The zero value uses provider defaults.
 type ModelSettings struct {
 	MaxTokens         int
+	RequestTimeout    time.Duration
 	Temperature       *float64
 	TopP              *float64
 	Seed              *int
@@ -61,6 +62,9 @@ func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettin
 	}
 	if override.MaxTokens != 0 {
 		base.MaxTokens = override.MaxTokens
+	}
+	if override.RequestTimeout != 0 {
+		base.RequestTimeout = override.RequestTimeout
 	}
 	if override.Temperature != nil {
 		base.Temperature = override.Temperature

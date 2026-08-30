@@ -120,9 +120,9 @@ Status:
 
 ### Model settings
 
-- [x] Max tokens, temperature, top-p, seed, and stop sequences in the common settings type.
+- [x] Max tokens, temperature, top-p, seed, stop sequences, and a cooperative per-request timeout in the common settings type.
 - [~] Providers only forward settings they support; compatibility is not validated by profiles. OpenAI, Anthropic, and Gemini normalize their available cache, audio, reasoning, and prediction usage details.
-- [ ] Timeout and request-level deadline settings.
+- [x] Static or per-step `RequestTimeout` bounds synchronous requests and full stream consumption while preserving earlier parent cancellation.
 - [x] `ParallelToolCalls` generation setting for OpenAI Chat/Responses and Anthropic; Gemini exposes no equivalent request setting.
 - [ ] Thinking/reasoning effort and token budgets.
 - [ ] Logprobs, penalties, service tier, response metadata, and provider-specific settings.

@@ -474,6 +474,11 @@ func cloneSchemaValue(value any) any {
 // supports it; otherwise it falls back to a plain request, replaying the
 // response as events so RunStream works with every Model.
 func (r *run[Deps, Output]) doModelRequest(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+	if params.Settings.RequestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, params.Settings.RequestTimeout)
+		defer cancel()
+	}
 	if r.emit == nil {
 		return r.model.Request(ctx, msgs, params)
 	}
@@ -1212,6 +1217,9 @@ func (r *run[Deps, Output]) prepareModelSettings(
 			return ModelSettings{}, fmt.Errorf("ai: model settings: %w", err)
 		}
 		settings = mergeModelSettings(settings, &resolved)
+	}
+	if settings.RequestTimeout < 0 {
+		return ModelSettings{}, fmt.Errorf("ai: request timeout must be non-negative, got %s", settings.RequestTimeout)
 	}
 	rc.ModelSettings = settings
 	r.rc.ModelSettings = settings

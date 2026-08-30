@@ -164,111 +164,245 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		if err != nil {
 			return nil, err
 		}
-		if final != nil {
-			return final, nil
-		}
 		r.messages = append(r.messages, ModelRequest{Parts: parts})
+		if final != nil {
+			return r.result(*final), nil
+		}
 	}
 }
 
 type callOutcome[Output any] struct {
-	part   RequestPart
-	result *RunResult[Output]
-	err    error
+	part       RequestPart
+	output     *Output
+	outputCall bool
+	err        error
 }
 
-// executeCalls runs independent tool calls concurrently and preserves their
-// original order in the request sent back to the model. Sequential tools and
-// output tools form barriers.
+const (
+	finalResultProcessed = "Final result processed."
+	retryWins            = "Output not used as the final result - addressing tool retries from this round first."
+	outputSkipped        = "Output tool not used - a final result was already processed."
+	outputNotFinal       = "Output tool processed, but its value will not be the final result of the agent run."
+	toolSkipped          = "Tool not executed - a final result was already processed."
+)
+
+// executeCalls honors the configured end strategy while preserving emission
+// order in the request sent back to the model.
 func (r *run[Deps, Output]) executeCalls(
 	ctx context.Context, calls []ToolCallPart,
-) ([]RequestPart, *RunResult[Output], error) {
-	outcomes := make([]callOutcome[Output], len(calls))
-	batchStart := 0
-	for i, call := range calls {
-		if !r.callIsSequential(call) {
-			continue
-		}
-		r.executeCallBatch(ctx, calls, outcomes, batchStart, i)
-		if err := firstCallError(outcomes[batchStart:i]); err != nil {
-			return nil, nil, err
-		}
-		part, result, err := r.executeCall(ctx, call)
-		outcomes[i] = callOutcome[Output]{part: part, result: result, err: err}
-		if err != nil {
-			return nil, nil, err
-		}
-		batchStart = i + 1
+) ([]RequestPart, *Output, error) {
+	if r.agent.endStrategy == EndStrategyEarly {
+		return r.executeCallsEarly(ctx, calls)
 	}
-	r.executeCallBatch(ctx, calls, outcomes, batchStart, len(calls))
-	if err := firstCallError(outcomes[batchStart:]); err != nil {
-		return nil, nil, err
+	if r.agent.endStrategy == EndStrategyGraceful {
+		return r.executeCallsGraceful(ctx, calls)
 	}
-
-	parts := make([]RequestPart, 0, len(calls))
-	var final *RunResult[Output]
-	for _, outcome := range outcomes {
-		if outcome.part != nil {
-			parts = append(parts, outcome.part)
-		}
-		if final == nil && outcome.result != nil {
-			final = outcome.result
-		}
-	}
-	return parts, final, nil
+	return r.executeCallsExhaustive(ctx, calls)
 }
 
-func (r *run[Deps, Output]) executeCallBatch(
-	ctx context.Context, calls []ToolCallPart, outcomes []callOutcome[Output], start, end int,
-) {
-	if start >= end {
-		return
+func (r *run[Deps, Output]) executeCallsEarly(
+	ctx context.Context, calls []ToolCallPart,
+) ([]RequestPart, *Output, error) {
+	outcomes := make([]callOutcome[Output], len(calls))
+	var winner *Output
+	for i, call := range calls {
+		if !r.isOutputCall(call) {
+			continue
+		}
+		if winner != nil {
+			outcomes[i].part = ToolReturnPart{ToolName: call.ToolName, Content: outputSkipped, ToolCallID: call.ToolCallID}
+			continue
+		}
+		outcomes[i] = r.executeOne(ctx, call)
+		if outcomes[i].err != nil {
+			return nil, nil, outcomes[i].err
+		}
+		winner = outcomes[i].output
 	}
-	if end-start == 1 {
-		part, result, err := r.executeCall(ctx, calls[start])
-		outcomes[start] = callOutcome[Output]{part: part, result: result, err: err}
-		return
+	if winner != nil {
+		for i, call := range calls {
+			if !r.isOutputCall(call) {
+				outcomes[i].part = ToolReturnPart{ToolName: call.ToolName, Content: toolSkipped, ToolCallID: call.ToolCallID}
+			}
+		}
+		return collectCallOutcomes(outcomes, false)
+	}
+	if err := r.executeSelected(ctx, calls, outcomes, r.functionCallIndexes(calls), false); err != nil {
+		return nil, nil, err
+	}
+	return collectCallOutcomes(outcomes, false)
+}
+
+func (r *run[Deps, Output]) executeCallsGraceful(
+	ctx context.Context, calls []ToolCallPart,
+) ([]RequestPart, *Output, error) {
+	outcomes := make([]callOutcome[Output], len(calls))
+	batch := make([]int, 0, len(calls))
+	var winner *Output
+	for i, call := range calls {
+		if !r.isOutputCall(call) && !r.callIsBarrier(call, true) {
+			batch = append(batch, i)
+			continue
+		}
+		if err := r.executeIndexBatch(ctx, calls, outcomes, batch); err != nil {
+			return nil, nil, err
+		}
+		batch = batch[:0]
+		if r.isOutputCall(call) && winner != nil {
+			outcomes[i].part = ToolReturnPart{ToolName: call.ToolName, Content: outputSkipped, ToolCallID: call.ToolCallID}
+			continue
+		}
+		outcomes[i] = r.executeOne(ctx, call)
+		if outcomes[i].err != nil {
+			return nil, nil, outcomes[i].err
+		}
+		if outcomes[i].output != nil {
+			winner = outcomes[i].output
+		}
+	}
+	if err := r.executeIndexBatch(ctx, calls, outcomes, batch); err != nil {
+		return nil, nil, err
+	}
+	return collectCallOutcomes(outcomes, true)
+}
+
+func (r *run[Deps, Output]) executeCallsExhaustive(
+	ctx context.Context, calls []ToolCallPart,
+) ([]RequestPart, *Output, error) {
+	outcomes := make([]callOutcome[Output], len(calls))
+	indexes := make([]int, len(calls))
+	for i := range calls {
+		indexes[i] = i
+	}
+	if err := r.executeSelected(ctx, calls, outcomes, indexes, true); err != nil {
+		return nil, nil, err
+	}
+	return collectCallOutcomes(outcomes, true)
+}
+
+func (r *run[Deps, Output]) executeSelected(
+	ctx context.Context,
+	calls []ToolCallPart,
+	outcomes []callOutcome[Output],
+	indexes []int,
+	outputToolsConcurrent bool,
+) error {
+	batch := make([]int, 0, len(indexes))
+	for _, i := range indexes {
+		if !r.callIsBarrier(calls[i], outputToolsConcurrent) {
+			batch = append(batch, i)
+			continue
+		}
+		if err := r.executeIndexBatch(ctx, calls, outcomes, batch); err != nil {
+			return err
+		}
+		batch = batch[:0]
+		outcomes[i] = r.executeOne(ctx, calls[i])
+		if outcomes[i].err != nil {
+			return outcomes[i].err
+		}
+	}
+	return r.executeIndexBatch(ctx, calls, outcomes, batch)
+}
+
+func (r *run[Deps, Output]) executeIndexBatch(
+	ctx context.Context, calls []ToolCallPart, outcomes []callOutcome[Output], indexes []int,
+) error {
+	if len(indexes) == 0 {
+		return nil
+	}
+	if len(indexes) == 1 {
+		outcomes[indexes[0]] = r.executeOne(ctx, calls[indexes[0]])
+		return outcomes[indexes[0]].err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	var wg sync.WaitGroup
-	for i := start; i < end; i++ {
+	for _, i := range indexes {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			part, result, err := r.executeCall(ctx, calls[i])
-			outcomes[i] = callOutcome[Output]{part: part, result: result, err: err}
-			if err != nil {
+			outcomes[i] = r.executeOne(ctx, calls[i])
+			if outcomes[i].err != nil {
 				cancel()
 			}
 		}()
 	}
 	wg.Wait()
-}
-
-func (r *run[Deps, Output]) callIsSequential(call ToolCallPart) bool {
-	if r.agent.sequentialTools {
-		return true
-	}
-	if r.params.OutputTool != nil && call.ToolName == outputToolName {
-		return true
-	}
-	entry, ok := r.agent.findTool(call.ToolName)
-	return ok && entry.def.Sequential
-}
-
-func firstCallError[Output any](outcomes []callOutcome[Output]) error {
-	for _, outcome := range outcomes {
-		if outcome.err != nil {
-			return outcome.err
+	for _, i := range indexes {
+		if outcomes[i].err != nil {
+			return outcomes[i].err
 		}
 	}
 	return nil
 }
 
+func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) callOutcome[Output] {
+	part, output, err := r.executeCall(ctx, call)
+	return callOutcome[Output]{part: part, output: output, outputCall: r.isOutputCall(call), err: err}
+}
+
+func (r *run[Deps, Output]) functionCallIndexes(calls []ToolCallPart) []int {
+	indexes := make([]int, 0, len(calls))
+	for i, call := range calls {
+		if !r.isOutputCall(call) {
+			indexes = append(indexes, i)
+		}
+	}
+	return indexes
+}
+
+func (r *run[Deps, Output]) isOutputCall(call ToolCallPart) bool {
+	return r.params.OutputTool != nil && call.ToolName == outputToolName
+}
+
+func (r *run[Deps, Output]) callIsBarrier(call ToolCallPart, outputToolsConcurrent bool) bool {
+	if r.agent.sequentialTools {
+		return true
+	}
+	if r.isOutputCall(call) {
+		return !outputToolsConcurrent
+	}
+	entry, ok := r.agent.findTool(call.ToolName)
+	return ok && entry.def.Sequential
+}
+
+func collectCallOutcomes[Output any](
+	outcomes []callOutcome[Output], retryCanWin bool,
+) ([]RequestPart, *Output, error) {
+	parts := make([]RequestPart, 0, len(outcomes))
+	var winner *Output
+	winningPart := -1
+	functionRetry := false
+	for _, outcome := range outcomes {
+		if outcome.part != nil {
+			parts = append(parts, outcome.part)
+		}
+		if outcome.output != nil {
+			if winner == nil {
+				winner = outcome.output
+				winningPart = len(parts) - 1
+			} else {
+				part := outcome.part.(ToolReturnPart)
+				part.Content = outputNotFinal
+				parts[len(parts)-1] = part
+			}
+		} else if _, ok := outcome.part.(RetryPromptPart); ok && !outcome.outputCall {
+			functionRetry = true
+		}
+	}
+	if retryCanWin && functionRetry && winner != nil {
+		part := parts[winningPart].(ToolReturnPart)
+		part.Content = retryWins
+		parts[winningPart] = part
+		winner = nil
+	}
+	return parts, winner, nil
+}
+
 // executeCall runs one tool call. It returns the request part to send back
-// to the model, or the final result if the call was the output tool.
-func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) (RequestPart, *RunResult[Output], error) {
+// to the model and a validated value for a successful output tool.
+func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) (RequestPart, *Output, error) {
 	if r.params.OutputTool != nil && call.ToolName == outputToolName {
 		return r.finalizeOutputCall(ctx, call)
 	}
@@ -295,7 +429,7 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	return ToolReturnPart{ToolName: call.ToolName, Content: content, ToolCallID: call.ToolCallID}, nil, nil
 }
 
-func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCallPart) (RequestPart, *RunResult[Output], error) {
+func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCallPart) (RequestPart, *Output, error) {
 	var out Output
 	if err := json.Unmarshal(call.Args, &out); err != nil {
 		if err := r.countRetry(); err != nil {
@@ -304,15 +438,17 @@ func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCal
 		msg := fmt.Sprintf("invalid final result: %v", err)
 		return RetryPromptPart{Content: msg, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
 	}
-	if retry, err := r.validate(ctx, out); err != nil {
+	outputRC := *r.rc
+	outputRC.ToolCallID = call.ToolCallID
+	outputRC.Retry = r.retryCount()
+	if retry, err := r.validate(ctx, &outputRC, out); err != nil {
 		return nil, nil, err
 	} else if retry != nil {
 		return RetryPromptPart{Content: retry.Message, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
 	}
-	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{
-		ToolReturnPart{ToolName: call.ToolName, Content: "Final result processed.", ToolCallID: call.ToolCallID},
-	}})
-	return nil, r.result(out), nil
+	return ToolReturnPart{
+		ToolName: call.ToolName, Content: finalResultProcessed, ToolCallID: call.ToolCallID,
+	}, &out, nil
 }
 
 // finalizeText handles a response with no tool calls. String outputs take
@@ -338,7 +474,7 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 		// string, so this assertion cannot fail.
 		out = any(resp.Text()).(Output)
 	}
-	if retry, err := r.validate(ctx, out); err != nil {
+	if retry, err := r.validate(ctx, r.rc, out); err != nil {
 		return nil, nil, err
 	} else if retry != nil {
 		return nil, &RetryPromptPart{Content: retry.Message}, nil
@@ -346,9 +482,11 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 	return r.result(out), nil, nil
 }
 
-func (r *run[Deps, Output]) validate(ctx context.Context, out Output) (*RetryError, error) {
+func (r *run[Deps, Output]) validate(
+	ctx context.Context, rc *RunContext[Deps], out Output,
+) (*RetryError, error) {
 	for _, validate := range r.agent.outputValidators {
-		err := validate(ctx, r.rc, out)
+		err := validate(ctx, rc, out)
 		var retry *RetryError
 		switch {
 		case errors.As(err, &retry):

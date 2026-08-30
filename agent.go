@@ -18,6 +18,7 @@ type Agent[Deps, Output any] struct {
 	settings          ModelSettings
 	maxRetries        int
 	outputMode        OutputMode
+	endStrategy       EndStrategy
 	sequentialTools   bool
 	capabilities      []Capability
 	capInstructions   []string
@@ -34,7 +35,7 @@ type toolEntry[Deps any] struct {
 
 // NewAgent creates an agent backed by model.
 func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output] {
-	a := &Agent[Deps, Output]{model: model, maxRetries: 1}
+	a := &Agent[Deps, Output]{model: model, maxRetries: 1, endStrategy: EndStrategyGraceful}
 	var cfg config
 	for _, opt := range opts {
 		opt(&cfg)
@@ -42,6 +43,14 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	a.instructions = cfg.instructions
 	a.settings = cfg.settings
 	a.outputMode = cfg.outputMode
+	if cfg.endStrategy != "" {
+		switch cfg.endStrategy {
+		case EndStrategyEarly, EndStrategyGraceful, EndStrategyExhaustive:
+			a.endStrategy = cfg.endStrategy
+		default:
+			panic(fmt.Sprintf("ai: invalid end strategy %q", cfg.endStrategy))
+		}
+	}
 	a.sequentialTools = cfg.sequentialTools
 	a.capabilities = cfg.capabilities
 	if cfg.limits != (UsageLimits{}) {
@@ -74,7 +83,9 @@ func (a *Agent[Deps, Output]) AddInstructionsFunc(fn func(ctx context.Context, r
 }
 
 // AddOutputValidator registers a semantic check on the final output.
-// Return an error from Retryf to send the failure back to the model.
+// Return an error from Retryf to send the failure back to the model. The
+// exhaustive end strategy may invoke validators concurrently for multiple
+// output calls, so validators must synchronize mutable state.
 func (a *Agent[Deps, Output]) AddOutputValidator(fn func(ctx context.Context, rc *RunContext[Deps], out Output) error) {
 	a.checkNotStarted()
 	a.outputValidators = append(a.outputValidators, fn)
@@ -100,6 +111,7 @@ type config struct {
 	limits          UsageLimits
 	maxRetries      int
 	outputMode      OutputMode
+	endStrategy     EndStrategy
 	sequentialTools bool
 	capabilities    []Capability
 }
@@ -121,6 +133,26 @@ const (
 // effect when Output is string.
 func WithOutputMode(mode OutputMode) Option {
 	return func(c *config) { c.outputMode = mode }
+}
+
+// EndStrategy controls calls emitted alongside a successful output tool.
+type EndStrategy string
+
+const (
+	// EndStrategyEarly skips function tools as soon as an output succeeds.
+	EndStrategyEarly EndStrategy = "early"
+	// EndStrategyGraceful runs function tools in emission order, skips later
+	// output tools, and discards the output if a function tool asks to retry.
+	EndStrategyGraceful EndStrategy = "graceful"
+	// EndStrategyExhaustive runs every call and selects the first successful
+	// output in emission order, unless a function tool asks to retry.
+	EndStrategyExhaustive EndStrategy = "exhaustive"
+)
+
+// WithEndStrategy controls calls emitted alongside a successful output tool.
+// The default is EndStrategyGraceful.
+func WithEndStrategy(strategy EndStrategy) Option {
+	return func(c *config) { c.endStrategy = strategy }
 }
 
 // WithSequentialToolExecution runs every tool call serially for every run

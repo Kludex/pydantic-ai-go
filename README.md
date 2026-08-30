@@ -90,6 +90,21 @@ result, err := agent.Run(ctx, "Weather in SF?", deps)
 
 `Output = string` means plain text - no output tool is involved.
 
+### Tool calls alongside output
+
+The default `ai.EndStrategyGraceful` runs function tools emitted alongside an output tool. The first successful output wins. A function-tool retry suppresses that output so the model can correct the call.
+
+Use `ai.EndStrategyEarly` when function tools should be skipped after an output succeeds:
+
+```go
+agent := ai.NewAgent[Deps, Weather](
+	model,
+	ai.WithEndStrategy(ai.EndStrategyEarly),
+)
+```
+
+Use `ai.EndStrategyExhaustive` when every output and function tool must run. Independent calls run concurrently, and the first successful output in emission order wins.
+
 ## Streaming
 
 `RunStream` yields events as the model produces them - text deltas, tool call starts, argument fragments - and the typed result is available once the stream completes:

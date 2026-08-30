@@ -26,7 +26,7 @@ Status:
 - [x] Execute independent tool calls concurrently by default while preserving model order.
 - [x] Per-tool sequential execution barrier via `WithSequential()`.
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
-- [ ] End strategy when a final output and function tools appear together (`early` / `exhaustive`).
+- [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [ ] Run cancellation initiated from `RunContext`, including draining concurrent tools.
 - [ ] Per-run overrides for model, settings, instructions, output type/mode, limits, and tools.
 - [ ] Model selection and model-ID resolution per request step.
@@ -83,6 +83,7 @@ Status:
 - [ ] Google Gemini streaming.
 - [ ] OpenAI Responses streaming.
 - [ ] Output validation during streaming and partial structured output.
+- [ ] Streaming final-output commitment: upstream `run_stream` locks the first matching output and behaves like `early`; Go currently accumulates the response and applies the configured strategy.
 - [ ] Stream event processors and capability wrapper.
 - [ ] Streamed tool execution events and deferred results.
 
@@ -117,6 +118,7 @@ Status:
 - [x] Text output.
 - [x] Tool output.
 - [~] Native output on supported providers.
+- [ ] Native/prompted output alongside function calls obeys end strategies; plain text must remain non-preemptive.
 - [ ] Prompted JSON output fallback.
 - [ ] Multiple output alternatives / union outputs.
 - [ ] Image and binary outputs.
@@ -189,7 +191,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add final-output end strategies for responses that mix output and function tools.
+2. Extend end-strategy handling to native output and streaming commitment semantics.
 3. Add per-step tool preparation, then provider-profile defaults for strict mode.
 4. Add Anthropic, Gemini, and OpenAI Responses streaming.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.

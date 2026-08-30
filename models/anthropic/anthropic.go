@@ -107,6 +107,7 @@ type messagesRequest struct {
 	Temperature *float64         `json:"temperature,omitempty"`
 	TopP        *float64         `json:"top_p,omitempty"`
 	Stop        []string         `json:"stop_sequences,omitempty"`
+	Stream      bool             `json:"stream,omitempty"`
 }
 
 type messageParam struct {

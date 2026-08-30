@@ -83,7 +83,7 @@ Status:
 - [x] Text, thinking, and partial tool-argument events.
 - [x] Non-streaming fallback replay.
 - [x] OpenAI Chat Completions SSE streaming.
-- [ ] Anthropic streaming.
+- [x] Anthropic SSE streaming for text, thinking, function calls, usage, errors, and cancellation.
 - [ ] Google Gemini streaming.
 - [ ] OpenAI Responses streaming.
 - [ ] Output validation during streaming and partial structured output.
@@ -97,7 +97,7 @@ Status:
 
 - [x] OpenAI Chat Completions.
 - [~] OpenAI Responses: non-streaming text, reasoning summaries, and function calls; native output, multimodal content, builtin tools, and streaming remain.
-- [~] Anthropic Messages: non-streaming text, thinking, function tools, and multimodal input; streaming and advanced thinking remain.
+- [~] Anthropic Messages: text/thinking/function-tool streaming and multimodal input; advanced thinking, citations, and native tools remain.
 - [~] Google Gemini: non-streaming text, thought parts, function tools, native output, and multimodal input; streaming remains.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.
@@ -197,6 +197,6 @@ Status:
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Match streaming final-output commitment and validation semantics.
 3. Add provider-profile defaults and schema compatibility checks for strict mode.
-4. Add Anthropic, Gemini, and OpenAI Responses streaming.
+4. Add Gemini and OpenAI Responses streaming.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

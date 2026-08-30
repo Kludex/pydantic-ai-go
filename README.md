@@ -196,7 +196,7 @@ for event, err := range stream.Events() {
 result := stream.Result()
 ```
 
-Models that do not implement `ai.StreamingModel` still work: each response is replayed as events.
+OpenAI Chat Completions and Anthropic Messages stream text, thinking, tool arguments, and usage from their SSE APIs. Models that do not implement `ai.StreamingModel` still work: each response is replayed as events.
 
 ## Multimodal input
 

@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
+	jsonschema "github.com/Kludex/pydantic-ai-go/internal/schema"
 )
 
 // Model calls the Gemini generateContent API. Create one with NewModel.
@@ -331,56 +332,38 @@ func supportsStrictTools(name string) bool {
 		!strings.Contains(name, "image")
 }
 
-func transformSchema(schema map[string]any) map[string]any {
-	out := make(map[string]any, len(schema))
-	for key, value := range schema {
-		switch key {
-		case "$schema", "discriminator", "examples", "title", "exclusiveMinimum", "exclusiveMaximum":
-			continue
-		case "const":
-			out["enum"] = []any{value}
+func transformSchema(source map[string]any) map[string]any {
+	return jsonschema.Transform(source, func(schema map[string]any) {
+		for _, key := range []string{"$schema", "discriminator", "examples", "title", "exclusiveMinimum", "exclusiveMaximum"} {
+			delete(schema, key)
+		}
+		if value, ok := schema["const"]; ok {
+			delete(schema, "const")
+			schema["enum"] = []any{value}
 			if _, ok := schema["type"]; !ok {
 				switch value.(type) {
 				case string:
-					out["type"] = "string"
+					schema["type"] = "string"
 				case bool:
-					out["type"] = "boolean"
+					schema["type"] = "boolean"
 				case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
-					out["type"] = "integer"
+					schema["type"] = "integer"
 				case float32, float64:
-					out["type"] = "number"
+					schema["type"] = "number"
 				}
 			}
-		default:
-			out[key] = transformSchemaValue(value)
 		}
-	}
-	if out["type"] == "string" {
-		if format, ok := out["format"].(string); ok {
-			delete(out, "format")
-			if description, ok := out["description"].(string); ok && description != "" {
-				out["description"] = fmt.Sprintf("%s (format: %s)", description, format)
-			} else {
-				out["description"] = "Format: " + format
+		if schema["type"] == "string" {
+			if format, ok := schema["format"].(string); ok {
+				delete(schema, "format")
+				if description, ok := schema["description"].(string); ok && description != "" {
+					schema["description"] = fmt.Sprintf("%s (format: %s)", description, format)
+				} else {
+					schema["description"] = "Format: " + format
+				}
 			}
 		}
-	}
-	return out
-}
-
-func transformSchemaValue(value any) any {
-	switch value := value.(type) {
-	case map[string]any:
-		return transformSchema(value)
-	case []any:
-		out := make([]any, len(value))
-		for i, item := range value {
-			out[i] = transformSchemaValue(item)
-		}
-		return out
-	default:
-		return value
-	}
+	})
 }
 
 type generateResponse struct {

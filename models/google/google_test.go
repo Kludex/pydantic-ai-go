@@ -486,6 +486,7 @@ func TestGeminiJSONSchemaTransform(t *testing.T) {
 			"title":   "Input",
 			"type":    "object",
 			"properties": map[string]any{
+				"title":   map[string]any{"type": "string", "title": "Display"},
 				"when":    map[string]any{"type": "string", "format": "date-time", "description": "Start"},
 				"empty":   map[string]any{"type": "string", "format": "email"},
 				"id":      map[string]any{"const": "fixed", "examples": []any{"fixed"}},
@@ -514,6 +515,9 @@ func TestGeminiJSONSchemaTransform(t *testing.T) {
 		t.Fatalf("unexpected root schema %v", schema)
 	}
 	properties := schema["properties"].(map[string]any)
+	if properties["title"].(map[string]any)["title"] != nil {
+		t.Fatalf("property named title was not preserved correctly: %v", properties)
+	}
 	when := properties["when"].(map[string]any)
 	if when["format"] != nil || when["description"] != "Start (format: date-time)" {
 		t.Fatalf("unexpected formatted string schema %v", when)

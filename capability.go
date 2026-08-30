@@ -21,8 +21,9 @@ type Capability interface {
 
 // CapabilityRegistry collects what a capability contributes at setup.
 type CapabilityRegistry struct {
-	tools        []capabilityTool
-	instructions []string
+	tools         []capabilityTool
+	instructions  []string
+	modelSettings []ModelSettings
 }
 
 type capabilityTool struct {
@@ -38,6 +39,11 @@ func (r *CapabilityRegistry) AddTool(def ToolDefinition, fn func(ctx context.Con
 // AddInstructions appends static instructions to the agent's.
 func (r *CapabilityRegistry) AddInstructions(instructions string) {
 	r.instructions = append(r.instructions, instructions)
+}
+
+// AddModelSettings appends static settings between agent and run settings.
+func (r *CapabilityRegistry) AddModelSettings(settings ModelSettings) {
+	r.modelSettings = append(r.modelSettings, settings)
 }
 
 // RunInfo is the untyped view of a run that capabilities receive. It is the
@@ -91,10 +97,25 @@ type RunWrapper interface {
 	WrapRun(ctx context.Context, ri *RunInfo, next RunFunc) error
 }
 
-// InstructionsProvider contributes per-run instructions, evaluated at the
-// start of every run and appended to the agent's.
+// InstructionsProvider contributes instructions before every model request.
 type InstructionsProvider interface {
 	Instructions(ctx context.Context, ri *RunInfo) (string, error)
+}
+
+// ModelSettingsProvider contributes settings before every model request.
+// current contains model, agent, and earlier capability settings.
+type ModelSettingsProvider interface {
+	ModelSettings(ctx context.Context, ri *RunInfo, current ModelSettings) (ModelSettings, error)
+}
+
+type capabilitySettingsLayer struct {
+	static   []ModelSettings
+	provider ModelSettingsProvider
+}
+
+func capabilityModelSettingsProvider(capability Capability) ModelSettingsProvider {
+	provider, _ := capability.(ModelSettingsProvider)
+	return provider
 }
 
 // RunEventStreamWrapper transforms the consumer-facing event stream. Changes

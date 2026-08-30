@@ -19,7 +19,7 @@ Status:
 - [x] Plain-text and tool-based structured output.
 - [x] Native structured output for OpenAI Chat Completions and Google Gemini.
 - [x] Output validators with model retries via `AddOutputValidator`.
-- [x] Dynamic instructions via `AddInstructionsFunc`.
+- [x] Dynamic instructions reevaluated before every model request via `AddInstructionsFunc` and `WithRunInstructionsFunc`.
 - [x] Message history input and complete/new message results.
 - [x] Request, token, output, and total usage limits.
 - [x] Run, model-request, and tool-call capability middleware.
@@ -28,7 +28,7 @@ Status:
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
-- [~] Per-run overrides cover model, fieldwise-merged settings, additive instructions, output mode, usage limits, retry limits, and history. Typed output specialization, dynamic per-step settings/instructions, capabilities, and toolsets remain.
+- [~] Per-run overrides cover model, static and per-step settings/instructions, output mode, usage limits, retry limits, and history. Typed output specialization, capabilities, tools, and toolsets remain.
 - [ ] Model selection and model-ID resolution per request step.
 - [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, and optional USD cost, with projected tool-call and known-cost limits. Arbitrary provider detail keys and automatic pricing remain.
 
@@ -126,7 +126,7 @@ Status:
 - [x] `ParallelToolCalls` generation setting for OpenAI Chat/Responses and Anthropic; Gemini exposes no equivalent request setting.
 - [ ] Thinking/reasoning effort and token budgets.
 - [ ] Logprobs, penalties, service tier, response metadata, and provider-specific settings.
-- [~] Fieldwise settings merge semantics across agent and run levels; model defaults, capability contributions, and dynamic per-step settings remain.
+- [~] Fieldwise static and per-step settings resolve in agent, capability, and run order, with prior layers visible to each callback. Model-owned defaults remain because `Model` does not expose them yet.
 
 ### Outputs
 
@@ -144,7 +144,7 @@ Status:
 
 ### Capability framework
 
-- [x] Setup contributions for static instructions and raw tools.
+- [x] Setup contributions for static instructions, model settings, and raw tools.
 - [x] Run, model request, tool call, and dynamic instruction hooks.
 - [x] Ordered middleware composition; first capability is outermost.
 - [x] History processing can be expressed as model-request middleware.
@@ -154,7 +154,7 @@ Status:
 - [x] Event-stream wrapper and per-event processor with standard capability middleware ordering.
 - [ ] Capability ordering constraints and outermost/innermost tiers.
 - [ ] Combined and wrapper capabilities.
-- [ ] Capability-provided model settings and adaptive model selection.
+- [~] Capability-provided static and per-step model settings; adaptive model selection remains.
 - [ ] Deferred-call handler hook.
 
 ### Built-in capabilities
@@ -206,7 +206,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run dynamic settings, typed output specialization, capabilities, and toolsets.
+2. Add per-run typed output specialization, capabilities, tools, and toolsets.
 3. Add configurable partial-output debouncing and broader schema constraint validation.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.

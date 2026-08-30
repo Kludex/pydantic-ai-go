@@ -12,19 +12,21 @@ import (
 // for plain-text output; any other type produces structured output via
 // an output tool whose schema is reflected from Output.
 type Agent[Deps, Output any] struct {
-	model             Model
-	instructions      string
-	instructionsFuncs []func(ctx context.Context, rc *RunContext[Deps]) (string, error)
-	toolsPrepareFuncs []ToolsPrepareFunc[Deps]
-	settings          ModelSettings
-	usageLimits       UsageLimits
-	retryLimits       RetryLimits
-	outputMode        OutputMode
-	endStrategy       EndStrategy
-	sequentialTools   bool
-	capabilities      []Capability
-	capInstructions   []string
-	outputValidators  []func(ctx context.Context, rc *RunContext[Deps], out Output) error
+	model              Model
+	instructions       string
+	instructionsFuncs  []InstructionsFunc[Deps]
+	modelSettingsFuncs []ModelSettingsFunc[Deps]
+	toolsPrepareFuncs  []ToolsPrepareFunc[Deps]
+	settings           ModelSettings
+	usageLimits        UsageLimits
+	retryLimits        RetryLimits
+	outputMode         OutputMode
+	endStrategy        EndStrategy
+	sequentialTools    bool
+	capabilities       []Capability
+	capInstructions    []string
+	capSettings        []capabilitySettingsLayer
+	outputValidators   []func(ctx context.Context, rc *RunContext[Deps], out Output) error
 
 	tools   []toolEntry[Deps]
 	started atomic.Bool
@@ -76,15 +78,32 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 				return fn(ctx, rawArgs)
 			})
 		}
+		a.capSettings = append(a.capSettings, capabilitySettingsLayer{
+			static: reg.modelSettings, provider: capabilityModelSettingsProvider(capability),
+		})
 	}
 	return a
 }
 
-// AddInstructionsFunc registers dynamic instructions evaluated at the start
-// of every run and appended to the static instructions.
-func (a *Agent[Deps, Output]) AddInstructionsFunc(fn func(ctx context.Context, rc *RunContext[Deps]) (string, error)) {
+// InstructionsFunc returns instructions for one model-request step.
+type InstructionsFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps]) (string, error)
+
+// AddInstructionsFunc registers dynamic instructions evaluated before every
+// model request and appended to the static instructions.
+func (a *Agent[Deps, Output]) AddInstructionsFunc(fn InstructionsFunc[Deps]) {
 	a.checkNotStarted()
 	a.instructionsFuncs = append(a.instructionsFuncs, fn)
+}
+
+// ModelSettingsFunc returns settings to merge over settings resolved by
+// earlier layers for one model-request step.
+type ModelSettingsFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps]) (ModelSettings, error)
+
+// AddModelSettingsFunc registers dynamic model settings evaluated before
+// every model request. Each callback sees prior layers in rc.ModelSettings.
+func (a *Agent[Deps, Output]) AddModelSettingsFunc(fn ModelSettingsFunc[Deps]) {
+	a.checkNotStarted()
+	a.modelSettingsFuncs = append(a.modelSettingsFuncs, fn)
 }
 
 // ToolsPrepareFunc filters or modifies per-step copies of function tool
@@ -230,14 +249,19 @@ func validateRetryLimits(limits RetryLimits) {
 // RunOption configures a single run.
 type RunOption func(*runConfig)
 
+type erasedModelSettingsFunc func(context.Context, any) (ModelSettings, error)
+type erasedInstructionsFunc func(context.Context, any) (string, error)
+
 type runConfig struct {
-	history      []ModelMessage
-	model        Model
-	settings     *ModelSettings
-	instructions string
-	usageLimits  *UsageLimits
-	retryLimits  *RetryLimits
-	outputMode   *OutputMode
+	history           []ModelMessage
+	model             Model
+	settings          *ModelSettings
+	instructions      string
+	usageLimits       *UsageLimits
+	retryLimits       *RetryLimits
+	outputMode        *OutputMode
+	settingsFuncs     []erasedModelSettingsFunc
+	instructionsFuncs []erasedInstructionsFunc
 }
 
 // WithMessageHistory prepends prior conversation messages to the run.
@@ -263,9 +287,38 @@ func WithRunModelSettings(settings ModelSettings) RunOption {
 	return func(c *runConfig) { c.settings = &settings }
 }
 
+// WithRunModelSettingsFunc appends dynamic settings for one run. The callback
+// runs before every model request and sees agent and capability settings in
+// rc.ModelSettings.
+func WithRunModelSettingsFunc[Deps any](fn ModelSettingsFunc[Deps]) RunOption {
+	return func(c *runConfig) {
+		c.settingsFuncs = append(c.settingsFuncs, func(ctx context.Context, rc any) (ModelSettings, error) {
+			typed, ok := rc.(*RunContext[Deps])
+			if !ok {
+				return ModelSettings{}, fmt.Errorf("ai: run model settings dependencies do not match agent")
+			}
+			return fn(ctx, typed)
+		})
+	}
+}
+
 // WithRunInstructions appends static instructions for one run.
 func WithRunInstructions(instructions string) RunOption {
 	return func(c *runConfig) { c.instructions = instructions }
+}
+
+// WithRunInstructionsFunc appends dynamic instructions for one run. The
+// callback runs before every model request.
+func WithRunInstructionsFunc[Deps any](fn InstructionsFunc[Deps]) RunOption {
+	return func(c *runConfig) {
+		c.instructionsFuncs = append(c.instructionsFuncs, func(ctx context.Context, rc any) (string, error) {
+			typed, ok := rc.(*RunContext[Deps])
+			if !ok {
+				return "", fmt.Errorf("ai: run instructions dependencies do not match agent")
+			}
+			return fn(ctx, typed)
+		})
+	}
 }
 
 // WithRunUsageLimits replaces the agent usage limits for one run. The zero

@@ -97,7 +97,8 @@ func (a *Agent[Deps, Output]) newRun(
 	}
 	r := &run[Deps, Output]{
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
-		retryLimits: a.retryLimits, toolRetries: make(map[string]int),
+		retryLimits: a.retryLimits, toolRetries: make(map[string]int), runSettings: cfg.settings,
+		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 	}
 	if cfg.retryLimits != nil {
 		validateRetryLimits(*cfg.retryLimits)
@@ -114,17 +115,14 @@ func (a *Agent[Deps, Output]) newRun(
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, cancellation: cancellation,
 	}
 	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages}
-	instructionParts, err := a.buildInstructions(runCtx, r.rc, r.info, cfg.instructions)
-	if err != nil {
-		cancellation.finish()
-		return nil, err
-	}
+	r.staticInstructions = a.staticInstructions(cfg.instructions)
 	outputMode := a.outputMode
 	if cfg.outputMode != nil {
 		outputMode = *cfg.outputMode
 	}
 	validateOutputMode(outputMode)
-	r.params, err = a.buildParams(instructionParts, settings, outputMode)
+	var err error
+	r.params, err = a.buildParams(r.staticInstructions, settings, outputMode)
 	if err != nil {
 		cancellation.finish()
 		return nil, err
@@ -305,23 +303,27 @@ func toolResultIdentity(part RequestPart) (toolName, toolCallID string, ok bool)
 }
 
 type run[Deps, Output any] struct {
-	agent        *Agent[Deps, Output]
-	model        Model
-	capabilities []Capability
-	ctx          context.Context
-	cancellation *runCancellation
-	rc           *RunContext[Deps]
-	info         *RunInfo
-	params       ModelRequestParams
-	messages     []ModelMessage
-	newMessages  int
-	usage        Usage
-	toolCalls    atomic.Int64
-	retryLimits  RetryLimits
-	toolRetries  map[string]int
-	outputRetry  int
-	retriesMu    sync.Mutex
-	currentTools map[string]struct{}
+	agent                *Agent[Deps, Output]
+	model                Model
+	capabilities         []Capability
+	ctx                  context.Context
+	cancellation         *runCancellation
+	rc                   *RunContext[Deps]
+	info                 *RunInfo
+	params               ModelRequestParams
+	messages             []ModelMessage
+	newMessages          int
+	usage                Usage
+	toolCalls            atomic.Int64
+	retryLimits          RetryLimits
+	toolRetries          map[string]int
+	outputRetry          int
+	retriesMu            sync.Mutex
+	currentTools         map[string]struct{}
+	staticInstructions   []InstructionPart
+	runSettings          *ModelSettings
+	runSettingsFuncs     []erasedModelSettingsFunc
+	runInstructionsFuncs []erasedInstructionsFunc
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
 	emitMu               sync.Mutex
@@ -375,11 +377,25 @@ func (r *run[Deps, Output]) setCurrentTools(params ModelRequestParams) {
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
 	params := r.params
-	params.InstructionParts = slices.Clone(params.InstructionParts)
-	tools := make([]ToolDefinition, 0, len(params.Tools))
 	rc := *r.rc
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.retryLimits.Output
+	settings, err := r.prepareModelSettings(ctx, &rc)
+	if err != nil {
+		return ModelRequestParams{}, err
+	}
+	instructionParts, err := r.prepareInstructions(ctx, &rc)
+	if err != nil {
+		return ModelRequestParams{}, err
+	}
+	params.Settings = settings
+	params.InstructionParts = instructionParts
+	instructions := make([]string, 0, len(instructionParts))
+	for _, part := range instructionParts {
+		instructions = append(instructions, part.Content)
+	}
+	params.Instructions = strings.Join(instructions, "\n\n")
+	tools := make([]ToolDefinition, 0, len(params.Tools))
 	for _, def := range params.Tools {
 		prepared := cloneToolDefinition(def)
 		entry, _ := r.agent.findTool(def.Name)
@@ -396,7 +412,6 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		tools = append(tools, prepared)
 	}
 	for _, prepare := range r.agent.toolsPrepareFuncs {
-		var err error
 		tools, err = prepare(ctx, &rc, tools)
 		if err != nil {
 			return ModelRequestParams{}, fmt.Errorf("ai: prepare tools: %w", err)
@@ -1151,10 +1166,8 @@ func (a *Agent[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
 	return toolEntry[Deps]{}, false
 }
 
-func (a *Agent[Deps, Output]) buildInstructions(
-	ctx context.Context, rc *RunContext[Deps], info *RunInfo, additional string,
-) ([]InstructionPart, error) {
-	parts := make([]InstructionPart, 0, len(a.instructionsFuncs)+len(a.capInstructions)+2)
+func (a *Agent[Deps, Output]) staticInstructions(additional string) []InstructionPart {
+	parts := make([]InstructionPart, 0, len(a.capInstructions)+2)
 	if a.instructions != "" {
 		parts = append(parts, InstructionPart{Content: a.instructions})
 	}
@@ -1164,12 +1177,53 @@ func (a *Agent[Deps, Output]) buildInstructions(
 	if additional != "" {
 		parts = append(parts, InstructionPart{Content: additional})
 	}
-	for _, capability := range a.capabilities {
-		provider, ok := capability.(InstructionsProvider)
-		if !ok {
-			continue
+	return parts
+}
+
+func (r *run[Deps, Output]) prepareModelSettings(
+	ctx context.Context, rc *RunContext[Deps],
+) (ModelSettings, error) {
+	settings := r.agent.settings
+	for _, fn := range r.agent.modelSettingsFuncs {
+		rc.ModelSettings = settings
+		resolved, err := fn(ctx, rc)
+		if err != nil {
+			return ModelSettings{}, fmt.Errorf("ai: model settings: %w", err)
 		}
-		instructions, err := provider.Instructions(ctx, info)
+		settings = mergeModelSettings(settings, &resolved)
+	}
+	for _, layer := range r.agent.capSettings {
+		for index := range layer.static {
+			settings = mergeModelSettings(settings, &layer.static[index])
+		}
+		if layer.provider != nil {
+			resolved, err := layer.provider.ModelSettings(ctx, r.info, settings)
+			if err != nil {
+				return ModelSettings{}, fmt.Errorf("ai: model settings: %w", err)
+			}
+			settings = mergeModelSettings(settings, &resolved)
+		}
+	}
+	settings = mergeModelSettings(settings, r.runSettings)
+	for _, fn := range r.runSettingsFuncs {
+		rc.ModelSettings = settings
+		resolved, err := fn(ctx, rc)
+		if err != nil {
+			return ModelSettings{}, fmt.Errorf("ai: model settings: %w", err)
+		}
+		settings = mergeModelSettings(settings, &resolved)
+	}
+	rc.ModelSettings = settings
+	r.rc.ModelSettings = settings
+	return settings, nil
+}
+
+func (r *run[Deps, Output]) prepareInstructions(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]InstructionPart, error) {
+	parts := slices.Clone(r.staticInstructions)
+	for _, fn := range r.agent.instructionsFuncs {
+		instructions, err := fn(ctx, rc)
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
@@ -1177,7 +1231,20 @@ func (a *Agent[Deps, Output]) buildInstructions(
 			parts = append(parts, InstructionPart{Content: instructions, Dynamic: true})
 		}
 	}
-	for _, fn := range a.instructionsFuncs {
+	for _, capability := range r.capabilities {
+		provider, ok := capability.(InstructionsProvider)
+		if !ok {
+			continue
+		}
+		instructions, err := provider.Instructions(ctx, r.info)
+		if err != nil {
+			return nil, fmt.Errorf("ai: instructions: %w", err)
+		}
+		if instructions != "" {
+			parts = append(parts, InstructionPart{Content: instructions, Dynamic: true})
+		}
+	}
+	for _, fn := range r.runInstructionsFuncs {
 		instructions, err := fn(ctx, rc)
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)

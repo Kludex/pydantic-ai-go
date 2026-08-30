@@ -65,11 +65,21 @@ result, err := agent.Run(
 	ai.WithRunModel(fasterModel),
 	ai.WithRunInstructions("Prefer concise answers."),
 	ai.WithRunModelSettings(ai.ModelSettings{MaxTokens: 200}),
+	ai.WithRunModelSettingsFunc(func(
+		ctx context.Context, rc *ai.RunContext[Deps],
+	) (ai.ModelSettings, error) {
+		return ai.ModelSettings{MaxTokens: 200 + rc.Usage().Requests*50}, nil
+	}),
+	ai.WithRunInstructionsFunc(func(
+		ctx context.Context, rc *ai.RunContext[Deps],
+	) (string, error) {
+		return fmt.Sprintf("This is model step %d.", rc.Usage().Requests+1), nil
+	}),
 	ai.WithRunUsageLimits(ai.UsageLimits{TotalTokenLimit: 1_000}),
 )
 ```
 
-Run settings merge over agent settings field by field. Additional instructions follow agent and capability instructions. A zero `UsageLimits` value disables agent-level limits for that run. `RunContext.Model`, `RunContext.ModelSettings`, and `RunContext.UsageLimits` expose the resolved values to dynamic hooks and tools.
+Run settings merge over agent settings field by field. Dynamic callbacks run before every model request, so they can adapt after tool calls and retries. Settings resolve in agent, capability, then run order. Each callback sees prior layers through `RunContext.ModelSettings`. A zero `UsageLimits` value disables agent-level limits for that run.
 
 ## Concurrent tools
 

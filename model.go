@@ -35,11 +35,12 @@ type ModelRequestParams struct {
 
 // ModelSettings tunes a model request. The zero value uses provider defaults.
 type ModelSettings struct {
-	MaxTokens     int
-	Temperature   *float64
-	TopP          *float64
-	Seed          *int
-	StopSequences []string
+	MaxTokens         int
+	Temperature       *float64
+	TopP              *float64
+	Seed              *int
+	StopSequences     []string
+	ParallelToolCalls *bool
 }
 
 // ToolDefinition describes a tool to the model.

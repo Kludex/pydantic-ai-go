@@ -422,3 +422,42 @@ func TestStrictToolDefinition(t *testing.T) {
 		t.Fatalf("strict flag not sent: %v", tool)
 	}
 }
+
+func TestParallelToolCallsSetting(t *testing.T) {
+	for _, test := range []struct {
+		name        string
+		parallel    bool
+		outputTool  bool
+		wantType    string
+		wantDisable bool
+	}{
+		{name: "disable automatic tools", parallel: false, wantType: "auto", wantDisable: true},
+		{name: "enable required output", parallel: true, outputTool: true, wantType: "any", wantDisable: false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var gotBody map[string]any
+			model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+			})
+			params := ai.ModelRequestParams{
+				AllowText: true,
+				Tools:     []ai.ToolDefinition{{Name: "work", Schema: map[string]any{"type": "object"}}},
+				Settings:  ai.ModelSettings{ParallelToolCalls: &test.parallel},
+			}
+			if test.outputTool {
+				params.AllowText = false
+				params.OutputTool = &ai.ToolDefinition{Name: "final_result", Schema: map[string]any{"type": "object"}}
+			}
+			if _, err := model.Request(t.Context(), nil, params); err != nil {
+				t.Fatal(err)
+			}
+			choice := gotBody["tool_choice"].(map[string]any)
+			if choice["type"] != test.wantType || choice["disable_parallel_tool_use"] != test.wantDisable {
+				t.Fatalf("unexpected tool choice %v", choice)
+			}
+		})
+	}
+}

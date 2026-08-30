@@ -469,3 +469,36 @@ func TestStrictToolDefinition(t *testing.T) {
 		t.Fatalf("strict flag not sent: %v", function)
 	}
 }
+
+func TestParallelToolCallsSetting(t *testing.T) {
+	var bodies []map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = w.Write([]byte(`{"model":"gpt-5","choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	})
+	disabled := false
+	params := ai.ModelRequestParams{
+		AllowText: true,
+		Tools:     []ai.ToolDefinition{{Name: "work", Schema: map[string]any{"type": "object"}}},
+		Settings:  ai.ModelSettings{ParallelToolCalls: &disabled},
+	}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	enabled := true
+	params.Tools = nil
+	params.Settings.ParallelToolCalls = &enabled
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if bodies[0]["parallel_tool_calls"] != false {
+		t.Fatalf("parallel setting not forwarded: %v", bodies[0])
+	}
+	if _, exists := bodies[1]["parallel_tool_calls"]; exists {
+		t.Fatalf("parallel setting sent without tools: %v", bodies[1])
+	}
+}

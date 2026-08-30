@@ -63,14 +63,15 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 }
 
 type responsesRequest struct {
-	Model        string           `json:"model"`
-	Instructions string           `json:"instructions,omitempty"`
-	Input        []responsesInput `json:"input"`
-	Tools        []responsesTool  `json:"tools,omitempty"`
-	ToolChoice   any              `json:"tool_choice,omitempty"`
-	MaxTokens    int              `json:"max_output_tokens,omitempty"`
-	Temperature  *float64         `json:"temperature,omitempty"`
-	TopP         *float64         `json:"top_p,omitempty"`
+	Model             string           `json:"model"`
+	Instructions      string           `json:"instructions,omitempty"`
+	Input             []responsesInput `json:"input"`
+	Tools             []responsesTool  `json:"tools,omitempty"`
+	ToolChoice        any              `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool            `json:"parallel_tool_calls,omitempty"`
+	MaxTokens         int              `json:"max_output_tokens,omitempty"`
+	Temperature       *float64         `json:"temperature,omitempty"`
+	TopP              *float64         `json:"top_p,omitempty"`
 }
 
 type responsesInput struct {
@@ -121,6 +122,9 @@ func (m *ResponsesModel) buildResponsesPayload(msgs []ai.ModelMessage, params ai
 		if !params.AllowText {
 			req.ToolChoice = "required"
 		}
+	}
+	if len(req.Tools) > 0 {
+		req.ParallelToolCalls = params.Settings.ParallelToolCalls
 	}
 	if params.OutputSchema != nil {
 		return nil, fmt.Errorf("openai: the Responses model does not support native JSON output mode yet; use OutputModeTool")

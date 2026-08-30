@@ -138,7 +138,8 @@ type toolParam struct {
 }
 
 type toolChoiceParam struct {
-	Type string `json:"type"`
+	Type                   string `json:"type"`
+	DisableParallelToolUse *bool  `json:"disable_parallel_tool_use,omitempty"`
 }
 
 type imageSource struct {
@@ -199,6 +200,13 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		if !params.AllowText {
 			req.ToolChoice = &toolChoiceParam{Type: "any"}
 		}
+	}
+	if len(req.Tools) > 0 && params.Settings.ParallelToolCalls != nil {
+		if req.ToolChoice == nil {
+			req.ToolChoice = &toolChoiceParam{Type: "auto"}
+		}
+		disable := !*params.Settings.ParallelToolCalls
+		req.ToolChoice.DisableParallelToolUse = &disable
 	}
 	if params.OutputSchema != nil {
 		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")

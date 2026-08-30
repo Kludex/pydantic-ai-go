@@ -337,3 +337,25 @@ func TestResponsesStrictToolDefinition(t *testing.T) {
 		t.Fatalf("strict flag not sent: %v", tool)
 	}
 }
+
+func TestResponsesParallelToolCallsSetting(t *testing.T) {
+	var gotBody map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{}}`))
+	})
+	enabled := true
+	params := ai.ModelRequestParams{
+		AllowText: true,
+		Tools:     []ai.ToolDefinition{{Name: "work", Schema: map[string]any{"type": "object"}}},
+		Settings:  ai.ModelSettings{ParallelToolCalls: &enabled},
+	}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["parallel_tool_calls"] != true {
+		t.Fatalf("parallel setting not forwarded: %v", gotBody)
+	}
+}

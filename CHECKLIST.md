@@ -112,7 +112,7 @@ Status:
 - [x] Max tokens, temperature, top-p, seed, and stop sequences in the common settings type.
 - [~] Providers only forward settings they support; compatibility is not validated by profiles.
 - [ ] Timeout and request-level deadline settings.
-- [ ] Parallel tool-call generation setting.
+- [x] `ParallelToolCalls` generation setting for OpenAI Chat/Responses and Anthropic; Gemini exposes no equivalent request setting.
 - [ ] Thinking/reasoning effort and token budgets.
 - [ ] Logprobs, penalties, service tier, response metadata, and provider-specific settings.
 - [ ] Settings merge semantics across model, agent, capability, and run levels.

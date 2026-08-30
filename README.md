@@ -97,7 +97,7 @@ agent.AddModelSelector(func(
 })
 ```
 
-`Step` starts at 1. `Messages` is a detached snapshot of completed turns and excludes the pending request. `Usage` contains work completed before the step. Model selection runs before dynamic settings, instructions, and tool preparation.
+`Step` starts at 1. `Messages` is a detached snapshot of completed turns and excludes the pending request. `Usage` contains work completed before the step. Model selection runs before dynamic settings, instructions, and tool preparation. You can pass `nil` to `NewAgent` when a selector or model ID always supplies the model. A request without any selected model returns `ErrNoModel`.
 
 Application IDs keep tenant or deployment lookup outside the selector:
 

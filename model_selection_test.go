@@ -21,6 +21,68 @@ func toolCallingModel(name string) ai.Model {
 	}}
 }
 
+func TestModelLessAgentUsesSelectorsAndModelIDs(t *testing.T) {
+	t.Run("agent selector", func(t *testing.T) {
+		agent := ai.NewAgent[deps, string](nil)
+		agent.AddModelSelector(func(
+			context.Context, ai.ModelSelectionContext[deps],
+		) (ai.ModelSelection, error) {
+			return ai.ModelSelection{Model: textModel("selected", "done", nil)}, nil
+		})
+		result, err := agent.Run(t.Context(), "go", deps{})
+		if err != nil || result.Output != "done" {
+			t.Fatalf("model-less selector run failed: result=%+v err=%v", result, err)
+		}
+	})
+
+	t.Run("capability selector", func(t *testing.T) {
+		capability := &selectionCapability{model: textModel("selected", "done", nil)}
+		agent := ai.NewAgent[deps, string](nil, ai.WithCapabilities(capability))
+		result, err := agent.Run(t.Context(), "go", deps{})
+		if err != nil || result.Output != "done" {
+			t.Fatalf("model-less capability run failed: result=%+v err=%v", result, err)
+		}
+	})
+
+	t.Run("model ID", func(t *testing.T) {
+		agent := ai.NewAgent[deps, string](nil)
+		agent.AddModelIDResolver(func(
+			context.Context, ai.ModelResolutionContext[deps], string,
+		) (ai.Model, error) {
+			return textModel("resolved", "done", nil), nil
+		})
+		result, err := agent.Run(t.Context(), "go", deps{}, ai.WithRunModelID("alias"))
+		if err != nil || result.Output != "done" {
+			t.Fatalf("model-less ID run failed: result=%+v err=%v", result, err)
+		}
+	})
+
+	t.Run("missing selection", func(t *testing.T) {
+		agent := ai.NewAgent[deps, string](nil)
+		if _, err := agent.Run(t.Context(), "go", deps{}); !errors.Is(err, ai.ErrNoModel) {
+			t.Fatalf("expected ErrNoModel, got %v", err)
+		}
+	})
+
+	t.Run("stream", func(t *testing.T) {
+		agent := ai.NewAgent[deps, string](nil)
+		agent.AddModelSelector(func(
+			context.Context, ai.ModelSelectionContext[deps],
+		) (ai.ModelSelection, error) {
+			return ai.ModelSelection{Model: textModel("selected", "done", nil)}, nil
+		})
+		stream := agent.RunStream(t.Context(), "go", deps{})
+		for _, err := range stream.Events() {
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if stream.Result() == nil || stream.Result().Output != "done" {
+			t.Fatalf("model-less stream failed: %+v", stream.Result())
+		}
+	})
+}
+
 func TestAgentSelectsModelBeforeEveryRequest(t *testing.T) {
 	defaultModel := textModel("default", "wrong", nil)
 	first := toolCallingModel("first")
@@ -86,7 +148,7 @@ func (c *selectionCapability) SelectModel(
 	if c.selectErr != nil {
 		return ai.ModelSelection{}, c.selectErr
 	}
-	if selection.Step < 1 || selection.Model == nil {
+	if selection.Step < 1 {
 		return ai.ModelSelection{}, errors.New("invalid selection context")
 	}
 	if c.model == nil {
@@ -348,13 +410,24 @@ func TestRunModelSelectionOptionsAreExclusive(t *testing.T) {
 	}
 }
 
-func TestRunModelIDRejectsEmptyID(t *testing.T) {
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected empty model ID panic")
-		}
-	}()
-	ai.WithRunModelID("")
+func TestRunModelOptionsRejectNilOrEmpty(t *testing.T) {
+	for name, build := range map[string]func(){
+		"empty ID":  func() { ai.WithRunModelID("") },
+		"nil model": func() { ai.WithRunModel(nil) },
+		"typed nil model": func() {
+			var model *fakes.TestModel
+			ai.WithRunModel(model)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			build()
+		})
+	}
 }
 
 func TestModelSelectionMessagesAreDetached(t *testing.T) {

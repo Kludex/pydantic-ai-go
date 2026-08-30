@@ -29,6 +29,10 @@ func startRunSpan(ctx context.Context, modelName string) (context.Context, trace
 	)
 }
 
+func recordRunModel(span trace.Span, modelName string) {
+	span.SetAttributes(attribute.String("gen_ai.request.model", modelName))
+}
+
 func startRequestSpan(ctx context.Context, modelName string) (context.Context, trace.Span) {
 	return tracer().Start(ctx, "chat "+modelName,
 		trace.WithAttributes(

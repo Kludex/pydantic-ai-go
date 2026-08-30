@@ -31,7 +31,8 @@ Status:
 - [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, and history. Typed output specialization, capabilities, tools, and toolsets remain.
 - [x] Typed agent/run and untyped capability model selectors run before every logical request with step, completed-history, prior-model, model-ID, deps, and usage context.
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
-- [ ] Model-less agents, selected-model lifecycle hooks, and selected-model attribution on the outer run span.
+- [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
+- [ ] Lifecycle entry/exit hooks for models selected during a run.
 - [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, and optional USD cost, with projected tool-call and known-cost limits. Arbitrary provider detail keys and automatic pricing remain.
 
 ### Messages and persisted history
@@ -209,7 +210,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run typed output specialization, capabilities, tools, and toolsets, then support model-less selector-driven agents.
+2. Add per-run typed output specialization, capabilities, tools, and toolsets.
 3. Add broader partial-output schema constraint validation.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.

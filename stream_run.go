@@ -175,7 +175,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 		if cfg.model != nil {
 			model = cfg.model
 		}
-		ctx, span := startRunSpan(ctx, model.Name())
+		ctx, span := startRunSpan(ctx, modelName(model))
 		var runErr error
 		defer func() {
 			if streamedRun.result != nil {
@@ -191,6 +191,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 			return
 		}
 		defer run.cancellation.finish()
+		run.recordSelectedModel = func(name string) { recordRunModel(span, name) }
 		run.commitStreamedOutput = commitFirstOutput
 		streamedRun.partialOutput = func(raw, toolCallID string) (Output, bool, error) {
 			return run.validatePartialOutput(run.ctx, raw, toolCallID)

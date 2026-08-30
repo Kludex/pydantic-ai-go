@@ -40,7 +40,8 @@ type toolEntry[Deps any] struct {
 	prepare ToolPrepareFunc[Deps]
 }
 
-// NewAgent creates an agent backed by model.
+// NewAgent creates an agent backed by model. Model may be nil when an agent
+// selector, capability selector, or per-run model always supplies one.
 func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output] {
 	a := &Agent[Deps, Output]{
 		model: model, retryLimits: RetryLimits{Tools: 1, Output: 1}, endStrategy: EndStrategyGraceful,
@@ -296,6 +297,9 @@ func WithRunRetryLimits(limits RetryLimits) RunOption {
 
 // WithRunModel uses model for one run without changing the agent default.
 func WithRunModel(model Model) RunOption {
+	if modelIsNil(model) {
+		panic("ai: run model must not be nil")
+	}
 	return func(c *runConfig) { c.model = model }
 }
 

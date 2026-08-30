@@ -18,6 +18,9 @@ var ErrRunCancelled = errors.New("ai: run cancelled")
 // ErrUnknownModelID identifies an application model ID no resolver accepted.
 var ErrUnknownModelID = errors.New("ai: unknown model ID")
 
+// ErrNoModel is returned when no default or selector supplies a model.
+var ErrNoModel = errors.New("ai: no model selected")
+
 // UnknownModelIDError reports an unresolved application model ID.
 type UnknownModelIDError struct {
 	ID string

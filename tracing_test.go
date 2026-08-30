@@ -40,6 +40,35 @@ func TestRunEmitsSpans(t *testing.T) {
 	}
 }
 
+func TestRunSpanUsesSelectedModel(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	agent := ai.NewAgent[deps, string](nil)
+	agent.AddModelSelector(func(
+		context.Context, ai.ModelSelectionContext[deps],
+	) (ai.ModelSelection, error) {
+		return ai.ModelSelection{Model: textModel("selected", "done", nil)}, nil
+	})
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, span := range exporter.GetSpans() {
+		if span.Name != "agent run" {
+			continue
+		}
+		for _, attr := range span.Attributes {
+			if string(attr.Key) == "gen_ai.request.model" && attr.Value.AsString() == "selected" {
+				return
+			}
+		}
+	}
+	t.Fatal("agent run span did not record the selected model")
+}
+
 func TestFailedRunRecordsError(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))

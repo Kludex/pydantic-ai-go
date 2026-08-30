@@ -51,7 +51,7 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 	if cfg.model != nil {
 		model = cfg.model
 	}
-	ctx, span := startRunSpan(ctx, model.Name())
+	ctx, span := startRunSpan(ctx, modelName(model))
 	defer func() {
 		if result != nil {
 			recordUsage(span, result.usage)
@@ -63,6 +63,7 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 	if err != nil {
 		return nil, err
 	}
+	r.recordSelectedModel = func(name string) { recordRunModel(span, name) }
 	defer r.cancellation.finish()
 	return r.wrappedLoop(r.ctx)
 }
@@ -349,6 +350,7 @@ type run[Deps, Output any] struct {
 	emit                 func(StreamEvent) bool
 	emitMu               sync.Mutex
 	commitStreamedOutput bool
+	recordSelectedModel  func(string)
 }
 
 func (r *run[Deps, Output]) selectModel(ctx context.Context) error {
@@ -461,14 +463,8 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 }
 
 func (r *run[Deps, Output]) applyModelSelection(ctx context.Context, selection ModelSelection) error {
-	if selection.Model != nil {
-		value := reflect.ValueOf(selection.Model)
-		switch value.Kind() {
-		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
-			if value.IsNil() {
-				return fmt.Errorf("ai: selected model must not be nil")
-			}
-		}
+	if selection.Model != nil && modelIsNil(selection.Model) {
+		return fmt.Errorf("ai: selected model must not be nil")
 	}
 	if selection.Model != nil && selection.ID != "" {
 		return fmt.Errorf("ai: model selection must contain either Model or ID, not both")
@@ -502,7 +498,7 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 		if err != nil {
 			return nil, fmt.Errorf("ai: resolve model ID %q: %w", modelID, err)
 		}
-		if model != nil {
+		if !modelIsNil(model) {
 			r.resolvedModels[modelID] = model
 			return model, nil
 		}
@@ -516,7 +512,7 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 		if err != nil {
 			return nil, fmt.Errorf("ai: resolve model ID %q: %w", modelID, err)
 		}
-		if model != nil {
+		if !modelIsNil(model) {
 			r.resolvedModels[modelID] = model
 			return model, nil
 		}
@@ -529,6 +525,12 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
 	if err := r.selectModel(ctx); err != nil {
 		return nil, err
+	}
+	if modelIsNil(r.model) {
+		return nil, ErrNoModel
+	}
+	if r.recordSelectedModel != nil {
+		r.recordSelectedModel(r.model.Name())
 	}
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 		r.setCurrentTools(params)

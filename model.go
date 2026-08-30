@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"reflect"
 	"slices"
 	"time"
 )
@@ -16,6 +17,26 @@ type Model interface {
 
 	// Name identifies the model (e.g. "gpt-5") for tracing and results.
 	Name() string
+}
+
+func modelName(model Model) string {
+	if modelIsNil(model) {
+		return ""
+	}
+	return model.Name()
+}
+
+func modelIsNil(model Model) bool {
+	if model == nil {
+		return true
+	}
+	value := reflect.ValueOf(model)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 // ModelSelection selects either a concrete model or an ID resolved by a

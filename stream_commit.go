@@ -53,6 +53,38 @@ func (r *run[Deps, Output]) streamedOutput(
 	return nil, -1, false, nil
 }
 
+func (r *run[Deps, Output]) validatePartialOutput(
+	ctx context.Context, raw, toolCallID string,
+) (Output, bool, error) {
+	var output Output
+	if r.params.OutputSchema == nil && r.params.OutputTool == nil {
+		output = any(raw).(Output)
+	} else {
+		schema := r.params.OutputSchema
+		if r.params.OutputTool != nil {
+			schema = r.params.OutputTool.Schema
+		}
+		var valid bool
+		output, valid = decodePartialJSON[Output](raw, schema)
+		if !valid {
+			return output, false, nil
+		}
+	}
+	runContext := r.outputRunContext(toolCallID)
+	runContext.PartialOutput = true
+	for _, validate := range r.agent.outputValidators {
+		err := validate(ctx, runContext, output)
+		var retry *RetryError
+		switch {
+		case errors.As(err, &retry):
+			return output, false, nil
+		case err != nil:
+			return output, false, fmt.Errorf("ai: partial output validation: %w", err)
+		}
+	}
+	return output, true, nil
+}
+
 func (r *run[Deps, Output]) validateStreamedOutput(
 	ctx context.Context, runContext *RunContext[Deps], output Output,
 ) error {

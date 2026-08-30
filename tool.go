@@ -14,11 +14,12 @@ import (
 // RunContext carries run-scoped data into tools and dynamic hooks. The
 // context.Context argument remains the cancellation signal carrier.
 type RunContext[Deps any] struct {
-	Deps       Deps
-	Retry      int
-	MaxRetries int
-	RunID      string
-	ToolCallID string
+	Deps          Deps
+	Retry         int
+	MaxRetries    int
+	RunID         string
+	ToolCallID    string
+	PartialOutput bool
 
 	usage        *Usage
 	messages     *[]ModelMessage

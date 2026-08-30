@@ -94,7 +94,8 @@ Status:
 - [x] Google Gemini SSE streaming for text, thinking, function calls with IDs, usage, errors, and cancellation.
 - [x] OpenAI Responses SSE streaming for text, reasoning summaries, function arguments, usage, errors, and cancellation.
 - [x] Final streamed output validation; retry requests fail clearly because `RunStream` cannot start another model round after committing output.
-- [ ] Partial structured output validation while deltas arrive.
+- [x] Typed partial text and structured output snapshots through `StreamedRun.Outputs`, with partial-validator context, retry suppression, required-field checks, and a final fully validated value.
+- [ ] Configurable partial-output debouncing and full JSON Schema constraint validation beyond Go decoding and required fields.
 - [x] Streaming final-output commitment: `RunStream` locks the first matching text, native, or output-tool result. Configured end strategies still govern co-emitted tools, but retries cannot revoke the committed result.
 - [x] Consumer-only stream transformation through `RunEventStreamWrapper` and `StreamEventProcessor`, including automatic streaming for `Run`.
 - [x] `FunctionToolCallEvent`, `FunctionToolResultEvent`, `OutputToolCallEvent`, and `OutputToolResultEvent`, with concurrent results emitted in completion order.
@@ -204,7 +205,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add partial structured-output validation while streaming deltas.
+2. Add configurable partial-output debouncing and broader schema constraint validation.
 3. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 4. Add streamed deferred request and result events with that lifecycle.
 5. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

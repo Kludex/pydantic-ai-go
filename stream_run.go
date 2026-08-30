@@ -9,13 +9,78 @@ import (
 // StreamedRun is a run in progress. Range over Events to consume it;
 // Result is valid once the range completes without error.
 type StreamedRun[Output any] struct {
-	events EventStream
-	result *RunResult[Output]
+	events        EventStream
+	result        *RunResult[Output]
+	partialOutput func(raw, toolCallID string) (Output, bool, error)
 }
 
 // Events streams normalized part lifecycle, final-result, and finish events
 // across every model request in the run. The sequence can be ranged once.
 func (s *StreamedRun[Output]) Events() EventStream { return s.events }
+
+// Outputs streams typed partial outputs and always ends with the fully
+// validated final output. It is an alternative view of Events; consume only
+// one view for a run.
+func (s *StreamedRun[Output]) Outputs() iter.Seq2[Output, error] {
+	return func(yield func(Output, error) bool) {
+		parts := map[int]ResponsePart{}
+		selectedIndex := -1
+		lastStarted := -1
+		for event, err := range s.Events() {
+			if err != nil {
+				yield(*new(Output), err)
+				return
+			}
+			switch event := event.(type) {
+			case PartStartEvent:
+				parts[event.Index] = event.Part
+				lastStarted = event.Index
+			case PartDeltaEvent:
+				part, ok := parts[event.Index]
+				if !ok {
+					continue
+				}
+				part, err = event.Delta.Apply(part)
+				if err != nil {
+					yield(*new(Output), err)
+					return
+				}
+				parts[event.Index] = part
+				if event.Index == selectedIndex && !s.yieldPartialOutput(yield, part) {
+					return
+				}
+			case FinalResultEvent:
+				selectedIndex = lastStarted
+				if part, ok := parts[selectedIndex]; ok && !s.yieldPartialOutput(yield, part) {
+					return
+				}
+			}
+		}
+		if s.result != nil {
+			yield(s.result.Output, nil)
+		}
+	}
+}
+
+func (s *StreamedRun[Output]) yieldPartialOutput(
+	yield func(Output, error) bool, part ResponsePart,
+) bool {
+	var raw, toolCallID string
+	switch part := part.(type) {
+	case TextPart:
+		raw = part.Content
+	case ToolCallPart:
+		raw, toolCallID = string(part.Args), part.ToolCallID
+	default:
+		return true
+	}
+	output, valid, err := s.partialOutput(raw, toolCallID)
+	if err != nil {
+		yield(*new(Output), err)
+		return false
+	}
+	return !valid || yield(output, nil)
+}
 
 // Result returns the final result. It is nil until the event stream has
 // been fully consumed without error.
@@ -71,6 +136,9 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 		}
 		defer run.cancellation.finish()
 		run.commitStreamedOutput = commitFirstOutput
+		streamedRun.partialOutput = func(raw, toolCallID string) (Output, bool, error) {
+			return run.validatePartialOutput(run.ctx, raw, toolCallID)
+		}
 
 		stopped := false
 		core := EventStream(func(yieldCore func(StreamEvent, error) bool) {

@@ -228,6 +228,20 @@ Bundled providers populate part IDs. A custom `StreamingModel` emits provider-fa
 
 Function and output tools emit call events before execution and result events when each call settles. Concurrent result events use completion order, while the request parts stored in history keep model order.
 
+Use `Outputs` instead of `Events` when you want typed snapshots. Output validators receive `RunContext.PartialOutput == true` for partial values and `false` for the final value:
+
+```go
+stream := agent.RunStream(ctx, "weather in Berlin", deps)
+for output, err := range stream.Outputs() {
+	if err != nil {
+		panic(err)
+	}
+	fmt.Printf("%+v\n", output)
+}
+```
+
+The last value is always the fully validated output, even when it equals the preceding partial value. `Events` and `Outputs` are alternative views; consume only one for each run.
+
 `RunStream` commits the first matching text, native, or output-tool result. The configured end strategy still controls co-emitted tools, but a tool retry cannot revoke that result. If an output validator requests a retry, the streamed run returns `UnexpectedModelBehaviorError` because output has already been committed. Use `Run` when validation should start another model round.
 
 ## Multimodal input

@@ -84,7 +84,7 @@ Status:
 - [x] Non-streaming fallback replay.
 - [x] OpenAI Chat Completions SSE streaming.
 - [x] Anthropic SSE streaming for text, thinking, function calls, usage, errors, and cancellation.
-- [ ] Google Gemini streaming.
+- [x] Google Gemini SSE streaming for text, thinking, function calls with IDs, usage, errors, and cancellation.
 - [ ] OpenAI Responses streaming.
 - [ ] Output validation during streaming and partial structured output.
 - [ ] Streaming final-output commitment: upstream `run_stream` locks the first matching output and behaves like `early`; Go currently accumulates the response and applies the configured strategy.
@@ -98,7 +98,7 @@ Status:
 - [x] OpenAI Chat Completions.
 - [~] OpenAI Responses: non-streaming text, reasoning summaries, and function calls; native output, multimodal content, builtin tools, and streaming remain.
 - [~] Anthropic Messages: text/thinking/function-tool streaming and multimodal input; advanced thinking, citations, and native tools remain.
-- [~] Google Gemini: non-streaming text, thought parts, function tools, native output, and multimodal input; streaming remains.
+- [~] Google Gemini: text/thinking/function-tool streaming, native output, multimodal input, and function-call IDs; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.
 - [ ] AWS Bedrock.
@@ -197,6 +197,6 @@ Status:
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Match streaming final-output commitment and validation semantics.
 3. Add provider-profile defaults and schema compatibility checks for strict mode.
-4. Add Gemini and OpenAI Responses streaming.
+4. Add OpenAI Responses streaming.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

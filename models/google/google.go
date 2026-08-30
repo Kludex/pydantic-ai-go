@@ -151,11 +151,13 @@ func convertUserPrompt(p ai.UserPromptPart) ([]part, error) {
 }
 
 type functionCall struct {
+	ID   string         `json:"id,omitempty"`
 	Name string         `json:"name"`
 	Args map[string]any `json:"args"`
 }
 
 type functionResponse struct {
+	ID       string         `json:"id,omitempty"`
 	Name     string         `json:"name"`
 	Response map[string]any `json:"response"`
 }
@@ -268,12 +270,14 @@ func convertRequest(m ai.ModelRequest) ([]content, error) {
 			parts = append(parts, converted...)
 		case ai.ToolReturnPart:
 			parts = append(parts, part{FunctionResponse: &functionResponse{
+				ID:       rp.ToolCallID,
 				Name:     rp.ToolName,
 				Response: map[string]any{"result": rp.Content},
 			}})
 		case ai.RetryPromptPart:
 			if rp.ToolName != "" {
 				parts = append(parts, part{FunctionResponse: &functionResponse{
+					ID:       rp.ToolCallID,
 					Name:     rp.ToolName,
 					Response: map[string]any{"error": rp.Content},
 				}})
@@ -300,7 +304,7 @@ func convertResponse(m ai.ModelResponse) ([]content, error) {
 					return nil, fmt.Errorf("google: tool call args: %w", err)
 				}
 			}
-			parts = append(parts, part{FunctionCall: &functionCall{Name: rp.ToolName, Args: args}})
+			parts = append(parts, part{FunctionCall: &functionCall{ID: rp.ToolCallID, Name: rp.ToolName, Args: args}})
 		}
 	}
 	return []content{{Role: "model", Parts: parts}}, nil
@@ -381,7 +385,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		case p.FunctionCall != nil:
 			// args came from parsed JSON, so re-marshalling cannot fail
 			args, _ := json.Marshal(p.FunctionCall.Args)
-			resp.Parts = append(resp.Parts, ai.ToolCallPart{ToolName: p.FunctionCall.Name, Args: args})
+			resp.Parts = append(resp.Parts, ai.ToolCallPart{
+				ToolName: p.FunctionCall.Name, Args: args, ToolCallID: p.FunctionCall.ID,
+			})
 		case p.Thought:
 			resp.Parts = append(resp.Parts, ai.ThinkingPart{Content: p.Text})
 		case p.Text != "":

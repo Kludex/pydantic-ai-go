@@ -86,7 +86,7 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 				"modelVersion": "gemini-2.5-flash",
 				"candidates": [{"content": {"parts": [
 					{"thought": true, "text": "checking"},
-					{"functionCall": {"name": "get_weather", "args": {"city": "SF"}}}
+					{"functionCall": {"id": "call1", "name": "get_weather", "args": {"city": "SF"}}}
 				]}}],
 				"usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 8}
 			}`))
@@ -115,7 +115,8 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := resp.ToolCalls()
-	if len(calls) != 1 || calls[0].ToolName != "get_weather" || string(calls[0].Args) != `{"city":"SF"}` {
+	if len(calls) != 1 || calls[0].ToolName != "get_weather" || calls[0].ToolCallID != "call1" ||
+		string(calls[0].Args) != `{"city":"SF"}` {
 		t.Fatalf("unexpected calls %+v", calls)
 	}
 	if _, ok := resp.Parts[0].(ai.ThinkingPart); !ok {
@@ -123,7 +124,7 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 	}
 
 	msgs = append(msgs, *resp, ai.ModelRequest{Parts: []ai.RequestPart{
-		ai.ToolReturnPart{ToolName: "get_weather", Content: "sunny"},
+		ai.ToolReturnPart{ToolName: "get_weather", Content: "sunny", ToolCallID: "call1"},
 	}})
 	if _, err := model.Request(t.Context(), msgs, params); err != nil {
 		t.Fatal(err)
@@ -134,8 +135,9 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 		t.Fatalf("unexpected roles %v", contents)
 	}
 	toolTurn := contents[2].(map[string]any)["parts"].([]any)[0].(map[string]any)
-	if toolTurn["functionResponse"] == nil {
-		t.Fatalf("function response not sent: %v", toolTurn)
+	functionResponse := toolTurn["functionResponse"].(map[string]any)
+	if functionResponse["id"] != "call1" {
+		t.Fatalf("function response ID not sent: %v", toolTurn)
 	}
 	declared := gotBody["tools"].([]any)[0].(map[string]any)["functionDeclarations"].([]any)[0].(map[string]any)
 	schema := declared["parameters"].(map[string]any)

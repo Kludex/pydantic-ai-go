@@ -60,6 +60,7 @@ type UsageLimits struct {
 	InputTokenLimit  int
 	OutputTokenLimit int
 	TotalTokenLimit  int
+	ToolCallLimit    *int
 	CostLimitUSD     *float64
 }
 

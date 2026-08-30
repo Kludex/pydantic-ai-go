@@ -506,6 +506,28 @@ func (r *run[Deps, Output]) executeCalls(
 	return r.executeCallsExhaustive(ctx, calls)
 }
 
+func (r *run[Deps, Output]) checkToolCallLimit(calls []ToolCallPart) error {
+	if r.rc.UsageLimits.ToolCallLimit == nil {
+		return nil
+	}
+	pending := 0
+	for _, call := range calls {
+		_, registered := r.agent.findTool(call.ToolName)
+		_, available := r.currentTools[call.ToolName]
+		if !r.isOutputCall(call) && registered && available {
+			pending++
+		}
+	}
+	projected := int(r.toolCalls.Load()) + pending
+	if projected > *r.rc.UsageLimits.ToolCallLimit {
+		return fmt.Errorf(
+			"%w: tool call count %d exceeds limit %d",
+			ErrUsageLimitExceeded, projected, *r.rc.UsageLimits.ToolCallLimit,
+		)
+	}
+	return nil
+}
+
 func (r *run[Deps, Output]) executeCallsEarly(
 	ctx context.Context, calls []ToolCallPart,
 ) ([]RequestPart, *Output, error) {
@@ -539,6 +561,9 @@ func (r *run[Deps, Output]) executeCallsEarly(
 		}
 		return r.collectCallOutcomes(outcomes, false)
 	}
+	if err := r.checkToolCallLimit(calls); err != nil {
+		return completedCallParts(outcomes), nil, err
+	}
 	if err := r.executeSelected(ctx, calls, outcomes, r.functionCallIndexes(calls), false); err != nil {
 		return completedCallParts(outcomes), nil, err
 	}
@@ -548,6 +573,9 @@ func (r *run[Deps, Output]) executeCallsEarly(
 func (r *run[Deps, Output]) executeCallsGraceful(
 	ctx context.Context, calls []ToolCallPart,
 ) ([]RequestPart, *Output, error) {
+	if err := r.checkToolCallLimit(calls); err != nil {
+		return nil, nil, err
+	}
 	outcomes := make([]callOutcome[Output], len(calls))
 	batch := make([]int, 0, len(calls))
 	var winner *Output
@@ -584,6 +612,9 @@ func (r *run[Deps, Output]) executeCallsGraceful(
 func (r *run[Deps, Output]) executeCallsExhaustive(
 	ctx context.Context, calls []ToolCallPart,
 ) ([]RequestPart, *Output, error) {
+	if err := r.checkToolCallLimit(calls); err != nil {
+		return nil, nil, err
+	}
 	outcomes := make([]callOutcome[Output], len(calls))
 	indexes := make([]int, len(calls))
 	for i := range calls {

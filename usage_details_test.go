@@ -82,6 +82,121 @@ func TestRichUsageAccumulatesAcrossRequestsAndTools(t *testing.T) {
 	}
 }
 
+func TestToolCallUsageLimit(t *testing.T) {
+	for _, strategy := range []ai.EndStrategy{
+		ai.EndStrategyEarly, ai.EndStrategyGraceful, ai.EndStrategyExhaustive,
+	} {
+		t.Run(string(strategy), func(t *testing.T) {
+			zero := 0
+			called := false
+			model := fakes.NewFunctionModel(func(
+				_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+					ToolName: params.Tools[0].Name, ToolCallID: "work-1", Args: []byte(`{}`),
+				}}}, nil
+			})
+			agent := ai.NewAgent[deps, string](
+				model, ai.WithEndStrategy(strategy),
+				ai.WithUsageLimits(ai.UsageLimits{ToolCallLimit: &zero}),
+			)
+			ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) {
+				called = true
+				return "ok", nil
+			})
+			if _, err := agent.Run(t.Context(), "go", deps{}); !errors.Is(err, ai.ErrUsageLimitExceeded) {
+				t.Fatalf("expected tool call limit failure, got %v", err)
+			}
+			if called {
+				t.Fatal("tool ran after projected usage exceeded the limit")
+			}
+		})
+	}
+}
+
+func TestToolCallUsageLimitAllowsProjectedCalls(t *testing.T) {
+	one := 1
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if len(messages) == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: params.Tools[0].Name, ToolCallID: "work-1", Args: []byte(`{}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model, ai.WithUsageLimits(ai.UsageLimits{ToolCallLimit: &one}))
+	ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) { return "ok", nil })
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Usage().ToolCalls != 1 {
+		t.Fatalf("unexpected tool usage: %+v", result.Usage())
+	}
+}
+
+func TestStreamedToolCallUsageLimit(t *testing.T) {
+	for _, strategy := range []ai.EndStrategy{ai.EndStrategyGraceful, ai.EndStrategyExhaustive} {
+		t.Run(string(strategy), func(t *testing.T) {
+			zero := 0
+			model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+				return []ai.ModelStreamEvent{
+					ai.TextDeltaEvent{PartID: "text", Delta: "done"},
+					ai.ToolCallStartEvent{PartID: "tool", ToolName: "work", ToolCallID: "work-1"},
+					ai.ToolCallDeltaEvent{PartID: "tool", ArgsDelta: `{}`}, ai.FinishEvent{},
+				}
+			})
+			agent := ai.NewAgent[deps, string](
+				model, ai.WithEndStrategy(strategy),
+				ai.WithUsageLimits(ai.UsageLimits{ToolCallLimit: &zero}),
+			)
+			ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) {
+				t.Fatal("tool ran after projected usage exceeded the limit")
+				return "", nil
+			})
+			stream := agent.RunStream(t.Context(), "go", deps{})
+			var got error
+			for _, err := range stream.Events() {
+				if err != nil {
+					got = err
+				}
+			}
+			if !errors.Is(got, ai.ErrUsageLimitExceeded) {
+				t.Fatalf("expected streamed tool call limit failure, got %v", got)
+			}
+		})
+	}
+}
+
+func TestEarlyOutputDoesNotReserveSkippedToolUsage(t *testing.T) {
+	zero := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.ToolCallPart{ToolName: params.OutputTool.Name, ToolCallID: "result", Args: []byte(`{"city":"Oslo","temp_c":3}`)},
+			ai.ToolCallPart{ToolName: params.Tools[0].Name, ToolCallID: "work-1", Args: []byte(`{}`)},
+		}}, nil
+	})
+	agent := ai.NewAgent[deps, weather](
+		model, ai.WithEndStrategy(ai.EndStrategyEarly),
+		ai.WithUsageLimits(ai.UsageLimits{ToolCallLimit: &zero}),
+	)
+	ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) {
+		t.Fatal("skipped tool ran")
+		return "", nil
+	})
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output.City != "Oslo" || result.Usage().ToolCalls != 0 {
+		t.Fatalf("unexpected early output or usage: result=%+v usage=%+v", result.Output, result.Usage())
+	}
+}
+
 func TestCostUsageLimit(t *testing.T) {
 	cost := 2.0
 	limit := 1.0

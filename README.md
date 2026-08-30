@@ -184,7 +184,7 @@ Use `ai.WithToolTimeout(5 * time.Second)` to give one tool call a deadline. The 
 
 `result.Usage()` includes requests, successful function-tool calls, token totals, cache reads and writes, audio tokens, reasoning tokens, and prediction tokens when the provider reports them. `Usage.CacheHitRatio()` returns the fraction of input tokens read from cache.
 
-Providers do not calculate prices. A model or capability can set `Usage.CostUSD`. `UsageLimits.CostLimitUSD` enforces known costs and does not reject a run when cost is unavailable.
+Providers do not calculate prices. A model or capability can set `Usage.CostUSD`. `UsageLimits.CostLimitUSD` enforces known costs and does not reject a run when cost is unavailable. `UsageLimits.ToolCallLimit` rejects a batch before any function tool runs when its projected successful-call count exceeds the limit.
 
 ## Structured output
 

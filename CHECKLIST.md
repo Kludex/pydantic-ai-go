@@ -30,7 +30,7 @@ Status:
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
 - [~] Per-run overrides cover model, fieldwise-merged settings, additive instructions, output mode, usage limits, retry limits, and history. Typed output specialization, dynamic per-step settings/instructions, capabilities, and toolsets remain.
 - [ ] Model selection and model-ID resolution per request step.
-- [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, and optional USD cost. Arbitrary provider detail keys, automatic pricing, and tool-call usage limits remain.
+- [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, and optional USD cost, with projected tool-call and known-cost limits. Arbitrary provider detail keys and automatic pricing remain.
 
 ### Messages and persisted history
 

@@ -122,6 +122,9 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 		return committedParts(outcomes), nil
 	}
 	if r.agent.endStrategy == EndStrategyGraceful {
+		if err := r.checkToolCallLimit(calls); err != nil {
+			return nil, err
+		}
 		batch := make([]int, 0, len(calls))
 		for index, call := range calls {
 			if !r.isOutputCall(call) && !r.callIsBarrier(call, true) {
@@ -150,6 +153,9 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 		return committedParts(outcomes), nil
 	}
 
+	if err := r.checkToolCallLimit(calls); err != nil {
+		return nil, err
+	}
 	indexes := make([]int, 0, len(calls))
 	for index, call := range calls {
 		if index == winningCall {

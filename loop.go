@@ -29,16 +29,23 @@ func (a *Agent[Deps, Output]) Run(ctx context.Context, prompt string, deps Deps,
 		endSpan(span, err)
 	}()
 	a.started.Store(true)
+	r, err := a.newRun(ctx, prompt, deps, opts)
+	if err != nil {
+		return nil, err
+	}
+	return r.loop(ctx)
+}
+
+func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt string, deps Deps, opts []RunOption) (*run[Deps, Output], error) {
+	a.started.Store(true)
 	var cfg runConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-
 	r := &run[Deps, Output]{agent: a}
 	r.messages = append(r.messages, cfg.history...)
 	r.newMessages = len(r.messages)
 	r.rc = &RunContext[Deps]{Deps: deps, RunID: newRunID(), usage: &r.usage, messages: &r.messages}
-
 	instructions, err := a.buildInstructions(ctx, r.rc)
 	if err != nil {
 		return nil, err
@@ -48,8 +55,7 @@ func (a *Agent[Deps, Output]) Run(ctx context.Context, prompt string, deps Deps,
 		return nil, err
 	}
 	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{UserPromptPart{Content: prompt}}})
-
-	return r.loop(ctx)
+	return r, nil
 }
 
 type run[Deps, Output any] struct {
@@ -60,6 +66,8 @@ type run[Deps, Output any] struct {
 	newMessages int
 	usage       Usage
 	retries     int
+	// emit forwards stream events during RunStream; nil for plain runs.
+	emit func(StreamEvent) bool
 }
 
 // modelRequest is the model-request interception point: tracing today,
@@ -67,7 +75,7 @@ type run[Deps, Output any] struct {
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
 	a := r.agent
 	reqCtx, reqSpan := startRequestSpan(ctx, a.model.Name())
-	resp, err := a.model.Request(reqCtx, r.messages, r.params)
+	resp, err := r.doModelRequest(reqCtx)
 	if err != nil {
 		endSpan(reqSpan, err)
 		return nil, err
@@ -81,6 +89,27 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		resp.ModelName = a.model.Name()
 	}
 	return resp, nil
+}
+
+// doModelRequest streams when the run has an emit callback and the model
+// supports it; otherwise it falls back to a plain request, replaying the
+// response as events so RunStream works with every Model.
+func (r *run[Deps, Output]) doModelRequest(ctx context.Context) (*ModelResponse, error) {
+	if r.emit == nil {
+		return r.agent.model.Request(ctx, r.messages, r.params)
+	}
+	if sm, ok := r.agent.model.(StreamingModel); ok {
+		events, err := sm.StreamRequest(ctx, r.messages, r.params)
+		if err != nil {
+			return nil, err
+		}
+		return accumulate(events, r.emit)
+	}
+	resp, err := r.agent.model.Request(ctx, r.messages, r.params)
+	if err != nil {
+		return nil, err
+	}
+	return accumulate(replayAsEvents(resp), r.emit)
 }
 
 func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error) {

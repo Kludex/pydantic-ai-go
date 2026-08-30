@@ -36,3 +36,21 @@ func TestKindMarkers(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamEventKinds(t *testing.T) {
+	kinds := []struct {
+		event StreamEvent
+		want  string
+	}{
+		{TextDeltaEvent{}, "text-delta"},
+		{ThinkingDeltaEvent{}, "thinking-delta"},
+		{ToolCallStartEvent{}, "tool-call-start"},
+		{ToolCallDeltaEvent{}, "tool-call-delta"},
+		{FinishEvent{}, "finish"},
+	}
+	for _, tc := range kinds {
+		if tc.event.streamEventKind() != tc.want {
+			t.Fatalf("expected %q, got %q", tc.want, tc.event.streamEventKind())
+		}
+	}
+}

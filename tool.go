@@ -1,0 +1,92 @@
+package ai
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
+
+	"github.com/Kludex/pydantic-ai-go/internal/schema"
+)
+
+// RunContext carries run-scoped data into tools and dynamic hooks.
+// It is pure data: ctx stays the sole cancellation carrier.
+type RunContext[Deps any] struct {
+	Deps       Deps
+	Retry      int
+	RunID      string
+	ToolCallID string
+
+	usage    *Usage
+	messages *[]ModelMessage
+}
+
+// Usage returns the usage accumulated so far in this run.
+func (rc *RunContext[Deps]) Usage() Usage { return *rc.usage }
+
+// Messages returns the conversation so far in this run.
+func (rc *RunContext[Deps]) Messages() []ModelMessage { return *rc.messages }
+
+// AddTool registers a tool on the agent. The argument schema is reflected
+// from the Args struct's `json` and `jsonschema` tags. Registration panics
+// after the agent's first run.
+//
+// If the model sends arguments that fail to unmarshal, the error is sent
+// back to the model as a retry prompt instead of failing the run. The same
+// happens when fn returns an error created with Retryf; any other error
+// aborts the run.
+func AddTool[Deps, Output, Args, Result any](
+	a *Agent[Deps, Output],
+	name string,
+	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
+	opts ...ToolOption,
+) {
+	def := toolDefinition[Args](name, opts)
+	a.addTool(def, func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+		var args Args
+		if err := json.Unmarshal(rawArgs, &args); err != nil {
+			return nil, Retryf("invalid arguments for tool %q: %v", name, err)
+		}
+		return fn(ctx, rc, args)
+	})
+}
+
+// AddSimpleTool registers a tool that needs no run context or deps.
+func AddSimpleTool[Deps, Output, Args, Result any](
+	a *Agent[Deps, Output],
+	name string,
+	fn func(ctx context.Context, args Args) (Result, error),
+	opts ...ToolOption,
+) {
+	AddTool(a, name, func(ctx context.Context, _ *RunContext[Deps], args Args) (Result, error) {
+		return fn(ctx, args)
+	}, opts...)
+}
+
+// AddRawTool registers a tool from an explicit definition, skipping schema
+// reflection. It is the escape hatch for dynamic tools (MCP, config-driven).
+func (a *Agent[Deps, Output]) AddRawTool(def ToolDefinition, fn func(ctx context.Context, rawArgs json.RawMessage) (any, error)) {
+	a.addTool(def, func(ctx context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+		return fn(ctx, rawArgs)
+	})
+}
+
+// ToolOption configures a tool at registration.
+type ToolOption func(*ToolDefinition)
+
+// WithDescription sets the tool description shown to the model.
+func WithDescription(description string) ToolOption {
+	return func(d *ToolDefinition) { d.Description = description }
+}
+
+func toolDefinition[Args any](name string, opts []ToolOption) ToolDefinition {
+	s, err := schema.For(reflect.TypeFor[Args]())
+	if err != nil {
+		panic(fmt.Sprintf("ai: tool %q: %v", name, err))
+	}
+	def := ToolDefinition{Name: name, Schema: s}
+	for _, opt := range opts {
+		opt(&def)
+	}
+	return def
+}

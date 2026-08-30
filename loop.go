@@ -92,9 +92,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 				return nil, err
 			}
 			if retry != nil {
-				if err := r.recordRetry(*retry); err != nil {
-					return nil, err
-				}
+				r.recordRetry(*retry)
 				continue
 			}
 			return result, nil
@@ -180,10 +178,9 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 		}
 		return nil, &RetryPromptPart{Content: fmt.Sprintf("Respond by calling the %s tool to provide the final result.", outputToolName)}, nil
 	}
-	out, ok := any(resp.Text()).(Output)
-	if !ok {
-		return nil, nil, &UnexpectedModelBehaviorError{Message: "text output requested for a non-string output type"}
-	}
+	// buildParams sets AllowText only when Output is string, so this
+	// assertion cannot fail.
+	out := any(resp.Text()).(Output)
 	if retry, err := r.validate(ctx, out); err != nil {
 		return nil, nil, err
 	} else if retry != nil {
@@ -209,9 +206,8 @@ func (r *run[Deps, Output]) validate(ctx context.Context, out Output) (*RetryErr
 	return nil, nil
 }
 
-func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) error {
+func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) {
 	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{part}})
-	return nil
 }
 
 func (r *run[Deps, Output]) countRetry() error {

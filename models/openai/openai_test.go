@@ -234,3 +234,152 @@ func TestEndToEndAgentRun(t *testing.T) {
 		t.Fatalf("unexpected usage %+v", result.Usage())
 	}
 }
+
+func TestAPIErrorMessage(t *testing.T) {
+	err := &openai.APIError{StatusCode: 500, Body: "oops"}
+	if err.Error() != "openai: API returned status 500: oops" {
+		t.Fatalf("unexpected message %q", err.Error())
+	}
+}
+
+func TestStructuredToolReturnContent(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","created":0,"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.ToolReturnPart{ToolName: "t", Content: map[string]any{"temp": 20}, ToolCallID: "c1"},
+	}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	content := gotBody["messages"].([]any)[0].(map[string]any)["content"]
+	if content != `{"temp":20}` {
+		t.Fatalf("unexpected content %v", content)
+	}
+}
+
+func TestUnserializableToolReturn(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.ToolReturnPart{ToolName: "t", Content: make(chan int)},
+	}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err == nil {
+		t.Fatal("expected error")
+	}
+}
+
+func TestParseErrors(t *testing.T) {
+	for name, body := range map[string]string{
+		"invalid json": `not json`,
+		"no choices":   `{"model":"gpt-5","choices":[],"usage":{}}`,
+	} {
+		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(body))
+		})
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
+			t.Fatalf("%s: expected error", name)
+		}
+	}
+}
+
+func TestRequestTransportError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	server.Close()
+	model := openai.NewModel("gpt-5", openai.WithAPIKey("k"), openai.WithBaseURL(server.URL))
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
+		t.Fatal("expected transport error")
+	}
+}
+
+func TestModelName(t *testing.T) {
+	if openai.NewModel("gpt-5").Name() != "gpt-5" {
+		t.Fatal("unexpected name")
+	}
+}
+
+func TestUnserializableToolSchema(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+	params := ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{Name: "t", Schema: map[string]any{"bad": make(chan int)}}},
+	}
+	if _, err := model.Request(t.Context(), nil, params); err == nil {
+		t.Fatal("expected marshal error")
+	}
+}
+
+func TestTruncatedResponseBody(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", "1000")
+		_, _ = w.Write([]byte(`{"model"`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
+		t.Fatal("expected read error")
+	}
+}
+
+func TestConvertUnknownMessageAndPartTypes(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{nil}, ai.ModelRequestParams{AllowText: true}); err == nil {
+		t.Fatal("expected error for unknown message type")
+	}
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{nil}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err == nil {
+		t.Fatal("expected error for unknown part type")
+	}
+}
+
+func TestAssistantMessageWithTextAndToolCalls(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","created":0,"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.TextPart{Content: "let me check"},
+		ai.ThinkingPart{Content: "hidden"},
+		ai.ToolCallPart{ToolName: "t", Args: json.RawMessage(`{}`), ToolCallID: "c1"},
+	}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	assistant := gotBody["messages"].([]any)[0].(map[string]any)
+	if assistant["content"] != "let me check" || assistant["tool_calls"] == nil {
+		t.Fatalf("unexpected assistant message %v", assistant)
+	}
+}
+
+func TestSystemPromptPartInHistory(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","created":0,"choices":[{"message":{"role":"assistant","content":"ok"}}],"usage":{}}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.SystemPromptPart{Content: "sys"}}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["messages"].([]any)[0].(map[string]any)["role"] != "system" {
+		t.Fatalf("unexpected messages %v", gotBody["messages"])
+	}
+}
+
+func TestInvalidBaseURL(t *testing.T) {
+	model := openai.NewModel("gpt-5", openai.WithBaseURL("http://[::1"))
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
+		t.Fatal("expected URL error")
+	}
+}

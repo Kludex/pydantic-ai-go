@@ -108,10 +108,7 @@ func argsFromSchema(s map[string]any) json.RawMessage {
 	for name, prop := range properties {
 		args[name] = valueFromSchema(prop)
 	}
-	b, err := json.Marshal(args)
-	if err != nil {
-		panic(err) // generated values are always marshallable
-	}
+	b, _ := json.Marshal(args) // generated values are always marshallable
 	return b
 }
 

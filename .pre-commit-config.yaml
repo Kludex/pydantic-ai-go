@@ -24,3 +24,9 @@ repos:
         language: system
         types: [go]
         pass_filenames: false
+      - id: coverage
+        name: coverage (100%)
+        entry: scripts/coverage.sh
+        language: system
+        types: [go]
+        pass_filenames: false

@@ -71,3 +71,44 @@ func TestUnmarshalUnknownKind(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestMarshalUnmarshalEdgeCases(t *testing.T) {
+	if _, err := ai.UnmarshalMessages([]byte(`not json`)); err == nil {
+		t.Fatal("expected error for invalid JSON")
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[42]`)); err == nil {
+		t.Fatal("expected error for non-object message")
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"mystery"}]}]`)); err == nil {
+		t.Fatal("expected error for unknown request part kind")
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"response","parts":[{"part_kind":"mystery"}]}]`)); err == nil {
+		t.Fatal("expected error for unknown response part kind")
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":42}]`)); err == nil {
+		t.Fatal("expected error for malformed request")
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"response","parts":42}]`)); err == nil {
+		t.Fatal("expected error for malformed response")
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"tool-return","content":42,"tool_name":"t"}]}]`)); err != nil {
+		t.Fatalf("non-string tool return content should unmarshal: %v", err)
+	}
+
+	if _, err := ai.MarshalMessages([]ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.ToolReturnPart{ToolName: "t", Content: make(chan int)},
+	}}}); err == nil {
+		t.Fatal("expected error for unmarshallable tool return content")
+	}
+}
+
+func TestUnmarshalNonStringContentFallsBack(t *testing.T) {
+	msgs, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":42}]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := msgs[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
+	if part.Content != "42" {
+		t.Fatalf("expected raw fallback, got %q", part.Content)
+	}
+}

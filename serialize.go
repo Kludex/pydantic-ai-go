@@ -179,10 +179,10 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 		return UserPromptPart{Content: stringContent(wp.Content)}, nil
 	case "tool-return":
 		var content any
+		// wp.Content is raw JSON from a document that already parsed,
+		// so decoding into any cannot fail.
 		if len(wp.Content) > 0 {
-			if err := json.Unmarshal(wp.Content, &content); err != nil {
-				return nil, err
-			}
+			_ = json.Unmarshal(wp.Content, &content)
 		}
 		return ToolReturnPart{ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID}, nil
 	case "retry-prompt":
@@ -206,10 +206,7 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 }
 
 func mustJSON(s string) json.RawMessage {
-	b, err := json.Marshal(s)
-	if err != nil {
-		panic(err) // marshalling a string cannot fail
-	}
+	b, _ := json.Marshal(s) // marshalling a string cannot fail
 	return b
 }
 

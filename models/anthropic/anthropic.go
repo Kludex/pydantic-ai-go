@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -18,10 +19,11 @@ const defaultMaxTokens = 4096
 
 // Model calls the Anthropic Messages API. Create one with NewModel.
 type Model struct {
-	name       string
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
+	name              string
+	apiKey            string
+	baseURL           string
+	httpClient        *http.Client
+	strictToolSupport bool
 }
 
 // Option configures a Model.
@@ -37,13 +39,20 @@ func WithBaseURL(url string) Option { return func(m *Model) { m.baseURL = url } 
 // WithHTTPClient sets the HTTP client used for requests.
 func WithHTTPClient(c *http.Client) Option { return func(m *Model) { m.httpClient = c } }
 
+// WithStrictToolSupport overrides whether the model supports Anthropic strict
+// tool definitions. Use it for aliases and newly released model versions.
+func WithStrictToolSupport(enabled bool) Option {
+	return func(m *Model) { m.strictToolSupport = enabled }
+}
+
 // NewModel creates a Model for the named Anthropic model, e.g. "claude-sonnet-4-5".
 func NewModel(name string, opts ...Option) *Model {
 	m := &Model{
-		name:       name,
-		apiKey:     os.Getenv("ANTHROPIC_API_KEY"),
-		baseURL:    "https://api.anthropic.com/v1",
-		httpClient: http.DefaultClient,
+		name:              name,
+		apiKey:            os.Getenv("ANTHROPIC_API_KEY"),
+		baseURL:           "https://api.anthropic.com/v1",
+		httpClient:        http.DefaultClient,
+		strictToolSupport: supportsStrictTools(name),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -194,10 +203,18 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Messages = append(req.Messages, converted...)
 	}
 	for _, tool := range params.Tools {
-		req.Tools = append(req.Tools, convertTool(tool))
+		converted, err := prepareAnthropicTool(tool, m.strictToolSupport)
+		if err != nil {
+			return nil, err
+		}
+		req.Tools = append(req.Tools, converted)
 	}
 	if params.OutputTool != nil {
-		req.Tools = append(req.Tools, convertTool(*params.OutputTool))
+		converted, err := prepareAnthropicTool(*params.OutputTool, m.strictToolSupport)
+		if err != nil {
+			return nil, err
+		}
+		req.Tools = append(req.Tools, converted)
 		if !params.AllowText {
 			req.ToolChoice = &toolChoiceParam{Type: "any"}
 		}
@@ -272,8 +289,17 @@ func convertResponse(m ai.ModelResponse) []messageParam {
 	return []messageParam{{Role: "assistant", Content: blocks}}
 }
 
-func convertTool(def ai.ToolDefinition) toolParam {
-	return toolParam{Name: def.Name, Description: def.Description, InputSchema: def.Schema, Strict: def.Strict}
+func supportsStrictTools(name string) bool {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-haiku-4-5", "claude-sonnet-4-5",
+		"claude-sonnet-4-6", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
+		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 type messagesResponse struct {

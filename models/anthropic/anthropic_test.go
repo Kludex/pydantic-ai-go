@@ -162,6 +162,10 @@ func TestRetryAndSystemParts(t *testing.T) {
 		ai.RetryPromptPart{Content: "bad args", ToolCallID: "tu1"},
 		ai.RetryPromptPart{Content: "plain retry"},
 		ai.ToolReturnPart{ToolName: "t", Content: map[string]any{"x": 1}, ToolCallID: "tu2"},
+		ai.ToolReturnPart{ToolName: "t", Content: "failed", ToolCallID: "tu3", Outcome: ai.ToolReturnOutcomeFailed},
+		ai.ToolReturnPart{
+			ToolName: "t", Content: "interrupted", ToolCallID: "tu4", Outcome: ai.ToolReturnOutcomeInterrupted,
+		},
 	}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
 		t.Fatal(err)
@@ -172,6 +176,10 @@ func TestRetryAndSystemParts(t *testing.T) {
 	}
 	if blocks[2].(map[string]any)["type"] != "text" {
 		t.Fatalf("plain retry should be text: %v", blocks[2])
+	}
+	if blocks[3].(map[string]any)["is_error"] != nil || blocks[4].(map[string]any)["is_error"] != true ||
+		blocks[5].(map[string]any)["is_error"] != true {
+		t.Fatalf("tool outcomes were not mapped to Anthropic errors: %v", blocks)
 	}
 	if blocks[3].(map[string]any)["content"] != `{"x":1}` {
 		t.Fatalf("structured tool return not serialized: %v", blocks[3])

@@ -276,7 +276,10 @@ func convertRequest(m ai.ModelRequest) ([]messageParam, error) {
 			if err != nil {
 				return nil, err
 			}
-			blocks = append(blocks, contentBlock{Type: "tool_result", ToolUseID: p.ToolCallID, Content: content})
+			blocks = append(blocks, contentBlock{
+				Type: "tool_result", ToolUseID: p.ToolCallID, Content: content,
+				IsError: p.Outcome == ai.ToolReturnOutcomeFailed || p.Outcome == ai.ToolReturnOutcomeInterrupted,
+			})
 		case ai.RetryPromptPart:
 			if p.ToolCallID != "" {
 				blocks = append(blocks, contentBlock{Type: "tool_result", ToolUseID: p.ToolCallID, Content: p.Content, IsError: true})

@@ -184,6 +184,9 @@ func TestRetryAndSystemParts(t *testing.T) {
 		ai.SystemPromptPart{Content: "sys"},
 		ai.RetryPromptPart{Content: "bad args", ToolName: "t"},
 		ai.RetryPromptPart{Content: "plain retry"},
+		ai.ToolReturnPart{ToolName: "t", Content: "ok"},
+		ai.ToolReturnPart{ToolName: "t", Content: "failed", Outcome: ai.ToolReturnOutcomeFailed},
+		ai.ToolReturnPart{ToolName: "t", Content: "stopped", Outcome: ai.ToolReturnOutcomeInterrupted},
 	}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
 		t.Fatal(err)
@@ -194,6 +197,12 @@ func TestRetryAndSystemParts(t *testing.T) {
 	}
 	if parts[2].(map[string]any)["text"] != "plain retry" {
 		t.Fatalf("plain retry should be text: %v", parts[2])
+	}
+	for index, key := range []string{"result", "error", "error"} {
+		response := parts[index+3].(map[string]any)["functionResponse"].(map[string]any)["response"].(map[string]any)
+		if _, ok := response[key]; !ok {
+			t.Fatalf("tool outcome at %d did not use %q: %v", index, key, response)
+		}
 	}
 }
 

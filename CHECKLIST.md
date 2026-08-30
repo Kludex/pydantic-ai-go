@@ -27,7 +27,7 @@ Status:
 - [x] Per-tool sequential execution barrier via `WithSequential()`.
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
-- [~] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, and drained concurrent tools. Interrupted request state, completed sibling results, and resumable cancellation history remain.
+- [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
 - [ ] Per-run overrides for model, settings, instructions, output type/mode, limits, and tools.
 - [ ] Model selection and model-ID resolution per request step.
 - [ ] Usage/cost details beyond basic token counts, including cached, audio, and reasoning tokens.
@@ -37,7 +37,7 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic and multimodal histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, and interrupted histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [ ] Instruction parts and stable instruction IDs.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content.
@@ -45,7 +45,8 @@ Status:
 - [ ] Tool availability delta parts.
 - [ ] Provider details, metadata, run ID, conversation ID, finish reason, and response IDs.
 - [ ] Retry prompt structured validation errors.
-- [ ] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
+- [x] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
+- [ ] Synthesized-return metadata markers and deterministic repair of arbitrary interior dangling calls.
 - [ ] Rich `ToolReturn`: separate return value, extra content, metadata, and revealed tools.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, and tool-argument deltas across bundled providers and fallback replay.
 - [ ] Explicit part start/delta/end, final-result, and enqueued-message events.
@@ -65,6 +66,7 @@ Status:
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
 - [ ] Per-toolset retry defaults and output-tool-specific overrides once those abstractions land.
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
+- [x] Failed and interrupted tool returns use Anthropic error results and Gemini error responses.
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [ ] Tool metadata and provider-specific options.

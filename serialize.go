@@ -37,8 +37,9 @@ func UnmarshalMessages(data []byte) ([]ModelMessage, error) {
 }
 
 type wireRequest struct {
-	Kind  string     `json:"kind"`
-	Parts []wirePart `json:"parts"`
+	Kind  string       `json:"kind"`
+	Parts []wirePart   `json:"parts"`
+	State RequestState `json:"state,omitempty"`
 }
 
 type wireResponse struct {
@@ -61,7 +62,7 @@ type wirePart struct {
 func marshalMessage(m ModelMessage) ([]byte, error) {
 	switch msg := m.(type) {
 	case ModelRequest:
-		w := wireRequest{Kind: "request"}
+		w := wireRequest{Kind: "request", State: msg.State}
 		for _, p := range msg.Parts {
 			wp, err := marshalRequestPart(p)
 			if err != nil {
@@ -145,7 +146,7 @@ func unmarshalMessage(data []byte) (ModelMessage, error) {
 		if err := json.Unmarshal(data, &w); err != nil {
 			return nil, err
 		}
-		msg := ModelRequest{}
+		msg := ModelRequest{State: w.State}
 		for _, wp := range w.Parts {
 			p, err := unmarshalRequestPart(wp)
 			if err != nil {

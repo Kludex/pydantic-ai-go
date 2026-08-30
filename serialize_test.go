@@ -66,6 +66,33 @@ func TestMessagesRoundTrip(t *testing.T) {
 	}
 }
 
+func TestInterruptedRequestRoundTrip(t *testing.T) {
+	messages := []ai.ModelMessage{ai.ModelRequest{
+		State: ai.RequestStateInterrupted,
+		Parts: []ai.RequestPart{ai.ToolReturnPart{
+			ToolName: "work", ToolCallID: "call", Content: "interrupted",
+			Outcome: ai.ToolReturnOutcomeInterrupted,
+		}},
+	}}
+	data, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"state":"interrupted"`) ||
+		!strings.Contains(string(data), `"outcome":"interrupted"`) {
+		t.Fatalf("interrupted state was not serialized: %s", data)
+	}
+	decoded, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := decoded[0].(ai.ModelRequest)
+	part := request.Parts[0].(ai.ToolReturnPart)
+	if request.State != ai.RequestStateInterrupted || part.Outcome != ai.ToolReturnOutcomeInterrupted {
+		t.Fatalf("interrupted state was not restored: %+v %+v", request, part)
+	}
+}
+
 func TestUnmarshalUnknownKind(t *testing.T) {
 	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"mystery"}]`)); err == nil {
 		t.Fatal("expected error")

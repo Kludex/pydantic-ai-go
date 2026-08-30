@@ -278,10 +278,12 @@ func convertRequest(m ai.ModelRequest) ([]content, error) {
 			}
 			parts = append(parts, converted...)
 		case ai.ToolReturnPart:
+			key := "result"
+			if rp.Outcome == ai.ToolReturnOutcomeFailed || rp.Outcome == ai.ToolReturnOutcomeInterrupted {
+				key = "error"
+			}
 			parts = append(parts, part{FunctionResponse: &functionResponse{
-				ID:       rp.ToolCallID,
-				Name:     rp.ToolName,
-				Response: map[string]any{"result": rp.Content},
+				ID: rp.ToolCallID, Name: rp.ToolName, Response: map[string]any{key: rp.Content},
 			}})
 		case ai.RetryPromptPart:
 			if rp.ToolName != "" {

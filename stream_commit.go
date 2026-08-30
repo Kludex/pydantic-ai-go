@@ -91,7 +91,7 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 				continue
 			}
 			if err := r.executeCommittedBatch(ctx, calls, outcomes, batch); err != nil {
-				return nil, err
+				return committedParts(outcomes), err
 			}
 			batch = batch[:0]
 			if r.isOutputCall(call) {
@@ -99,12 +99,12 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 			} else {
 				outcomes[index] = r.executeOneCommitted(ctx, call)
 				if outcomes[index].err != nil {
-					return nil, outcomes[index].err
+					return committedParts(outcomes), outcomes[index].err
 				}
 			}
 		}
 		if err := r.executeCommittedBatch(ctx, calls, outcomes, batch); err != nil {
-			return nil, err
+			return committedParts(outcomes), err
 		}
 		return committedParts(outcomes), nil
 	}
@@ -118,7 +118,7 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 		indexes = append(indexes, index)
 	}
 	if err := r.executeCommittedSelected(ctx, calls, outcomes, indexes); err != nil {
-		return nil, err
+		return committedParts(outcomes), err
 	}
 	return committedParts(outcomes), nil
 }

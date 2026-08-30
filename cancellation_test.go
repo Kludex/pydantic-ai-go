@@ -17,6 +17,7 @@ func TestRunContextCancelDrainsConcurrentTools(t *testing.T) {
 	) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{
 			Parts: []ai.ResponsePart{
+				ai.ToolCallPart{ToolName: "fast", Args: json.RawMessage(`{}`), ToolCallID: "fast"},
 				ai.ToolCallPart{ToolName: "cancel", Args: json.RawMessage(`{}`), ToolCallID: "cancel"},
 				ai.ToolCallPart{ToolName: "sibling", Args: json.RawMessage(`{}`), ToolCallID: "sibling"},
 			},
@@ -26,6 +27,9 @@ func TestRunContextCancelDrainsConcurrentTools(t *testing.T) {
 	agent := ai.NewAgent[deps, string](model)
 	started := make(chan struct{})
 	drained := make(chan struct{})
+	ai.AddSimpleTool(agent, "fast", func(context.Context, struct{}) (string, error) {
+		return "completed", nil
+	}, ai.WithSequential())
 	ai.AddTool(agent, "cancel", func(
 		_ context.Context, rc *ai.RunContext[deps], _ struct{},
 	) (string, error) {
@@ -54,13 +58,77 @@ func TestRunContextCancelDrainsConcurrentTools(t *testing.T) {
 	if !errors.As(err, &cancelled) {
 		t.Fatalf("expected RunCancelledError, got %T", err)
 	}
-	if len(cancelled.Messages()) != 2 || cancelled.Usage().InputTokens != 2 {
+	if len(cancelled.Messages()) != 3 || cancelled.Usage().InputTokens != 2 {
 		t.Fatalf("cancellation snapshot lost state: messages=%v usage=%+v", cancelled.Messages(), cancelled.Usage())
+	}
+	interrupted := cancelled.Messages()[2].(ai.ModelRequest)
+	if interrupted.State != ai.RequestStateInterrupted || len(interrupted.Parts) != 1 {
+		t.Fatalf("completed sibling result was not retained: %+v", interrupted)
+	}
+	part := interrupted.Parts[0].(ai.ToolReturnPart)
+	if part.ToolName != "fast" || part.Content != "completed" {
+		t.Fatalf("wrong completed result retained: %+v", part)
 	}
 	messages := cancelled.Messages()
 	messages[0] = nil
 	if cancelled.Messages()[0] == nil {
 		t.Fatal("Messages did not return a copy")
+	}
+
+	var resumed []ai.ModelMessage
+	resumeModel := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		resumed = messages
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "resumed"}}}, nil
+	})
+	resumeAgent := ai.NewAgent[deps, string](resumeModel)
+	resumeResult, err := resumeAgent.Run(
+		t.Context(), "continue", deps{}, ai.WithMessageHistory(cancelled.Messages()),
+	)
+	if err != nil || resumeResult.Output != "resumed" {
+		t.Fatalf("cancellation history did not resume: result=%+v err=%v", resumeResult, err)
+	}
+	request := resumed[len(resumed)-1].(ai.ModelRequest)
+	if len(request.Parts) != 3 {
+		t.Fatalf("dangling tool calls were not repaired: %+v", request)
+	}
+	for index, name := range []string{"cancel", "sibling"} {
+		interrupted := request.Parts[index].(ai.ToolReturnPart)
+		if interrupted.ToolName != name || interrupted.Outcome != ai.ToolReturnOutcomeInterrupted {
+			t.Fatalf("unexpected synthesized return: %+v", interrupted)
+		}
+	}
+	if request.Parts[2].(ai.UserPromptPart).Content != "continue" {
+		t.Fatalf("resume prompt was not appended after repairs: %+v", request)
+	}
+}
+
+func TestMessageHistoryRepairRecognizesExistingResults(t *testing.T) {
+	history := []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.ToolCallPart{ToolName: "with_id", ToolCallID: "call", Args: json.RawMessage(`{}`)},
+			ai.ToolCallPart{ToolName: "without_id", Args: json.RawMessage(`{}`)},
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.RetryPromptPart{ToolName: "with_id", ToolCallID: "call", Content: "again"},
+			ai.ToolReturnPart{ToolName: "without_id", Content: "done"},
+		}},
+	}
+	var seen []ai.ModelMessage
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		seen = messages
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	if _, err := agent.Run(t.Context(), "continue", deps{}, ai.WithMessageHistory(history)); err != nil {
+		t.Fatal(err)
+	}
+	request := seen[len(seen)-1].(ai.ModelRequest)
+	if len(request.Parts) != 1 {
+		t.Fatalf("already-settled calls were synthesized again: %+v", request)
 	}
 }
 
@@ -129,6 +197,44 @@ func TestRunStreamContextCancellation(t *testing.T) {
 	}
 	if stream.Result() != nil || !errors.Is(got, ai.ErrRunCancelled) {
 		t.Fatalf("unexpected streamed cancellation result=%+v err=%v", stream.Result(), got)
+	}
+}
+
+func TestRunStreamCommittedCancellationRetainsCompletedTools(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.StreamEvent {
+		return []ai.StreamEvent{
+			ai.TextDeltaEvent{PartID: "text", Delta: "discarded"},
+			ai.ToolCallStartEvent{PartID: "fast", ToolName: "fast", ToolCallID: "fast"},
+			ai.ToolCallDeltaEvent{PartID: "fast", ArgsDelta: `{}`},
+			ai.ToolCallStartEvent{PartID: "cancel", ToolName: "cancel", ToolCallID: "cancel"},
+			ai.ToolCallDeltaEvent{PartID: "cancel", ArgsDelta: `{}`},
+			ai.FinishEvent{},
+		}
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddSimpleTool(agent, "fast", func(context.Context, struct{}) (string, error) {
+		return "completed", nil
+	}, ai.WithSequential())
+	ai.AddTool(agent, "cancel", func(
+		_ context.Context, rc *ai.RunContext[deps], _ struct{},
+	) (string, error) {
+		rc.Cancel()
+		return "discarded", nil
+	})
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	var got error
+	for _, err := range stream.Events() {
+		if err != nil {
+			got = err
+		}
+	}
+	var cancelled *ai.RunCancelledError
+	if !errors.As(got, &cancelled) {
+		t.Fatalf("expected streamed RunCancelledError, got %v", got)
+	}
+	request := cancelled.Messages()[2].(ai.ModelRequest)
+	if request.State != ai.RequestStateInterrupted || request.Parts[0].(ai.ToolReturnPart).ToolName != "fast" {
+		t.Fatalf("completed streamed tool was not retained: %+v", request)
 	}
 }
 

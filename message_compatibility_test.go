@@ -66,6 +66,22 @@ func TestUnmarshalUpstreamMultimodalMessageFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamInterruptedMessageFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_interrupted.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := messages[0].(ai.ModelRequest)
+	part := request.Parts[0].(ai.ToolReturnPart)
+	if request.State != ai.RequestStateInterrupted || part.Outcome != ai.ToolReturnOutcomeInterrupted {
+		t.Fatalf("unexpected interrupted history: %+v %+v", request, part)
+	}
+}
+
 func TestMarshalMultimodalMessageUsesUpstreamDiscriminators(t *testing.T) {
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
 		ai.UserPromptPart{Contents: []ai.UserContent{

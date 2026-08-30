@@ -88,7 +88,7 @@ ai.AddTool(agent, "stop", func(
 })
 ```
 
-Use `errors.As` with `*ai.RunCancelledError` to inspect the history and usage retained before cancellation.
+Use `errors.As` with `*ai.RunCancelledError` to inspect the history and usage retained before cancellation. Pass `cancelled.Messages()` to `ai.WithMessageHistory` to resume; dangling calls receive synthesized `interrupted` returns before the new prompt.
 
 Use `ai.WithStrict()` to ask the provider to constrain generated arguments to the tool schema:
 

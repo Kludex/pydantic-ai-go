@@ -82,8 +82,49 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 		cancellation.finish()
 		return nil, err
 	}
-	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{prompt}})
+	requestParts := interruptedToolReturns(r.messages)
+	requestParts = append(requestParts, prompt)
+	r.messages = append(r.messages, ModelRequest{Parts: requestParts})
 	return r, nil
+}
+
+func interruptedToolReturns(messages []ModelMessage) []RequestPart {
+	var open []ToolCallPart
+	for _, message := range messages {
+		switch message := message.(type) {
+		case ModelResponse:
+			open = append(open, message.ToolCalls()...)
+		case ModelRequest:
+			for _, part := range message.Parts {
+				var toolName, toolCallID string
+				switch part := part.(type) {
+				case ToolReturnPart:
+					toolName, toolCallID = part.ToolName, part.ToolCallID
+				case RetryPromptPart:
+					toolName, toolCallID = part.ToolName, part.ToolCallID
+				default:
+					continue
+				}
+				for index, call := range open {
+					idMatches := toolCallID != "" && call.ToolCallID == toolCallID
+					nameMatches := toolCallID == "" && call.ToolCallID == "" && call.ToolName == toolName
+					if idMatches || nameMatches {
+						open = append(open[:index], open[index+1:]...)
+						break
+					}
+				}
+			}
+		}
+	}
+	parts := make([]RequestPart, 0, len(open))
+	for _, call := range open {
+		parts = append(parts, ToolReturnPart{
+			ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+			Content: "The tool call was interrupted before a result was produced.",
+			Outcome: ToolReturnOutcomeInterrupted,
+		})
+	}
+	return parts
 }
 
 type run[Deps, Output any] struct {
@@ -270,6 +311,12 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			}
 			if committed {
 				parts, err := r.executeCallsWithCommittedOutput(ctx, calls, winningCall)
+				if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
+					if len(parts) > 0 {
+						r.messages = append(r.messages, ModelRequest{Parts: parts, State: RequestStateInterrupted})
+					}
+					return nil, ErrRunCancelled
+				}
 				if err != nil {
 					return nil, err
 				}
@@ -306,6 +353,12 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		}
 
 		parts, final, err := r.executeCalls(ctx, calls)
+		if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
+			if len(parts) > 0 {
+				r.messages = append(r.messages, ModelRequest{Parts: parts, State: RequestStateInterrupted})
+			}
+			return nil, ErrRunCancelled
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -388,7 +441,7 @@ func (r *run[Deps, Output]) executeCallsEarly(
 		}
 		outcomes[i] = r.executeOne(ctx, call)
 		if outcomes[i].err != nil {
-			return nil, nil, outcomes[i].err
+			return completedCallParts(outcomes), nil, outcomes[i].err
 		}
 		winner = outcomes[i].output
 	}
@@ -404,7 +457,7 @@ func (r *run[Deps, Output]) executeCallsEarly(
 		return collectCallOutcomes(outcomes, false)
 	}
 	if err := r.executeSelected(ctx, calls, outcomes, r.functionCallIndexes(calls), false); err != nil {
-		return nil, nil, err
+		return completedCallParts(outcomes), nil, err
 	}
 	return collectCallOutcomes(outcomes, false)
 }
@@ -421,7 +474,7 @@ func (r *run[Deps, Output]) executeCallsGraceful(
 			continue
 		}
 		if err := r.executeIndexBatch(ctx, calls, outcomes, batch); err != nil {
-			return nil, nil, err
+			return completedCallParts(outcomes), nil, err
 		}
 		batch = batch[:0]
 		if r.isOutputCall(call) && winner != nil {
@@ -433,14 +486,14 @@ func (r *run[Deps, Output]) executeCallsGraceful(
 		}
 		outcomes[i] = r.executeOne(ctx, call)
 		if outcomes[i].err != nil {
-			return nil, nil, outcomes[i].err
+			return completedCallParts(outcomes), nil, outcomes[i].err
 		}
 		if outcomes[i].output != nil {
 			winner = outcomes[i].output
 		}
 	}
 	if err := r.executeIndexBatch(ctx, calls, outcomes, batch); err != nil {
-		return nil, nil, err
+		return completedCallParts(outcomes), nil, err
 	}
 	return collectCallOutcomes(outcomes, true)
 }
@@ -454,7 +507,7 @@ func (r *run[Deps, Output]) executeCallsExhaustive(
 		indexes[i] = i
 	}
 	if err := r.executeSelected(ctx, calls, outcomes, indexes, true); err != nil {
-		return nil, nil, err
+		return completedCallParts(outcomes), nil, err
 	}
 	return collectCallOutcomes(outcomes, true)
 }
@@ -520,10 +573,14 @@ func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) c
 	part, output, err := r.executeCall(ctx, call)
 	_, registered := r.agent.findTool(call.ToolName)
 	_, available := r.currentTools[call.ToolName]
-	functionCall := registered && available
-	return callOutcome[Output]{
-		part: part, output: output, outputCall: r.isOutputCall(call), functionCall: functionCall, err: err,
+	outcome := callOutcome[Output]{
+		part: part, output: output, outputCall: r.isOutputCall(call), functionCall: registered && available, err: err,
 	}
+	if err == nil && errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
+		outcome.part = nil
+		outcome.output = nil
+	}
+	return outcome
 }
 
 func (r *run[Deps, Output]) functionCallIndexes(calls []ToolCallPart) []int {
@@ -549,6 +606,16 @@ func (r *run[Deps, Output]) callIsBarrier(call ToolCallPart, outputToolsConcurre
 	}
 	entry, ok := r.agent.findTool(call.ToolName)
 	return ok && entry.def.Sequential
+}
+
+func completedCallParts[Output any](outcomes []callOutcome[Output]) []RequestPart {
+	parts := make([]RequestPart, 0, len(outcomes))
+	for _, outcome := range outcomes {
+		if outcome.err == nil && outcome.part != nil {
+			parts = append(parts, outcome.part)
+		}
+	}
+	return parts
 }
 
 func collectCallOutcomes[Output any](

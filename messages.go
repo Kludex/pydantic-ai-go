@@ -14,9 +14,20 @@ type ModelMessage interface {
 	messageKind() string
 }
 
+// RequestState reports whether construction of a model request completed.
+type RequestState string
+
+const (
+	// RequestStateComplete is the default state for an ordinary request.
+	RequestStateComplete RequestState = "complete"
+	// RequestStateInterrupted marks partial tool results retained during cancellation.
+	RequestStateInterrupted RequestState = "interrupted"
+)
+
 // ModelRequest is a message sent to the model.
 type ModelRequest struct {
 	Parts []RequestPart
+	State RequestState
 }
 
 func (ModelRequest) messageKind() string { return "request" }
@@ -109,6 +120,8 @@ const (
 	ToolReturnOutcomeSuccess ToolReturnOutcome = "success"
 	// ToolReturnOutcomeFailed marks a terminal failure the model should adapt to.
 	ToolReturnOutcomeFailed ToolReturnOutcome = "failed"
+	// ToolReturnOutcomeInterrupted marks a synthesized result for an interrupted call.
+	ToolReturnOutcomeInterrupted ToolReturnOutcome = "interrupted"
 )
 
 // ToolReturnPart carries the result of a tool call back to the model.

@@ -17,10 +17,11 @@ import (
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
 type Model struct {
-	name       string
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
+	name              string
+	apiKey            string
+	baseURL           string
+	httpClient        *http.Client
+	strictToolSupport bool
 }
 
 // Option configures a Model.
@@ -36,13 +37,20 @@ func WithBaseURL(url string) Option { return func(m *Model) { m.baseURL = url } 
 // WithHTTPClient sets the HTTP client used for requests.
 func WithHTTPClient(c *http.Client) Option { return func(m *Model) { m.httpClient = c } }
 
+// WithStrictToolSupport configures whether an OpenAI-compatible endpoint
+// accepts strict function definitions. OpenAI supports them by default.
+func WithStrictToolSupport(enabled bool) Option {
+	return func(m *Model) { m.strictToolSupport = enabled }
+}
+
 // NewModel creates a Model for the named OpenAI model, e.g. "gpt-5".
 func NewModel(name string, opts ...Option) *Model {
 	m := &Model{
-		name:       name,
-		apiKey:     os.Getenv("OPENAI_API_KEY"),
-		baseURL:    "https://api.openai.com/v1",
-		httpClient: http.DefaultClient,
+		name:              name,
+		apiKey:            os.Getenv("OPENAI_API_KEY"),
+		baseURL:           "https://api.openai.com/v1",
+		httpClient:        http.DefaultClient,
+		strictToolSupport: true,
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -171,10 +179,18 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Messages = append(req.Messages, converted...)
 	}
 	for _, tool := range params.Tools {
-		req.Tools = append(req.Tools, convertTool(tool))
+		converted, err := convertTool(tool, m.strictToolSupport)
+		if err != nil {
+			return nil, err
+		}
+		req.Tools = append(req.Tools, converted)
 	}
 	if params.OutputTool != nil {
-		req.Tools = append(req.Tools, convertTool(*params.OutputTool))
+		converted, err := convertTool(*params.OutputTool, m.strictToolSupport)
+		if err != nil {
+			return nil, err
+		}
+		req.Tools = append(req.Tools, converted)
 		if !params.AllowText {
 			req.ToolChoice = "required"
 		}
@@ -183,9 +199,18 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.ParallelToolCalls = params.Settings.ParallelToolCalls
 	}
 	if params.OutputSchema != nil {
+		strict := true
+		schema, _, err := prepareOpenAISchema(params.OutputSchema, &strict)
+		if err != nil {
+			return nil, fmt.Errorf("openai: output schema: %w", err)
+		}
+		var strictFlag *bool
+		if m.strictToolSupport {
+			strictFlag = &strict
+		}
 		req.ResponseFormat = &responseFormat{
 			Type:       "json_schema",
-			JSONSchema: jsonSchemaFormat{Name: "final_result", Schema: params.OutputSchema, Strict: true},
+			JSONSchema: jsonSchemaFormat{Name: "final_result", Schema: schema, Strict: strictFlag},
 		}
 	}
 	return req, nil
@@ -199,7 +224,7 @@ type responseFormat struct {
 type jsonSchemaFormat struct {
 	Name   string         `json:"name"`
 	Schema map[string]any `json:"schema"`
-	Strict bool           `json:"strict"`
+	Strict *bool          `json:"strict,omitempty"`
 }
 
 func convertMessage(msg ai.ModelMessage) ([]chatMessage, error) {
@@ -261,11 +286,15 @@ func convertResponse(m ai.ModelResponse) []chatMessage {
 	return []chatMessage{msg}
 }
 
-func convertTool(def ai.ToolDefinition) chatTool {
+func convertTool(def ai.ToolDefinition, supportsStrict bool) (chatTool, error) {
+	schema, strict, err := prepareOpenAITool(def, supportsStrict)
+	if err != nil {
+		return chatTool{}, err
+	}
 	return chatTool{
 		Type:     "function",
-		Function: chatFunction{Name: def.Name, Description: def.Description, Parameters: def.Schema, Strict: def.Strict},
-	}
+		Function: chatFunction{Name: def.Name, Description: def.Description, Parameters: schema, Strict: strict},
+	}, nil
 }
 
 type chatResponse struct {

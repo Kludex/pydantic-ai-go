@@ -81,7 +81,7 @@ Use `ai.WithStrict()` to ask the provider to constrain generated arguments to th
 ai.AddTool(agent, "book_table", bookTable, ai.WithStrict())
 ```
 
-Strict mode prevents malformed arguments before they reach your code. OpenAI and Anthropic configure it per tool. Gemini 2.5 and newer use request-wide `VALIDATED` mode by default. Use `ai.WithoutStrict()` to keep a Gemini request on `AUTO`, or `google.WithStrictToolSupport` for model aliases and compatible proxies.
+Strict mode prevents malformed arguments before they reach your code. OpenAI enables it automatically when a schema is compatible, and rewrites incompatible constraints when you use `ai.WithStrict()`. Use `openai.WithStrictToolSupport(false)` for compatible endpoints that reject strict definitions. Anthropic uses explicit strict mode. Gemini 2.5 and newer use request-wide `VALIDATED` mode by default. Use `ai.WithoutStrict()` to keep a Gemini request on `AUTO`, or `google.WithStrictToolSupport` for model aliases and compatible proxies.
 
 ## Dynamic tools
 

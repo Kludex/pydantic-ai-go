@@ -308,7 +308,9 @@ func TestUnserializableToolSchema(t *testing.T) {
 		_, _ = w.Write([]byte(`{}`))
 	})
 	params := ai.ModelRequestParams{
-		Tools: []ai.ToolDefinition{{Name: "t", Schema: map[string]any{"bad": make(chan int)}}},
+		Tools: []ai.ToolDefinition{{Name: "t", Schema: map[string]any{
+			"type": "object", "properties": map[string]any{}, "required": []string{}, "bad": make(chan int),
+		}}},
 	}
 	if _, err := model.Request(t.Context(), nil, params); err == nil {
 		t.Fatal("expected marshal error")

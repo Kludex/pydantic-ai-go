@@ -14,17 +14,21 @@ import (
 // ResponsesModel calls the OpenAI Responses API, the successor to Chat
 // Completions. Create one with NewResponsesModel.
 type ResponsesModel struct {
-	name       string
-	apiKey     string
-	baseURL    string
-	httpClient *http.Client
+	name              string
+	apiKey            string
+	baseURL           string
+	httpClient        *http.Client
+	strictToolSupport bool
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
 // It accepts the same options as NewModel.
 func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 	m := NewModel(name, opts...)
-	return &ResponsesModel{name: m.name, apiKey: m.apiKey, baseURL: m.baseURL, httpClient: m.httpClient}
+	return &ResponsesModel{
+		name: m.name, apiKey: m.apiKey, baseURL: m.baseURL, httpClient: m.httpClient,
+		strictToolSupport: m.strictToolSupport,
+	}
 }
 
 // Name returns the model name.
@@ -111,14 +115,22 @@ func (m *ResponsesModel) buildResponsesPayload(msgs []ai.ModelMessage, params ai
 		req.Input = append(req.Input, items...)
 	}
 	for _, tool := range params.Tools {
+		schema, strict, err := prepareOpenAITool(tool, m.strictToolSupport)
+		if err != nil {
+			return nil, err
+		}
 		req.Tools = append(req.Tools, responsesTool{
-			Type: "function", Name: tool.Name, Description: tool.Description, Parameters: tool.Schema, Strict: tool.Strict,
+			Type: "function", Name: tool.Name, Description: tool.Description, Parameters: schema, Strict: strict,
 		})
 	}
 	if params.OutputTool != nil {
+		schema, strict, err := prepareOpenAITool(*params.OutputTool, m.strictToolSupport)
+		if err != nil {
+			return nil, err
+		}
 		req.Tools = append(req.Tools, responsesTool{
 			Type: "function", Name: params.OutputTool.Name, Description: params.OutputTool.Description,
-			Parameters: params.OutputTool.Schema, Strict: params.OutputTool.Strict,
+			Parameters: schema, Strict: strict,
 		})
 		if !params.AllowText {
 			req.ToolChoice = "required"

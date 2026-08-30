@@ -116,7 +116,9 @@ func TestResponsesStreamProtocolErrors(t *testing.T) {
 func TestResponsesStreamRequestErrors(t *testing.T) {
 	t.Run("bad payload", func(t *testing.T) {
 		model := newResponsesServer(t, sseHandler(t, nil))
-		params := ai.ModelRequestParams{Tools: []ai.ToolDefinition{{Name: "bad", Schema: map[string]any{"x": make(chan int)}}}}
+		params := ai.ModelRequestParams{Tools: []ai.ToolDefinition{{Name: "bad", Schema: map[string]any{
+			"type": "object", "properties": map[string]any{}, "required": []string{}, "bad": make(chan int),
+		}}}}
 		if _, err := collect(t, model, params); err == nil {
 			t.Fatal("expected marshal error")
 		}

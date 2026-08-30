@@ -75,7 +75,28 @@ Strict mode prevents malformed arguments before they reach your code. OpenAI and
 
 ## Dynamic tools
 
-Prepare function tools before each model request when their availability or schema depends on the run:
+Use `ai.AddPreparedTool` when one tool's availability or schema depends on the run:
+
+```go
+ai.AddPreparedTool(
+	agent,
+	"get_weather",
+	func(_ context.Context, rc *ai.RunContext[Deps], args WeatherArgs) (string, error) {
+		return fmt.Sprintf("sunny, 21 %s in %s", rc.Deps.DefaultUnit, args.City), nil
+	},
+	func(_ context.Context, rc *ai.RunContext[Deps], tool ai.ToolDefinition) (*ai.ToolDefinition, error) {
+		if rc.Deps.DefaultUnit == "" {
+			return nil, nil
+		}
+		tool.Description = "Get current weather in " + rc.Deps.DefaultUnit
+		return &tool, nil
+	},
+)
+```
+
+The callback receives a fresh definition before every model request. Return `nil` to omit that tool for the step.
+
+Use `AddToolsPrepareFunc` to filter or modify all function tools together:
 
 ```go
 agent.AddToolsPrepareFunc(func(

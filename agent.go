@@ -30,8 +30,9 @@ type Agent[Deps, Output any] struct {
 }
 
 type toolEntry[Deps any] struct {
-	def  ToolDefinition
-	call toolFunc[Deps]
+	def     ToolDefinition
+	call    toolFunc[Deps]
+	prepare ToolPrepareFunc[Deps]
 }
 
 // NewAgent creates an agent backed by model.
@@ -108,8 +109,14 @@ func (a *Agent[Deps, Output]) AddOutputValidator(fn func(ctx context.Context, rc
 }
 
 func (a *Agent[Deps, Output]) addTool(def ToolDefinition, fn toolFunc[Deps]) {
+	a.addPreparedTool(def, fn, nil)
+}
+
+func (a *Agent[Deps, Output]) addPreparedTool(
+	def ToolDefinition, fn toolFunc[Deps], prepare ToolPrepareFunc[Deps],
+) {
 	a.checkNotStarted()
-	a.tools = append(a.tools, toolEntry[Deps]{def: def, call: fn})
+	a.tools = append(a.tools, toolEntry[Deps]{def: def, call: fn, prepare: prepare})
 }
 
 func (a *Agent[Deps, Output]) checkNotStarted() {

@@ -123,12 +123,24 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
 	params := r.params
-	tools := make([]ToolDefinition, len(params.Tools))
-	for i, def := range params.Tools {
-		tools[i] = cloneToolDefinition(def)
-	}
+	tools := make([]ToolDefinition, 0, len(params.Tools))
 	rc := *r.rc
 	rc.Retry = r.retryCount()
+	for _, def := range params.Tools {
+		prepared := cloneToolDefinition(def)
+		entry, _ := r.agent.findTool(def.Name)
+		if entry.prepare != nil {
+			result, err := entry.prepare(ctx, &rc, prepared)
+			if err != nil {
+				return ModelRequestParams{}, fmt.Errorf("ai: prepare tool %q: %w", def.Name, err)
+			}
+			if result == nil {
+				continue
+			}
+			prepared = *result
+		}
+		tools = append(tools, prepared)
+	}
 	for _, prepare := range r.agent.toolsPrepareFuncs {
 		var err error
 		tools, err = prepare(ctx, &rc, tools)

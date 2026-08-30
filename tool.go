@@ -27,6 +27,12 @@ func (rc *RunContext[Deps]) Usage() Usage { return *rc.usage }
 // Messages returns the conversation so far in this run.
 func (rc *RunContext[Deps]) Messages() []ModelMessage { return *rc.messages }
 
+// ToolPrepareFunc customizes one tool definition before each model request.
+// Return nil to omit the tool for that step.
+type ToolPrepareFunc[Deps any] func(
+	ctx context.Context, rc *RunContext[Deps], tool ToolDefinition,
+) (*ToolDefinition, error)
+
 // AddTool registers a tool on the agent. The argument schema is reflected
 // from the Args struct's `json` and `jsonschema` tags. Registration panics
 // after the agent's first run.
@@ -41,14 +47,37 @@ func AddTool[Deps, Output, Args, Result any](
 	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
 	opts ...ToolOption,
 ) {
+	addReflectedTool(a, name, fn, nil, opts)
+}
+
+// AddPreparedTool registers a tool with a per-step preparation callback.
+// Preparation receives a fresh definition and runs before agent-wide tool
+// preparation. Returning nil omits this tool for the current model request.
+func AddPreparedTool[Deps, Output, Args, Result any](
+	a *Agent[Deps, Output],
+	name string,
+	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
+	prepare ToolPrepareFunc[Deps],
+	opts ...ToolOption,
+) {
+	addReflectedTool(a, name, fn, prepare, opts)
+}
+
+func addReflectedTool[Deps, Output, Args, Result any](
+	a *Agent[Deps, Output],
+	name string,
+	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
+	prepare ToolPrepareFunc[Deps],
+	opts []ToolOption,
+) {
 	def := toolDefinition[Args](name, opts)
-	a.addTool(def, func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+	a.addPreparedTool(def, func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
 		var args Args
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
 			return nil, Retryf("invalid arguments for tool %q: %v", name, err)
 		}
 		return fn(ctx, rc, args)
-	})
+	}, prepare)
 }
 
 // AddSimpleTool registers a tool that needs no run context or deps.

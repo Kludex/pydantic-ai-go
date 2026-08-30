@@ -56,7 +56,7 @@ Status:
 - [~] Tool and argument-unmarshal retries work, but Go currently shares one global counter; upstream tracks function retries per tool and output retries separately.
 - [~] JSON Schema supports common structs, arrays, maps, descriptions, and enums; it is not full JSON Schema parity.
 - [~] Explicit strict tool mode via `WithStrict()` / `WithoutStrict()` on OpenAI, Anthropic, and Gemini; automatic provider/model defaults and schema compatibility checks remain.
-- [~] Agent-wide per-step tool preparation and omission via `AddToolsPrepareFunc`; per-tool prepare callbacks remain.
+- [x] Per-tool and agent-wide per-step preparation and omission via `AddPreparedTool` and `AddToolsPrepareFunc`, applied in upstream order.
 - [ ] Argument validators before approval/execution.
 - [ ] Per-tool, per-toolset, per-run, and separate output retry budgets with upstream precedence.
 - [ ] Tool timeout.
@@ -193,7 +193,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Match streaming final-output commitment and validation semantics.
-3. Add per-tool preparation, then provider-profile defaults for strict mode.
+3. Add provider-profile defaults and schema compatibility checks for strict mode.
 4. Add Anthropic, Gemini, and OpenAI Responses streaming.
 5. Design deferred tools and approvals around explicit pause/resume values rather than exceptions.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

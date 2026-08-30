@@ -140,6 +140,15 @@ func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettin
 	return base
 }
 
+// OutputToolConfig customizes tool-based structured output. Empty Name and
+// Description fields use the defaults.
+type OutputToolConfig struct {
+	Name        string
+	Description string
+	Sequential  bool
+	Strict      *bool
+}
+
 // ToolDefinition describes a tool to the model.
 type ToolDefinition struct {
 	Name        string         `json:"name"`

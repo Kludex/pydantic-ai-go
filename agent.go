@@ -23,6 +23,8 @@ type Agent[Deps, Output any] struct {
 	usageLimits        UsageLimits
 	retryLimits        RetryLimits
 	outputMode         OutputMode
+	outputTool         OutputToolConfig
+	outputToolPrepare  []OutputToolPrepareFunc[Deps]
 	endStrategy        EndStrategy
 	sequentialTools    bool
 	capabilities       []Capability
@@ -54,6 +56,11 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	a.settings = cfg.settings
 	a.usageLimits = cfg.limits
 	a.outputMode = cfg.outputMode
+	a.outputTool = cfg.outputTool
+	if cfg.outputTool.Strict != nil {
+		strict := *cfg.outputTool.Strict
+		a.outputTool.Strict = &strict
+	}
 	validateOutputMode(a.outputMode)
 	if cfg.endStrategy != "" {
 		switch cfg.endStrategy {
@@ -138,6 +145,19 @@ func (a *Agent[Deps, Output]) AddToolsPrepareFunc(fn ToolsPrepareFunc[Deps]) {
 	a.toolsPrepareFuncs = append(a.toolsPrepareFuncs, fn)
 }
 
+// OutputToolPrepareFunc customizes the output tool before one model request.
+// Return nil to omit it for that step.
+type OutputToolPrepareFunc[Deps any] func(
+	ctx context.Context, rc *RunContext[Deps], tool ToolDefinition,
+) (*ToolDefinition, error)
+
+// AddOutputToolPrepareFunc registers per-step output-tool preparation. It is
+// ignored for text and native output modes.
+func (a *Agent[Deps, Output]) AddOutputToolPrepareFunc(fn OutputToolPrepareFunc[Deps]) {
+	a.checkNotStarted()
+	a.outputToolPrepare = append(a.outputToolPrepare, fn)
+}
+
 // AddOutputValidator registers a semantic check on the final output.
 // Return an error from Retryf to send the failure back to the model. The
 // exhaustive end strategy may invoke validators concurrently for multiple
@@ -173,6 +193,7 @@ type config struct {
 	limits          UsageLimits
 	retryLimits     *RetryLimits
 	outputMode      OutputMode
+	outputTool      OutputToolConfig
 	endStrategy     EndStrategy
 	sequentialTools bool
 	capabilities    []Capability
@@ -195,6 +216,12 @@ const (
 // effect when Output is string.
 func WithOutputMode(mode OutputMode) Option {
 	return func(c *config) { c.outputMode = mode }
+}
+
+// WithOutputTool customizes tool-based structured output. It has no effect
+// for string or native output.
+func WithOutputTool(outputTool OutputToolConfig) Option {
+	return func(c *config) { c.outputTool = outputTool }
 }
 
 // EndStrategy controls calls emitted alongside a successful output tool.

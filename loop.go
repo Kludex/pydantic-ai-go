@@ -337,6 +337,7 @@ type run[Deps, Output any] struct {
 	outputRetry          int
 	retriesMu            sync.Mutex
 	currentTools         map[string]struct{}
+	currentOutputTool    *ToolDefinition
 	staticInstructions   []InstructionPart
 	runSettings          *ModelSettings
 	runSettingsFuncs     []erasedModelSettingsFunc
@@ -594,6 +595,25 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		instructions = append(instructions, part.Content)
 	}
 	params.Instructions = strings.Join(instructions, "\n\n")
+	if params.OutputTool != nil {
+		prepared := cloneToolDefinition(*params.OutputTool)
+		for _, prepare := range r.agent.outputToolPrepare {
+			result, err := prepare(ctx, &rc, prepared)
+			if err != nil {
+				return ModelRequestParams{}, fmt.Errorf("ai: prepare output tool: %w", err)
+			}
+			if result == nil {
+				params.OutputTool = nil
+				break
+			}
+			prepared = cloneToolDefinition(*result)
+			params.OutputTool = &prepared
+		}
+		if params.OutputTool != nil && params.OutputTool.Name == "" {
+			return ModelRequestParams{}, fmt.Errorf("ai: prepared output tool name must not be empty")
+		}
+	}
+	r.currentOutputTool = params.OutputTool
 	tools := make([]ToolDefinition, 0, len(params.Tools))
 	for _, def := range params.Tools {
 		prepared := cloneToolDefinition(def)
@@ -1072,7 +1092,7 @@ func (r *run[Deps, Output]) functionCallIndexes(calls []ToolCallPart) []int {
 }
 
 func (r *run[Deps, Output]) isOutputCall(call ToolCallPart) bool {
-	return r.params.OutputTool != nil && call.ToolName == outputToolName
+	return r.currentOutputTool != nil && call.ToolName == r.currentOutputTool.Name
 }
 
 func (r *run[Deps, Output]) callIsBarrier(call ToolCallPart, outputToolsConcurrent bool) bool {
@@ -1080,7 +1100,7 @@ func (r *run[Deps, Output]) callIsBarrier(call ToolCallPart, outputToolsConcurre
 		return true
 	}
 	if r.isOutputCall(call) {
-		return !outputToolsConcurrent
+		return r.currentOutputTool.Sequential || !outputToolsConcurrent
 	}
 	entry, ok := r.agent.findTool(call.ToolName)
 	return ok && entry.def.Sequential
@@ -1162,7 +1182,7 @@ func (r *run[Deps, Output]) emitPendingCallResults(outcomes []callOutcome[Output
 // executeCall runs one tool call. It returns the request part to send back
 // to the model and a validated value for a successful output tool.
 func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) (RequestPart, *Output, error) {
-	if r.params.OutputTool != nil && call.ToolName == outputToolName {
+	if r.isOutputCall(call) {
 		return r.finalizeOutputCall(ctx, call)
 	}
 	entry, registered := r.agent.findTool(call.ToolName)
@@ -1216,8 +1236,8 @@ func (r *run[Deps, Output]) unknownToolMessage(name string) string {
 	for toolName := range r.currentTools {
 		available = append(available, toolName)
 	}
-	if r.params.OutputTool != nil {
-		available = append(available, r.params.OutputTool.Name)
+	if r.currentOutputTool != nil {
+		available = append(available, r.currentOutputTool.Name)
 	}
 	slices.Sort(available)
 	if len(available) == 0 {
@@ -1261,7 +1281,13 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 		if err := r.countOutputRetry(); err != nil {
 			return nil, nil, err
 		}
-		return nil, &RetryPromptPart{Content: fmt.Sprintf("Respond by calling the %s tool to provide the final result.", outputToolName)}, nil
+		name := r.params.OutputTool.Name
+		if r.currentOutputTool != nil {
+			name = r.currentOutputTool.Name
+		}
+		return nil, &RetryPromptPart{Content: fmt.Sprintf(
+			"Respond by calling the %s tool to provide the final result.", name,
+		)}, nil
 	}
 	var out Output
 	if r.params.OutputSchema != nil {
@@ -1491,10 +1517,17 @@ func (a *Agent[Deps, Output]) buildParams(
 		params.AllowText = true
 		return params, nil
 	}
+	name := a.outputTool.Name
+	if name == "" {
+		name = outputToolName
+	}
+	description := a.outputTool.Description
+	if description == "" {
+		description = "The final result of the run."
+	}
 	params.OutputTool = &ToolDefinition{
-		Name:        outputToolName,
-		Description: "The final result of the run.",
-		Schema:      s,
+		Name: name, Description: description, Schema: s,
+		Sequential: a.outputTool.Sequential, Strict: a.outputTool.Strict,
 	}
 	return params, nil
 }

@@ -141,8 +141,8 @@ Status:
 - [ ] Prompted JSON output fallback, including end-strategy handling.
 - [ ] Multiple output alternatives / union outputs.
 - [ ] Image and binary outputs.
-- [ ] Output tool name/description customization and sequential flag.
-- [ ] Output preparation per step.
+- [x] Output tool name, description, strict mode, and sequential execution-barrier configuration through `OutputToolConfig`.
+- [x] Output-tool definitions can be modified, renamed, or omitted from fresh copies before each request through `AddOutputToolPrepareFunc`.
 
 ## P1 - Capabilities and ecosystem
 

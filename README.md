@@ -273,6 +273,20 @@ result, err := agent.Run(ctx, "Weather in SF?", deps)
 
 `Output = string` means plain text - no output tool is involved.
 
+Customize the tool contract without changing the output type:
+
+```go
+strict := true
+agent := ai.NewAgent[Deps, Weather](model, ai.WithOutputTool(ai.OutputToolConfig{
+	Name:        "weather_result",
+	Description: "Return the validated weather.",
+	Strict:      &strict,
+	Sequential:  true,
+}))
+```
+
+Use `AddOutputToolPrepareFunc` to rename, modify, or omit a fresh output-tool definition before each model request. Preparation runs after model selection and dynamic settings.
+
 ### Tool calls alongside output
 
 The default `ai.EndStrategyGraceful` runs function tools emitted alongside an output tool. The first successful output wins. A function-tool retry suppresses that output so the model can correct the call.

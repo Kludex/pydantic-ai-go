@@ -57,12 +57,12 @@ func (r *run[Deps, Output]) validatePartialOutput(
 	ctx context.Context, raw, toolCallID string,
 ) (Output, bool, error) {
 	var output Output
-	if r.params.OutputSchema == nil && r.params.OutputTool == nil {
+	if r.params.OutputSchema == nil && r.currentOutputTool == nil {
 		output = any(raw).(Output)
 	} else {
 		schema := r.params.OutputSchema
-		if r.params.OutputTool != nil {
-			schema = r.params.OutputTool.Schema
+		if r.currentOutputTool != nil {
+			schema = r.currentOutputTool.Schema
 		}
 		var valid bool
 		output, valid = decodePartialJSON[Output](raw, schema)

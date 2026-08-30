@@ -43,7 +43,7 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 	if err != nil {
 		return nil, err
 	}
-	return r.loop(ctx)
+	return r.wrappedLoop(ctx)
 }
 
 func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (*run[Deps, Output], error) {
@@ -56,7 +56,8 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 	r.messages = append(r.messages, cfg.history...)
 	r.newMessages = len(r.messages)
 	r.rc = &RunContext[Deps]{Deps: deps, RunID: newRunID(), usage: &r.usage, messages: &r.messages}
-	instructions, err := a.buildInstructions(ctx, r.rc)
+	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, messages: &r.messages}
+	instructions, err := a.buildInstructions(ctx, r.rc, r.info)
 	if err != nil {
 		return nil, err
 	}
@@ -71,6 +72,7 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 type run[Deps, Output any] struct {
 	agent       *Agent[Deps, Output]
 	rc          *RunContext[Deps]
+	info        *RunInfo
 	params      ModelRequestParams
 	messages    []ModelMessage
 	newMessages int
@@ -80,42 +82,54 @@ type run[Deps, Output any] struct {
 	emit func(StreamEvent) bool
 }
 
-// modelRequest is the model-request interception point: tracing today,
-// capability middleware (WrapModelRequest) in v0.3.
+// modelRequest is the model-request interception point: tracing plus
+// capability middleware (ModelRequestWrapper), outermost first.
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
 	a := r.agent
-	reqCtx, reqSpan := startRequestSpan(ctx, a.model.Name())
-	resp, err := r.doModelRequest(reqCtx)
-	if err != nil {
-		endSpan(reqSpan, err)
-		return nil, err
+	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+		reqCtx, reqSpan := startRequestSpan(ctx, a.model.Name())
+		resp, err := r.doModelRequest(reqCtx, msgs, params)
+		if err != nil {
+			endSpan(reqSpan, err)
+			return nil, err
+		}
+		recordUsage(reqSpan, resp.Usage)
+		endSpan(reqSpan, nil)
+		if resp.Timestamp.IsZero() {
+			resp.Timestamp = time.Now().UTC()
+		}
+		if resp.ModelName == "" {
+			resp.ModelName = a.model.Name()
+		}
+		return resp, nil
 	}
-	recordUsage(reqSpan, resp.Usage)
-	endSpan(reqSpan, nil)
-	if resp.Timestamp.IsZero() {
-		resp.Timestamp = time.Now().UTC()
+	next := inner
+	for i := len(a.capabilities) - 1; i >= 0; i-- {
+		if wrapper, ok := a.capabilities[i].(ModelRequestWrapper); ok {
+			innerNext := next
+			next = func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+				return wrapper.WrapModelRequest(ctx, r.info, msgs, params, innerNext)
+			}
+		}
 	}
-	if resp.ModelName == "" {
-		resp.ModelName = a.model.Name()
-	}
-	return resp, nil
+	return next(ctx, r.messages, r.params)
 }
 
 // doModelRequest streams when the run has an emit callback and the model
 // supports it; otherwise it falls back to a plain request, replaying the
 // response as events so RunStream works with every Model.
-func (r *run[Deps, Output]) doModelRequest(ctx context.Context) (*ModelResponse, error) {
+func (r *run[Deps, Output]) doModelRequest(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 	if r.emit == nil {
-		return r.agent.model.Request(ctx, r.messages, r.params)
+		return r.agent.model.Request(ctx, msgs, params)
 	}
 	if sm, ok := r.agent.model.(StreamingModel); ok {
-		events, err := sm.StreamRequest(ctx, r.messages, r.params)
+		events, err := sm.StreamRequest(ctx, msgs, params)
 		if err != nil {
 			return nil, err
 		}
 		return accumulate(events, r.emit)
 	}
-	resp, err := r.agent.model.Request(ctx, r.messages, r.params)
+	resp, err := r.agent.model.Request(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
@@ -123,16 +137,12 @@ func (r *run[Deps, Output]) doModelRequest(ctx context.Context) (*ModelResponse,
 }
 
 func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error) {
-	a := r.agent
 	for {
 		resp, err := r.modelRequest(ctx)
 		if err != nil {
 			return nil, err
 		}
 		r.usage.Add(resp.Usage)
-		if err := a.limits.check(r.usage); err != nil {
-			return nil, err
-		}
 		r.messages = append(r.messages, *resp)
 
 		calls := resp.ToolCalls()
@@ -182,7 +192,7 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	r.rc.ToolCallID = call.ToolCallID
 	r.rc.Retry = r.retries
 	toolCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
-	content, err := entry.call(toolCtx, r.rc, call.Args)
+	content, err := r.callTool(toolCtx, entry, call)
 	endSpan(toolSpan, err)
 	r.rc.ToolCallID = ""
 	var retry *RetryError
@@ -291,10 +301,24 @@ func (a *Agent[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
 	return toolEntry[Deps]{}, false
 }
 
-func (a *Agent[Deps, Output]) buildInstructions(ctx context.Context, rc *RunContext[Deps]) (string, error) {
-	parts := make([]string, 0, len(a.instructionsFuncs)+1)
+func (a *Agent[Deps, Output]) buildInstructions(ctx context.Context, rc *RunContext[Deps], info *RunInfo) (string, error) {
+	parts := make([]string, 0, len(a.instructionsFuncs)+len(a.capInstructions)+1)
 	if a.instructions != "" {
 		parts = append(parts, a.instructions)
+	}
+	parts = append(parts, a.capInstructions...)
+	for _, capability := range a.capabilities {
+		provider, ok := capability.(InstructionsProvider)
+		if !ok {
+			continue
+		}
+		s, err := provider.Instructions(ctx, info)
+		if err != nil {
+			return "", fmt.Errorf("ai: instructions: %w", err)
+		}
+		if s != "" {
+			parts = append(parts, s)
+		}
 	}
 	for _, fn := range a.instructionsFuncs {
 		s, err := fn(ctx, rc)
@@ -339,4 +363,44 @@ func newRunID() string {
 	var b [8]byte
 	_, _ = rand.Read(b[:])
 	return hex.EncodeToString(b[:])
+}
+
+// callTool is the tool-call interception point: capability middleware
+// (ToolCallWrapper) around the tool itself, outermost first.
+func (r *run[Deps, Output]) callTool(ctx context.Context, entry toolEntry[Deps], call ToolCallPart) (any, error) {
+	next := ToolCallFunc(func(ctx context.Context, call ToolCallPart) (any, error) {
+		return entry.call(ctx, r.rc, call.Args)
+	})
+	for i := len(r.agent.capabilities) - 1; i >= 0; i-- {
+		if wrapper, ok := r.agent.capabilities[i].(ToolCallWrapper); ok {
+			innerNext := next
+			next = func(ctx context.Context, call ToolCallPart) (any, error) {
+				return wrapper.WrapToolCall(ctx, r.info, call, innerNext)
+			}
+		}
+	}
+	return next(ctx, call)
+}
+
+// wrappedLoop is the run interception point: capability middleware
+// (RunWrapper) around the whole loop, outermost first.
+func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output], error) {
+	var result *RunResult[Output]
+	next := RunFunc(func(ctx context.Context) error {
+		var err error
+		result, err = r.loop(ctx)
+		return err
+	})
+	for i := len(r.agent.capabilities) - 1; i >= 0; i-- {
+		if wrapper, ok := r.agent.capabilities[i].(RunWrapper); ok {
+			innerNext := next
+			next = func(ctx context.Context) error {
+				return wrapper.WrapRun(ctx, r.info, innerNext)
+			}
+		}
+	}
+	if err := next(ctx); err != nil {
+		return nil, err
+	}
+	return result, nil
 }

@@ -2,6 +2,8 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 	"sync/atomic"
 )
 
@@ -14,9 +16,10 @@ type Agent[Deps, Output any] struct {
 	instructions      string
 	instructionsFuncs []func(ctx context.Context, rc *RunContext[Deps]) (string, error)
 	settings          ModelSettings
-	limits            UsageLimits
 	maxRetries        int
 	outputMode        OutputMode
+	capabilities      []Capability
+	capInstructions   []string
 	outputValidators  []func(ctx context.Context, rc *RunContext[Deps], out Output) error
 
 	tools   []toolEntry[Deps]
@@ -37,10 +40,26 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	}
 	a.instructions = cfg.instructions
 	a.settings = cfg.settings
-	a.limits = cfg.limits
 	a.outputMode = cfg.outputMode
+	a.capabilities = cfg.capabilities
+	if cfg.limits != (UsageLimits{}) {
+		a.capabilities = append([]Capability{usageLimitsCapability{limits: cfg.limits}}, a.capabilities...)
+	}
 	if cfg.maxRetries > 0 {
 		a.maxRetries = cfg.maxRetries
+	}
+	for _, capability := range a.capabilities {
+		reg := &CapabilityRegistry{}
+		if err := capability.Setup(reg); err != nil {
+			panic(fmt.Sprintf("ai: capability setup: %v", err))
+		}
+		a.capInstructions = append(a.capInstructions, reg.instructions...)
+		for _, tool := range reg.tools {
+			fn := tool.call
+			a.addTool(tool.def, func(ctx context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+				return fn(ctx, rawArgs)
+			})
+		}
 	}
 	return a
 }
@@ -79,6 +98,7 @@ type config struct {
 	limits       UsageLimits
 	maxRetries   int
 	outputMode   OutputMode
+	capabilities []Capability
 }
 
 // OutputMode selects how structured output is requested from the model.

@@ -67,7 +67,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(ctx context.Context, prompt UserPr
 			return true
 		}
 		var result *RunResult[Output]
-		result, err = r.loop(ctx)
+		result, err = r.wrappedLoop(ctx)
 		if stopped {
 			err = nil // the consumer broke out; not a run failure
 			return

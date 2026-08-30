@@ -4,6 +4,7 @@ package anthropic
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -117,6 +118,8 @@ type contentBlock struct {
 	Type string `json:"type"`
 	// text
 	Text string `json:"text,omitempty"`
+	// image
+	Source *imageSource `json:"source,omitempty"`
 	// tool_use
 	ID    string          `json:"id,omitempty"`
 	Name  string          `json:"name,omitempty"`
@@ -135,6 +138,37 @@ type toolParam struct {
 
 type toolChoiceParam struct {
 	Type string `json:"type"`
+}
+
+type imageSource struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+}
+
+func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
+	if len(p.Contents) == 0 {
+		return []contentBlock{{Type: "text", Text: p.Content}}, nil
+	}
+	blocks := make([]contentBlock, 0, len(p.Contents))
+	for _, c := range p.Contents {
+		switch item := c.(type) {
+		case ai.TextContent:
+			blocks = append(blocks, contentBlock{Type: "text", Text: item.Text})
+		case ai.BinaryContent:
+			blocks = append(blocks, contentBlock{Type: "image", Source: &imageSource{
+				Type:      "base64",
+				MediaType: item.MediaType,
+				Data:      base64.StdEncoding.EncodeToString(item.Data),
+			}})
+		case ai.ImageURL:
+			blocks = append(blocks, contentBlock{Type: "image", Source: &imageSource{Type: "url", URL: item.URL}})
+		default:
+			return nil, fmt.Errorf("anthropic: unsupported user content type %T", c)
+		}
+	}
+	return blocks, nil
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*messagesRequest, error) {
@@ -188,7 +222,11 @@ func convertRequest(m ai.ModelRequest) ([]messageParam, error) {
 			// system part in history becomes user-visible context.
 			blocks = append(blocks, contentBlock{Type: "text", Text: p.Content})
 		case ai.UserPromptPart:
-			blocks = append(blocks, contentBlock{Type: "text", Text: p.Content})
+			converted, err := convertUserPrompt(p)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, converted...)
 		case ai.ToolReturnPart:
 			content, err := contentString(p.Content)
 			if err != nil {

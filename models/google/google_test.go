@@ -332,3 +332,38 @@ func TestAssistantHistoryWithText(t *testing.T) {
 		t.Fatalf("empty-args tool call lost: %v", parts)
 	}
 }
+
+func TestMultimodalUserPrompt(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"a cat"}]}}],"usageMetadata":{}}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.TextContent{Text: "what is this?"},
+		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
+		ai.ImageURL{URL: "https://example.com/cat.png"},
+	}}}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	parts := gotBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	inline := parts[1].(map[string]any)["inlineData"].(map[string]any)
+	if inline["mimeType"] != "image/png" || inline["data"] != "aGk=" {
+		t.Fatalf("unexpected inline data %v", inline)
+	}
+	file := parts[2].(map[string]any)["fileData"].(map[string]any)
+	if file["fileUri"] != "https://example.com/cat.png" {
+		t.Fatalf("unexpected file data %v", file)
+	}
+}
+
+func TestMultimodalUnknownContent(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{nil}}}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err == nil {
+		t.Fatal("expected error")
+	}
+}

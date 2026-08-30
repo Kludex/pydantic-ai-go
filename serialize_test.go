@@ -102,13 +102,50 @@ func TestMarshalUnmarshalEdgeCases(t *testing.T) {
 	}
 }
 
-func TestUnmarshalNonStringContentFallsBack(t *testing.T) {
-	msgs, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":42}]}]`))
+func TestUnmarshalUserContentForms(t *testing.T) {
+	msgs, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":[
+		{"kind":"text","text":"look at this"},
+		{"kind":"image-url","url":"https://example.com/cat.png"},
+		{"kind":"binary","data":"aGk=","media_type":"image/png"}
+	]}]}]`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	part := msgs[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
-	if part.Content != "42" {
-		t.Fatalf("expected raw fallback, got %q", part.Content)
+	if len(part.Contents) != 3 {
+		t.Fatalf("unexpected contents %+v", part.Contents)
+	}
+	if part.Contents[1].(ai.ImageURL).URL != "https://example.com/cat.png" {
+		t.Fatalf("unexpected image %+v", part.Contents[1])
+	}
+	if string(part.Contents[2].(ai.BinaryContent).Data) != "hi" {
+		t.Fatalf("unexpected binary %+v", part.Contents[2])
+	}
+
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":42}]}]`)); err == nil {
+		t.Fatal("expected error for invalid user content")
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":[{"kind":"mystery"}]}]}]`)); err == nil {
+		t.Fatal("expected error for unknown content kind")
+	}
+}
+
+func TestMarshalUserContentRoundTrip(t *testing.T) {
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.TextContent{Text: "what is this?"},
+		ai.ImageURL{URL: "https://example.com/cat.png"},
+		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
+	}}}}}
+	data, err := ai.MarshalMessages(msgs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	back, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := back[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
+	if len(part.Contents) != 3 {
+		t.Fatalf("round trip lost contents: %+v", part.Contents)
 	}
 }

@@ -20,7 +20,17 @@ type toolFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps], rawArgs 
 
 // Run executes the agent loop: send the conversation to the model, execute
 // any tool calls, repeat until the model produces a final output.
-func (a *Agent[Deps, Output]) Run(ctx context.Context, prompt string, deps Deps, opts ...RunOption) (result *RunResult[Output], err error) {
+func (a *Agent[Deps, Output]) Run(ctx context.Context, prompt string, deps Deps, opts ...RunOption) (*RunResult[Output], error) {
+	return a.runPrompt(ctx, UserPromptPart{Content: prompt}, deps, opts)
+}
+
+// RunParts is Run with a multimodal prompt: text, image URLs, and inline
+// binary data. Providers reject content kinds they do not support.
+func (a *Agent[Deps, Output]) RunParts(ctx context.Context, contents []UserContent, deps Deps, opts ...RunOption) (*RunResult[Output], error) {
+	return a.runPrompt(ctx, UserPromptPart{Contents: contents}, deps, opts)
+}
+
+func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (result *RunResult[Output], err error) {
 	ctx, span := startRunSpan(ctx, a.model.Name())
 	defer func() {
 		if result != nil {
@@ -36,7 +46,7 @@ func (a *Agent[Deps, Output]) Run(ctx context.Context, prompt string, deps Deps,
 	return r.loop(ctx)
 }
 
-func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt string, deps Deps, opts []RunOption) (*run[Deps, Output], error) {
+func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (*run[Deps, Output], error) {
 	a.started.Store(true)
 	var cfg runConfig
 	for _, opt := range opts {
@@ -54,7 +64,7 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt string, deps De
 	if err != nil {
 		return nil, err
 	}
-	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{UserPromptPart{Content: prompt}}})
+	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{prompt}})
 	return r, nil
 }
 

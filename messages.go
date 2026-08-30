@@ -65,12 +65,41 @@ type SystemPromptPart struct {
 
 func (SystemPromptPart) requestPartKind() string { return "system-prompt" }
 
-// UserPromptPart carries user input.
+// UserPromptPart carries user input. Content holds plain text; Contents,
+// when non-empty, holds multimodal items instead and Content is ignored.
 type UserPromptPart struct {
-	Content string
+	Content  string
+	Contents []UserContent
 }
 
 func (UserPromptPart) requestPartKind() string { return "user-prompt" }
+
+// UserContent is one multimodal item in a user prompt.
+type UserContent interface {
+	userContentKind() string
+}
+
+// TextContent is a text item in a multimodal prompt.
+type TextContent struct {
+	Text string
+}
+
+func (TextContent) userContentKind() string { return "text" }
+
+// ImageURL references an image by URL.
+type ImageURL struct {
+	URL string
+}
+
+func (ImageURL) userContentKind() string { return "image-url" }
+
+// BinaryContent carries inline binary data, such as an image or document.
+type BinaryContent struct {
+	Data      []byte
+	MediaType string // e.g. "image/png"
+}
+
+func (BinaryContent) userContentKind() string { return "binary" }
 
 // ToolReturnPart carries the result of a tool call back to the model.
 type ToolReturnPart struct {

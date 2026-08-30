@@ -4,6 +4,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -110,9 +111,19 @@ type chatRequest struct {
 
 type chatMessage struct {
 	Role       string     `json:"role"`
-	Content    *string    `json:"content,omitempty"`
+	Content    any        `json:"content,omitempty"` // string or []contentPart
 	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
 	ToolCallID string     `json:"tool_call_id,omitempty"`
+}
+
+type contentPart struct {
+	Type     string    `json:"type"`
+	Text     string    `json:"text,omitempty"`
+	ImageURL *imageURL `json:"image_url,omitempty"`
+}
+
+type imageURL struct {
+	URL string `json:"url"`
 }
 
 type toolCall struct {
@@ -147,7 +158,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		Stop:        params.Settings.StopSequences,
 	}
 	if params.Instructions != "" {
-		req.Messages = append(req.Messages, chatMessage{Role: "system", Content: ptr(params.Instructions)})
+		req.Messages = append(req.Messages, chatMessage{Role: "system", Content: params.Instructions})
 	}
 	for _, msg := range msgs {
 		converted, err := convertMessage(msg)
@@ -184,20 +195,24 @@ func convertRequest(m ai.ModelRequest) ([]chatMessage, error) {
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.SystemPromptPart:
-			out = append(out, chatMessage{Role: "system", Content: ptr(p.Content)})
+			out = append(out, chatMessage{Role: "system", Content: p.Content})
 		case ai.UserPromptPart:
-			out = append(out, chatMessage{Role: "user", Content: ptr(p.Content)})
+			msg, err := convertUserPrompt(p)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, msg)
 		case ai.ToolReturnPart:
 			content, err := contentString(p.Content)
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, chatMessage{Role: "tool", Content: ptr(content), ToolCallID: p.ToolCallID})
+			out = append(out, chatMessage{Role: "tool", Content: content, ToolCallID: p.ToolCallID})
 		case ai.RetryPromptPart:
 			if p.ToolCallID != "" {
-				out = append(out, chatMessage{Role: "tool", Content: ptr(p.Content), ToolCallID: p.ToolCallID})
+				out = append(out, chatMessage{Role: "tool", Content: p.Content, ToolCallID: p.ToolCallID})
 			} else {
-				out = append(out, chatMessage{Role: "user", Content: ptr(p.Content)})
+				out = append(out, chatMessage{Role: "user", Content: p.Content})
 			}
 		default:
 			return nil, fmt.Errorf("openai: unknown request part type %T", part)
@@ -211,7 +226,7 @@ func convertResponse(m ai.ModelResponse) []chatMessage {
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.TextPart:
-			msg.Content = ptr(p.Content)
+			msg.Content = p.Content
 		case ai.ToolCallPart:
 			msg.ToolCalls = append(msg.ToolCalls, toolCall{
 				ID:       p.ToolCallID,
@@ -234,7 +249,10 @@ type chatResponse struct {
 	Model   string `json:"model"`
 	Created int64  `json:"created"`
 	Choices []struct {
-		Message chatMessage `json:"message"`
+		Message struct {
+			Content   string     `json:"content"`
+			ToolCalls []toolCall `json:"tool_calls"`
+		} `json:"message"`
 	} `json:"choices"`
 	Usage struct {
 		PromptTokens     int `json:"prompt_tokens"`
@@ -260,8 +278,8 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		},
 	}
 	msg := cr.Choices[0].Message
-	if msg.Content != nil && *msg.Content != "" {
-		resp.Parts = append(resp.Parts, ai.TextPart{Content: *msg.Content})
+	if msg.Content != "" {
+		resp.Parts = append(resp.Parts, ai.TextPart{Content: msg.Content})
 	}
 	for _, call := range msg.ToolCalls {
 		resp.Parts = append(resp.Parts, ai.ToolCallPart{
@@ -284,4 +302,23 @@ func contentString(content any) (string, error) {
 	return string(b), nil
 }
 
-func ptr[T any](v T) *T { return &v }
+func convertUserPrompt(p ai.UserPromptPart) (chatMessage, error) {
+	if len(p.Contents) == 0 {
+		return chatMessage{Role: "user", Content: p.Content}, nil
+	}
+	parts := make([]contentPart, 0, len(p.Contents))
+	for _, c := range p.Contents {
+		switch item := c.(type) {
+		case ai.TextContent:
+			parts = append(parts, contentPart{Type: "text", Text: item.Text})
+		case ai.ImageURL:
+			parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: item.URL}})
+		case ai.BinaryContent:
+			url := fmt.Sprintf("data:%s;base64,%s", item.MediaType, base64.StdEncoding.EncodeToString(item.Data))
+			parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: url}})
+		default:
+			return chatMessage{}, fmt.Errorf("openai: unknown user content type %T", c)
+		}
+	}
+	return chatMessage{Role: "user", Content: parts}, nil
+}

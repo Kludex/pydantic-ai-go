@@ -97,7 +97,11 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 	case SystemPromptPart:
 		return wirePart{PartKind: "system-prompt", Content: mustJSON(part.Content)}, nil
 	case UserPromptPart:
-		return wirePart{PartKind: "user-prompt", Content: mustJSON(part.Content)}, nil
+		content, err := marshalUserContent(part)
+		if err != nil {
+			return wirePart{}, err
+		}
+		return wirePart{PartKind: "user-prompt", Content: content}, nil
 	case ToolReturnPart:
 		content, err := json.Marshal(part.Content)
 		if err != nil {
@@ -176,7 +180,7 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 	case "system-prompt":
 		return SystemPromptPart{Content: stringContent(wp.Content)}, nil
 	case "user-prompt":
-		return UserPromptPart{Content: stringContent(wp.Content)}, nil
+		return unmarshalUserContent(wp.Content)
 	case "tool-return":
 		var content any
 		// wp.Content is raw JSON from a document that already parsed,
@@ -216,4 +220,58 @@ func stringContent(raw json.RawMessage) string {
 		return string(raw)
 	}
 	return s
+}
+
+type wireUserContent struct {
+	Kind      string `json:"kind"`
+	Text      string `json:"text,omitempty"`
+	URL       string `json:"url,omitempty"`
+	Data      []byte `json:"data,omitempty"`
+	MediaType string `json:"media_type,omitempty"`
+}
+
+func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
+	if len(part.Contents) == 0 {
+		return mustJSON(part.Content), nil
+	}
+	items := make([]wireUserContent, 0, len(part.Contents))
+	for _, c := range part.Contents {
+		switch item := c.(type) {
+		case TextContent:
+			items = append(items, wireUserContent{Kind: "text", Text: item.Text})
+		case ImageURL:
+			items = append(items, wireUserContent{Kind: "image-url", URL: item.URL})
+		case BinaryContent:
+			items = append(items, wireUserContent{Kind: "binary", Data: item.Data, MediaType: item.MediaType})
+		default:
+			return nil, fmt.Errorf("ai: unknown user content type %T", c)
+		}
+	}
+	b, _ := json.Marshal(items) // wireUserContent is always marshallable
+	return b, nil
+}
+
+func unmarshalUserContent(raw json.RawMessage) (UserPromptPart, error) {
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return UserPromptPart{Content: s}, nil
+	}
+	var items []wireUserContent
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return UserPromptPart{}, fmt.Errorf("ai: unmarshal user prompt content: %w", err)
+	}
+	part := UserPromptPart{}
+	for _, item := range items {
+		switch item.Kind {
+		case "text":
+			part.Contents = append(part.Contents, TextContent{Text: item.Text})
+		case "image-url":
+			part.Contents = append(part.Contents, ImageURL{URL: item.URL})
+		case "binary":
+			part.Contents = append(part.Contents, BinaryContent{Data: item.Data, MediaType: item.MediaType})
+		default:
+			return UserPromptPart{}, fmt.Errorf("ai: unknown user content kind %q", item.Kind)
+		}
+	}
+	return part, nil
 }

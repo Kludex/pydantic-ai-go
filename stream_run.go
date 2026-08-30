@@ -32,6 +32,15 @@ func (s *StreamedRun[Output]) Result() *RunResult[Output] { return s.result }
 //	}
 //	result := stream.Result()
 func (a *Agent[Deps, Output]) RunStream(ctx context.Context, prompt string, deps Deps, opts ...RunOption) *StreamedRun[Output] {
+	return a.runStreamPrompt(ctx, UserPromptPart{Content: prompt}, deps, opts)
+}
+
+// RunStreamParts is RunStream with a multimodal prompt.
+func (a *Agent[Deps, Output]) RunStreamParts(ctx context.Context, contents []UserContent, deps Deps, opts ...RunOption) *StreamedRun[Output] {
+	return a.runStreamPrompt(ctx, UserPromptPart{Contents: contents}, deps, opts)
+}
+
+func (a *Agent[Deps, Output]) runStreamPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) *StreamedRun[Output] {
 	s := &StreamedRun[Output]{}
 	s.events = func(yield func(StreamEvent, error) bool) {
 		ctx, span := startRunSpan(ctx, a.model.Name())

@@ -283,3 +283,36 @@ func TestAddToolWithUnsupportedArgsPanics(t *testing.T) {
 	}()
 	ai.AddSimpleTool(agent, "bad", func(context.Context, chan int) (string, error) { return "", nil })
 }
+
+func TestRunParts(t *testing.T) {
+	var gotPart ai.UserPromptPart
+	model := fakes.NewFunctionModel(func(_ context.Context, msgs []ai.ModelMessage, _ ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		gotPart = msgs[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "a cat"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	result, err := agent.RunParts(t.Context(), []ai.UserContent{
+		ai.TextContent{Text: "what is this?"},
+		ai.ImageURL{URL: "https://example.com/cat.png"},
+		ai.BinaryContent{Data: []byte("bytes"), MediaType: "image/png"},
+	}, deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "a cat" || len(gotPart.Contents) != 3 {
+		t.Fatalf("output=%q contents=%+v", result.Output, gotPart.Contents)
+	}
+}
+
+func TestRunStreamParts(t *testing.T) {
+	agent := ai.NewAgent[deps, string](fakes.NewTestModel())
+	stream := agent.RunStreamParts(t.Context(), []ai.UserContent{ai.TextContent{Text: "hi"}}, deps{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stream.Result() == nil {
+		t.Fatal("expected result")
+	}
+}

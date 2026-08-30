@@ -383,3 +383,43 @@ func TestInvalidBaseURL(t *testing.T) {
 		t.Fatal("expected URL error")
 	}
 }
+
+func TestMultimodalUserPrompt(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","created":0,"choices":[{"message":{"role":"assistant","content":"a cat"}}],"usage":{}}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.TextContent{Text: "what is this?"},
+		ai.ImageURL{URL: "https://example.com/cat.png"},
+		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
+	}}}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	parts := gotBody["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(parts) != 3 {
+		t.Fatalf("unexpected parts %v", parts)
+	}
+	if parts[0].(map[string]any)["type"] != "text" {
+		t.Fatalf("unexpected first part %v", parts[0])
+	}
+	if parts[1].(map[string]any)["image_url"].(map[string]any)["url"] != "https://example.com/cat.png" {
+		t.Fatalf("unexpected image part %v", parts[1])
+	}
+	dataURL := parts[2].(map[string]any)["image_url"].(map[string]any)["url"].(string)
+	if dataURL != "data:image/png;base64,aGk=" {
+		t.Fatalf("unexpected data URL %q", dataURL)
+	}
+}
+
+func TestMultimodalUnknownContent(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{nil}}}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err == nil {
+		t.Fatal("expected error for unknown content type")
+	}
+}

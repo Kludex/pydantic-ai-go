@@ -54,3 +54,19 @@ func TestStreamEventKinds(t *testing.T) {
 		}
 	}
 }
+
+func TestUserContentKinds(t *testing.T) {
+	kinds := []struct {
+		c    UserContent
+		want string
+	}{
+		{TextContent{}, "text"},
+		{ImageURL{}, "image-url"},
+		{BinaryContent{}, "binary"},
+	}
+	for _, tc := range kinds {
+		if tc.c.userContentKind() != tc.want {
+			t.Fatalf("expected %q, got %q", tc.want, tc.c.userContentKind())
+		}
+	}
+}

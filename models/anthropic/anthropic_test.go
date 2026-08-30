@@ -353,3 +353,41 @@ func TestAssistantHistoryWithMixedParts(t *testing.T) {
 		t.Fatalf("unexpected blocks %v", blocks)
 	}
 }
+
+func TestMultimodalUserPrompt(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"a cat"}],"usage":{}}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.TextContent{Text: "what is this?"},
+		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
+		ai.ImageURL{URL: "https://example.com/cat.png"},
+	}}}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	blocks := gotBody["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(blocks) != 3 {
+		t.Fatalf("unexpected blocks %v", blocks)
+	}
+	source := blocks[1].(map[string]any)["source"].(map[string]any)
+	if source["type"] != "base64" || source["data"] != "aGk=" || source["media_type"] != "image/png" {
+		t.Fatalf("unexpected image source %v", source)
+	}
+	urlSource := blocks[2].(map[string]any)["source"].(map[string]any)
+	if urlSource["type"] != "url" || urlSource["url"] != "https://example.com/cat.png" {
+		t.Fatalf("unexpected url source %v", urlSource)
+	}
+}
+
+func TestMultimodalUnknownContent(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
+	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{nil}}}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err == nil {
+		t.Fatal("expected error")
+	}
+}

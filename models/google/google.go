@@ -4,6 +4,7 @@ package google
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -109,9 +110,44 @@ type content struct {
 
 type part struct {
 	Text             string            `json:"text,omitempty"`
+	InlineData       *inlineData       `json:"inlineData,omitempty"`
+	FileData         *fileData         `json:"fileData,omitempty"`
 	FunctionCall     *functionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *functionResponse `json:"functionResponse,omitempty"`
 	Thought          bool              `json:"thought,omitempty"`
+}
+
+type inlineData struct {
+	MimeType string `json:"mimeType"`
+	Data     string `json:"data"`
+}
+
+type fileData struct {
+	MimeType string `json:"mimeType,omitempty"`
+	FileURI  string `json:"fileUri"`
+}
+
+func convertUserPrompt(p ai.UserPromptPart) ([]part, error) {
+	if len(p.Contents) == 0 {
+		return []part{{Text: p.Content}}, nil
+	}
+	parts := make([]part, 0, len(p.Contents))
+	for _, c := range p.Contents {
+		switch item := c.(type) {
+		case ai.TextContent:
+			parts = append(parts, part{Text: item.Text})
+		case ai.BinaryContent:
+			parts = append(parts, part{InlineData: &inlineData{
+				MimeType: item.MediaType,
+				Data:     base64.StdEncoding.EncodeToString(item.Data),
+			}})
+		case ai.ImageURL:
+			parts = append(parts, part{FileData: &fileData{FileURI: item.URL}})
+		default:
+			return nil, fmt.Errorf("google: unsupported user content type %T", c)
+		}
+	}
+	return parts, nil
 }
 
 type functionCall struct {
@@ -204,7 +240,11 @@ func convertRequest(m ai.ModelRequest) ([]content, error) {
 		case ai.SystemPromptPart:
 			parts = append(parts, part{Text: rp.Content})
 		case ai.UserPromptPart:
-			parts = append(parts, part{Text: rp.Content})
+			converted, err := convertUserPrompt(rp)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, converted...)
 		case ai.ToolReturnPart:
 			parts = append(parts, part{FunctionResponse: &functionResponse{
 				Name:     rp.ToolName,

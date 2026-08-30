@@ -98,6 +98,27 @@ result, err := agent.RunParts(ctx, []ai.UserContent{
 }, deps)
 ```
 
+## Capabilities
+
+A capability is a reusable, composable unit of agent behavior: it can contribute tools and instructions at setup, and intercept the run, every model request, and every tool call. One capability works with any agent, regardless of its `Deps` and `Output` types.
+
+```go
+type Redactor struct{}
+
+func (Redactor) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (Redactor) WrapToolCall(ctx context.Context, ri *ai.RunInfo, call ai.ToolCallPart, next ai.ToolCallFunc) (any, error) {
+	if call.ToolName == "delete_everything" {
+		return nil, ai.Retryf("that tool is not allowed")
+	}
+	return next(ctx, call)
+}
+
+agent := ai.NewAgent[Deps, string](model, ai.WithCapabilities(Redactor{}))
+```
+
+Implement any of `RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, or `InstructionsProvider` - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Slice order is middleware order: the first capability is outermost. Usage limits are implemented on this same surface internally.
+
 ## Why no graph?
 
 The agent run is a plain loop: call model, execute tool calls, repeat. PydanticAI's graph layer exists for history and durability reasons that do not apply here. Fewer layers means the whole loop fits in one file you can read.
@@ -119,4 +140,4 @@ Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` 
 
 ## Status
 
-v0.2 - streaming, OpenAI + Anthropic + Google providers, multimodal input, and native JSON output mode (`ai.WithOutputMode(ai.OutputModeNative)`), on top of the v0.1 loop, tools, structured output, usage limits, fakes, and tracing. See [PLAN.md](PLAN.md) for the roadmap: capabilities (v0.3), MCP (v0.4).
+v0.3 - capabilities (hook interfaces, `WithCapabilities`) and the OpenAI Responses API model (`openai.NewResponsesModel`), on top of v0.2 streaming, three providers, multimodal input, and native JSON output mode, and the v0.1 loop, tools, structured output, usage limits, fakes, and tracing. See [PLAN.md](PLAN.md) for the roadmap: MCP and provider-native tools (v0.4).

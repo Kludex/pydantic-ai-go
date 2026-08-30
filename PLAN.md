@@ -250,12 +250,13 @@ The minimal useful agent: typed runs against OpenAI.
 - Multimodal user input: `RunParts` / `UserPart` (images, files)
 - Native JSON-mode structured output where providers support it
 
-### v0.3 - Capabilities
+### v0.3 - Capabilities (shipped)
 
 - Public `Capability` + hook interfaces (`RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, `InstructionsProvider`)
-- `WithCapabilities`, slice-order composition
-- Dogfood: reimplement dynamic instructions, usage limits, and output validation as internal capabilities
-- `WithOutputValidator`, history processors as a capability
+- `WithCapabilities`, slice-order composition (first is outermost)
+- Dogfood: usage limits reimplemented as an internal `ModelRequestWrapper` capability
+- Output validation stays `AddOutputValidator` (a typed method): construction options are untyped, so a `WithOutputValidator` option cannot carry `Deps`/`Output` - Open Decision 1 resolved in favor of methods for typed extension points
+- History processors expressed as `ModelRequestWrapper` capabilities (no separate API needed)
 - `models/openai` Responses API constructor (`NewResponsesModel`)
 
 ### v0.4 - Ecosystem

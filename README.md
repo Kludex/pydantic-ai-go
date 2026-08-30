@@ -70,6 +70,34 @@ result, err := agent.Run(ctx, "Weather in SF?", deps)
 
 `Output = string` means plain text - no output tool is involved.
 
+## Streaming
+
+`RunStream` yields events as the model produces them - text deltas, tool call starts, argument fragments - and the typed result is available once the stream completes:
+
+```go
+stream := agent.RunStream(ctx, "tell me a story", deps)
+for event, err := range stream.Events() {
+	if err != nil { /* handle */ }
+	if delta, ok := event.(ai.TextDeltaEvent); ok {
+		fmt.Print(delta.Delta)
+	}
+}
+result := stream.Result()
+```
+
+Models that do not implement `ai.StreamingModel` still work: each response is replayed as events.
+
+## Multimodal input
+
+`RunParts` sends images and files alongside text:
+
+```go
+result, err := agent.RunParts(ctx, []ai.UserContent{
+	ai.TextContent{Text: "What is in this image?"},
+	ai.ImageURL{URL: "https://example.com/cat.png"},
+}, deps)
+```
+
 ## Why no graph?
 
 The agent run is a plain loop: call model, execute tool calls, repeat. PydanticAI's graph layer exists for history and durability reasons that do not apply here. Fewer layers means the whole loop fits in one file you can read.
@@ -91,4 +119,4 @@ Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` 
 
 ## Status
 
-v0.1 - the core loop, tools, structured output, usage limits, OpenAI provider, fakes, and tracing. See [PLAN.md](PLAN.md) for the roadmap: streaming and more providers (v0.2), capabilities (v0.3), MCP (v0.4).
+v0.2 - streaming, OpenAI + Anthropic + Google providers, multimodal input, and native JSON output mode (`ai.WithOutputMode(ai.OutputModeNative)`), on top of the v0.1 loop, tools, structured output, usage limits, fakes, and tracing. See [PLAN.md](PLAN.md) for the roadmap: capabilities (v0.3), MCP (v0.4).

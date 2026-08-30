@@ -227,7 +227,7 @@ OTel spans following the GenAI semantic conventions, same approach as pydantic-e
 
 ## Releases
 
-### v0.1 - The loop
+### v0.1 - The loop (shipped)
 
 The minimal useful agent: typed runs against OpenAI.
 
@@ -242,7 +242,7 @@ The minimal useful agent: typed runs against OpenAI.
 - OTel tracing
 - Error taxonomy, cassette-based provider tests, 100% coverage
 
-### v0.2 - Streaming and providers
+### v0.2 - Streaming and providers (shipped)
 
 - `StreamingModel`, `Agent.RunStream`: text deltas, partial tool calls, event stream
 - `models/anthropic`, `models/google`

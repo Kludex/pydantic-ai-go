@@ -1,6 +1,9 @@
 package ai
 
-import "context"
+import (
+	"context"
+	"time"
+)
 
 // Model is the provider contract. A provider package implements Model;
 // the agent calls Request once per loop iteration.
@@ -51,4 +54,5 @@ type ToolDefinition struct {
 	// Nil uses the provider default; true forces strict mode; false disables it.
 	Strict     *bool `json:"-"`
 	maxRetries *int
+	timeout    time.Duration
 }

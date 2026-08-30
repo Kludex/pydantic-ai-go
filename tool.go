@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"time"
 
 	"github.com/Kludex/pydantic-ai-go/internal/schema"
 )
@@ -141,6 +142,16 @@ func WithToolMaxRetries(n int) ToolOption {
 		panic(fmt.Sprintf("ai: tool max retries must be non-negative, got %d", n))
 	}
 	return func(d *ToolDefinition) { d.maxRetries = &n }
+}
+
+// WithToolTimeout sets the maximum duration of one tool call. The tool must
+// honor context cancellation. A timeout becomes a retry prompt and consumes
+// this tool's retry budget.
+func WithToolTimeout(timeout time.Duration) ToolOption {
+	if timeout <= 0 {
+		panic(fmt.Sprintf("ai: tool timeout must be positive, got %s", timeout))
+	}
+	return func(d *ToolDefinition) { d.timeout = timeout }
 }
 
 func toolDefinition[Args any](name string, opts []ToolOption) ToolDefinition {

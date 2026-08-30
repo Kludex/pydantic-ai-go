@@ -62,7 +62,7 @@ Status:
 - [ ] Per-toolset retry defaults and output-tool-specific overrides once those abstractions land.
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
-- [ ] Tool timeout.
+- [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [ ] Tool metadata and provider-specific options.
 - [ ] Toolsets: function, combined, filtered, prefixed, renamed, prepared, and approval-required.
 - [ ] Deferred/lazy tool loading and tool search.

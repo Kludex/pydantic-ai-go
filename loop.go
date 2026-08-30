@@ -576,8 +576,17 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	toolRC := *r.rc
 	toolRC.ToolCallID = call.ToolCallID
 	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)
-	toolCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
+	spanCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
+	toolCtx := spanCtx
+	var cancel context.CancelFunc = func() {}
+	if entry.def.timeout > 0 {
+		toolCtx, cancel = context.WithTimeout(spanCtx, entry.def.timeout)
+	}
 	content, err := r.callTool(toolCtx, &toolRC, entry, call)
+	if ctx.Err() == nil && errors.Is(toolCtx.Err(), context.DeadlineExceeded) {
+		err = Retryf("Timed out after %s.", entry.def.timeout)
+	}
+	cancel()
 	endSpan(toolSpan, err)
 	var failed *ToolFailedError
 	var retry *RetryError

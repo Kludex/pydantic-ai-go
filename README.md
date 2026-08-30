@@ -135,6 +135,8 @@ Return `ai.Retryf(...)` when the model should correct the call. Return `ai.ToolF
 
 Unknown tool names also go back to the model as retry prompts. The prompt lists only tools exposed for that request, so a tool omitted by preparation cannot be executed from a stale call.
 
+Use `ai.WithToolTimeout(5 * time.Second)` to give one tool call a deadline. The tool must honor `ctx.Done()`. A tool-specific timeout becomes a retry, while cancellation of the parent run remains `context.Canceled`.
+
 ## Structured output
 
 Use any struct as the `Output` type and the agent asks the model for it via a final output tool. The result arrives typed and validated:

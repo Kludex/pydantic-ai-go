@@ -138,8 +138,8 @@ func TestRunSettingsInheritUnspecifiedAgentDefaults(t *testing.T) {
 	if _, err := agent.Run(t.Context(), "go", deps{}, ai.WithRunModelSettings(ai.ModelSettings{TopP: &topP})); err != nil {
 		t.Fatal(err)
 	}
-	if got.MaxTokens != 100 || got.Temperature != &temperature || got.TopP != &topP ||
-		!reflect.DeepEqual(got.StopSequences, []string{"base"}) {
+	if got.MaxTokens != 100 || got.Temperature == nil || *got.Temperature != temperature ||
+		got.TopP == nil || *got.TopP != topP || !reflect.DeepEqual(got.StopSequences, []string{"base"}) {
 		t.Fatalf("unspecified settings did not inherit defaults: %+v", got)
 	}
 }

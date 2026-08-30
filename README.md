@@ -79,7 +79,7 @@ result, err := agent.Run(
 )
 ```
 
-Run settings merge over agent settings field by field. Dynamic callbacks run before every model request, so they can adapt after tool calls and retries. Settings resolve in agent, capability, then run order. Each callback sees prior layers through `RunContext.ModelSettings`. The effective joined instructions are persisted on every sent `ModelRequest`, including middleware changes, so serialized histories retain request context. A zero `UsageLimits` value disables agent-level limits for that run.
+Run settings merge field by field. Bundled models accept provider-level defaults through `openai.WithDefaultSettings`, `anthropic.WithDefaultSettings`, and `google.WithDefaultSettings`. After model selection, settings resolve in model, agent, capability, then run order. Dynamic callbacks run before every model request, so they can adapt after tool calls and retries. Each callback sees prior layers through `RunContext.ModelSettings`. The effective joined instructions are persisted on every sent `ModelRequest`, including middleware changes, so serialized histories retain request context. A zero `UsageLimits` value disables agent-level limits for that run.
 
 ## Model selection
 

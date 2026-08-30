@@ -19,6 +19,12 @@ type Model interface {
 	Name() string
 }
 
+// ModelDefaultSettings is implemented by models with request-setting defaults.
+// Agent, capability, and run settings override these values field by field.
+type ModelDefaultSettings interface {
+	DefaultModelSettings() ModelSettings
+}
+
 func modelName(model Model) string {
 	if modelIsNil(model) {
 		return ""
@@ -112,7 +118,26 @@ type ModelSettings struct {
 	ParallelToolCalls *bool
 }
 
+// Clone returns settings detached from pointer and slice fields.
+func (s ModelSettings) Clone() ModelSettings {
+	s.Temperature = clonePointer(s.Temperature)
+	s.TopP = clonePointer(s.TopP)
+	s.Seed = clonePointer(s.Seed)
+	s.StopSequences = slices.Clone(s.StopSequences)
+	s.ParallelToolCalls = clonePointer(s.ParallelToolCalls)
+	return s
+}
+
+func clonePointer[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	cloned := *value
+	return &cloned
+}
+
 func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettings {
+	base = base.Clone()
 	if override == nil {
 		return base
 	}
@@ -123,19 +148,19 @@ func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettin
 		base.RequestTimeout = override.RequestTimeout
 	}
 	if override.Temperature != nil {
-		base.Temperature = override.Temperature
+		base.Temperature = clonePointer(override.Temperature)
 	}
 	if override.TopP != nil {
-		base.TopP = override.TopP
+		base.TopP = clonePointer(override.TopP)
 	}
 	if override.Seed != nil {
-		base.Seed = override.Seed
+		base.Seed = clonePointer(override.Seed)
 	}
 	if override.StopSequences != nil {
 		base.StopSequences = slices.Clone(override.StopSequences)
 	}
 	if override.ParallelToolCalls != nil {
-		base.ParallelToolCalls = override.ParallelToolCalls
+		base.ParallelToolCalls = clonePointer(override.ParallelToolCalls)
 	}
 	return base
 }

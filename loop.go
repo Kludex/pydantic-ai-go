@@ -1495,7 +1495,12 @@ func (a *Agent[Deps, Output]) staticInstructions(additional string) []Instructio
 func (r *run[Deps, Output]) prepareModelSettings(
 	ctx context.Context, rc *RunContext[Deps],
 ) (ModelSettings, error) {
-	settings := r.agent.settings
+	var settings ModelSettings
+	if defaults, ok := r.model.(ModelDefaultSettings); ok {
+		modelSettings := defaults.DefaultModelSettings()
+		settings = mergeModelSettings(settings, &modelSettings)
+	}
+	settings = mergeModelSettings(settings, &r.agent.settings)
 	for _, fn := range r.agent.modelSettingsFuncs {
 		rc.ModelSettings = settings
 		resolved, err := fn(ctx, rc)

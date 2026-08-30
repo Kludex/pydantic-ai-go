@@ -131,7 +131,7 @@ Status:
 - [x] `ParallelToolCalls` generation setting for OpenAI Chat/Responses and Anthropic; Gemini exposes no equivalent request setting.
 - [ ] Thinking/reasoning effort and token budgets.
 - [ ] Logprobs, penalties, service tier, response metadata, and provider-specific settings.
-- [~] Fieldwise static and per-step settings resolve in agent, capability, and run order, with prior layers visible to each callback. Model-owned defaults remain because `Model` does not expose them yet.
+- [x] Fieldwise settings resolve per selected model in model-default, agent, capability, and run order, with prior layers visible to each callback; bundled providers expose detached defaults through `WithDefaultSettings`.
 
 ### Outputs
 

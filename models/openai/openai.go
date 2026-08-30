@@ -22,6 +22,7 @@ type Model struct {
 	baseURL           string
 	httpClient        *http.Client
 	strictToolSupport bool
+	defaultSettings   ai.ModelSettings
 }
 
 // Option configures a Model.
@@ -36,6 +37,11 @@ func WithBaseURL(url string) Option { return func(m *Model) { m.baseURL = url } 
 
 // WithHTTPClient sets the HTTP client used for requests.
 func WithHTTPClient(c *http.Client) Option { return func(m *Model) { m.httpClient = c } }
+
+// WithDefaultSettings sets request defaults overridden by agent and run settings.
+func WithDefaultSettings(settings ai.ModelSettings) Option {
+	return func(m *Model) { m.defaultSettings = settings.Clone() }
+}
 
 // WithStrictToolSupport configures whether an OpenAI-compatible endpoint
 // accepts strict function definitions. OpenAI supports them by default.
@@ -60,6 +66,9 @@ func NewModel(name string, opts ...Option) *Model {
 
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
+
+// DefaultModelSettings returns this model's request defaults.
+func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 
 // Request implements ai.Model.
 func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {

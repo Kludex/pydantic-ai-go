@@ -19,6 +19,7 @@ type ResponsesModel struct {
 	baseURL           string
 	httpClient        *http.Client
 	strictToolSupport bool
+	defaultSettings   ai.ModelSettings
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
@@ -27,12 +28,15 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 	m := NewModel(name, opts...)
 	return &ResponsesModel{
 		name: m.name, apiKey: m.apiKey, baseURL: m.baseURL, httpClient: m.httpClient,
-		strictToolSupport: m.strictToolSupport,
+		strictToolSupport: m.strictToolSupport, defaultSettings: m.defaultSettings,
 	}
 }
 
 // Name returns the model name.
 func (m *ResponsesModel) Name() string { return m.name }
+
+// DefaultModelSettings returns this model's request defaults.
+func (m *ResponsesModel) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 
 // Request implements ai.Model.
 func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {

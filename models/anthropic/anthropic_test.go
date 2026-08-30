@@ -27,6 +27,22 @@ func newServer(t *testing.T, handler http.HandlerFunc) *anthropic.Model {
 	)
 }
 
+func TestDefaultSettingsAreDetached(t *testing.T) {
+	stop := []string{"stop"}
+	model := anthropic.NewModel("claude-test", anthropic.WithDefaultSettings(ai.ModelSettings{
+		MaxTokens: 42, StopSequences: stop,
+	}))
+	stop[0] = "changed"
+	defaults := model.DefaultModelSettings()
+	if defaults.MaxTokens != 42 || defaults.StopSequences[0] != "stop" {
+		t.Fatalf("unexpected defaults: %+v", defaults)
+	}
+	defaults.StopSequences[0] = "mutated"
+	if model.DefaultModelSettings().StopSequences[0] != "stop" {
+		t.Fatal("model defaults were mutable")
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotKey, gotVersion string

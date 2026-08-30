@@ -82,7 +82,7 @@ func TestDynamicSettingsAndInstructionsResolveEveryStep(t *testing.T) {
 		ai.WithRunModelSettings(ai.ModelSettings{Temperature: &runTemperature}),
 		ai.WithRunModelSettingsFunc(func(_ context.Context, rc *ai.RunContext[deps]) (ai.ModelSettings, error) {
 			if rc.ModelSettings.Seed == nil || *rc.ModelSettings.Seed != 100+rc.Usage().Requests ||
-				rc.ModelSettings.Temperature != &runTemperature {
+				rc.ModelSettings.Temperature == nil || *rc.ModelSettings.Temperature != runTemperature {
 				t.Fatalf("run settings callback saw wrong layers: %+v", rc.ModelSettings)
 			}
 			return ai.ModelSettings{MaxTokens: 200 + rc.Usage().Requests}, nil
@@ -99,7 +99,8 @@ func TestDynamicSettingsAndInstructionsResolveEveryStep(t *testing.T) {
 	}
 	for index, params := range got {
 		if params.Settings.MaxTokens != 200+index || params.Settings.Seed == nil ||
-			*params.Settings.Seed != 100+index || params.Settings.Temperature != &runTemperature ||
+			*params.Settings.Seed != 100+index || params.Settings.Temperature == nil ||
+			*params.Settings.Temperature != runTemperature ||
 			!reflect.DeepEqual(params.Settings.StopSequences, []string{fmt.Sprintf("cap-%d", index)}) {
 			t.Fatalf("unexpected settings for step %d: %+v", index, params.Settings)
 		}

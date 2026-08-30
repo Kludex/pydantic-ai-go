@@ -23,6 +23,26 @@ func newServer(t *testing.T, handler http.HandlerFunc) *openai.Model {
 	)
 }
 
+func TestDefaultSettingsAreDetached(t *testing.T) {
+	stop := []string{"stop"}
+	settings := ai.ModelSettings{MaxTokens: 42, StopSequences: stop}
+	models := []ai.Model{
+		openai.NewModel("gpt-test", openai.WithDefaultSettings(settings)),
+		openai.NewResponsesModel("gpt-test", openai.WithDefaultSettings(settings)),
+	}
+	stop[0] = "changed"
+	for _, model := range models {
+		defaults := model.(ai.ModelDefaultSettings).DefaultModelSettings()
+		if defaults.MaxTokens != 42 || defaults.StopSequences[0] != "stop" {
+			t.Fatalf("unexpected defaults for %T: %+v", model, defaults)
+		}
+		defaults.StopSequences[0] = "mutated"
+		if model.(ai.ModelDefaultSettings).DefaultModelSettings().StopSequences[0] != "stop" {
+			t.Fatalf("defaults were mutable for %T", model)
+		}
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotAuth string

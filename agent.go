@@ -53,7 +53,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		opt(&cfg)
 	}
 	a.instructions = cfg.instructions
-	a.settings = cfg.settings
+	a.settings = cfg.settings.Clone()
 	a.usageLimits = cfg.limits
 	a.outputMode = cfg.outputMode
 	a.outputTool = cfg.outputTool

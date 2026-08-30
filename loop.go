@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -77,17 +78,18 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 }
 
 type run[Deps, Output any] struct {
-	agent       *Agent[Deps, Output]
-	rc          *RunContext[Deps]
-	info        *RunInfo
-	params      ModelRequestParams
-	messages    []ModelMessage
-	newMessages int
-	usage       Usage
-	retryLimits RetryLimits
-	toolRetries map[string]int
-	outputRetry int
-	retriesMu   sync.Mutex
+	agent        *Agent[Deps, Output]
+	rc           *RunContext[Deps]
+	info         *RunInfo
+	params       ModelRequestParams
+	messages     []ModelMessage
+	newMessages  int
+	usage        Usage
+	retryLimits  RetryLimits
+	toolRetries  map[string]int
+	outputRetry  int
+	retriesMu    sync.Mutex
+	currentTools map[string]struct{}
 	// emit forwards stream events during RunStream; nil for plain runs.
 	emit func(StreamEvent) bool
 }
@@ -97,6 +99,7 @@ type run[Deps, Output any] struct {
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
 	a := r.agent
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+		r.setCurrentTools(params)
 		reqCtx, reqSpan := startRequestSpan(ctx, a.model.Name())
 		resp, err := r.doModelRequest(reqCtx, msgs, params)
 		if err != nil {
@@ -126,7 +129,15 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			}
 		}
 	}
+	r.setCurrentTools(params)
 	return next(ctx, r.messages, params)
+}
+
+func (r *run[Deps, Output]) setCurrentTools(params ModelRequestParams) {
+	r.currentTools = make(map[string]struct{}, len(params.Tools))
+	for _, def := range params.Tools {
+		r.currentTools[def.Name] = struct{}{}
+	}
 }
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
@@ -260,6 +271,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			for _, call := range calls {
 				parts = append(parts, ToolReturnPart{
 					ToolName: call.ToolName, Content: toolSkipped, ToolCallID: call.ToolCallID,
+					Outcome: ToolReturnOutcomeSuccess,
 				})
 			}
 			r.messages = append(r.messages, ModelRequest{Parts: parts})
@@ -302,10 +314,11 @@ func (r *run[Deps, Output]) earlyNativeOutput(
 }
 
 type callOutcome[Output any] struct {
-	part       RequestPart
-	output     *Output
-	outputCall bool
-	err        error
+	part         RequestPart
+	output       *Output
+	outputCall   bool
+	functionCall bool
+	err          error
 }
 
 const (
@@ -340,7 +353,10 @@ func (r *run[Deps, Output]) executeCallsEarly(
 			continue
 		}
 		if winner != nil {
-			outcomes[i].part = ToolReturnPart{ToolName: call.ToolName, Content: outputSkipped, ToolCallID: call.ToolCallID}
+			outcomes[i].part = ToolReturnPart{
+				ToolName: call.ToolName, Content: outputSkipped, ToolCallID: call.ToolCallID,
+				Outcome: ToolReturnOutcomeSuccess,
+			}
 			continue
 		}
 		outcomes[i] = r.executeOne(ctx, call)
@@ -352,7 +368,10 @@ func (r *run[Deps, Output]) executeCallsEarly(
 	if winner != nil {
 		for i, call := range calls {
 			if !r.isOutputCall(call) {
-				outcomes[i].part = ToolReturnPart{ToolName: call.ToolName, Content: toolSkipped, ToolCallID: call.ToolCallID}
+				outcomes[i].part = ToolReturnPart{
+					ToolName: call.ToolName, Content: toolSkipped, ToolCallID: call.ToolCallID,
+					Outcome: ToolReturnOutcomeSuccess,
+				}
 			}
 		}
 		return collectCallOutcomes(outcomes, false)
@@ -379,7 +398,10 @@ func (r *run[Deps, Output]) executeCallsGraceful(
 		}
 		batch = batch[:0]
 		if r.isOutputCall(call) && winner != nil {
-			outcomes[i].part = ToolReturnPart{ToolName: call.ToolName, Content: outputSkipped, ToolCallID: call.ToolCallID}
+			outcomes[i].part = ToolReturnPart{
+				ToolName: call.ToolName, Content: outputSkipped, ToolCallID: call.ToolCallID,
+				Outcome: ToolReturnOutcomeSuccess,
+			}
 			continue
 		}
 		outcomes[i] = r.executeOne(ctx, call)
@@ -469,7 +491,12 @@ func (r *run[Deps, Output]) executeIndexBatch(
 
 func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) callOutcome[Output] {
 	part, output, err := r.executeCall(ctx, call)
-	return callOutcome[Output]{part: part, output: output, outputCall: r.isOutputCall(call), err: err}
+	_, registered := r.agent.findTool(call.ToolName)
+	_, available := r.currentTools[call.ToolName]
+	functionCall := registered && available
+	return callOutcome[Output]{
+		part: part, output: output, outputCall: r.isOutputCall(call), functionCall: functionCall, err: err,
+	}
 }
 
 func (r *run[Deps, Output]) functionCallIndexes(calls []ToolCallPart) []int {
@@ -517,7 +544,7 @@ func collectCallOutcomes[Output any](
 				part.Content = outputNotFinal
 				parts[len(parts)-1] = part
 			}
-		} else if _, ok := outcome.part.(RetryPromptPart); ok && !outcome.outputCall {
+		} else if _, ok := outcome.part.(RetryPromptPart); ok && outcome.functionCall {
 			functionRetry = true
 		}
 	}
@@ -536,9 +563,15 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	if r.params.OutputTool != nil && call.ToolName == outputToolName {
 		return r.finalizeOutputCall(ctx, call)
 	}
-	entry, ok := r.agent.findTool(call.ToolName)
-	if !ok {
-		return nil, nil, &UnexpectedModelBehaviorError{Message: fmt.Sprintf("model called unknown tool %q", call.ToolName)}
+	entry, registered := r.agent.findTool(call.ToolName)
+	_, available := r.currentTools[call.ToolName]
+	if !registered || !available {
+		if err := r.countToolRetry(call.ToolName); err != nil {
+			return nil, nil, err
+		}
+		return RetryPromptPart{
+			Content: r.unknownToolMessage(call.ToolName), ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+		}, nil, nil
 	}
 	toolRC := *r.rc
 	toolRC.ToolCallID = call.ToolCallID
@@ -546,8 +579,14 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	toolCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
 	content, err := r.callTool(toolCtx, &toolRC, entry, call)
 	endSpan(toolSpan, err)
+	var failed *ToolFailedError
 	var retry *RetryError
 	switch {
+	case errors.As(err, &failed):
+		return ToolReturnPart{
+			ToolName: call.ToolName, Content: failed.Message, ToolCallID: call.ToolCallID,
+			Outcome: ToolReturnOutcomeFailed,
+		}, nil, nil
 	case errors.As(err, &retry):
 		if err := r.countToolRetry(call.ToolName); err != nil {
 			return nil, nil, err
@@ -556,7 +595,31 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	case err != nil:
 		return nil, nil, fmt.Errorf("ai: tool %q: %w", call.ToolName, err)
 	}
-	return ToolReturnPart{ToolName: call.ToolName, Content: content, ToolCallID: call.ToolCallID}, nil, nil
+	return ToolReturnPart{
+		ToolName: call.ToolName, Content: content, ToolCallID: call.ToolCallID, Outcome: ToolReturnOutcomeSuccess,
+	}, nil, nil
+}
+
+func (r *run[Deps, Output]) unknownToolMessage(name string) string {
+	available := make([]string, 0, len(r.currentTools)+1)
+	for toolName := range r.currentTools {
+		available = append(available, toolName)
+	}
+	if r.params.OutputTool != nil {
+		available = append(available, r.params.OutputTool.Name)
+	}
+	slices.Sort(available)
+	if len(available) == 0 {
+		return fmt.Sprintf("Unknown tool name: %s. No tools available.", quoteToolName(name))
+	}
+	for i, toolName := range available {
+		available[i] = quoteToolName(toolName)
+	}
+	return fmt.Sprintf("Unknown tool name: %s. Available tools: %s", quoteToolName(name), strings.Join(available, ", "))
+}
+
+func quoteToolName(name string) string {
+	return "'" + strings.ReplaceAll(name, "'", `\'`) + "'"
 }
 
 func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCallPart) (RequestPart, *Output, error) {
@@ -575,6 +638,7 @@ func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCal
 	}
 	return ToolReturnPart{
 		ToolName: call.ToolName, Content: finalResultProcessed, ToolCallID: call.ToolCallID,
+		Outcome: ToolReturnOutcomeSuccess,
 	}, &out, nil
 }
 

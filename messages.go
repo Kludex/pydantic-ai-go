@@ -101,11 +101,22 @@ type BinaryContent struct {
 
 func (BinaryContent) userContentKind() string { return "binary" }
 
+// ToolReturnOutcome reports whether a tool completed successfully.
+type ToolReturnOutcome string
+
+const (
+	// ToolReturnOutcomeSuccess is the default for ordinary return values.
+	ToolReturnOutcomeSuccess ToolReturnOutcome = "success"
+	// ToolReturnOutcomeFailed marks a terminal failure the model should adapt to.
+	ToolReturnOutcomeFailed ToolReturnOutcome = "failed"
+)
+
 // ToolReturnPart carries the result of a tool call back to the model.
 type ToolReturnPart struct {
 	ToolName   string
 	Content    any
 	ToolCallID string
+	Outcome    ToolReturnOutcome
 }
 
 func (ToolReturnPart) requestPartKind() string { return "tool-return" }

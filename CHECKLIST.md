@@ -35,7 +35,7 @@ Status:
 ### Messages and persisted history
 
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
-- [x] Text, thinking, tool call, tool return, retry prompt, and system/user prompt parts.
+- [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
 - [~] Pinned upstream fixtures cover basic and multimodal histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [ ] Instruction parts and stable instruction IDs.
@@ -60,8 +60,8 @@ Status:
 - [ ] Argument validators before approval/execution.
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
 - [ ] Per-toolset retry defaults and output-tool-specific overrides once those abstractions land.
-- [ ] `ToolFailed` terminal failure results that do not consume retry budgets.
-- [ ] Unknown tool calls should produce a retry prompt with available tool names instead of aborting the run.
+- [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
+- [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
 - [ ] Tool timeout.
 - [ ] Tool metadata and provider-specific options.
 - [ ] Toolsets: function, combined, filtered, prefixed, renamed, prepared, and approval-required.

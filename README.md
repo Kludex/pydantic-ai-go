@@ -131,6 +131,10 @@ Use `ai.WithToolMaxRetries(4)` when registering one tool to override the functio
 
 Inside tools and output validators, `rc.Retry` is the current counter for that tool or output path. `rc.MaxRetries` is the limit that applies to it.
 
+Return `ai.Retryf(...)` when the model should correct the call. Return `ai.ToolFailedf(...)` when the call completed unsuccessfully and the model should adapt instead of retrying. A terminal failure does not consume the tool's retry budget.
+
+Unknown tool names also go back to the model as retry prompts. The prompt lists only tools exposed for that request, so a tool omitted by preparation cannot be executed from a stale call.
+
 ## Structured output
 
 Use any struct as the `Output` type and the agent asks the model for it via a final output tool. The result arrives typed and validated:

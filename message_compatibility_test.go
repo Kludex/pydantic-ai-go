@@ -32,6 +32,10 @@ func TestUnmarshalUpstreamBasicMessageFixture(t *testing.T) {
 	if call.ToolName != "search" || call.ToolCallID != "c1" || string(call.Args) != `{"q": "go"}` {
 		t.Fatalf("unexpected tool call %+v", call)
 	}
+	toolReturn := messages[2].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
+	if toolReturn.Outcome != ai.ToolReturnOutcomeSuccess {
+		t.Fatalf("unexpected tool outcome %q", toolReturn.Outcome)
+	}
 	if messages[3].(ai.ModelResponse).Text() != "done" {
 		t.Fatalf("unexpected final response %+v", messages[3])
 	}

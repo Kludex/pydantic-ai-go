@@ -192,16 +192,27 @@ func TestInvalidToolArgsRetries(t *testing.T) {
 }
 
 func TestUnknownToolCall(t *testing.T) {
-	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
-		return &ai.ModelResponse{Parts: []ai.ResponsePart{
-			ai.ToolCallPart{ToolName: "nope", Args: json.RawMessage(`{}`)},
-		}}, nil
+	var retry ai.RetryPromptPart
+	model := fakes.NewFunctionModel(func(_ context.Context, msgs []ai.ModelMessage, _ ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		if len(msgs) == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.ToolCallPart{ToolName: "nope", ToolCallID: "bad", Args: json.RawMessage(`{}`)},
+			}}, nil
+		}
+		retry = msgs[len(msgs)-1].(ai.ModelRequest).Parts[0].(ai.RetryPromptPart)
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "recovered"}}}, nil
 	})
 	agent := ai.NewAgent[deps, string](model)
-	var ube *ai.UnexpectedModelBehaviorError
-	_, err := agent.Run(t.Context(), "go", deps{})
-	if !errors.As(err, &ube) {
-		t.Fatalf("expected UnexpectedModelBehaviorError, got %v", err)
+	ai.AddSimpleTool(agent, "known", func(context.Context, struct{}) (string, error) { return "", nil })
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "recovered" {
+		t.Fatalf("unexpected output %q", result.Output)
+	}
+	if retry.Content != "Unknown tool name: 'nope'. Available tools: 'known'" || retry.ToolCallID != "bad" {
+		t.Fatalf("unexpected retry %+v", retry)
 	}
 }
 

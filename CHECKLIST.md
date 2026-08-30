@@ -53,12 +53,15 @@ Status:
 - [x] Typed function tools with reflected JSON Schema.
 - [x] Dependency-aware and simple tool signatures.
 - [x] Raw-schema dynamic tool registration.
-- [~] Tool and argument-unmarshal retries work, but Go currently shares one global counter; upstream tracks function retries per tool and output retries separately.
+- [x] Tool and argument-unmarshal retries use independent per-tool counters; output retries use a separate counter.
 - [~] JSON Schema supports common structs, arrays, maps, descriptions, and enums; it is not full JSON Schema parity.
 - [~] Explicit strict tool mode via `WithStrict()` / `WithoutStrict()` on OpenAI, Anthropic, and Gemini; automatic provider/model defaults and schema compatibility checks remain.
 - [x] Per-tool and agent-wide per-step preparation and omission via `AddPreparedTool` and `AddToolsPrepareFunc`, applied in upstream order.
 - [ ] Argument validators before approval/execution.
-- [ ] Per-tool, per-toolset, per-run, and separate output retry budgets with upstream precedence.
+- [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
+- [ ] Per-toolset retry defaults and output-tool-specific overrides once those abstractions land.
+- [ ] `ToolFailed` terminal failure results that do not consume retry budgets.
+- [ ] Unknown tool calls should produce a retry prompt with available tool names instead of aborting the run.
 - [ ] Tool timeout.
 - [ ] Tool metadata and provider-specific options.
 - [ ] Toolsets: function, combined, filtered, prefixed, renamed, prepared, and approval-required.

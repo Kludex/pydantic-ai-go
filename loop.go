@@ -53,10 +53,16 @@ func (a *Agent[Deps, Output]) newRun(ctx context.Context, prompt UserPromptPart,
 	for _, opt := range opts {
 		opt(&cfg)
 	}
-	r := &run[Deps, Output]{agent: a}
+	r := &run[Deps, Output]{agent: a, retryLimits: a.retryLimits, toolRetries: make(map[string]int)}
+	if cfg.retryLimits != nil {
+		validateRetryLimits(*cfg.retryLimits)
+		r.retryLimits = *cfg.retryLimits
+	}
 	r.messages = append(r.messages, cfg.history...)
 	r.newMessages = len(r.messages)
-	r.rc = &RunContext[Deps]{Deps: deps, RunID: newRunID(), usage: &r.usage, messages: &r.messages}
+	r.rc = &RunContext[Deps]{
+		Deps: deps, MaxRetries: r.retryLimits.Output, RunID: newRunID(), usage: &r.usage, messages: &r.messages,
+	}
 	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, messages: &r.messages}
 	instructions, err := a.buildInstructions(ctx, r.rc, r.info)
 	if err != nil {
@@ -78,7 +84,9 @@ type run[Deps, Output any] struct {
 	messages    []ModelMessage
 	newMessages int
 	usage       Usage
-	retries     int
+	retryLimits RetryLimits
+	toolRetries map[string]int
+	outputRetry int
 	retriesMu   sync.Mutex
 	// emit forwards stream events during RunStream; nil for plain runs.
 	emit func(StreamEvent) bool
@@ -125,7 +133,8 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	params := r.params
 	tools := make([]ToolDefinition, 0, len(params.Tools))
 	rc := *r.rc
-	rc.Retry = r.retryCount()
+	rc.Retry = r.outputRetryCount()
+	rc.MaxRetries = r.retryLimits.Output
 	for _, def := range params.Tools {
 		prepared := cloneToolDefinition(def)
 		entry, _ := r.agent.findTool(def.Name)
@@ -278,8 +287,9 @@ func (r *run[Deps, Output]) earlyNativeOutput(
 	if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
 		return nil, false, nil
 	}
+	outputRC := r.outputRunContext("")
 	for _, validate := range r.agent.outputValidators {
-		err := validate(ctx, r.rc, out)
+		err := validate(ctx, outputRC, out)
 		var retry *RetryError
 		switch {
 		case errors.As(err, &retry):
@@ -532,14 +542,14 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	}
 	toolRC := *r.rc
 	toolRC.ToolCallID = call.ToolCallID
-	toolRC.Retry = r.retryCount()
+	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)
 	toolCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
 	content, err := r.callTool(toolCtx, &toolRC, entry, call)
 	endSpan(toolSpan, err)
 	var retry *RetryError
 	switch {
 	case errors.As(err, &retry):
-		if err := r.countRetry(); err != nil {
+		if err := r.countToolRetry(call.ToolName); err != nil {
 			return nil, nil, err
 		}
 		return RetryPromptPart{Content: retry.Message, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
@@ -552,16 +562,13 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCallPart) (RequestPart, *Output, error) {
 	var out Output
 	if err := json.Unmarshal(call.Args, &out); err != nil {
-		if err := r.countRetry(); err != nil {
+		if err := r.countOutputRetry(); err != nil {
 			return nil, nil, err
 		}
 		msg := fmt.Sprintf("invalid final result: %v", err)
 		return RetryPromptPart{Content: msg, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
 	}
-	outputRC := *r.rc
-	outputRC.ToolCallID = call.ToolCallID
-	outputRC.Retry = r.retryCount()
-	if retry, err := r.validate(ctx, &outputRC, out); err != nil {
+	if retry, err := r.validate(ctx, r.outputRunContext(call.ToolCallID), out); err != nil {
 		return nil, nil, err
 	} else if retry != nil {
 		return RetryPromptPart{Content: retry.Message, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
@@ -576,7 +583,7 @@ func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCal
 // structured outputs must call the output tool, so text triggers a retry.
 func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelResponse) (*RunResult[Output], *RetryPromptPart, error) {
 	if !r.params.AllowText {
-		if err := r.countRetry(); err != nil {
+		if err := r.countOutputRetry(); err != nil {
 			return nil, nil, err
 		}
 		return nil, &RetryPromptPart{Content: fmt.Sprintf("Respond by calling the %s tool to provide the final result.", outputToolName)}, nil
@@ -584,7 +591,7 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 	var out Output
 	if r.params.OutputSchema != nil {
 		if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
-			if err := r.countRetry(); err != nil {
+			if err := r.countOutputRetry(); err != nil {
 				return nil, nil, err
 			}
 			return nil, &RetryPromptPart{Content: fmt.Sprintf("invalid JSON output: %v", err)}, nil
@@ -594,7 +601,7 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 		// string, so this assertion cannot fail.
 		out = any(resp.Text()).(Output)
 	}
-	if retry, err := r.validate(ctx, r.rc, out); err != nil {
+	if retry, err := r.validate(ctx, r.outputRunContext(""), out); err != nil {
 		return nil, nil, err
 	} else if retry != nil {
 		return nil, &RetryPromptPart{Content: retry.Message}, nil
@@ -610,7 +617,7 @@ func (r *run[Deps, Output]) validate(
 		var retry *RetryError
 		switch {
 		case errors.As(err, &retry):
-			if err := r.countRetry(); err != nil {
+			if err := r.countOutputRetry(); err != nil {
 				return nil, err
 			}
 			return retry, nil
@@ -625,20 +632,53 @@ func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) {
 	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{part}})
 }
 
-func (r *run[Deps, Output]) countRetry() error {
+func (r *run[Deps, Output]) outputRunContext(toolCallID string) *RunContext[Deps] {
+	rc := *r.rc
+	rc.Retry = r.outputRetryCount()
+	rc.MaxRetries = r.retryLimits.Output
+	rc.ToolCallID = toolCallID
+	return &rc
+}
+
+func (r *run[Deps, Output]) countToolRetry(name string) error {
 	r.retriesMu.Lock()
 	defer r.retriesMu.Unlock()
-	r.retries++
-	if r.retries > r.agent.maxRetries {
-		return fmt.Errorf("%w: %d retries", ErrMaxRetriesExceeded, r.retries)
+	r.toolRetries[name]++
+	_, maxRetries := r.toolRetryInfoLocked(name)
+	if r.toolRetries[name] > maxRetries {
+		return fmt.Errorf("%w: tool %q exceeded %d retries", ErrMaxRetriesExceeded, name, maxRetries)
 	}
 	return nil
 }
 
-func (r *run[Deps, Output]) retryCount() int {
+func (r *run[Deps, Output]) toolRetryInfo(name string) (int, int) {
 	r.retriesMu.Lock()
 	defer r.retriesMu.Unlock()
-	return r.retries
+	return r.toolRetryInfoLocked(name)
+}
+
+func (r *run[Deps, Output]) toolRetryInfoLocked(name string) (int, int) {
+	maxRetries := r.retryLimits.Tools
+	if entry, ok := r.agent.findTool(name); ok && entry.def.maxRetries != nil {
+		maxRetries = *entry.def.maxRetries
+	}
+	return r.toolRetries[name], maxRetries
+}
+
+func (r *run[Deps, Output]) countOutputRetry() error {
+	r.retriesMu.Lock()
+	defer r.retriesMu.Unlock()
+	r.outputRetry++
+	if r.outputRetry > r.retryLimits.Output {
+		return fmt.Errorf("%w: output exceeded %d retries", ErrMaxRetriesExceeded, r.retryLimits.Output)
+	}
+	return nil
+}
+
+func (r *run[Deps, Output]) outputRetryCount() int {
+	r.retriesMu.Lock()
+	defer r.retriesMu.Unlock()
+	return r.outputRetry
 }
 
 func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {

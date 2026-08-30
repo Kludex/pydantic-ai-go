@@ -49,5 +49,6 @@ type ToolDefinition struct {
 	Sequential bool `json:"-"`
 	// Strict asks the provider to constrain generated arguments to Schema.
 	// Nil uses the provider default; true forces strict mode; false disables it.
-	Strict *bool `json:"-"`
+	Strict     *bool `json:"-"`
+	maxRetries *int
 }

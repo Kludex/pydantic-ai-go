@@ -14,6 +14,7 @@ import (
 type RunContext[Deps any] struct {
 	Deps       Deps
 	Retry      int
+	MaxRetries int
 	RunID      string
 	ToolCallID string
 
@@ -94,7 +95,14 @@ func AddSimpleTool[Deps, Output, Args, Result any](
 
 // AddRawTool registers a tool from an explicit definition, skipping schema
 // reflection. It is the escape hatch for dynamic tools (MCP, config-driven).
-func (a *Agent[Deps, Output]) AddRawTool(def ToolDefinition, fn func(ctx context.Context, rawArgs json.RawMessage) (any, error)) {
+func (a *Agent[Deps, Output]) AddRawTool(
+	def ToolDefinition,
+	fn func(ctx context.Context, rawArgs json.RawMessage) (any, error),
+	opts ...ToolOption,
+) {
+	for _, opt := range opts {
+		opt(&def)
+	}
 	a.addTool(def, func(ctx context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
 		return fn(ctx, rawArgs)
 	})
@@ -125,6 +133,14 @@ func WithStrict() ToolOption {
 func WithoutStrict() ToolOption {
 	strict := false
 	return func(d *ToolDefinition) { d.Strict = &strict }
+}
+
+// WithToolMaxRetries overrides the function-tool retry budget for this tool.
+func WithToolMaxRetries(n int) ToolOption {
+	if n < 0 {
+		panic(fmt.Sprintf("ai: tool max retries must be non-negative, got %d", n))
+	}
+	return func(d *ToolDefinition) { d.maxRetries = &n }
 }
 
 func toolDefinition[Args any](name string, opts []ToolOption) ToolDefinition {

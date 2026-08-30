@@ -17,7 +17,7 @@ type Agent[Deps, Output any] struct {
 	instructionsFuncs []func(ctx context.Context, rc *RunContext[Deps]) (string, error)
 	toolsPrepareFuncs []ToolsPrepareFunc[Deps]
 	settings          ModelSettings
-	maxRetries        int
+	retryLimits       RetryLimits
 	outputMode        OutputMode
 	endStrategy       EndStrategy
 	sequentialTools   bool
@@ -37,7 +37,9 @@ type toolEntry[Deps any] struct {
 
 // NewAgent creates an agent backed by model.
 func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output] {
-	a := &Agent[Deps, Output]{model: model, maxRetries: 1, endStrategy: EndStrategyGraceful}
+	a := &Agent[Deps, Output]{
+		model: model, retryLimits: RetryLimits{Tools: 1, Output: 1}, endStrategy: EndStrategyGraceful,
+	}
 	var cfg config
 	for _, opt := range opts {
 		opt(&cfg)
@@ -58,8 +60,9 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	if cfg.limits != (UsageLimits{}) {
 		a.capabilities = append([]Capability{usageLimitsCapability{limits: cfg.limits}}, a.capabilities...)
 	}
-	if cfg.maxRetries > 0 {
-		a.maxRetries = cfg.maxRetries
+	if cfg.retryLimits != nil {
+		validateRetryLimits(*cfg.retryLimits)
+		a.retryLimits = *cfg.retryLimits
 	}
 	for _, capability := range a.capabilities {
 		reg := &CapabilityRegistry{}
@@ -132,7 +135,7 @@ type config struct {
 	instructions    string
 	settings        ModelSettings
 	limits          UsageLimits
-	maxRetries      int
+	retryLimits     *RetryLimits
 	outputMode      OutputMode
 	endStrategy     EndStrategy
 	sequentialTools bool
@@ -200,22 +203,47 @@ func WithUsageLimits(limits UsageLimits) Option {
 	return func(c *config) { c.limits = limits }
 }
 
-// WithMaxRetries caps how many times a tool or the output validation may
-// ask the model to retry. The default is 1.
+// RetryLimits contains the independent function-tool and output retry
+// budgets. Both default to 1. Zero disables retries for that side.
+type RetryLimits struct {
+	Tools  int
+	Output int
+}
+
+// WithRetryLimits sets independent agent-wide retry budgets.
+func WithRetryLimits(limits RetryLimits) Option {
+	return func(c *config) { c.retryLimits = &limits }
+}
+
+// WithMaxRetries sets both retry budgets to n. It is a convenience for
+// WithRetryLimits(RetryLimits{Tools: n, Output: n}).
 func WithMaxRetries(n int) Option {
-	return func(c *config) { c.maxRetries = n }
+	return WithRetryLimits(RetryLimits{Tools: n, Output: n})
+}
+
+func validateRetryLimits(limits RetryLimits) {
+	if limits.Tools < 0 || limits.Output < 0 {
+		panic(fmt.Sprintf("ai: retry limits must be non-negative, got %+v", limits))
+	}
 }
 
 // RunOption configures a single run.
 type RunOption func(*runConfig)
 
 type runConfig struct {
-	history []ModelMessage
+	history     []ModelMessage
+	retryLimits *RetryLimits
 }
 
 // WithMessageHistory prepends prior conversation messages to the run.
 func WithMessageHistory(msgs []ModelMessage) RunOption {
 	return func(c *runConfig) { c.history = msgs }
+}
+
+// WithRunRetryLimits overrides both retry budgets for one run. Explicit
+// per-tool limits still take precedence.
+func WithRunRetryLimits(limits RetryLimits) RunOption {
+	return func(c *runConfig) { c.retryLimits = &limits }
 }
 
 // RunResult is the outcome of a successful run.

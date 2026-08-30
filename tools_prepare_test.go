@@ -119,7 +119,7 @@ func TestPrepareToolsHooksComposeInRegistrationOrder(t *testing.T) {
 	}
 }
 
-func TestPrepareToolsReceivesCurrentRetry(t *testing.T) {
+func TestPrepareToolsReceivesCurrentOutputRetry(t *testing.T) {
 	var retries []int
 	calls := 0
 	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
@@ -142,8 +142,8 @@ func TestPrepareToolsReceivesCurrentRetry(t *testing.T) {
 	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(retries, []int{0, 1}) {
-		t.Fatalf("unexpected retry values %v", retries)
+	if !slices.Equal(retries, []int{0, 0}) {
+		t.Fatalf("function retry leaked into output retry context: %v", retries)
 	}
 }
 

@@ -252,6 +252,100 @@ func TestResponsesWebSearchNativeTool(t *testing.T) {
 	}
 }
 
+func TestResponsesCodeExecutionNativeTool(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[
+				{"type":"code_interpreter_call","id":"code-1","container_id":"container-1","code":"print(1)","status":"completed","outputs":[
+					{"type":"logs","logs":"1\n"},{"type":"image","url":"data:image/png;base64,aW1hZ2U="}
+				]},
+				{"type":"message","id":"message","content":[{"type":"output_text","text":"done"}]}
+			]
+		}`))
+	}, openai.WithResponsesCodeExecutionOutputs(true))
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.CodeExecutionTool{Files: []ai.UploadedFile{
+			{FileID: "file-openai", ProviderName: "openai"},
+			{FileID: "file-anthropic", ProviderName: "anthropic"},
+		}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	container := tool["container"].(map[string]any)
+	if tool["type"] != "code_interpreter" || container["type"] != "auto" ||
+		container["file_ids"].([]any)[0] != "file-openai" ||
+		body["include"].([]any)[0] != "code_interpreter_call.outputs" {
+		t.Fatalf("unexpected code execution request: %#v", body)
+	}
+	if len(response.Parts) != 4 {
+		t.Fatalf("unexpected code execution response parts: %#v", response.Parts)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	file := response.Parts[1].(ai.FilePart)
+	returned := response.Parts[2].(ai.NativeToolReturnPart)
+	if call.ToolKind != ai.ToolPartKindCodeExecution || call.ToolCallID != "code-1" ||
+		string(call.Args) != `{"container_id":"container-1","code":"print(1)"}` ||
+		file.Content.MediaType != "image/png" || string(file.Content.Data) != "image" || file.ID != "code-1" ||
+		returned.ToolKind != ai.ToolPartKindCodeExecution || returned.Content.(map[string]any)["status"] != "completed" ||
+		returned.Content.(map[string]any)["logs"].([]string)[0] != "1\n" {
+		t.Fatalf("unexpected normalized code execution: call=%+v file=%+v return=%+v", call, file, returned)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{&ai.CodeExecutionTool{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if container := body["tools"].([]any)[0].(map[string]any)["container"].(map[string]any); container["file_ids"] != nil {
+		t.Fatalf("empty code container included files: %#v", container)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := body["input"].([]any)[0].(map[string]any)
+	if replayed["type"] != "code_interpreter_call" || replayed["id"] != "code-1" ||
+		replayed["container_id"] != "container-1" || replayed["code"] != "print(1)" ||
+		replayed["status"] != "completed" || replayed["outputs"] != nil {
+		t.Fatalf("unexpected code execution replay: %#v", replayed)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{
+			ToolName: "code_execution", ToolKind: ai.ToolPartKindCodeExecution,
+			ProviderName: "openai", Args: json.RawMessage(`{bad`), ToolCallID: "bad",
+		},
+	}}}, ai.ModelRequestParams{}); err == nil || !strings.Contains(err.Error(), "parse code execution arguments") {
+		t.Fatalf("unexpected malformed code replay error: %v", err)
+	}
+}
+
+func TestResponsesCodeExecutionOutputErrors(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		output string
+		want   string
+	}{
+		{name: "unknown", output: `{"type":"audio"}`, want: "unknown code interpreter output type"},
+		{name: "invalid URI", output: `{"type":"image","url":"https://example.com/image.png"}`, want: "invalid code interpreter image data URI"},
+		{name: "invalid base64", output: `{"type":"image","url":"data:image/png;base64,!"}`, want: "decode code interpreter image"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(`{"output":[{"type":"code_interpreter_call","id":"code","outputs":[` +
+					test.output + `]}]}`))
+			})
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected code output error: %v", err)
+			}
+		})
+	}
+}
+
 func TestResponsesNativeToolCompatibility(t *testing.T) {
 	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
 		var body map[string]any

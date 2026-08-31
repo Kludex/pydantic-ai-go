@@ -28,6 +28,7 @@ func TestKindMarkers(t *testing.T) {
 		want string
 	}{
 		{TextPart{}, "text"},
+		{FilePart{}, "file"},
 		{ToolCallPart{}, "tool-call"},
 		{NativeToolCallPart{}, "builtin-tool-call"},
 		{NativeToolReturnPart{}, "builtin-tool-return"},
@@ -52,6 +53,7 @@ func TestStreamEventKinds(t *testing.T) {
 		{ToolCallStartEvent{}, "tool-call-start"},
 		{ToolCallDeltaEvent{}, "tool-call-delta"},
 		{NativeToolReturnEvent{}, "builtin-tool-return"},
+		{FileEvent{}, "file"},
 		{FinishEvent{}, "finish"},
 	}
 	for _, test := range modelKinds {

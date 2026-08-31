@@ -21,21 +21,22 @@ import (
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
 type Model struct {
-	name                   string
-	providerName           string
-	apiKey                 string
-	baseURL                string
-	httpClient             *http.Client
-	providerHeaders        http.Header
-	providerQuery          url.Values
-	prepareRequest         RequestPreparationFunc
-	strictToolSupport      bool
-	deferredToolSupport    bool
-	defaultSettings        ai.ModelSettings
-	background             *bool
-	backgroundPollInterval time.Duration
-	responsesPhaseSupport  *bool
-	chatCompatibility      ChatCompatibility
+	name                          string
+	providerName                  string
+	apiKey                        string
+	baseURL                       string
+	httpClient                    *http.Client
+	providerHeaders               http.Header
+	providerQuery                 url.Values
+	prepareRequest                RequestPreparationFunc
+	strictToolSupport             bool
+	deferredToolSupport           bool
+	defaultSettings               ai.ModelSettings
+	background                    *bool
+	backgroundPollInterval        time.Duration
+	responsesPhaseSupport         *bool
+	responsesCodeExecutionOutputs bool
+	chatCompatibility             ChatCompatibility
 }
 
 // Option configures a Model.
@@ -87,6 +88,11 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 			FinishReasons:    maps.Clone(finishReasons),
 		}
 	}
+}
+
+// WithResponsesCodeExecutionOutputs includes code-interpreter logs and image outputs in Responses results.
+func WithResponsesCodeExecutionOutputs(enabled bool) Option {
+	return func(model *Model) { model.responsesCodeExecutionOutputs = enabled }
 }
 
 // WithProvider configures an OpenAI-compatible provider in one option.

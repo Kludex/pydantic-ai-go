@@ -126,6 +126,14 @@ type NativeToolReturnEvent struct {
 
 func (NativeToolReturnEvent) modelStreamEventKind() string { return "builtin-tool-return" }
 
+// FileEvent emits one complete model-generated file.
+type FileEvent struct {
+	PartID string
+	Part   FilePart
+}
+
+func (FileEvent) modelStreamEventKind() string { return "file" }
+
 // FinishEvent ends one streamed model response and carries its usage. It is
 // both the provider completion marker and the final normalized response event.
 type FinishEvent struct {

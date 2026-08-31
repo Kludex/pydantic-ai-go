@@ -183,6 +183,15 @@ func marshalResponsePart(p ResponsePart) (wirePart, error) {
 			PartKind: "text", Content: mustJSON(part.Content), ID: part.ID,
 			ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
 		}, nil
+	case FilePart:
+		content, _ := json.Marshal(struct {
+			Data      []byte `json:"data"`
+			MediaType string `json:"media_type"`
+		}{Data: part.Content.Data, MediaType: part.Content.MediaType})
+		return wirePart{
+			PartKind: "file", Content: content, ID: part.ID,
+			ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+		}, nil
 	case ToolCallPart:
 		return wirePart{
 			PartKind: "tool-call", ToolName: part.ToolName, Args: part.Args, ToolCallID: part.ToolCallID,
@@ -351,6 +360,18 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 	case "text":
 		return TextPart{
 			Content: stringContent(wp.Content), ID: wp.ID,
+			ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
+		}, nil
+	case "file":
+		var content struct {
+			Data      []byte `json:"data"`
+			MediaType string `json:"media_type"`
+		}
+		if err := json.Unmarshal(wp.Content, &content); err != nil {
+			return nil, fmt.Errorf("ai: unmarshal file content: %w", err)
+		}
+		return FilePart{
+			Content: BinaryContent{Data: content.Data, MediaType: content.MediaType}, ID: wp.ID,
 			ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
 		}, nil
 	case "tool-call":

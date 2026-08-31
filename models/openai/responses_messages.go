@@ -232,6 +232,22 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 			if part.ProviderName != c.providerName {
 				continue
 			}
+			if part.ToolKind == ai.ToolPartKindCodeExecution {
+				var arguments struct {
+					ContainerID string `json:"container_id"`
+					Code        string `json:"code"`
+				}
+				if err := json.Unmarshal(part.Args, &arguments); err != nil {
+					return nil, fmt.Errorf("openai: parse code execution arguments: %w", err)
+				}
+				if part.ToolCallID != "" && arguments.ContainerID != "" {
+					out = append(out, responsesInput{
+						Type: "code_interpreter_call", ID: part.ToolCallID, ContainerID: arguments.ContainerID,
+						Code: arguments.Code, Outputs: (*struct{})(nil), Status: "completed",
+					})
+				}
+				continue
+			}
 			if part.ToolKind == ai.ToolPartKindWebSearch {
 				status, _ := part.ProviderDetails["status"].(string)
 				out = append(out, responsesInput{

@@ -886,6 +886,9 @@ func TestRunStreamPreservesProviderNativeToolLifecycle(t *testing.T) {
 				Content:      ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "weather"}}},
 				ProviderName: "provider",
 			}},
+			ai.FileEvent{PartID: "file", Part: ai.FilePart{
+				Content: ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"}, ProviderName: "provider",
+			}},
 			ai.TextDeltaEvent{PartID: "answer", Delta: "done"},
 			ai.FinishEvent{},
 		}
@@ -905,15 +908,16 @@ func TestRunStreamPreservesProviderNativeToolLifecycle(t *testing.T) {
 		}
 	}
 	result := stream.Result()
-	if result == nil || result.Output != "done" || len(starts) != 3 || len(deltas) != 1 {
+	if result == nil || result.Output != "done" || len(starts) != 4 || len(deltas) != 1 {
 		t.Fatalf("unexpected native stream lifecycle: result=%+v starts=%+v deltas=%+v", result, starts, deltas)
 	}
 	messages := result.Messages()
 	response := messages[len(messages)-1].(ai.ModelResponse)
 	call := response.Parts[0].(ai.NativeToolCallPart)
 	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	file := response.Parts[2].(ai.FilePart)
 	if string(call.Args) != `{"queries":["weather"]}` || call.ToolCallID != returned.ToolCallID ||
-		returned.ProviderName != "provider" {
+		returned.ProviderName != "provider" || string(file.Content.Data) != "image" {
 		t.Fatalf("unexpected native stream parts: %+v", response.Parts)
 	}
 	if _, ok := deltas[0].Delta.(ai.NativeToolCallPartDelta); !ok {
@@ -955,6 +959,7 @@ func TestRunStreamFallbackReplaysNativeToolParts(t *testing.T) {
 				ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
 				Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{}}, ProviderName: "provider",
 			},
+			ai.FilePart{Content: ai.BinaryContent{Data: []byte("file"), MediaType: "text/plain"}},
 			ai.TextPart{Content: "done"},
 		}}, nil
 	})
@@ -966,7 +971,7 @@ func TestRunStreamFallbackReplaysNativeToolParts(t *testing.T) {
 	}
 	messages := stream.Result().Messages()
 	parts := messages[len(messages)-1].(ai.ModelResponse).Parts
-	if len(parts) != 3 {
+	if len(parts) != 4 {
 		t.Fatalf("native fallback parts were lost: %+v", parts)
 	}
 	if _, ok := parts[0].(ai.NativeToolCallPart); !ok {
@@ -975,6 +980,48 @@ func TestRunStreamFallbackReplaysNativeToolParts(t *testing.T) {
 	if _, ok := parts[1].(ai.NativeToolReturnPart); !ok {
 		t.Fatalf("unexpected native fallback return %T", parts[1])
 	}
+}
+
+func TestRunStreamCanStopFilePart(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.FileEvent{PartID: "file", Part: ai.FilePart{
+				Content: ai.BinaryContent{Data: []byte("file"), MediaType: "text/plain"},
+			}},
+			ai.FinishEvent{},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		break
+	}
+	if stream.Result() != nil {
+		t.Fatal("stopped file stream produced a result")
+	}
+}
+
+func TestRunStreamRejectsDuplicateFilePartID(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		part := ai.FilePart{Content: ai.BinaryContent{Data: []byte("file"), MediaType: "text/plain"}}
+		return []ai.ModelStreamEvent{
+			ai.FileEvent{PartID: "file", Part: part},
+			ai.FileEvent{PartID: "file", Part: part},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	for _, err := range stream.Events() {
+		if err == nil {
+			continue
+		}
+		if !strings.Contains(err.Error(), `duplicate file stream part "file"`) {
+			t.Fatalf("unexpected duplicate file error: %v", err)
+		}
+		return
+	}
+	t.Fatal("expected duplicate file error")
 }
 
 func TestRunStreamRejectsDuplicateNativeToolReturnPartID(t *testing.T) {

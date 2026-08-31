@@ -15,6 +15,7 @@ type ResponsePartKind string
 
 const (
 	ResponsePartKindText             ResponsePartKind = "text"
+	ResponsePartKindFile             ResponsePartKind = "file"
 	ResponsePartKindThinking         ResponsePartKind = "thinking"
 	ResponsePartKindCompaction       ResponsePartKind = "compaction"
 	ResponsePartKindToolCall         ResponsePartKind = "tool-call"

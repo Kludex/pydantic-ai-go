@@ -231,6 +231,29 @@ func TestMarshalUserContentRoundTrip(t *testing.T) {
 	}
 }
 
+func TestFilePartSerialization(t *testing.T) {
+	messages := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.FilePart{
+		Content: ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
+		ID:      "file", ProviderName: "openai", ProviderDetails: map[string]any{"source": "code"},
+	}}}}
+	data, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := decoded[0].(ai.ModelResponse).Parts[0].(ai.FilePart)
+	if string(file.Content.Data) != "image" || file.Content.MediaType != "image/png" ||
+		file.ID != "file" || file.ProviderDetails["source"] != "code" {
+		t.Fatalf("unexpected file round trip: %+v", file)
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"response","parts":[{"part_kind":"file","content":"bad"}]}]`)); err == nil || !strings.Contains(err.Error(), "unmarshal file content") {
+		t.Fatalf("unexpected malformed file error: %v", err)
+	}
+}
+
 func TestNativeToolReturnSerializationErrors(t *testing.T) {
 	_, err := ai.MarshalMessages([]ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
 		ai.NativeToolReturnPart{ToolName: "native", Content: make(chan int)},

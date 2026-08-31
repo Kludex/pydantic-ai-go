@@ -291,6 +291,16 @@ type TextPart struct {
 
 func (TextPart) responsePartKind() string { return "text" }
 
+// FilePart is binary content produced by a model or provider-native tool.
+type FilePart struct {
+	Content         BinaryContent
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
+}
+
+func (FilePart) responsePartKind() string { return "file" }
+
 // ToolPartKind identifies a typed cross-provider tool part.
 type ToolPartKind string
 

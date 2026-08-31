@@ -18,7 +18,7 @@ func telemetryMessagesJSON(messages []ModelMessage, includeContent, includeBinar
 			output = append(output, telemetryRequestMessageGroups(message, includeContent, includeBinary, version)...)
 		case ModelResponse:
 			entry := map[string]any{
-				"role": "assistant", "parts": telemetryResponseParts(message.Parts, includeContent, version),
+				"role": "assistant", "parts": telemetryResponseParts(message.Parts, includeContent, includeBinary, version),
 			}
 			if message.FinishReason != "" {
 				entry["finish_reason"] = message.FinishReason
@@ -170,12 +170,21 @@ func telemetryURLMediaType(rawURL string) string {
 	return mime.TypeByExtension(path.Ext(parsed.Path))
 }
 
-func telemetryResponseParts(parts []ResponsePart, includeContent bool, version int) []any {
+func telemetryResponseParts(parts []ResponsePart, includeContent, includeBinary bool, version int) []any {
 	output := make([]any, 0, len(parts))
 	for _, part := range parts {
 		switch part := part.(type) {
 		case TextPart:
 			output = append(output, telemetryText(part.Content, includeContent))
+		case FilePart:
+			value := map[string]any{"type": "blob", "mime_type": part.Content.MediaType}
+			if slash := strings.IndexByte(part.Content.MediaType, '/'); slash > 0 {
+				value["modality"] = part.Content.MediaType[:slash]
+			}
+			if includeContent && includeBinary {
+				value["content"] = base64.StdEncoding.EncodeToString(part.Content.Data)
+			}
+			output = append(output, value)
 		case ThinkingPart:
 			if version >= 3 {
 				value := map[string]any{"type": "reasoning"}

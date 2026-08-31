@@ -161,7 +161,7 @@ func accumulate(
 					part.providerName != "" || len(part.providerDetails) > 0 {
 					response.Parts = append(response.Parts, part.responsePart())
 				}
-			case ResponsePartKindCompaction, ResponsePartKindToolCall,
+			case ResponsePartKindFile, ResponsePartKindCompaction, ResponsePartKindToolCall,
 				ResponsePartKindNativeToolCall, ResponsePartKindNativeToolReturn:
 				response.Parts = append(response.Parts, part.responsePart())
 			}
@@ -319,6 +319,19 @@ func accumulate(
 				}
 			}
 			if err := emitEvent(PartDeltaEvent{Index: part.index, PartID: part.id, Delta: delta}); err != nil {
+				return partialResponse(), err
+			}
+		case FileEvent:
+			if event.PartID != "" {
+				if _, exists := partsByID[event.PartID]; exists {
+					return nil, &UnexpectedModelBehaviorError{
+						Message: fmt.Sprintf("duplicate file stream part %q", event.PartID),
+					}
+				}
+			}
+			part := newPart(event.PartID, ResponsePartKindFile)
+			part.complete = cloneResponsePart(event.Part)
+			if err := startPart(part); err != nil {
 				return partialResponse(), err
 			}
 		case NativeToolReturnEvent:

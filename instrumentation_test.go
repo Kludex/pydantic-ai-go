@@ -44,6 +44,7 @@ func TestInstrumentedModelRequest(t *testing.T) {
 		return &ai.ModelResponse{
 			Parts: []ai.ResponsePart{
 				ai.TextPart{Content: "done"},
+				ai.FilePart{Content: ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"}},
 				ai.ThinkingPart{Content: "thought"},
 				ai.CompactionPart{Content: "summary"},
 				ai.ToolCallPart{ToolName: "lookup", ToolCallID: "call", Args: json.RawMessage(`{"city":"Paris"}`)},

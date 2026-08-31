@@ -13,6 +13,137 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
+func TestResponsesStreamCodeExecution(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.created","response":{"id":"response","model":"gpt-5","created_at":100,"status":"in_progress"}}`,
+		`{"type":"response.output_item.added","item":{"id":"code-1","type":"code_interpreter_call","container_id":"container-1","code":"","status":"in_progress"}}`,
+		`{"type":"response.code_interpreter_call.in_progress","item_id":"code-1"}`,
+		`{"type":"response.code_interpreter_call.interpreting","item_id":"code-1"}`,
+		`{"type":"response.code_interpreter_call_code.delta","item_id":"code-1","delta":"print(\"hi\")"}`,
+		`{"type":"response.code_interpreter_call_code.done","item_id":"code-1"}`,
+		`{"type":"response.code_interpreter_call.completed","item_id":"code-1"}`,
+		`{"type":"response.output_item.done","item":{"id":"code-1","type":"code_interpreter_call","container_id":"container-1","code":"print(\"hi\")","status":"completed","outputs":[{"type":"logs","logs":"hi\n"},{"type":"image","url":"data:image/png;base64,aW1hZ2U="}]}}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[{"id":"code-1","type":"code_interpreter_call","container_id":"container-1","code":"print(\"hi\")","status":"completed","outputs":[{"type":"logs","logs":"hi\n"},{"type":"image","url":"data:image/png;base64,aW1hZ2U="}]}]}}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ai.ModelStreamEvent
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	var start ai.ToolCallStartEvent
+	var deltas string
+	var file ai.FilePart
+	var returned ai.NativeToolReturnPart
+	var finish ai.FinishEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			start = event
+		case ai.ToolCallDeltaEvent:
+			deltas += event.ArgsDelta
+		case ai.FileEvent:
+			file = event.Part
+		case ai.NativeToolReturnEvent:
+			returned = event.Part
+		case ai.FinishEvent:
+			finish = event
+		}
+	}
+	if start.ToolKind != ai.ToolPartKindCodeExecution || !start.Native ||
+		deltas != `{"container_id":"container-1","code":"print(\"hi\")"}` ||
+		file.Content.MediaType != "image/png" || string(file.Content.Data) != "image" ||
+		returned.Content.(map[string]any)["logs"].([]string)[0] != "hi\n" || len(finish.Parts) != 3 {
+		t.Fatalf("unexpected code execution stream: events=%#v finish=%+v", events, finish)
+	}
+}
+
+func TestResponsesStreamCodeExecutionEdges(t *testing.T) {
+	events := []string{
+		`{"type":"response.output_item.added","item":{"id":"code","type":"code_interpreter_call","container_id":"container","code":""}}`,
+		`{"type":"response.code_interpreter_call_code.delta","item_id":"code","delta":"pass"}`,
+		`{"type":"response.code_interpreter_call_code.done","item_id":"code"}`,
+		`{"type":"response.output_item.done","item":{"id":"code","type":"code_interpreter_call","status":"completed","outputs":[{"type":"image","url":"data:image/png;base64,aQ=="}]}}`,
+	}
+	for breakAfter := 1; breakAfter <= 6; breakAfter++ {
+		t.Run(fmt.Sprintf("consumer break %d", breakAfter), func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, events))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen++
+				if seen == breakAfter {
+					break
+				}
+			}
+			if seen != breakAfter {
+				t.Fatalf("stream ended after %d events", seen)
+			}
+		})
+	}
+	t.Run("invalid output", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.output_item.done","item":{"id":"code","type":"code_interpreter_call","outputs":[{"type":"unknown"}]}}`,
+		}))
+		stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, err := range stream {
+			if err == nil || !strings.Contains(err.Error(), "unknown code interpreter output type") {
+				t.Fatalf("unexpected streamed code output error: %v", err)
+			}
+			return
+		}
+		t.Fatal("expected streamed code output error")
+	})
+}
+
+func TestResponsesStaticCodeExecutionFileStream(t *testing.T) {
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodGet {
+			t.Fatalf("unexpected method %s", request.Method)
+		}
+		_, _ = response.Write([]byte(`{"id":"background","status":"completed","output":[
+			{"type":"code_interpreter_call","id":"code","container_id":"container","code":"pass","status":"completed","outputs":[{"type":"image","url":"data:image/png;base64,aQ=="}]}
+		]}`))
+	})
+	history := []ai.ModelMessage{ai.ModelResponse{
+		ProviderName: "openai", ProviderResponseID: "background", State: ai.ModelResponseStateSuspended,
+		ProviderDetails: map[string]any{"background": true},
+	}}
+	stream, err := model.StreamRequest(t.Context(), history, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		if seen == 3 {
+			break
+		}
+	}
+	if seen != 3 {
+		t.Fatalf("unexpected static code stream length: %d", seen)
+	}
+}
+
 func TestResponsesStreamRefusal(t *testing.T) {
 	model := newResponsesServer(t, sseHandler(t, []string{
 		`{"type":"response.refusal.delta","delta":"I cannot "}`,

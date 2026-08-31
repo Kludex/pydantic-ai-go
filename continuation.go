@@ -80,6 +80,10 @@ func cloneModelResponse(response *ModelResponse) *ModelResponse {
 		case ThinkingPart:
 			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
 			cloned.Parts[index] = part
+		case FilePart:
+			part.Content.Data = slices.Clone(part.Content.Data)
+			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
+			cloned.Parts[index] = part
 		case ToolCallPart:
 			part.Args = slices.Clone(part.Args)
 			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)

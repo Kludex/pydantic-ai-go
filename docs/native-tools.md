@@ -228,4 +228,49 @@ func main() {
 
 Only files whose `ProviderName` matches the selected provider are attached. Anthropic places uploads on the first user message so the cacheable prefix stays stable. It also retains and reuses the response container ID through subsequent tool turns.
 
-OpenAI Responses, Bedrock, and xAI code-execution rendering remain provider-parity work.
+Use `WithResponsesCodeExecutionOutputs` when you need OpenAI code-interpreter logs and generated images:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	model := openai.NewResponsesModel(
+		"gpt-5.4",
+		openai.WithResponsesCodeExecutionOutputs(true),
+	)
+	agent := ai.NewAgent[struct{}, string](
+		model,
+		ai.WithNativeTools(ai.CodeExecutionTool{}),
+	)
+
+	result, err := agent.Run(context.Background(), "Plot y = x squared from -5 to 5.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+	for _, message := range result.Messages() {
+		response, ok := message.(ai.ModelResponse)
+		if !ok {
+			continue
+		}
+		for _, part := range response.Parts {
+			if file, ok := part.(ai.FilePart); ok {
+				fmt.Printf("generated %s: %d bytes\n", file.Content.MediaType, len(file.Content.Data))
+			}
+		}
+	}
+}
+```
+
+The option adds `code_interpreter_call.outputs` to the Responses `include` list. Image outputs become detached `FilePart` values. Logs remain on the matching `NativeToolReturnPart`.
+
+Bedrock and xAI code-execution rendering remain provider-parity work.

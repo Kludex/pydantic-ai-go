@@ -3,6 +3,7 @@ package openai
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,6 +34,7 @@ type ResponsesModel struct {
 	background             *bool
 	backgroundPollInterval time.Duration
 	phaseSupport           *bool
+	codeExecutionOutputs   bool
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
@@ -51,7 +53,8 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 		prepareRequest: m.prepareRequest, strictToolSupport: m.strictToolSupport,
 		deferredToolSupport: m.deferredToolSupport, defaultSettings: m.defaultSettings,
 		background: m.background, backgroundPollInterval: m.backgroundPollInterval,
-		phaseSupport: phaseSupport,
+		phaseSupport:         phaseSupport,
+		codeExecutionOutputs: m.responsesCodeExecutionOutputs,
 	}
 }
 
@@ -319,6 +322,9 @@ func setResponsesProvider(response *ai.ModelResponse, providerName, providerURL 
 		case ai.ThinkingPart:
 			part.ProviderName = providerName
 			response.Parts[index] = part
+		case ai.FilePart:
+			part.ProviderName = providerName
+			response.Parts[index] = part
 		case ai.ToolCallPart:
 			part.ProviderName = providerName
 			response.Parts[index] = part
@@ -387,6 +393,9 @@ type responsesInput struct {
 	Phase            string          `json:"phase,omitempty"`
 	Tools            []responsesTool `json:"tools,omitempty"`
 	EncryptedContent string          `json:"encrypted_content,omitempty"`
+	ContainerID      string          `json:"container_id,omitempty"`
+	Code             string          `json:"code,omitempty"`
+	Outputs          any             `json:"outputs,omitempty"`
 }
 
 type responsesInputContent struct {
@@ -407,6 +416,12 @@ type responsesTool struct {
 	UserLocation      *responsesWebSearchLocation `json:"user_location,omitempty"`
 	Filters           *responsesWebSearchFilters  `json:"filters,omitempty"`
 	ExternalWebAccess *bool                       `json:"external_web_access,omitempty"`
+	Container         *responsesCodeContainer     `json:"container,omitempty"`
+}
+
+type responsesCodeContainer struct {
+	Type    string   `json:"type"`
+	FileIDs []string `json:"file_ids,omitempty"`
 }
 
 type responsesWebSearchLocation struct {
@@ -421,7 +436,7 @@ type responsesWebSearchFilters struct {
 	AllowedDomains []string `json:"allowed_domains"`
 }
 
-func prepareResponsesNativeTool(nativeTool ai.NativeTool) (responsesTool, bool, error) {
+func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (responsesTool, bool, error) {
 	if nativeToolIsNil(nativeTool) {
 		return responsesTool{}, false, fmt.Errorf("openai: native tool must not be nil")
 	}
@@ -431,6 +446,10 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool) (responsesTool, bool, 
 		webSearch = tool
 	case *ai.WebSearchTool:
 		webSearch = *tool
+	case ai.CodeExecutionTool:
+		return responsesCodeExecutionTool(tool, providerName), true, nil
+	case *ai.CodeExecutionTool:
+		return responsesCodeExecutionTool(*tool, providerName), true, nil
 	default:
 		if nativeTool.IsOptional() {
 			return responsesTool{}, false, nil
@@ -460,6 +479,16 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool) (responsesTool, bool, 
 		tool.ExternalWebAccess = &external
 	}
 	return tool, true, nil
+}
+
+func responsesCodeExecutionTool(tool ai.CodeExecutionTool, providerName string) responsesTool {
+	container := &responsesCodeContainer{Type: "auto"}
+	for _, file := range tool.Files {
+		if file.ProviderName == providerName {
+			container.FileIDs = append(container.FileIDs, file.FileID)
+		}
+	}
+	return responsesTool{Type: "code_interpreter", Container: container}
 }
 
 func (m *ResponsesModel) buildResponsesPayload(
@@ -515,12 +544,15 @@ func (m *ResponsesModel) buildResponsesPayload(
 			searchTool.ToolSearchStrategy == ai.ToolSearchStrategyCustom)
 	serverToolSearch := activeToolSearch && !clientToolSearch
 	for _, nativeTool := range params.NativeTools {
-		tool, include, err := prepareResponsesNativeTool(nativeTool)
+		tool, include, err := prepareResponsesNativeTool(nativeTool, m.providerName)
 		if err != nil {
 			return nil, err
 		}
 		if include {
 			req.Tools = append(req.Tools, tool)
+			if tool.Type == "code_interpreter" && m.codeExecutionOutputs {
+				req.Include = append(req.Include, "code_interpreter_call.outputs")
+			}
 		}
 	}
 	deferred := make(map[string]ai.ToolDefinition, len(params.DeferredTools))
@@ -646,7 +678,14 @@ type responsesOutputItem struct {
 	Phase            string          `json:"phase"`
 	Tools            []responsesTool `json:"tools"`
 	EncryptedContent string          `json:"encrypted_content"`
-	Summary          []struct {
+	ContainerID      string          `json:"container_id"`
+	Code             string          `json:"code"`
+	Outputs          []struct {
+		Type string `json:"type"`
+		Logs string `json:"logs"`
+		URL  string `json:"url"`
+	} `json:"outputs"`
+	Summary []struct {
 		Text string `json:"text"`
 	} `json:"summary"`
 }
@@ -733,6 +772,56 @@ func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
 	return modelResponseFromResponses(rr)
 }
 
+func responsesCodeExecutionParts(
+	item responsesOutputItem, timestamp time.Time,
+) (ai.NativeToolCallPart, []ai.FilePart, ai.NativeToolReturnPart, error) {
+	args, _ := json.Marshal(struct {
+		ContainerID string `json:"container_id"`
+		Code        string `json:"code"`
+	}{ContainerID: item.ContainerID, Code: item.Code})
+	content := map[string]any{"status": item.Status}
+	logs := make([]string, 0)
+	files := make([]ai.FilePart, 0)
+	for _, output := range item.Outputs {
+		switch output.Type {
+		case "logs":
+			logs = append(logs, output.Logs)
+		case "image":
+			binary, err := responsesDataURI(output.URL)
+			if err != nil {
+				return ai.NativeToolCallPart{}, nil, ai.NativeToolReturnPart{}, err
+			}
+			files = append(files, ai.FilePart{Content: binary, ID: item.ID, ProviderName: "openai"})
+		default:
+			return ai.NativeToolCallPart{}, nil, ai.NativeToolReturnPart{}, fmt.Errorf(
+				"openai: unknown code interpreter output type %q", output.Type,
+			)
+		}
+	}
+	if len(logs) > 0 {
+		content["logs"] = logs
+	}
+	return ai.NativeToolCallPart{
+			ToolName: "code_execution", Args: args, ToolCallID: item.ID,
+			ToolKind: ai.ToolPartKindCodeExecution, ID: item.ID, ProviderName: "openai",
+		}, files, ai.NativeToolReturnPart{
+			ToolName: "code_execution", ToolCallID: item.ID, ToolKind: ai.ToolPartKindCodeExecution,
+			Content: content, Timestamp: timestamp, ProviderName: "openai",
+		}, nil
+}
+
+func responsesDataURI(value string) (ai.BinaryContent, error) {
+	header, encoded, ok := strings.Cut(value, ",")
+	if !ok || !strings.HasPrefix(header, "data:") || !strings.HasSuffix(header, ";base64") {
+		return ai.BinaryContent{}, fmt.Errorf("openai: invalid code interpreter image data URI")
+	}
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return ai.BinaryContent{}, fmt.Errorf("openai: decode code interpreter image: %w", err)
+	}
+	return ai.BinaryContent{Data: data, MediaType: strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")}, nil
+}
+
 func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error) {
 	rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
 		rr.Status, rr.IncompleteDetails, rr.CreatedAt, rr.Background,
@@ -804,6 +893,16 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 				ToolName: item.Name, Args: arguments, ToolCallID: responsesCallID(item.CallID),
 				ID: item.ID, ProviderName: "openai", ProviderDetails: providerDetails,
 			})
+		case "code_interpreter_call":
+			call, files, returned, err := responsesCodeExecutionParts(item, timestamp)
+			if err != nil {
+				return nil, err
+			}
+			resp.Parts = append(resp.Parts, call)
+			for _, file := range files {
+				resp.Parts = append(resp.Parts, file)
+			}
+			resp.Parts = append(resp.Parts, returned)
 		case "web_search_call":
 			arguments := slices.Clone(item.Action)
 			if len(arguments) == 0 || string(arguments) == "null" {

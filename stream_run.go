@@ -386,6 +386,10 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 				}, nil) {
 					return
 				}
+			case FilePart:
+				if !yield(FileEvent{PartID: partID, Part: cloneResponsePart(part).(FilePart)}, nil) {
+					return
+				}
 			case ThinkingPart:
 				if !yield(ThinkingDeltaEvent{
 					PartID: partID, Delta: part.Content, ID: part.ID, SignatureDelta: part.Signature,

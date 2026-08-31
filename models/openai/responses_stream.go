@@ -322,6 +322,18 @@ func (m *ResponsesModel) responsesEventStream(
 							return
 						}
 					}
+				case "code_interpreter_call":
+					emittedParts = true
+					partID := responsesToolPartID(event)
+					if !yield(ai.ToolCallStartEvent{
+						PartID: partID, ToolName: "code_execution", ToolCallID: event.Item.ID,
+						ToolKind: ai.ToolPartKindCodeExecution, ID: event.Item.ID,
+						ProviderName: m.providerName, Native: true,
+					}, nil) || !yield(ai.ToolCallDeltaEvent{
+						PartID: partID, ArgsDelta: responsesCodeArgumentPrefix(event.Item),
+					}, nil) {
+						return
+					}
 				case "web_search_call":
 					emittedParts = true
 					if !yield(ai.ToolCallStartEvent{
@@ -377,7 +389,38 @@ func (m *ResponsesModel) responsesEventStream(
 				if !yield(ai.ToolCallDeltaEvent{PartID: responsesToolPartID(event), ArgsDelta: event.Delta}, nil) {
 					return
 				}
+			case "response.code_interpreter_call_code.delta":
+				encoded, _ := json.Marshal(event.Delta)
+				if !yield(ai.ToolCallDeltaEvent{
+					PartID: responsesToolPartID(event), ArgsDelta: string(encoded[1 : len(encoded)-1]),
+				}, nil) {
+					return
+				}
+			case "response.code_interpreter_call_code.done":
+				if !yield(ai.ToolCallDeltaEvent{PartID: responsesToolPartID(event), ArgsDelta: `"}`}, nil) {
+					return
+				}
 			case "response.output_item.done":
+				if event.Item.Type == "code_interpreter_call" {
+					_, files, returned, err := responsesCodeExecutionParts(event.Item, responseTimestamp)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					for index, file := range files {
+						if !yield(ai.FileEvent{
+							PartID: fmt.Sprintf("item:%s:file:%d", event.Item.ID, index), Part: file,
+						}, nil) {
+							return
+						}
+					}
+					if !yield(ai.NativeToolReturnEvent{
+						PartID: "return:" + event.Item.ID, Part: returned,
+					}, nil) {
+						return
+					}
+					continue
+				}
 				switch {
 				case event.Item.Type == "web_search_call":
 					arguments := slices.Clone(event.Item.Action)
@@ -495,6 +538,8 @@ func (m *ResponsesModel) responsesEventStream(
 			case "response.created", "response.in_progress", "response.queued",
 				"response.content_part.added", "response.content_part.done",
 				"response.function_call_arguments.done",
+				"response.code_interpreter_call.in_progress", "response.code_interpreter_call.interpreting",
+				"response.code_interpreter_call.completed",
 				"response.reasoning_summary_part.done", "response.reasoning_summary_text.done",
 				"response.reasoning_text.done":
 			default:
@@ -572,6 +617,10 @@ func yieldStaticResponsesParts(
 			}, nil) {
 				return false
 			}
+		case ai.FilePart:
+			if !yield(ai.FileEvent{PartID: partID, Part: part}, nil) {
+				return false
+			}
 		case ai.CompactionPart:
 			if !yield(ai.CompactionEvent{
 				PartID: partID, Content: part.Content, ID: part.ID,
@@ -615,6 +664,12 @@ func yieldStaticResponsesParts(
 		}
 	}
 	return true
+}
+
+func responsesCodeArgumentPrefix(item responsesOutputItem) string {
+	container, _ := json.Marshal(item.ContainerID)
+	code, _ := json.Marshal(item.Code)
+	return `{"container_id":` + string(container) + `,"code":` + string(code[:len(code)-1])
 }
 
 func responsesToolPartID(event responsesStreamEvent) string {

@@ -432,9 +432,13 @@ func TestRunModelOptionsRejectNilOrEmpty(t *testing.T) {
 
 func TestModelSelectionMessagesAreDetached(t *testing.T) {
 	history := []ai.ModelMessage{
-		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
-			ToolName: "old", ToolCallID: "old-call", Args: []byte(`{"value":1}`),
-		}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.ToolCallPart{ToolName: "old", ToolCallID: "old-call", Args: []byte(`{"value":1}`)},
+			ai.FilePart{
+				Content:         ai.BinaryContent{Data: []byte("file"), MediaType: "text/plain"},
+				ProviderDetails: map[string]any{"stable": true},
+			},
+		}},
 		ai.ModelRequest{Parts: []ai.RequestPart{
 			ai.ToolReturnPart{
 				ToolName: "old", ToolCallID: "old-call", Content: "done", Metadata: map[string]any{"stable": true},
@@ -452,6 +456,9 @@ func TestModelSelectionMessagesAreDetached(t *testing.T) {
 		response := selection.Messages[0].(ai.ModelResponse)
 		call := response.Parts[0].(ai.ToolCallPart)
 		call.Args[0] = 'X'
+		file := response.Parts[1].(ai.FilePart)
+		file.Content.Data[0] = 'X'
+		file.ProviderDetails["stable"] = false
 		request := selection.Messages[1].(ai.ModelRequest)
 		result := request.Parts[0].(ai.ToolReturnPart)
 		result.Metadata["stable"] = false
@@ -468,6 +475,8 @@ func TestModelSelectionMessagesAreDetached(t *testing.T) {
 	response := result.Messages()[0].(ai.ModelResponse)
 	request := result.Messages()[1].(ai.ModelRequest)
 	if response.Parts[0].(ai.ToolCallPart).Args[0] != '{' ||
+		response.Parts[1].(ai.FilePart).Content.Data[0] != 'f' ||
+		response.Parts[1].(ai.FilePart).ProviderDetails["stable"] != true ||
 		request.Parts[0].(ai.ToolReturnPart).Metadata["stable"] != true ||
 		request.Parts[1].(ai.UserPromptPart).Contents[0].(ai.BinaryContent).Data[0] != 'd' ||
 		request.Parts[1].(ai.UserPromptPart).Contents[1].(ai.UploadedFile).VendorMetadata["stable"] != true {

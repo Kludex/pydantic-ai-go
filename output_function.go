@@ -64,6 +64,62 @@ func (output OutputFunction[Deps, Output]) Schema() map[string]any {
 	return cloneSchemaMap(output.schema)
 }
 
+// TextOutputFunction describes a function that converts plain model text into
+// the agent's final output.
+type TextOutputFunction[Deps, Output any] struct {
+	name    string
+	process func(context.Context, *RunContext[Deps], string) (Output, error)
+}
+
+// NewTextOutputFunction registers fn as a plain-text output processor.
+// Streaming output may call fn concurrently, so fn must synchronize shared
+// mutable state.
+func NewTextOutputFunction[Deps, Output any](
+	name string,
+	fn func(context.Context, *RunContext[Deps], string) (Output, error),
+) TextOutputFunction[Deps, Output] {
+	if name == "" {
+		panic("ai: text output function name must not be empty")
+	}
+	if fn == nil {
+		panic("ai: text output function must not be nil")
+	}
+	return TextOutputFunction[Deps, Output]{name: name, process: fn}
+}
+
+// Name returns the stable text output-function name.
+func (output TextOutputFunction[Deps, Output]) Name() string { return output.name }
+
+// NewTextOutputFunctionAgent creates an agent that passes plain model text to
+// the function. Function failures use the output retry and error handling
+// pipeline.
+func NewTextOutputFunctionAgent[Deps, Output any](
+	model Model,
+	output TextOutputFunction[Deps, Output],
+	opts ...Option,
+) *Agent[Deps, Output] {
+	if output.name == "" || output.process == nil {
+		panic("ai: invalid text output function")
+	}
+	agent := NewAgent[Deps, Output](model, opts...)
+	agent.outputProcessor = func(
+		ctx context.Context, runContext *RunContext[Deps], value, _ any,
+	) (Output, error) {
+		text, ok := value.(string)
+		if !ok {
+			var zero Output
+			return zero, fmt.Errorf("text output function %q received %T, expected string", output.name, value)
+		}
+		return output.process(ctx, runContext, text)
+	}
+	agent.outputHasFunction = true
+	agent.outputFunctionName = output.name
+	agent.outputInputType = reflect.TypeFor[string]()
+	agent.outputAllowsText = true
+	agent.outputOverrideErr = ErrOutputTypeOverrideWithCustomOutput
+	return agent
+}
+
 // NewOutputFunctionAgent creates an agent that validates model output as the
 // function's input type before calling the function. Function failures use the
 // output retry and error handling pipeline.

@@ -3524,7 +3524,8 @@ func (a *Agent[Deps, Output]) buildParams(
 	s := cloneSchemaMap(a.outputSchema)
 	if s == nil {
 		var out Output
-		if _, isString := any(out).(string); isString {
+		_, isString := any(out).(string)
+		if isString || a.outputAllowsText {
 			params.AllowText = true
 			return params, nil
 		}

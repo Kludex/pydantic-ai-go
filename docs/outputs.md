@@ -150,7 +150,47 @@ The model produces `CityInput`. The agent validates that value before calling yo
 
 Return `Retryf` to send feedback to the model. Other errors stop the run unless an output-processing capability recovers them. Output validators run after the function and receive the final value.
 
-Output functions run for tool, native, and prompted output. They also process partial structured values returned by `StreamedRun.Outputs`. Your function can therefore run concurrently when you use exhaustive output processing or concurrent stream consumers. Synchronize shared mutable state.
+Structured output functions run for tool, native, and prompted output. They also process partial structured values returned by `StreamedRun.Outputs`. Your function can therefore run concurrently when you use exhaustive output processing or concurrent stream consumers. Synchronize shared mutable state.
+
+### Transform plain text
+
+Use `NewTextOutputFunction` when the model should return text without a JSON Schema:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	output := ai.NewTextOutputFunction("words", func(
+		ctx context.Context,
+		rc *ai.RunContext[struct{}],
+		text string,
+	) ([]string, error) {
+		words := strings.Fields(text)
+		if len(words) < 2 {
+			return nil, ai.Retryf("return at least two words")
+		}
+		return words, nil
+	})
+	agent := ai.NewTextOutputFunctionAgent(openai.NewModel("gpt-5-mini"), output)
+	result, err := agent.Run(context.Background(), "Name a city and country.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+The function name is used in telemetry. It does not register a model-facing tool. The callback receives partial text when you consume `StreamedRun.Outputs`.
 
 ## Output modes
 

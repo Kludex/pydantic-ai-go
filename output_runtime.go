@@ -265,6 +265,9 @@ func (r *run[Deps, Output]) processOutputWithHooks(
 
 func (r *run[Deps, Output]) decodeOutput(rawOutput any, structured bool) (decodedOutput, error) {
 	if !structured {
+		if r.agent.outputProcessor != nil {
+			return decodedOutput{value: rawOutput}, nil
+		}
 		return decodedOutput{value: rawOutput.(Output)}, nil
 	}
 	raw, err := outputBytes(rawOutput)

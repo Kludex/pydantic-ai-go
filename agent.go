@@ -34,6 +34,7 @@ type Agent[Deps, Output any] struct {
 	outputHasFunction  bool
 	outputFunctionName string
 	outputInputType    reflect.Type
+	outputAllowsText   bool
 	outputOverrideErr  error
 	promptedTemplate   string
 	outputToolPrepare  []OutputToolPrepareFunc[Deps]

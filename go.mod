@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
-	github.com/pydantic/genai-prices/packages/go v0.0.0-20260831083617-00b022d60650
+	github.com/pydantic/genai-prices/packages/go v0.1.5
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	go.opentelemetry.io/otel v1.46.0
 	go.opentelemetry.io/otel/metric v1.46.0

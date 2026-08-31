@@ -236,7 +236,7 @@ Status:
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
-- [ ] Replace the `genai-prices` Go pseudo-version with the now-available `v0.1.5` module release.
+- [x] Use the tagged `genai-prices` Go `v0.1.5` module release instead of a commit pseudo-version.
 - [ ] Audit the 22 upstream commits from `bf2fb0555` through current `f711f5376`, including stable instruction IDs, transport-based Google routing, AG-UI tool-call message starts, new durable-operation APIs, and CLI MCP/tool streaming; then advance the audited baseline.
 - [ ] Pin `.upstream-sync.json` to the audited upstream commit.
 - [ ] After parity, add the daily `gh-aw` upstream-sync workflow described in `PLAN.md`.

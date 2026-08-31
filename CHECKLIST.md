@@ -140,7 +140,7 @@ Status:
 - [ ] Groq, Mistral, Cohere, Cerebras, xAI, OpenRouter, Ollama, Hugging Face, and other upstream providers.
 - [ ] Provider profiles/capability detection instead of model-name conditionals.
 - [ ] Provider HTTP retries and configurable retry policy.
-- [~] Transparent `ModelWrapper` delegation and wrapper-aware provider compaction are complete. `FallbackModel` supports ordered models, default provider-API-error fallback, composable error/response predicates, detached diagnostics, rejected-response cost accounting, streaming-open fallback, pinned suspended continuations with rewind, combined strategy/native-history behavior, and reverse lifecycle cleanup. Shared concurrency-limited model wrappers are complete; instrumentation wrappers remain.
+- [x] Transparent `ModelWrapper` delegation and wrapper-aware provider compaction are complete. `FallbackModel` supports ordered models, default provider-API-error fallback, composable error/response predicates, detached diagnostics, rejected-response cost accounting, streaming-open fallback, pinned suspended continuations with rewind, combined strategy/native-history behavior, and reverse lifecycle cleanup. Shared concurrency-limited and OpenTelemetry-instrumented model wrappers preserve optional model capabilities.
 
 ### Model settings
 
@@ -199,7 +199,7 @@ Status:
 ### Integrations
 
 - [ ] First-class `pydantic-evals-go` task adapter.
-- [ ] OpenTelemetry parity with PydanticAI span names, attributes, events, arbitrary usage-detail attributes, and privacy controls.
+- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. A configurable outermost agent instrumentation capability, run/output/deferred metadata, all upstream event shapes, baggage, and legacy format versions remain.
 - [ ] Logfire guidance and examples.
 - [ ] AG-UI adapter.
 - [ ] Vercel AI protocol adapter.
@@ -235,7 +235,7 @@ Status:
 
 ## Next work
 
-1. Add instrumentation wrappers on top of the transparent model-wrapper contract.
+1. Complete the configurable outermost agent instrumentation capability, including run/output/deferred metadata, baggage, and remaining upstream event shapes.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP with explicit shared sessions, prompts/resources, sampling, elicitation, task extension, and OAuth examples.
 4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.

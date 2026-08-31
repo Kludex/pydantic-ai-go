@@ -939,6 +939,9 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
 		}
 		r.setCurrentTools(params)
+		if hasInstrumentedModel(r.model) {
+			return r.doModelRequest(ctx, msgs, params)
+		}
 		reqCtx, reqSpan := startRequestSpan(ctx, r.model.Name())
 		resp, err := r.doModelRequest(reqCtx, msgs, params)
 		if err != nil {

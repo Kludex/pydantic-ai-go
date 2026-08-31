@@ -260,6 +260,43 @@ func main() {
 
 A run capability holds its slot for the complete agent run. Use `NewConcurrencyLimitedModel(model, limiter)` instead when only model requests should consume capacity; its slot remains held for the complete streamed response. Share one `ConcurrencyLimiter` across models or agents when they consume the same capacity pool. Do not apply the same limiter at nested run and model levels. A full bounded queue returns an error matching `ErrConcurrencyLimitExceeded`.
 
+### Instrument direct model requests
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	model := ai.NewInstrumentedModel(
+		openai.NewModel("gpt-5-mini"),
+		ai.WithInstrumentationContent(false),
+	)
+	response, err := ai.RequestModel(
+		context.Background(),
+		model,
+		[]ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "Hello"},
+		}}},
+		ai.ModelRequestParams{AllowText: true},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Print(response.Text())
+}
+```
+
+`InstrumentedModel` emits an OpenTelemetry client span, token and cost histograms, and time to first chunk for streams. It includes prompt, completion, and tool content by default. Use `WithInstrumentationContent(false)` to omit all content, `WithInstrumentationBinaryContent(false)` to keep media types without payloads, and `WithInstrumentationModelRequestParameters(false)` to omit the full parameter snapshot. Tool definitions remain available through `gen_ai.tool.definitions`.
+
+The wrapper delegates lifecycle, defaults, continuation, and tool-search capabilities. Nesting it with another transparent model wrapper keeps those capabilities available. Agent requests already have request spans and avoid creating a duplicate span when they reach an `InstrumentedModel`.
+
 ## Suspended responses
 
 Use OpenAI background mode for model requests that may take a long time:

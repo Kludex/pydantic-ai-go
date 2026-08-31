@@ -177,6 +177,9 @@ func cloneDeferredMetadata(metadata map[string]map[string]any) map[string]map[st
 }
 
 func cloneDeferredValidationErrors(errors []ValidationError) []ValidationError {
+	if errors == nil {
+		return nil
+	}
 	cloned := make([]ValidationError, len(errors))
 	for index, item := range errors {
 		item.Location = slices.Clone(item.Location)

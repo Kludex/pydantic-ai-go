@@ -13,6 +13,13 @@ import (
 // so traces from both libraries look the same in Logfire.
 const otelScope = "pydantic-ai"
 
+type modelRequestSpanContextKey struct{}
+
+func modelRequestSpanActive(ctx context.Context) bool {
+	active, _ := ctx.Value(modelRequestSpanContextKey{}).(bool)
+	return active
+}
+
 // tracer returns the package tracer from the global provider. When no
 // provider is configured this is a no-op tracer, so instrumentation costs
 // nothing unless the user opts in via otel.SetTracerProvider.
@@ -34,12 +41,13 @@ func recordRunModel(span trace.Span, modelName string) {
 }
 
 func startRequestSpan(ctx context.Context, modelName string) (context.Context, trace.Span) {
-	return tracer().Start(ctx, "chat "+modelName,
+	ctx, span := tracer().Start(ctx, "chat "+modelName,
 		trace.WithAttributes(
 			attribute.String("gen_ai.operation.name", "chat"),
 			attribute.String("gen_ai.request.model", modelName),
 		),
 	)
+	return context.WithValue(ctx, modelRequestSpanContextKey{}, true), span
 }
 
 func startToolSpan(ctx context.Context, toolName, toolCallID string) (context.Context, trace.Span) {

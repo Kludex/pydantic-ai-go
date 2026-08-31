@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"reflect"
@@ -12,9 +13,12 @@ import (
 // OutputAlternative describes one member of a UnionOutput. Kind is the stable
 // discriminator sent to the model.
 type OutputAlternative[Output any] struct {
-	kind   string
-	schema map[string]any
-	decode func(json.RawMessage) (Output, error)
+	kind        string
+	schema      map[string]any
+	decode      func(json.RawMessage) (any, error)
+	process     func(any) (Output, error)
+	inputType   reflect.Type
+	hasFunction bool
 }
 
 // NewOutputAlternative reflects Value's schema and converts a decoded Value to
@@ -32,14 +36,50 @@ func NewOutputAlternative[Output, Value any](
 	if err != nil {
 		panic(fmt.Sprintf("ai: output alternative %q: %v", kind, err))
 	}
-	return NewRawOutputAlternative(kind, valueSchema, func(raw json.RawMessage) (Output, error) {
-		var value Value
-		if err := json.Unmarshal(raw, &value); err != nil {
-			var zero Output
-			return zero, err
-		}
+	return newOutputAlternative(kind, valueSchema, func(value Value) (Output, error) {
 		return convert(value), nil
 	})
+}
+
+// NewOutputAlternativeFunc reflects Value's schema and converts a decoded
+// Value with a function that may return an error or request a retry.
+func NewOutputAlternativeFunc[Output, Value any](
+	kind string, convert func(Value) (Output, error),
+) OutputAlternative[Output] {
+	if kind == "" {
+		panic("ai: output alternative kind must not be empty")
+	}
+	if convert == nil {
+		panic("ai: output alternative converter must not be nil")
+	}
+	valueSchema, err := schema.For(reflect.TypeFor[Value]())
+	if err != nil {
+		panic(fmt.Sprintf("ai: output alternative %q: %v", kind, err))
+	}
+	return newOutputAlternative(kind, valueSchema, convert)
+}
+
+func newOutputAlternative[Output, Value any](
+	kind string, valueSchema map[string]any, convert func(Value) (Output, error),
+) OutputAlternative[Output] {
+	return OutputAlternative[Output]{
+		kind: kind, schema: cloneSchemaMap(valueSchema), inputType: reflect.TypeFor[Value](), hasFunction: true,
+		decode: func(raw json.RawMessage) (any, error) {
+			var value Value
+			if err := json.Unmarshal(raw, &value); err != nil {
+				return nil, err
+			}
+			return value, nil
+		},
+		process: func(value any) (Output, error) {
+			typed, ok := value.(Value)
+			if !ok {
+				var zero Output
+				return zero, fmt.Errorf("output alternative %q received %T, expected %v", kind, value, reflect.TypeFor[Value]())
+			}
+			return convert(typed)
+		},
+	}
 }
 
 // NewRawOutputAlternative creates an alternative from an explicit JSON Schema
@@ -56,7 +96,18 @@ func NewRawOutputAlternative[Output any](
 	if decode == nil {
 		panic("ai: output alternative decoder must not be nil")
 	}
-	return OutputAlternative[Output]{kind: kind, schema: cloneSchemaMap(valueSchema), decode: decode}
+	return OutputAlternative[Output]{
+		kind: kind, schema: cloneSchemaMap(valueSchema), inputType: reflect.TypeFor[Output](),
+		decode: func(raw json.RawMessage) (any, error) { return decode(raw) },
+		process: func(value any) (Output, error) {
+			output, ok := value.(Output)
+			if !ok {
+				var zero Output
+				return zero, fmt.Errorf("raw output alternative %q decoded %T, expected %v", kind, value, reflect.TypeFor[Output]())
+			}
+			return output, nil
+		},
+	}
 }
 
 // UnionOutput is a discriminated structured-output specification. It uses one
@@ -77,7 +128,7 @@ func NewUnionOutput[Output any](alternatives ...OutputAlternative[Output]) Union
 	variants := make([]any, 0, len(alternatives))
 	definitions := map[string]any{}
 	for index, alternative := range alternatives {
-		if alternative.kind == "" || alternative.decode == nil || alternative.schema == nil {
+		if alternative.kind == "" || alternative.decode == nil || alternative.process == nil || alternative.schema == nil {
 			panic("ai: invalid output alternative")
 		}
 		if _, duplicate := union.alternatives[alternative.kind]; duplicate {
@@ -116,22 +167,12 @@ func (output UnionOutput[Output]) Schema() map[string]any { return cloneSchemaMa
 // Decode resolves the union discriminator and decodes its selected value. An
 // agent applies full JSON Schema validation before calling Decode.
 func (output UnionOutput[Output]) Decode(raw []byte) (Output, error) {
-	var envelope struct {
-		Result struct {
-			Kind string          `json:"kind"`
-			Data json.RawMessage `json:"data"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(raw, &envelope); err != nil {
+	candidate, err := output.decodeCandidate(raw)
+	if err != nil {
 		var zero Output
 		return zero, err
 	}
-	alternative, ok := output.alternatives[envelope.Result.Kind]
-	if !ok {
-		var zero Output
-		return zero, fmt.Errorf("unknown output alternative kind %q", envelope.Result.Kind)
-	}
-	return alternative.decode(envelope.Result.Data)
+	return output.processCandidate(candidate.value, candidate.state)
 }
 
 // NewUnionAgent creates an agent whose Output can be one of the registered
@@ -150,8 +191,66 @@ func NewUnionAgent[Deps, Output any](
 		alternatives[kind] = alternative
 	}
 	union := UnionOutput[Output]{schema: cloneSchemaMap(output.schema), alternatives: alternatives}
-	agent.outputDecoder = union.Decode
+	agent.outputDecoder = union.decodeCandidate
+	agent.outputProcessor = func(_ context.Context, _ *RunContext[Deps], value, state any) (Output, error) {
+		return union.processCandidate(value, state)
+	}
+	for _, alternative := range alternatives {
+		agent.outputHasFunction = agent.outputHasFunction || alternative.hasFunction
+	}
+	agent.outputOverrideErr = ErrOutputTypeOverrideWithUnion
 	return agent
+}
+
+func (output UnionOutput[Output]) decodeCandidate(raw []byte) (decodedOutput, error) {
+	var envelope struct {
+		Result struct {
+			Kind string          `json:"kind"`
+			Data json.RawMessage `json:"data"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return decodedOutput{}, err
+	}
+	alternative, ok := output.alternatives[envelope.Result.Kind]
+	if !ok {
+		return decodedOutput{}, fmt.Errorf("unknown output alternative kind %q", envelope.Result.Kind)
+	}
+	value, err := alternative.decode(envelope.Result.Data)
+	if err != nil {
+		return decodedOutput{}, err
+	}
+	return decodedOutput{value: value, state: alternative}, nil
+}
+
+func (output UnionOutput[Output]) processCandidate(value, state any) (Output, error) {
+	original, hasOriginal := state.(OutputAlternative[Output])
+	if hasOriginal && original.accepts(value) {
+		return original.process(value)
+	}
+	var matched OutputAlternative[Output]
+	matches := 0
+	for _, alternative := range output.alternatives {
+		if alternative.accepts(value) {
+			matched = alternative
+			matches++
+		}
+	}
+	if matches == 1 {
+		return matched.process(value)
+	}
+	if hasOriginal {
+		return original.process(value)
+	}
+	var zero Output
+	return zero, fmt.Errorf("union output cannot select an alternative for %T", value)
+}
+
+func (output OutputAlternative[Output]) accepts(value any) bool {
+	if output.inputType == nil || value == nil {
+		return false
+	}
+	return reflect.TypeOf(value).AssignableTo(output.inputType)
 }
 
 func prepareUnionAlternativeSchema(value map[string]any, index int, definitions map[string]any) map[string]any {

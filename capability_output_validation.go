@@ -29,6 +29,8 @@ type OutputHookContext struct {
 	AllowsText     bool
 	Structured     bool
 	Partial        bool
+	HasFunction    bool
+	FunctionName   string
 }
 
 // Clone returns a context detached from schemas, tool calls, and definitions.

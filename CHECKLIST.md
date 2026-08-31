@@ -159,7 +159,8 @@ Status:
 - [~] Native output on supported providers.
 - [x] Native structured output alongside function calls obeys end strategies; plain text remains non-preemptive.
 - [x] Prompted JSON output fallback for reflected structured outputs, including default/custom schema instructions, validation retries, streaming, per-run overrides, and end-strategy handling.
-- [x] Multiple output alternatives through typed `UnionOutput` and `NewUnionAgent`, with stable discriminators, one provider-portable envelope across tool/native/prompted modes, raw-schema alternatives, recursive and merged-definition reference rewriting, semantic conversion, retries, output validators, streaming, detached schema inspection, standalone decoding, and explicit incompatibility with per-run output specialization.
+- [x] Multiple output alternatives through typed `UnionOutput` and `NewUnionAgent`, with stable discriminators, one provider-portable envelope across tool/native/prompted modes, raw-schema alternatives, recursive and merged-definition reference rewriting, post-validation semantic conversion, conversion retries, output validators, streaming, detached schema inspection, standalone decoding, and explicit incompatibility with per-run output specialization.
+- [~] Typed structured `OutputFunction` and `NewOutputFunctionAgent` separate the model-produced schema type from the final agent type, run conversion after schema validation and output hooks, support `RunContext`, retries, final-output validators, all structured modes, partial streaming, custom output-tool names, and concurrent-safe reusable specifications. Upstream-style plain-text output functions remain; binary/image output has its own open item.
 - [x] `OutputModeAuto` resolves the selected model's `ModelProfile` for each step, including adaptive selectors, model-request-hook switches, transparent wrappers, direct requests, streams, and each fallback candidate. Explicit agent/run modes and templates win; profiles can supply prompted templates and require schema instructions alongside native output.
 - [ ] Image and binary outputs.
 - [x] Output tool name, description, strict mode, sequential execution barrier, and independent retry configuration through `OutputToolConfig`, with per-run replacement.
@@ -199,7 +200,7 @@ Status:
 ### Integrations
 
 - [ ] First-class `pydantic-evals-go` task adapter.
-- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, and successful deferral metadata. Format versions 2 through 6 cover legacy span/attribute names, pre-v4 multimodal content, v5 control-flow deferrals, and v6 tool-message roles for implemented content. Output-function spans, richer run metadata, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
+- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, successful deferral metadata, and output-function spans with validated arguments, converted results, tool/function identity, privacy controls, errors, middleware nesting, and version 2 legacy naming. Richer run metadata, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
 - [ ] Logfire guidance and examples.
 - [ ] AG-UI adapter.
 - [ ] Vercel AI protocol adapter.
@@ -225,7 +226,7 @@ Status:
 - [ ] Record Google Gemini cassettes when credentials are available.
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
-- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused output, provider, MCP, and OpenTelemetry guides cover union output, OpenAI-compatible/Azure setup, shared-session lifecycle, direct protocol operations, privacy, format compatibility, and usage attribution. Dedicated multimodal and capability examples remain.
+- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused output, provider, MCP, and OpenTelemetry guides cover output functions and unions, OpenAI-compatible/Azure setup, shared-session lifecycle, direct protocol operations, privacy, format compatibility, and usage attribution. Dedicated multimodal and capability examples remain.
 - [~] Focused output, provider, MCP, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for capabilities, deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
@@ -236,7 +237,7 @@ Status:
 
 ## Next work
 
-1. Complete OpenTelemetry output-function spans, richer run metadata, remaining event shapes, and message-fragment caching/mutation diagnostics.
+1. Complete OpenTelemetry richer run metadata, remaining event shapes, and message-fragment caching/mutation diagnostics; output-function spans are complete for implemented output functions.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
 4. Extend upstream message fixtures as remaining persisted part types land.

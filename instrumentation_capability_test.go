@@ -15,6 +15,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
+	"go.opentelemetry.io/otel/trace"
 )
 
 func TestInstrumentationCapabilityRecordsRunRequestsAndTools(t *testing.T) {
@@ -516,6 +517,127 @@ func TestInstrumentationCapabilityErrorsAndEmptyModel(t *testing.T) {
 	)
 	if err != nil || response == nil || !called {
 		t.Fatalf("empty-model request was not delegated: response=%+v called=%v err=%v", response, called, err)
+	}
+}
+
+func TestInstrumentationCapabilityOutputFunctionSpan(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
+	instrumentation := ai.NewInstrumentation(
+		ai.WithInstrumentationTracerProvider(provider), ai.WithInstrumentationAgentName("classifier"),
+	)
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "normalize", ToolCallID: "final", Args: json.RawMessage(`{"city":"Paris"}`),
+		}}}, nil
+	})
+	var activeSpan trace.SpanContext
+	output := ai.NewOutputFunction("normalize", func(
+		ctx context.Context, _ *ai.RunContext[struct{}], input outputFunctionInput,
+	) (string, error) {
+		activeSpan = trace.SpanContextFromContext(ctx)
+		return strings.ToUpper(input.City), nil
+	})
+	agent := ai.NewOutputFunctionAgent(model, output, ai.WithCapabilities(
+		instrumentation,
+		ai.NewInstrumentation(ai.WithInstrumentationTracerProvider(provider)),
+	))
+	result, err := agent.Run(t.Context(), "city", struct{}{})
+	if err != nil || result.Output != "PARIS" {
+		t.Fatalf("unexpected output function result: %+v err=%v", result, err)
+	}
+
+	spans := exporter.GetSpans()
+	var runSpan, outputSpan *tracetest.SpanStub
+	for index := range spans {
+		span := &spans[index]
+		switch span.Name {
+		case "invoke_agent classifier":
+			runSpan = span
+		case "execute_tool normalize":
+			outputSpan = span
+		}
+	}
+	if runSpan == nil || outputSpan == nil || len(spans) != 3 {
+		t.Fatalf("expected one run, request, and output function span: %+v", spans)
+	}
+	if outputSpan.Parent.SpanID() != runSpan.SpanContext.SpanID() || activeSpan.SpanID() != outputSpan.SpanContext.SpanID() {
+		t.Fatalf("output function span hierarchy is wrong: run=%+v output=%+v active=%+v", runSpan, outputSpan, activeSpan)
+	}
+	attributes := instrumentationSpanAttributes(outputSpan.Attributes)
+	for key, want := range map[string]any{
+		"gen_ai.operation.name": "execute_tool", "gen_ai.tool.name": "normalize",
+		"gen_ai.tool.call.id": "final", "gen_ai.agent.name": "classifier",
+		"logfire.msg": "running output function: normalize",
+	} {
+		if got := attributes[key]; got != want {
+			t.Fatalf("output function attribute %q = %#v, want %#v", key, got, want)
+		}
+	}
+	if arguments, _ := attributes["gen_ai.tool.call.arguments"].(string); !strings.Contains(arguments, "Paris") {
+		t.Fatalf("output function arguments missing: %+v", attributes)
+	}
+	if value, _ := attributes["gen_ai.tool.call.result"].(string); value != `"PARIS"` {
+		t.Fatalf("output function result missing: %+v", attributes)
+	}
+	if schema, _ := attributes["logfire.json_schema"].(string); !strings.Contains(schema, "gen_ai.tool.call.result") {
+		t.Fatalf("output function log schema missing: %+v", attributes)
+	}
+}
+
+func TestInstrumentationCapabilityOutputFunctionLegacyPrivacyAndErrors(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
+	instrumentation := ai.NewInstrumentation(
+		ai.WithInstrumentationTracerProvider(provider), ai.WithInstrumentationVersion(2),
+		ai.WithInstrumentationContent(false),
+	)
+	hook := ai.OutputHookContext{HasFunction: true, FunctionName: "normalize"}
+	boom := errors.New("output function failed")
+	if _, err := instrumentation.WrapOutputProcessing(
+		t.Context(), nil, hook, map[string]any{"secret": true},
+		func(context.Context, any) (any, error) { return nil, boom },
+	); !errors.Is(err, boom) {
+		t.Fatalf("unexpected output function error: %v", err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || spans[0].Name != "running output function" || spans[0].Status.Code != codes.Error ||
+		len(spans[0].Events) != 1 {
+		t.Fatalf("unexpected legacy output function span: %+v", spans)
+	}
+	attributes := instrumentationSpanAttributes(spans[0].Attributes)
+	if _, exists := attributes["tool_arguments"]; exists {
+		t.Fatalf("private output function arguments leaked: %+v", attributes)
+	}
+	if _, exists := attributes["tool_response"]; exists {
+		t.Fatalf("private output function result leaked: %+v", attributes)
+	}
+	if schema, _ := attributes["logfire.json_schema"].(string); strings.Contains(schema, "tool_arguments") {
+		t.Fatalf("private output schema exposed content fields: %s", schema)
+	}
+
+	exporter.Reset()
+	result, err := instrumentation.WrapOutputProcessing(
+		t.Context(), nil, ai.OutputHookContext{HasFunction: true}, "input",
+		func(context.Context, any) (any, error) { return "done", nil },
+	)
+	spans = exporter.GetSpans()
+	if err != nil || result != "done" || len(spans) != 1 ||
+		instrumentationSpanAttributes(spans[0].Attributes)["gen_ai.tool.name"] != "output_function" {
+		t.Fatalf("generic output function span missing: result=%v err=%v spans=%+v", result, err, spans)
+	}
+
+	exporter.Reset()
+	result, err = instrumentation.WrapOutputProcessing(
+		t.Context(), nil, ai.OutputHookContext{}, "plain",
+		func(context.Context, any) (any, error) { return "done", nil },
+	)
+	if err != nil || result != "done" || len(exporter.GetSpans()) != 0 {
+		t.Fatalf("plain output unexpectedly emitted a span: result=%v err=%v spans=%+v", result, err, exporter.GetSpans())
 	}
 }
 

@@ -189,6 +189,124 @@ func TestUnionOutputDecode(t *testing.T) {
 	}
 }
 
+func TestUnionOutputFunctionRetries(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		city := "retry"
+		if requests == 2 {
+			city = "Paris"
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "final_result", ToolCallID: "call", Args: []byte(
+				`{"result":{"kind":"city","data":{"city":"` + city + `"}}}`,
+			),
+		}}}, nil
+	})
+	union := ai.NewUnionOutput(
+		ai.NewOutputAlternativeFunc("city", func(answer cityAnswer) (unionAnswer, error) {
+			if answer.City == "retry" {
+				return nil, ai.Retryf("choose a real city")
+			}
+			return answer, nil
+		}),
+		ai.NewOutputAlternative("refusal", func(answer refusalAnswer) unionAnswer { return answer }),
+	)
+	result, err := ai.NewUnionAgent[struct{}](model, union).Run(t.Context(), "answer", struct{}{})
+	if err != nil || result.Output.answer() != "Paris" || requests != 2 {
+		t.Fatalf("unexpected union function result: %+v requests=%d err=%v", result, requests, err)
+	}
+}
+
+func TestUnionOutputRejectsHookStateAndTypeChanges(t *testing.T) {
+	union := newAnswerUnion()
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "final_result", Args: []byte(`{"result":{"kind":"city","data":{"city":"Paris"}}}`),
+		}}}, nil
+	})
+	wrongType := ai.BeforeOutputProcessingFunc(func(
+		context.Context, *ai.RunInfo, ai.OutputHookContext, any,
+	) (any, error) {
+		return refusalAnswer{Reason: "changed"}, nil
+	})
+	switched, err := ai.NewUnionAgent[struct{}](model, union, ai.WithCapabilities(wrongType)).Run(
+		t.Context(), "answer", struct{}{},
+	)
+	if err != nil || switched.Output.answer() != "changed" {
+		t.Fatalf("union did not dispatch a hook-swapped alternative: %+v err=%v", switched, err)
+	}
+
+	recovered, err := ai.NewUnionAgent[struct{}](model, union, ai.WithCapabilities(
+		bypassUnionValidation{value: cityAnswer{City: "recovered"}},
+	)).Run(t.Context(), "answer", struct{}{})
+	if err != nil || recovered.Output.answer() != "recovered" {
+		t.Fatalf("union did not infer a recovered alternative: %+v err=%v", recovered, err)
+	}
+	if _, err := ai.NewUnionAgent[struct{}](model, union, ai.WithCapabilities(
+		bypassUnionValidation{value: "wrong"},
+	)).Run(t.Context(), "answer", struct{}{}); err == nil ||
+		!strings.Contains(err.Error(), "cannot select an alternative") {
+		t.Fatalf("unexpected union state error: %v", err)
+	}
+
+	rawUnion := ai.NewUnionOutput(
+		ai.NewRawOutputAlternative("city", map[string]any{
+			"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}},
+			"required": []any{"city"}, "additionalProperties": false,
+		}, func(raw json.RawMessage) (unionAnswer, error) {
+			var answer cityAnswer
+			return answer, json.Unmarshal(raw, &answer)
+		}),
+		ai.NewRawOutputAlternative("refusal", map[string]any{
+			"type": "object", "properties": map[string]any{"reason": map[string]any{"type": "string"}},
+			"required": []any{"reason"}, "additionalProperties": false,
+		}, func(raw json.RawMessage) (unionAnswer, error) {
+			var answer refusalAnswer
+			return answer, json.Unmarshal(raw, &answer)
+		}),
+	)
+	decoded, err := rawUnion.Decode([]byte(`{"result":{"kind":"city","data":{"city":"Rome"}}}`))
+	if err != nil || decoded.answer() != "Rome" {
+		t.Fatalf("unexpected raw union decode: %#v err=%v", decoded, err)
+	}
+	if _, err := ai.NewUnionAgent[struct{}](model, rawUnion, ai.WithCapabilities(ai.BeforeOutputProcessingFunc(func(
+		context.Context, *ai.RunInfo, ai.OutputHookContext, any,
+	) (any, error) {
+		return "wrong", nil
+	}))).Run(t.Context(), "answer", struct{}{}); err == nil || !strings.Contains(err.Error(), "raw output alternative") {
+		t.Fatalf("unexpected raw union type-change error: %v", err)
+	}
+
+	if _, err := ai.NewUnionAgent[struct{}](model, union, ai.WithCapabilities(ai.BeforeOutputProcessingFunc(func(
+		context.Context, *ai.RunInfo, ai.OutputHookContext, any,
+	) (any, error) {
+		return nil, nil
+	}))).Run(t.Context(), "answer", struct{}{}); err == nil || !strings.Contains(err.Error(), "output alternative") {
+		t.Fatalf("unexpected nil union value error: %v", err)
+	}
+}
+
+type bypassUnionValidation struct {
+	value any
+}
+
+func (bypassUnionValidation) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (capability bypassUnionValidation) WrapOutputValidation(
+	_ context.Context,
+	_ *ai.RunInfo,
+	_ ai.OutputHookContext,
+	_ any,
+	_ ai.OutputValidationFunc,
+) (any, error) {
+	return capability.value, nil
+}
+
 func TestUnionOutputConfigurationValidation(t *testing.T) {
 	city := ai.NewOutputAlternative("city", func(answer cityAnswer) unionAnswer { return answer })
 	tests := map[string]func(){
@@ -200,6 +318,15 @@ func TestUnionOutputConfigurationValidation(t *testing.T) {
 		},
 		"unsupported value": func() {
 			ai.NewOutputAlternative("channel", func(chan int) unionAnswer { return cityAnswer{} })
+		},
+		"function empty kind": func() {
+			ai.NewOutputAlternativeFunc("", func(cityAnswer) (unionAnswer, error) { return nil, nil })
+		},
+		"function nil converter": func() {
+			ai.NewOutputAlternativeFunc[unionAnswer, cityAnswer]("city", nil)
+		},
+		"function unsupported value": func() {
+			ai.NewOutputAlternativeFunc("channel", func(chan int) (unionAnswer, error) { return cityAnswer{}, nil })
 		},
 		"raw empty kind": func() {
 			ai.NewRawOutputAlternative("", map[string]any{}, func(json.RawMessage) (unionAnswer, error) {

@@ -59,9 +59,12 @@ Use an OTLP exporter instead when you send traces to an observability service. T
 - One `invoke_agent <name>` span for the run.
 - One `chat <model>` client span for each model request.
 - One `execute_tool <name>` span for each local tool execution.
+- One `execute_tool <name>` span for each user output function.
 - One failed `execute_tool <name>` span for a tool call rejected during argument validation.
 
 The run span records cumulative usage and cost. Request spans record provider, model, request settings, response details, tool definitions, messages, usage, cost, and streaming time to first chunk.
+
+Output-function spans include the validated model value as their arguments and the converted final value as their result. They use the output-tool name in tool mode and the registered function name in native or prompted mode. Plain validation and output validators do not create output-function spans.
 
 Tool deferrals are control flow in the default format. Their spans remain successful and use `pydantic_ai.tool.deferral.name` and `pydantic_ai.tool.deferral.metadata` attributes.
 
@@ -117,6 +120,6 @@ Do not wrap an agent's model and add `NewInstrumentation` only to get duplicate 
 
 Version 5 is the default. It matches the current upstream default. Pass `WithInstrumentationVersion(6)` to emit tool call responses with the OpenTelemetry `tool` role instead of the legacy `user` role.
 
-Versions 2 through 6 are supported for compatibility. Versions 2 and 3 retain the older multimodal message shape. Version 2 also uses the legacy `agent run`, `running tool`, `tool_arguments`, and `tool_response` names.
+Versions 2 through 6 are supported for compatibility. Versions 2 and 3 retain the older multimodal message shape. Version 2 also uses the legacy `agent run`, `running tool`, `running output function`, `tool_arguments`, and `tool_response` names.
 
 Run spans use `gen_ai.aggregated_usage.*` by default. This prevents observability backends from adding cumulative run usage to child request usage. Pass `WithInstrumentationAggregatedUsageAttributeNames(false)` when an existing dashboard requires `gen_ai.usage.*` names.

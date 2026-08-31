@@ -260,6 +260,7 @@ func TestAgent(t *testing.T) {
 | You need to | Use |
 | --- | --- |
 | Change one run without mutating the agent | `WithRunModelSettings`, `WithRunInstructions`, and other `RunOption` values |
+| Convert validated model data into another type | [`NewOutputFunction` and `NewOutputFunctionAgent`](docs/outputs.md) |
 | Return one of several typed outputs | [`NewUnionOutput` and `NewUnionAgent`](docs/outputs.md) |
 | Reuse or combine tools | `NewTool`, `NewFunctionToolset`, and the toolset wrappers |
 | Require approval | `WithApprovalRequired` and `DeferredToolResults` |

@@ -102,7 +102,55 @@ The envelope is the same for tool, native, and prompted output. This avoids prov
 
 `NewUnionOutput` requires at least two unique kinds. Treat each kind as persisted API data. Do not rename it after you have stored message history or prompts that reference it.
 
-Use `NewRawOutputAlternative` when a type needs a hand-written schema or decoder. `UnionOutput.Schema` returns a detached schema for inspection. `UnionOutput.Decode` decodes an envelope outside an agent.
+Use `NewOutputAlternativeFunc` when conversion can fail or request a model retry. Use `NewRawOutputAlternative` when a type needs a hand-written schema or decoder. `UnionOutput.Schema` returns a detached schema for inspection. `UnionOutput.Decode` decodes an envelope outside an agent.
+
+## Output functions
+
+Use an output function when the model's schema should differ from your final result:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"strings"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+type CityInput struct {
+	Name    string `json:"name"`
+	Country string `json:"country"`
+}
+
+func main() {
+	output := ai.NewOutputFunction("city_label", func(
+		ctx context.Context,
+		rc *ai.RunContext[struct{}],
+		city CityInput,
+	) (string, error) {
+		if city.Country == "" {
+			return "", ai.Retryf("include the country")
+		}
+		return strings.ToUpper(city.Name + ", " + city.Country), nil
+	})
+	agent := ai.NewOutputFunctionAgent(openai.NewModel("gpt-5-mini"), output)
+	result, err := agent.Run(context.Background(), "Return information about Paris.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+The model produces `CityInput`. The agent validates that value before calling your function. The function returns the agent's final `string` output. Its name becomes the default output-tool name, and you can override it with `WithOutputTool`.
+
+Return `Retryf` to send feedback to the model. Other errors stop the run unless an output-processing capability recovers them. Output validators run after the function and receive the final value.
+
+Output functions run for tool, native, and prompted output. They also process partial structured values returned by `StreamedRun.Outputs`. Your function can therefore run concurrently when you use exhaustive output processing or concurrent stream consumers. Synchronize shared mutable state.
 
 ## Output modes
 

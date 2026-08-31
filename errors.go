@@ -31,6 +31,12 @@ var ErrOutputTypeOverrideWithValidators = errors.New(
 	"ai: per-run output type cannot be used when the agent has output validators",
 )
 
+// ErrOutputTypeOverrideWithCustomOutput is returned when RunAs or RunStreamAs
+// would discard an agent's custom output processing.
+var ErrOutputTypeOverrideWithCustomOutput = errors.New(
+	"ai: per-run output type cannot be used when the agent has custom output processing",
+)
+
 // ErrOutputTypeOverrideWithUnion is returned when RunAs or RunStreamAs would
 // discard an agent's registered union-output alternatives.
 var ErrOutputTypeOverrideWithUnion = errors.New(

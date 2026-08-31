@@ -93,8 +93,8 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 	if len(agent.outputValidators) != 0 {
 		return nil, ErrOutputTypeOverrideWithValidators
 	}
-	if agent.outputDecoder != nil {
-		return nil, ErrOutputTypeOverrideWithUnion
+	if agent.outputDecoder != nil || agent.outputProcessor != nil {
+		return nil, agent.outputOverrideErr
 	}
 	tools := make([]toolEntry[Deps], len(agent.tools))
 	for index, tool := range agent.tools {

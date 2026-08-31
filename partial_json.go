@@ -7,8 +7,11 @@ import (
 	"github.com/Kludex/pydantic-ai-go/internal/schema"
 )
 
-func decodePartialJSON[Output any](raw string, validator *schema.Validator) (Output, bool) {
-	var zero Output
+func decodePartialJSON(
+	raw string,
+	validator *schema.Validator,
+	decode func([]byte) (decodedOutput, error),
+) (decodedOutput, bool) {
 	data := bytes.TrimSpace([]byte(raw))
 	for end := len(data); end > 0; end-- {
 		candidate, ok := closeJSONPrefix(data[:end])
@@ -24,13 +27,13 @@ func decodePartialJSON[Output any](raw string, validator *schema.Validator) (Out
 				continue
 			}
 		}
-		var output Output
-		if err := json.Unmarshal(candidate, &output); err != nil {
+		output, err := decode(candidate)
+		if err != nil {
 			continue
 		}
 		return output, true
 	}
-	return zero, false
+	return decodedOutput{}, false
 }
 
 func closeJSONPrefix(prefix []byte) ([]byte, bool) {

@@ -256,4 +256,7 @@ func TestUsageCostSerializationCompatibility(t *testing.T) {
 	if err := json.Unmarshal([]byte(`not json`), &usage); err == nil {
 		t.Fatal("expected invalid usage JSON error")
 	}
+	if err := usage.UnmarshalJSON([]byte(`{`)); err == nil {
+		t.Fatal("expected direct invalid usage JSON error")
+	}
 }

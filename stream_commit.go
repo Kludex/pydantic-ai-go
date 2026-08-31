@@ -25,7 +25,7 @@ func (r *run[Deps, Output]) streamedOutput(
 			structured := r.params.OutputSchema != nil
 			output, err := r.validateAndProcessOutput(
 				ctx, r.outputRunContext(""), r.outputHookContext(nil, structured, false), response.Text(),
-				func(raw any) (Output, error) { return r.decodeOutput(raw, structured) },
+				func(raw any) (decodedOutput, error) { return r.decodeOutput(raw, structured) },
 			)
 			if err := committedOutputError(err); err != nil {
 				return nil, -1, false, err
@@ -39,7 +39,7 @@ func (r *run[Deps, Output]) streamedOutput(
 			call := part
 			output, err := r.validateAndProcessOutput(
 				ctx, r.outputRunContext(part.ToolCallID), r.outputHookContext(&call, true, false), part.Args,
-				func(raw any) (Output, error) { return r.decodeOutput(raw, true) },
+				func(raw any) (decodedOutput, error) { return r.decodeOutput(raw, true) },
 			)
 			if err := committedOutputError(err); err != nil {
 				return nil, callIndex, false, err
@@ -65,16 +65,15 @@ func (r *run[Deps, Output]) validatePartialOutput(
 	}
 	output, err := r.validateAndProcessOutput(
 		ctx, runContext, r.outputHookContext(call, structured, true), raw,
-		func(rawOutput any) (Output, error) {
+		func(rawOutput any) (decodedOutput, error) {
 			if !structured {
 				return r.decodeOutput(rawOutput, false)
 			}
 			encoded, err := outputBytes(rawOutput)
 			if err != nil {
-				var zero Output
-				return zero, err
+				return decodedOutput{}, err
 			}
-			output, valid := decodePartialJSON[Output](string(encoded), r.currentOutputValidator)
+			output, valid := decodePartialJSON(string(encoded), r.currentOutputValidator, r.decodeOutputBytes)
 			if !valid {
 				return output, errPartialOutputIncomplete
 			}

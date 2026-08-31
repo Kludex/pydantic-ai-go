@@ -2292,7 +2292,7 @@ func (r *run[Deps, Output]) earlyNativeOutput(
 	}
 	out, err := r.validateAndProcessOutput(
 		ctx, r.outputRunContext(""), r.outputHookContext(nil, true, false), resp.Text(),
-		func(raw any) (Output, error) { return r.decodeOutput(raw, true) },
+		func(raw any) (decodedOutput, error) { return r.decodeOutput(raw, true) },
 	)
 	var schemaValidation *outputSchemaValidationError
 	var decodeError *outputDecodeError
@@ -3085,7 +3085,7 @@ func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCal
 	hookContext := r.outputHookContext(&call, true, false)
 	out, err := r.validateAndProcessOutput(
 		ctx, r.outputRunContext(call.ToolCallID), hookContext, call.Args,
-		func(raw any) (Output, error) { return r.decodeOutput(raw, true) },
+		func(raw any) (decodedOutput, error) { return r.decodeOutput(raw, true) },
 	)
 	var schemaValidation *outputSchemaValidationError
 	var retry *RetryError
@@ -3146,7 +3146,7 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 	hookContext := r.outputHookContext(nil, structured, false)
 	out, err := r.validateAndProcessOutput(
 		ctx, r.outputRunContext(""), hookContext, resp.Text(),
-		func(raw any) (Output, error) { return r.decodeOutput(raw, structured) },
+		func(raw any) (decodedOutput, error) { return r.decodeOutput(raw, structured) },
 	)
 	var schemaValidation *outputSchemaValidationError
 	var retry *RetryError
@@ -3521,13 +3521,13 @@ func (a *Agent[Deps, Output]) buildParams(
 	for _, entry := range tools {
 		params.Tools = append(params.Tools, entry.def)
 	}
-	var out Output
-	if _, isString := any(out).(string); isString {
-		params.AllowText = true
-		return params, nil
-	}
 	s := cloneSchemaMap(a.outputSchema)
 	if s == nil {
+		var out Output
+		if _, isString := any(out).(string); isString {
+			params.AllowText = true
+			return params, nil
+		}
 		var err error
 		s, err = schema.For(reflect.TypeFor[Output]())
 		if err != nil {

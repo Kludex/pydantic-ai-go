@@ -225,6 +225,81 @@ func (instrumentation *Instrumentation) WrapToolExecution(
 	return next(ctx, args)
 }
 
+// WrapOutputProcessing records user output-function arguments and results.
+func (instrumentation *Instrumentation) WrapOutputProcessing(
+	ctx context.Context,
+	_ *RunInfo,
+	hook OutputHookContext,
+	output any,
+	next OutputProcessingFunc,
+) (result any, err error) {
+	if !hook.HasFunction || outputFunctionSpanActive(ctx) {
+		return next(ctx, output)
+	}
+	target := hook.FunctionName
+	if hook.ToolCall != nil {
+		target = hook.ToolCall.ToolName
+	}
+	if target == "" {
+		target = "output_function"
+	}
+	names := namesForInstrumentationVersion(instrumentation.runtime.version)
+	attributes := []attribute.KeyValue{
+		attribute.String("gen_ai.operation.name", "execute_tool"),
+		attribute.String("gen_ai.tool.name", target),
+		attribute.String("logfire.msg", "running output function: "+target),
+	}
+	attributes = append(attributes, instrumentationBaggageAttributes(ctx)...)
+	if hook.ToolCall != nil && hook.ToolCall.ToolCallID != "" {
+		attributes = append(attributes, attribute.String("gen_ai.tool.call.id", hook.ToolCall.ToolCallID))
+	}
+	if instrumentation.runtime.includeContent {
+		attributes = append(attributes, attribute.String(
+			names.toolArguments,
+			telemetryJSON(telemetryOutputValue(output, instrumentation.runtime.includeBinaryContent)),
+		))
+	}
+	properties := map[string]any{"gen_ai.tool.name": map[string]any{}}
+	if instrumentation.runtime.includeContent {
+		properties[names.toolArguments] = map[string]any{"type": "object"}
+		properties[names.toolResult] = map[string]any{"type": "object"}
+	}
+	if hook.ToolCall != nil && hook.ToolCall.ToolCallID != "" {
+		properties["gen_ai.tool.call.id"] = map[string]any{}
+	}
+	attributes = append(attributes, attribute.String(
+		"logfire.json_schema", telemetryJSON(map[string]any{"type": "object", "properties": properties}),
+	))
+	ctx, span := instrumentation.runtime.tracer.Start(
+		ctx, names.outputFunctionSpan(target), trace.WithAttributes(attributes...),
+	)
+	ctx = context.WithValue(ctx, outputFunctionSpanContextKey{}, true)
+	defer func() {
+		if err != nil {
+			span.SetStatus(codes.Error, err.Error())
+			span.RecordError(err)
+		} else if instrumentation.runtime.includeContent {
+			span.SetAttributes(attribute.String(
+				names.toolResult,
+				telemetryJSON(telemetryOutputValue(result, instrumentation.runtime.includeBinaryContent)),
+			))
+		}
+		span.End()
+	}()
+	return next(ctx, output)
+}
+
+func instrumentationBaggageAttributes(ctx context.Context) []attribute.KeyValue {
+	current := baggage.FromContext(ctx)
+	attributes := make([]attribute.KeyValue, 0, 3)
+	for _, key := range []string{"gen_ai.agent.name", "gen_ai.agent.call.id", "gen_ai.conversation.id"} {
+		if value := current.Member(key).Value(); value != "" {
+			attributes = append(attributes, attribute.String(key, value))
+		}
+	}
+	return attributes
+}
+
 func instrumentationBaggage(ctx context.Context, name, runID, conversationID string) context.Context {
 	values := []struct{ key, value string }{
 		{key: "gen_ai.agent.name", value: name},

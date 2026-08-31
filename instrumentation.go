@@ -28,24 +28,27 @@ type instrumentationConfig struct {
 }
 
 type instrumentationNames struct {
-	runSpan       func(string) string
-	toolSpan      func(string) string
-	toolArguments string
-	toolResult    string
+	runSpan            func(string) string
+	toolSpan           func(string) string
+	outputFunctionSpan func(string) string
+	toolArguments      string
+	toolResult         string
 }
 
 func namesForInstrumentationVersion(version int) instrumentationNames {
 	if version == 2 {
 		return instrumentationNames{
-			runSpan:       func(string) string { return "agent run" },
-			toolSpan:      func(string) string { return "running tool" },
-			toolArguments: "tool_arguments", toolResult: "tool_response",
+			runSpan:            func(string) string { return "agent run" },
+			toolSpan:           func(string) string { return "running tool" },
+			outputFunctionSpan: func(string) string { return "running output function" },
+			toolArguments:      "tool_arguments", toolResult: "tool_response",
 		}
 	}
 	return instrumentationNames{
-		runSpan:       func(name string) string { return "invoke_agent " + name },
-		toolSpan:      func(name string) string { return "execute_tool " + name },
-		toolArguments: "gen_ai.tool.call.arguments", toolResult: "gen_ai.tool.call.result",
+		runSpan:            func(name string) string { return "invoke_agent " + name },
+		toolSpan:           func(name string) string { return "execute_tool " + name },
+		outputFunctionSpan: func(name string) string { return "execute_tool " + name },
+		toolArguments:      "gen_ai.tool.call.arguments", toolResult: "gen_ai.tool.call.result",
 	}
 }
 

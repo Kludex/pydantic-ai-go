@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"sync/atomic"
 )
@@ -28,7 +29,12 @@ type Agent[Deps, Output any] struct {
 	outputMode         OutputMode
 	outputTool         OutputToolConfig
 	outputSchema       map[string]any
-	outputDecoder      func([]byte) (Output, error)
+	outputDecoder      func([]byte) (decodedOutput, error)
+	outputProcessor    func(context.Context, *RunContext[Deps], any, any) (Output, error)
+	outputHasFunction  bool
+	outputFunctionName string
+	outputInputType    reflect.Type
+	outputOverrideErr  error
 	promptedTemplate   string
 	outputToolPrepare  []OutputToolPrepareFunc[Deps]
 	endStrategy        EndStrategy

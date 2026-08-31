@@ -341,6 +341,35 @@ func TestBeforeModelRequestCanSelectModelAndCloneContext(t *testing.T) {
 	}
 }
 
+func TestBeforeModelRequestReprofilesStructuredOutputAfterModelSwitch(t *testing.T) {
+	initial := ai.NewProfiledModel(fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		t.Fatal("initial model should have been replaced")
+		return nil, nil
+	}), ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool})
+	replacement := ai.NewProfiledModel(fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if params.OutputMode != ai.OutputModeNative || params.OutputSchema == nil || params.OutputTool != nil {
+			t.Fatalf("replacement model was not reprofiled: %+v", params)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: `{"value":"switched"}`}}}, nil
+	}), ai.ModelProfile{DefaultOutputMode: ai.OutputModeNative})
+	hook := ai.BeforeModelRequestFunc(func(
+		_ context.Context, _ *ai.RunInfo, request ai.ModelRequestContext,
+	) (ai.ModelRequestContext, error) {
+		request.Model = replacement
+		return request, nil
+	})
+	result, err := ai.NewAgent[deps, profileOutput](initial, ai.WithCapabilities(hook)).Run(
+		t.Context(), "go", deps{},
+	)
+	if err != nil || result.Output.Value != "switched" {
+		t.Fatalf("unexpected reprofiled output: %+v err=%v", result, err)
+	}
+}
+
 func TestModelHookCanReplaceHistoryAndRecordAdditionalUsage(t *testing.T) {
 	model := fakes.NewFunctionModel(func(
 		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,

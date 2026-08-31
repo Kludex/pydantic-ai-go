@@ -103,6 +103,7 @@ func (instrumentation *Instrumentation) WrapRun(
 	}
 	ctx, span := instrumentation.runtime.tracer.Start(ctx, names.runSpan(name), trace.WithAttributes(attributes...))
 	ctx = context.WithValue(ctx, runSpanContextKey{}, true)
+	ctx = context.WithValue(ctx, instrumentationRuntimeContextKey{}, instrumentation.runtime)
 	runState := &instrumentationRunState{}
 	ctx = context.WithValue(ctx, instrumentationRunStateKey{}, runState)
 	ctx = instrumentationBaggage(ctx, name, info.RunID, info.ConversationID)

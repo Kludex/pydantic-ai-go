@@ -180,6 +180,34 @@ func (model *InstrumentedModel) Request(
 	return response, err
 }
 
+// CompactMessages instruments explicit provider compaction.
+func (model *InstrumentedModel) CompactMessages(
+	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
+) (*ModelResponse, error) {
+	if compactionSpanActive(ctx) {
+		return model.ModelWrapper.CompactMessages(ctx, messages, params)
+	}
+	request := ModelRequestContext{Messages: messages, Params: params}.Clone()
+	if err := validateModelSettings(request.Params.Settings); err != nil {
+		return nil, err
+	}
+	if request.Params.Settings.RequestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, request.Params.Settings.RequestTimeout)
+		defer cancel()
+	}
+	return model.compactMessages(ctx, model.ModelWrapper, request.Messages, request.Params)
+}
+
+func (model *InstrumentedModel) compactMessages(
+	ctx context.Context, compactor ModelCompactor, messages []ModelMessage, params ModelRequestParams,
+) (*ModelResponse, error) {
+	spanCtx, request := model.startOperation(ctx, "compact", messages, params)
+	response, err := compactor.CompactMessages(spanCtx, messages, params)
+	request.finish(spanCtx, response, err, 0)
+	return response, err
+}
+
 // StreamRequest instruments stream opening and keeps the span open through consumption.
 func (model *InstrumentedModel) StreamRequest(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
@@ -222,18 +250,25 @@ func (model *InstrumentedModel) StreamRequest(
 }
 
 type instrumentedRequest struct {
-	model    *InstrumentedModel
-	span     trace.Span
-	messages []ModelMessage
-	params   ModelRequestParams
-	once     sync.Once
+	model     *InstrumentedModel
+	operation string
+	span      trace.Span
+	messages  []ModelMessage
+	params    ModelRequestParams
+	once      sync.Once
 }
 
 func (model *InstrumentedModel) startRequest(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
 ) (context.Context, *instrumentedRequest) {
+	return model.startOperation(ctx, "chat", messages, params)
+}
+
+func (model *InstrumentedModel) startOperation(
+	ctx context.Context, operation string, messages []ModelMessage, params ModelRequestParams,
+) (context.Context, *instrumentedRequest) {
 	attributes := []attribute.KeyValue{
-		attribute.String("gen_ai.operation.name", "chat"),
+		attribute.String("gen_ai.operation.name", operation),
 		attribute.String("gen_ai.request.model", model.Name()),
 	}
 	attributes = append(attributes, modelSettingAttributes(params.Settings)...)
@@ -244,11 +279,15 @@ func (model *InstrumentedModel) startRequest(
 		attributes = append(attributes, attribute.String("model_request_parameters", telemetryRequestParameters(params)))
 	}
 	spanCtx, span := model.tracer.Start(
-		ctx, "chat "+model.Name(), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attributes...),
+		ctx, operation+" "+model.Name(), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attributes...),
 	)
-	spanCtx = context.WithValue(spanCtx, modelRequestSpanContextKey{}, true)
+	if operation == "compact" {
+		spanCtx = context.WithValue(spanCtx, compactionSpanContextKey{}, true)
+	} else {
+		spanCtx = context.WithValue(spanCtx, modelRequestSpanContextKey{}, true)
+	}
 	return spanCtx, &instrumentedRequest{
-		model: model, span: span, messages: cloneModelMessages(messages),
+		model: model, operation: operation, span: span, messages: cloneModelMessages(messages),
 		params: ModelRequestContext{Params: params}.Clone().Params,
 	}
 }
@@ -290,7 +329,7 @@ func (request *instrumentedRequest) finish(
 		}
 		request.span.SetAttributes(attributes...)
 		request.span.End()
-		request.model.recordMetrics(ctx, response, firstChunk)
+		request.model.recordMetrics(ctx, response, firstChunk, request.operation)
 	})
 }
 
@@ -316,9 +355,9 @@ func hasInstrumentedModel(model Model) bool {
 }
 
 func (model *InstrumentedModel) recordMetrics(
-	ctx context.Context, response *ModelResponse, firstChunk time.Duration,
+	ctx context.Context, response *ModelResponse, firstChunk time.Duration, operation string,
 ) {
-	attributes := []attribute.KeyValue{attribute.String("gen_ai.operation.name", "chat")}
+	attributes := []attribute.KeyValue{attribute.String("gen_ai.operation.name", operation)}
 	if response.ProviderName != "" {
 		attributes = append(attributes,
 			attribute.String("gen_ai.provider.name", response.ProviderName),

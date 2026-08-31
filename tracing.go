@@ -15,8 +15,10 @@ const otelScope = "pydantic-ai"
 
 type runSpanContextKey struct{}
 type modelRequestSpanContextKey struct{}
+type compactionSpanContextKey struct{}
 type toolSpanContextKey struct{}
 type outputFunctionSpanContextKey struct{}
+type instrumentationRuntimeContextKey struct{}
 
 func runSpanActive(ctx context.Context) bool {
 	active, _ := ctx.Value(runSpanContextKey{}).(bool)
@@ -25,6 +27,11 @@ func runSpanActive(ctx context.Context) bool {
 
 func modelRequestSpanActive(ctx context.Context) bool {
 	active, _ := ctx.Value(modelRequestSpanContextKey{}).(bool)
+	return active
+}
+
+func compactionSpanActive(ctx context.Context) bool {
+	active, _ := ctx.Value(compactionSpanContextKey{}).(bool)
 	return active
 }
 

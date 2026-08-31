@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"go.opentelemetry.io/otel"
@@ -165,6 +166,140 @@ func TestInstrumentedModelRequest(t *testing.T) {
 	for _, name := range []string{"gen_ai.client.token.usage", "operation.cost"} {
 		if !metricNames[name] {
 			t.Fatalf("missing metric %q: %+v", name, metricNames)
+		}
+	}
+}
+
+func TestInstrumentedModelCompaction(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
+	base := &explicitCompactionModel{compact: func(
+		ctx context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if !trace.SpanFromContext(ctx).SpanContext().IsValid() {
+			t.Fatal("compaction did not receive the span context")
+		}
+		return &ai.ModelResponse{
+			Parts:        []ai.ResponsePart{ai.CompactionPart{Content: "Summary."}},
+			Usage:        ai.Usage{InputTokens: 4, OutputTokens: 1},
+			ModelName:    "compact-response-model",
+			ProviderName: "provider",
+		}, nil
+	}}
+	model := ai.NewInstrumentedModel(base, ai.WithInstrumentationTracerProvider(provider))
+	response, err := ai.CompactModelMessages(t.Context(), model, []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "old"}}},
+	}, ai.ModelRequestParams{Instructions: "Keep decisions."})
+	if err != nil || response.Parts[0].(ai.CompactionPart).Content != "Summary." {
+		t.Fatalf("unexpected compacted response=%+v err=%v", response, err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 1 || spans[0].Name != "compact compact-model" || spans[0].SpanKind != trace.SpanKindClient {
+		t.Fatalf("unexpected compaction spans: %+v", spans)
+	}
+	attributes := instrumentationSpanAttributes(spans[0].Attributes)
+	for key, want := range map[string]any{
+		"gen_ai.operation.name":     "compact",
+		"gen_ai.request.model":      "compact-model",
+		"gen_ai.response.model":     "compact-response-model",
+		"gen_ai.provider.name":      "provider",
+		"gen_ai.usage.input_tokens": int64(4),
+	} {
+		if got := attributes[key]; got != want {
+			t.Fatalf("compaction attribute %q = %#v, want %#v", key, got, want)
+		}
+	}
+	if input, _ := attributes["gen_ai.input.messages"].(string); !strings.Contains(input, "old") {
+		t.Fatalf("compaction input was not traced: %s", input)
+	}
+	if output, _ := attributes["gen_ai.output.messages"].(string); !strings.Contains(output, "Summary.") {
+		t.Fatalf("compaction output was not traced: %s", output)
+	}
+
+	compactor := any(model).(ai.ModelCompactor)
+	if _, err := compactor.CompactMessages(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		RequestTimeout: -time.Second,
+	}}); err == nil || err.Error() != "ai: request timeout must be non-negative, got -1s" {
+		t.Fatalf("unexpected direct compaction validation error: %v", err)
+	}
+	base.compact = func(
+		ctx context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	if _, err := compactor.CompactMessages(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		RequestTimeout: time.Millisecond,
+	}}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unexpected direct compaction timeout: %v", err)
+	}
+
+	base.compact = func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.CompactionPart{Content: "nested"}}}, nil
+	}
+	nested := ai.NewInstrumentedModel(model, ai.WithInstrumentationTracerProvider(provider))
+	if _, err := ai.CompactModelMessages(t.Context(), nested, nil, ai.ModelRequestParams{}); err != nil {
+		t.Fatalf("nested instrumented compaction failed: %v", err)
+	}
+}
+
+type traceCompactionCapability struct{}
+
+func (*traceCompactionCapability) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (*traceCompactionCapability) BeforeModelRequest(
+	ctx context.Context, _ *ai.RunInfo, request ai.ModelRequestContext,
+) (ai.ModelRequestContext, error) {
+	response, err := ai.CompactModelMessages(ctx, request.Model, request.Messages, request.Params)
+	if response != nil {
+		request.AdditionalUsage.Add(response.Usage)
+	}
+	return request, err
+}
+
+func TestAgentInstrumentationTracesSideCompactionOnce(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
+	model := &explicitCompactionModel{compact: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{
+			Parts: []ai.ResponsePart{ai.CompactionPart{Content: "Summary."}},
+			Usage: ai.Usage{InputTokens: 3, OutputTokens: 1},
+		}, nil
+	}}
+	agent := ai.NewAgent[struct{}, string](model, ai.WithCapabilities(
+		ai.NewInstrumentation(ai.WithInstrumentationTracerProvider(provider)),
+		&traceCompactionCapability{},
+	))
+	result, err := agent.Run(t.Context(), "new", struct{}{})
+	if err != nil || result.Output != "done" || result.Usage().InputTokens != 3 {
+		t.Fatalf("unexpected instrumented run result=%+v err=%v", result, err)
+	}
+	model.compact = func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return nil, nil
+	}
+	result, err = agent.Run(t.Context(), "again", struct{}{})
+	if err != nil || result.Output != "done" {
+		t.Fatalf("unexpected nil-side-response run result=%+v err=%v", result, err)
+	}
+	counts := map[string]int{}
+	for _, span := range exporter.GetSpans() {
+		counts[span.Name]++
+	}
+	for name, want := range map[string]int{
+		"compact compact-model": 2,
+		"chat compact-model":    2,
+		"invoke_agent agent":    2,
+	} {
+		if counts[name] != want {
+			t.Fatalf("span %q count = %d, want %d; all=%+v", name, counts[name], want, exporter.GetSpans())
 		}
 	}
 }

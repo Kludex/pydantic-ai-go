@@ -3,13 +3,101 @@ package ai_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"slices"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 )
+
+type explicitCompactionModel struct {
+	compact func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error)
+}
+
+func (*explicitCompactionModel) Name() string { return "compact-model" }
+
+func (*explicitCompactionModel) Request(
+	context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+) (*ai.ModelResponse, error) {
+	return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+}
+
+func (model *explicitCompactionModel) CompactMessages(
+	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+) (*ai.ModelResponse, error) {
+	return model.compact(ctx, messages, params)
+}
+
+func TestCompactModelMessagesUsesDetachedSnapshots(t *testing.T) {
+	providerDetails := map[string]any{"nested": map[string]any{"value": "original"}}
+	model := &explicitCompactionModel{compact: func(
+		_ context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		messages[0].(ai.ModelRequest).Parts[0] = ai.UserPromptPart{Content: "changed"}
+		params.Tools[0].Schema["changed"] = true
+		return &ai.ModelResponse{
+			Parts: []ai.ResponsePart{ai.CompactionPart{Content: "Summary.", ProviderDetails: providerDetails}},
+			Usage: ai.Usage{InputTokens: 2, OutputTokens: 1},
+		}, nil
+	}}
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "original"}}}}
+	params := ai.ModelRequestParams{Tools: []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}}}
+	response, err := ai.CompactModelMessages(t.Context(), ai.WrapModel(model), messages, params)
+	if err != nil || response.Parts[0].(ai.CompactionPart).Content != "Summary." {
+		t.Fatalf("unexpected compaction response=%+v err=%v", response, err)
+	}
+	if messages[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart).Content != "original" ||
+		params.Tools[0].Schema["changed"] != nil {
+		t.Fatalf("compaction mutated caller input: messages=%+v params=%+v", messages, params)
+	}
+	response.Parts[0].(ai.CompactionPart).ProviderDetails["nested"].(map[string]any)["value"] = "changed"
+	if providerDetails["nested"].(map[string]any)["value"] != "original" {
+		t.Fatal("compaction response retained provider-owned state")
+	}
+}
+
+func TestCompactModelMessagesValidationAndCancellation(t *testing.T) {
+	if _, err := ai.CompactModelMessages(t.Context(), nil, nil, ai.ModelRequestParams{}); !errors.Is(err, ai.ErrNoModel) {
+		t.Fatalf("unexpected nil-model error: %v", err)
+	}
+	unsupported := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return nil, nil
+	})
+	if _, err := ai.CompactModelMessages(t.Context(), unsupported, nil, ai.ModelRequestParams{}); !errors.Is(
+		err, ai.ErrCompactionUnsupported,
+	) {
+		t.Fatalf("unexpected unsupported-compaction error: %v", err)
+	}
+	model := &explicitCompactionModel{compact: func(
+		ctx context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}}
+	if _, err := ai.CompactModelMessages(t.Context(), model, nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		RequestTimeout: -time.Second,
+	}}); err == nil || err.Error() != "ai: request timeout must be non-negative, got -1s" {
+		t.Fatalf("unexpected settings error: %v", err)
+	}
+	if _, err := ai.CompactModelMessages(t.Context(), model, nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		RequestTimeout: time.Millisecond,
+	}}); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("unexpected compaction timeout: %v", err)
+	}
+	model.compact = func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return nil, nil
+	}
+	if response, err := ai.CompactModelMessages(t.Context(), model, nil, ai.ModelRequestParams{}); response != nil || err != nil {
+		t.Fatalf("unexpected nil compaction response=%+v err=%v", response, err)
+	}
+}
 
 func TestUpstreamCompactionFixtureRoundTrips(t *testing.T) {
 	data, err := os.ReadFile("testdata/messages/upstream_compaction.json")

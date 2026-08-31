@@ -272,6 +272,7 @@ func TestAgent(t *testing.T) {
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
 | Trim or summarize old conversation turns | [`TokenHistoryTrimmer` and `HistorySummarizer`](docs/history.md) |
+| Compact old provider history | [`ModelCompactor` and compaction capabilities](docs/compaction.md) |
 | Send image URLs or inline images | [`RunParts`](docs/multimodal.md) |
 | Use provider-native web tools | [`WebSearchTool` and `WebFetchTool`](docs/native-tools.md) |
 | Configure a provider or compatible endpoint | [Provider configuration](docs/providers.md) |

@@ -104,14 +104,14 @@ func (*Compaction) CapabilityOrdering() ai.CapabilityOrdering {
 func (compaction *Compaction) BeforeModelRequest(
 	ctx context.Context, runInfo *ai.RunInfo, request ai.ModelRequestContext,
 ) (ai.ModelRequestContext, error) {
-	model, ok := ai.UnwrapModel(request.Model).(*ResponsesModel)
+	_, ok := ai.UnwrapModel(request.Model).(*ResponsesModel)
 	if !ok {
 		return request, fmt.Errorf("openai: compaction requires ResponsesModel, got %T", request.Model)
 	}
 	if !compaction.isStateless() || !compaction.shouldCompact(request.Messages) || len(request.Messages) < 2 {
 		return request, nil
 	}
-	compacted, err := model.CompactMessages(ctx, request.Messages[:len(request.Messages)-1], request.Params)
+	compacted, err := ai.CompactModelMessages(ctx, request.Model, request.Messages[:len(request.Messages)-1], request.Params)
 	if err != nil {
 		return request, err
 	}

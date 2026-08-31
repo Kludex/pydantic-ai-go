@@ -59,6 +59,7 @@ Use an OTLP exporter instead when you send traces to an observability service. T
 
 - One `invoke_agent <name>` span for the run.
 - One `chat <model>` client span for each model request.
+- One `compact <model>` client span for each explicit provider compaction request.
 - One `execute_tool <name>` span for each local tool execution.
 - One `execute_tool <name>` span for each user output function.
 - One failed `execute_tool <name>` span for a tool call rejected during argument validation.
@@ -66,6 +67,8 @@ Use an OTLP exporter instead when you send traces to an observability service. T
 Set the application identity with `WithAgentName` and `WithAgentDescription`. Use `WithAgentDescriptionFunc` when the description depends on typed run dependencies. `WithInstrumentationAgentName` remains available when one telemetry pipeline needs to override the application name.
 
 The run span records the agent description, cumulative usage, cost, application metadata from `WithMetadata` or `WithRunMetadata`, and whether formatted instructions changed between requests. Its `logfire.json_schema` describes the recorded run fields. Request spans record provider, model, request settings, response details, tool definitions, messages, usage, cost, and streaming time to first chunk.
+
+Explicit compaction uses `gen_ai.operation.name=compact`. Automatic stateless compaction is a separate child of the run span before the primary request. See [Compact model history](compaction.md).
 
 Output-function spans include the validated model value as their arguments and the converted final value as their result. They use the output-tool name in tool mode and the registered function name in native or prompted mode. Plain validation and output validators do not create output-function spans.
 

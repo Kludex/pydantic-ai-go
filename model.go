@@ -29,6 +29,13 @@ type TokenCountingModel interface {
 	CountTokens(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (Usage, error)
 }
 
+// ModelCompactor is implemented by models with an explicit history-compaction endpoint.
+// The returned response contains the provider's durable compaction boundary. Implementations
+// may be called concurrently and must not retain or mutate request values.
+type ModelCompactor interface {
+	CompactMessages(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error)
+}
+
 // ModelProviderIdentity is implemented by models that expose the provider
 // identity used for pricing and telemetry.
 type ModelProviderIdentity interface {
@@ -58,6 +65,44 @@ func CountModelTokens(
 	}
 	usage, err := counter.CountTokens(ctx, request.Messages, request.Params)
 	return usage.Clone(), err
+}
+
+// CompactModelMessages calls a model's explicit compaction endpoint with detached input.
+// The returned response is detached from provider-owned state.
+func CompactModelMessages(
+	ctx context.Context, model Model, msgs []ModelMessage, params ModelRequestParams,
+) (*ModelResponse, error) {
+	if modelIsNil(model) {
+		return nil, ErrNoModel
+	}
+	compactor, ok := model.(ModelCompactor)
+	if !ok {
+		return nil, fmt.Errorf("%w by model %q", ErrCompactionUnsupported, model.Name())
+	}
+	request := ModelRequestContext{Messages: msgs, Params: params}.Clone()
+	if err := validateModelSettings(request.Params.Settings); err != nil {
+		return nil, err
+	}
+	if request.Params.Settings.RequestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, request.Params.Settings.RequestTimeout)
+		defer cancel()
+	}
+	if configured, ok := ctx.Value(instrumentationRuntimeContextKey{}).(*InstrumentedModel); ok &&
+		!compactionSpanActive(ctx) {
+		runtime := *configured
+		runtime.ModelWrapper = WrapModel(model)
+		response, err := runtime.compactMessages(ctx, compactor, request.Messages, request.Params)
+		if response == nil {
+			return nil, err
+		}
+		return cloneModelResponse(response), err
+	}
+	response, err := compactor.CompactMessages(ctx, request.Messages, request.Params)
+	if response == nil {
+		return nil, err
+	}
+	return cloneModelResponse(response), err
 }
 
 // ToolSearchStrategyModel is implemented by models that support required

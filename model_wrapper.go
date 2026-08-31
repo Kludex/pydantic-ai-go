@@ -61,6 +61,13 @@ func (wrapper *ModelWrapper) CountTokens(
 	return CountModelTokens(ctx, wrapper.wrapped, messages, params)
 }
 
+// CompactMessages delegates explicit history compaction when supported.
+func (wrapper *ModelWrapper) CompactMessages(
+	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
+) (*ModelResponse, error) {
+	return CompactModelMessages(ctx, wrapper.wrapped, messages, params)
+}
+
 // StreamRequest delegates streaming or replays a non-streaming response as events.
 func (wrapper *ModelWrapper) StreamRequest(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,

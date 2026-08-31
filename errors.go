@@ -24,6 +24,9 @@ var ErrNoModel = errors.New("ai: no model selected")
 // ErrTokenCountingUnsupported is returned when a model has no token-counting API.
 var ErrTokenCountingUnsupported = errors.New("ai: token counting is not supported")
 
+// ErrCompactionUnsupported is returned when a model has no explicit compaction API.
+var ErrCompactionUnsupported = errors.New("ai: compaction is not supported")
+
 // ErrNoSuspendedResponse is returned when Resume receives history that does
 // not end with a suspended model response.
 var ErrNoSuspendedResponse = errors.New("ai: message history does not end with a suspended model response")

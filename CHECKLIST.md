@@ -28,7 +28,7 @@ Status:
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
-- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, history, and reusable tools. Typed output specialization, capabilities, and toolsets remain.
+- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, history, reusable tools, and additive capabilities with setup contributions. Typed output specialization and toolsets remain.
 - [x] Typed agent/run and untyped capability model selectors run before every logical request with step, completed-history, prior-model, model-ID, deps, and usage context.
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
@@ -165,6 +165,7 @@ Status:
 - [ ] Capability ordering constraints and outermost/innermost tiers.
 - [ ] Combined and wrapper capabilities.
 - [x] Capability-provided static/per-step model settings and adaptive model selection.
+- [x] Per-run capabilities are set up once per run, contribute static instructions/settings/raw tools, participate in every middleware hook, enable event processing for `Run`, and leave agent configuration unchanged.
 - [ ] Deferred-call handler hook.
 
 ### Built-in capabilities
@@ -216,7 +217,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run typed output specialization, capabilities, and composable toolsets.
+2. Add per-run typed output specialization and composable toolsets.
 3. Add rich tool return values, extra content, and revealed tools.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.

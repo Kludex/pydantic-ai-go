@@ -361,6 +361,13 @@ type runConfig struct {
 	instructionsFuncs []erasedInstructionsFunc
 	modelSelectors    []erasedModelSelectorFunc
 	tools             []erasedTool
+	capabilities      []Capability
+}
+
+// WithRunCapabilities adds capabilities for one run without modifying the
+// agent. Agent capabilities remain outermost in middleware order.
+func WithRunCapabilities(capabilities ...Capability) RunOption {
+	return func(c *runConfig) { c.capabilities = append(c.capabilities, capabilities...) }
 }
 
 // WithRunTools adds reusable tools for one run without modifying the agent.

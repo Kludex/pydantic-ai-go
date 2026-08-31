@@ -35,7 +35,9 @@ func (a *Agent[Deps, Output]) RunParts(ctx context.Context, contents []UserConte
 }
 
 func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (result *RunResult[Output], err error) {
-	if hasEventStreamCapability(a.capabilities) {
+	cfg := buildRunConfig(opts)
+	capabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
+	if hasEventStreamCapability(capabilities) {
 		stream := a.runStreamPrompt(ctx, prompt, deps, opts, false)
 		for _, streamErr := range stream.Events() {
 			if streamErr != nil {
@@ -47,7 +49,6 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 		}
 		return stream.Result(), nil
 	}
-	cfg := buildRunConfig(opts)
 	model := a.model
 	if cfg.model != nil {
 		model = cfg.model
@@ -101,7 +102,22 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, fmt.Errorf("ai: run model, model ID, and model selector are mutually exclusive")
 	}
-	capabilities := slices.Clone(a.capabilities)
+	capabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
+	runCapabilityInstructions := []string(nil)
+	capSettings := slices.Clone(a.capSettings)
+	var runCapabilityTools []capabilityTool
+	for _, capability := range cfg.capabilities {
+		registry := &CapabilityRegistry{}
+		if err := capability.Setup(registry); err != nil {
+			cancellation.finish()
+			return nil, fmt.Errorf("ai: run capability setup: %w", err)
+		}
+		runCapabilityInstructions = append(runCapabilityInstructions, registry.instructions...)
+		runCapabilityTools = append(runCapabilityTools, registry.tools...)
+		capSettings = append(capSettings, capabilitySettingsLayer{
+			static: registry.modelSettings, provider: capabilityModelSettingsProvider(capability),
+		})
+	}
 	limits := a.usageLimits
 	if cfg.usageLimits != nil {
 		limits = *cfg.usageLimits
@@ -114,7 +130,7 @@ func (a *Agent[Deps, Output]) newRun(
 	r := &run[Deps, Output]{
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int), runSettings: cfg.settings,
-		tools:            slices.Clone(a.tools),
+		tools: slices.Clone(a.tools), capSettings: capSettings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
 		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
@@ -140,6 +156,20 @@ func (a *Agent[Deps, Output]) newRun(
 		entry.def = cloneToolDefinition(entry.def)
 		r.tools = append(r.tools, entry)
 		toolNames[entry.def.Name] = struct{}{}
+	}
+	for _, tool := range runCapabilityTools {
+		if _, exists := toolNames[tool.def.Name]; exists {
+			cancellation.finish()
+			return nil, fmt.Errorf("ai: duplicate run capability tool name %q", tool.def.Name)
+		}
+		call := tool.call
+		r.tools = append(r.tools, toolEntry[Deps]{
+			def: cloneToolDefinition(tool.def),
+			call: func(ctx context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+				return call(ctx, rawArgs)
+			},
+		})
+		toolNames[tool.def.Name] = struct{}{}
 	}
 	history, interruptedReturns := repairDanglingToolCalls(dropOrphanedToolResults(cfg.history))
 	runID := cfg.runID
@@ -172,7 +202,7 @@ func (a *Agent[Deps, Output]) newRun(
 		RunID: runID, ConversationID: conversationID,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
 	}
-	r.staticInstructions = a.staticInstructions(cfg.instructions)
+	r.staticInstructions = a.staticInstructions(cfg.instructions, runCapabilityInstructions)
 	outputMode := a.outputMode
 	if cfg.outputMode != nil {
 		outputMode = *cfg.outputMode
@@ -431,6 +461,7 @@ type run[Deps, Output any] struct {
 	tools                  []toolEntry[Deps]
 	staticInstructions     []InstructionPart
 	systemPromptsPrepared  bool
+	capSettings            []capabilitySettingsLayer
 	runSettings            *ModelSettings
 	runSettingsFuncs       []erasedModelSettingsFunc
 	runInstructionsFuncs   []erasedInstructionsFunc
@@ -1655,12 +1686,15 @@ func (r *run[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
 	return toolEntry[Deps]{}, false
 }
 
-func (a *Agent[Deps, Output]) staticInstructions(additional string) []InstructionPart {
-	parts := make([]InstructionPart, 0, len(a.capInstructions)+2)
+func (a *Agent[Deps, Output]) staticInstructions(additional string, runCapabilityInstructions []string) []InstructionPart {
+	parts := make([]InstructionPart, 0, len(a.capInstructions)+len(runCapabilityInstructions)+2)
 	if a.instructions != "" {
 		parts = append(parts, InstructionPart{Content: a.instructions})
 	}
 	for _, instructions := range a.capInstructions {
+		parts = append(parts, InstructionPart{Content: instructions})
+	}
+	for _, instructions := range runCapabilityInstructions {
 		parts = append(parts, InstructionPart{Content: instructions})
 	}
 	if additional != "" {
@@ -1686,7 +1720,7 @@ func (r *run[Deps, Output]) prepareModelSettings(
 		}
 		settings = mergeModelSettings(settings, &resolved)
 	}
-	for _, layer := range r.agent.capSettings {
+	for _, layer := range r.capSettings {
 		for index := range layer.static {
 			settings = mergeModelSettings(settings, &layer.static[index])
 		}

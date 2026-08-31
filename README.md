@@ -426,6 +426,8 @@ agent := ai.NewAgent[Deps, string](model, ai.WithCapabilities(Redactor{}))
 
 Implement any of `RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, `RunEventStreamWrapper`, `StreamEventProcessor`, `InstructionsProvider`, `ModelSettingsProvider`, `ModelSelectionProvider`, or `ModelIDResolver` - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Slice order is middleware order: the first capability is outermost. Usage limits are implemented on this same surface internally.
 
+Pass `ai.WithRunCapabilities(...)` to scope setup contributions and middleware to one run. Agent capabilities remain outermost. A run capability is set up once for that run and may contribute instructions, settings, and raw tools without modifying the shared agent.
+
 Stream wrappers only change events seen by the consumer. They do not change accumulated history, tool execution, or final output. Adding one also enables provider streaming for `Run`, so processors run whether you call `Run` or `RunStream`.
 
 ## Why no graph?

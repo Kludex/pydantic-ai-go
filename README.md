@@ -269,7 +269,8 @@ func TestAgent(t *testing.T) {
 | Require approval | `WithApprovalRequired` and `DeferredToolResults` |
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
-| Trim old conversation turns | [`TokenHistoryTrimmer`](docs/history.md) |
+| Trim or summarize old conversation turns | [`TokenHistoryTrimmer` and `HistorySummarizer`](docs/history.md) |
+| Send image URLs or inline images | [`RunParts`](docs/multimodal.md) |
 | Configure a provider or compatible endpoint | [Provider configuration](docs/providers.md) |
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |

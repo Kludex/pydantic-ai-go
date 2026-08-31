@@ -276,6 +276,7 @@ func TestAgent(t *testing.T) {
 | Limit concurrency | `NewConcurrencyLimiter` |
 | Add middleware | [`Capability` and its focused hook interfaces](docs/capabilities.md) |
 | Add OpenTelemetry | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |
+| Evaluate an agent | [`evals.NewTextTask` or `evals.NewTask`](docs/evals.md) |
 | Call a model without an agent | `RequestModel` or `StreamModel` |
 | Drive a run one event at a time | `AgentRun` |
 

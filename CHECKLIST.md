@@ -207,7 +207,7 @@ Status:
 
 ### Integrations
 
-- [ ] First-class `pydantic-evals-go` task adapter.
+- [x] First-class `pydantic-evals-go` task adapters through `evals.NewTextTask` and `evals.NewTask`, including typed dependencies, multimodal and per-case run options, agent errors, explicit deferred-run rejection, usage/cost/detail metrics, run/model/provider identity, and detached application metadata.
 - [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, successful deferral metadata, application run metadata, agent names and dependency-rendered descriptions, variable-instruction diagnostics based on final prepared request instructions, run messages/schemas, and output-function spans with validated arguments, converted results, tool/function identity, privacy controls, errors, middleware nesting, and version 2 legacy naming. Richer request/tool Logfire schemas/messages, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
 - [ ] Logfire guidance and examples.
 - [ ] AG-UI adapter, including an assistant `TEXT_MESSAGE_START` before tool-call events owned by the same response.
@@ -235,7 +235,7 @@ Status:
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
 - [x] The README starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused instruction, output, provider, MCP, capability, history-trimming/summarization, usage-limit/token-counting, multimodal-input, and OpenTelemetry guides cover stable source-qualified prompts, output functions and unions, OpenAI-compatible/Azure setup, shared-session lifecycle, direct protocol operations, image URLs and inline images, privacy, format compatibility, and usage attribution.
-- [~] Focused instruction, output, provider, MCP, capability, history, usage, multimodal, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
+- [~] Focused instruction, output, provider, MCP, capability, history, usage, multimodal, evaluation, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
@@ -250,4 +250,4 @@ Status:
 2. Add dedicated compaction tracing; token-aware request-only trimming, provider-neutral summarization, and provider-native compaction are complete.
 3. Extend MCP shared sessions with task-extension-specific APIs; model-backed sampling, elicitation, current-protocol multi-round-trip input retries, OAuth transport attachment, and authorization guidance are complete.
 4. Extend upstream message fixtures as remaining persisted part types land.
-5. Add the remaining provider-native tools, richer content parts, provider metadata, and OpenAI-compatible providers; Z.AI Chat Completions, OpenAI refusal handling, Google prompt-feedback blocks, system-prompt reinjection, and tool return-schema advertisement are complete.
+5. Add the remaining provider-native tools, richer content parts, provider metadata, and OpenAI-compatible providers; Z.AI Chat Completions, OpenAI refusal handling, Google prompt-feedback blocks, system-prompt reinjection, tool return-schema advertisement, and the `pydantic-evals-go` task adapter are complete.

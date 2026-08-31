@@ -6,6 +6,7 @@ fail=0
 packages=(
     .
     ./internal/schema
+    ./evals
     ./models/fakes
     ./models/openai
     ./models/anthropic

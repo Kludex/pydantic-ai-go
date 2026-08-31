@@ -169,6 +169,9 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("anthropic: API returned status %d: %s", e.StatusCode, e.Body)
 }
 
+// IsModelAPIError marks provider API responses as eligible for default model fallback.
+func (*APIError) IsModelAPIError() bool { return true }
+
 type messagesRequest struct {
 	Model             string           `json:"model"`
 	MaxTokens         int              `json:"max_tokens"`

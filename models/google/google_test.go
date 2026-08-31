@@ -399,8 +399,8 @@ func TestErrors(t *testing.T) {
 		})
 		var apiErr *google.APIError
 		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
-		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests {
-			t.Fatalf("expected APIError 429, got %v", err)
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests || !apiErr.IsModelAPIError() {
+			t.Fatalf("expected fallback-eligible APIError 429, got %v", err)
 		}
 		if apiErr.Error() != "google: API returned status 429: rate limited" {
 			t.Fatalf("unexpected message %q", apiErr.Error())

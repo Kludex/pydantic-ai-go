@@ -191,6 +191,7 @@ func accumulate(
 			response.ProviderName = event.ProviderName
 			response.ProviderURL = event.ProviderURL
 			response.ProviderDetails = cloneSchemaMap(event.ProviderDetails)
+			response.Metadata = cloneSchemaMap(event.Metadata)
 			response.ProviderResponseID = event.ProviderResponseID
 			response.FinishReason = event.FinishReason
 			response.State = event.State
@@ -346,6 +347,7 @@ func accumulate(
 			response.ProviderName = event.ProviderName
 			response.ProviderURL = event.ProviderURL
 			response.ProviderDetails = cloneSchemaMap(event.ProviderDetails)
+			response.Metadata = cloneSchemaMap(event.Metadata)
 			response.ProviderResponseID = event.ProviderResponseID
 			response.FinishReason = event.FinishReason
 			response.State = event.State

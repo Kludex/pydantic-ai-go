@@ -39,6 +39,7 @@ type ResponseMetadataEvent struct {
 	ProviderName       string
 	ProviderURL        string
 	ProviderDetails    map[string]any
+	Metadata           map[string]any
 	ProviderResponseID string
 	FinishReason       FinishReason
 	State              ModelResponseState
@@ -137,6 +138,7 @@ type FinishEvent struct {
 	ProviderName       string
 	ProviderURL        string
 	ProviderDetails    map[string]any
+	Metadata           map[string]any
 	ProviderResponseID string
 	FinishReason       FinishReason
 	State              ModelResponseState

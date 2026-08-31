@@ -126,6 +126,9 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("google: API returned status %d: %s", e.StatusCode, e.Body)
 }
 
+// IsModelAPIError marks provider API responses as eligible for default model fallback.
+func (*APIError) IsModelAPIError() bool { return true }
+
 type generateRequest struct {
 	SystemInstruction *content          `json:"systemInstruction,omitempty"`
 	Contents          []content         `json:"contents"`

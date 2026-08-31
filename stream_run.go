@@ -434,8 +434,8 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 			Parts: cloneModelResponse(response).Parts,
 			Usage: response.Usage, ModelName: response.ModelName, Timestamp: response.Timestamp,
 			ProviderName: response.ProviderName, ProviderURL: response.ProviderURL,
-			ProviderDetails: cloneSchemaMap(response.ProviderDetails), ProviderResponseID: response.ProviderResponseID,
-			FinishReason: response.FinishReason, State: state,
+			ProviderDetails: cloneSchemaMap(response.ProviderDetails), Metadata: cloneSchemaMap(response.Metadata),
+			ProviderResponseID: response.ProviderResponseID, FinishReason: response.FinishReason, State: state,
 		}, nil)
 	}
 }

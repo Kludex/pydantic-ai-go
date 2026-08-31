@@ -144,6 +144,9 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("openai: API returned status %d: %s", e.StatusCode, e.Body)
 }
 
+// IsModelAPIError marks provider API responses as eligible for default model fallback.
+func (*APIError) IsModelAPIError() bool { return true }
+
 type chatRequest struct {
 	Model             string          `json:"model"`
 	Messages          []chatMessage   `json:"messages"`

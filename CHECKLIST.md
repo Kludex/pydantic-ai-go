@@ -140,7 +140,7 @@ Status:
 - [ ] Groq, Mistral, Cohere, Cerebras, xAI, OpenRouter, Ollama, Hugging Face, and other upstream providers.
 - [ ] Provider profiles/capability detection instead of model-name conditionals.
 - [ ] Provider HTTP retries and configurable retry policy.
-- [~] `ModelWrapper`, `ModelUnwrapper`, `WrapModel`, and recursive `UnwrapModel` provide transparent request, streaming, lifecycle, settings, tool-search, native-history, and continuation delegation. Provider compaction recognizes wrapped Anthropic and OpenAI Responses models. Fallback chains, concurrency limiting, and instrumentation wrappers remain.
+- [~] Transparent `ModelWrapper` delegation and wrapper-aware provider compaction are complete. `FallbackModel` supports ordered models, default provider-API-error fallback, composable error/response predicates, detached diagnostics, rejected-response cost accounting, streaming-open fallback, pinned suspended continuations with rewind, combined strategy/native-history behavior, and reverse lifecycle cleanup. Concurrency limiting and instrumentation wrappers remain.
 
 ### Model settings
 
@@ -235,7 +235,7 @@ Status:
 
 ## Next work
 
-1. Add fallback model chains, concurrency limiting, and instrumentation wrappers on top of the transparent model-wrapper contract.
+1. Add model concurrency limiting and instrumentation wrappers on top of the transparent model-wrapper contract.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP with explicit shared sessions, prompts/resources, sampling, elicitation, task extension, and OAuth examples.
 4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.

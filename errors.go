@@ -31,6 +31,12 @@ var ErrOutputTypeOverrideWithValidators = errors.New(
 	"ai: per-run output type cannot be used when the agent has output validators",
 )
 
+// ModelAPIError identifies a provider API response error suitable for model fallback.
+type ModelAPIError interface {
+	error
+	IsModelAPIError() bool
+}
+
 // UnknownModelIDError reports an unresolved application model ID.
 type UnknownModelIDError struct {
 	ID string

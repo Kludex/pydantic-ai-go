@@ -614,8 +614,8 @@ func TestErrors(t *testing.T) {
 		})
 		var apiErr *anthropic.APIError
 		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
-		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests {
-			t.Fatalf("expected APIError 429, got %v", err)
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusTooManyRequests || !apiErr.IsModelAPIError() {
+			t.Fatalf("expected fallback-eligible APIError 429, got %v", err)
 		}
 		if apiErr.Error() != "anthropic: API returned status 429: rate limited" {
 			t.Fatalf("unexpected message %q", apiErr.Error())

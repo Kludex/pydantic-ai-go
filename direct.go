@@ -179,6 +179,7 @@ func (stream *ModelResponseStream) observeEvent(event StreamEvent) {
 		stream.response.ProviderName = event.ProviderName
 		stream.response.ProviderURL = event.ProviderURL
 		stream.response.ProviderDetails = cloneSchemaMap(event.ProviderDetails)
+		stream.response.Metadata = cloneSchemaMap(event.Metadata)
 		stream.response.ProviderResponseID = event.ProviderResponseID
 		stream.response.FinishReason = event.FinishReason
 		stream.response.State = event.State

@@ -196,6 +196,38 @@ Resolvers run in registration order, and each ID is resolved once per run. An un
 
 A model can implement `ModelOpener` when it owns run-scoped resources. `OpenModel` runs once for each distinct selected model. Its `ModelCloseFunc` runs with a non-canceled context in reverse selection order, including failed, canceled, deferred, and partially consumed streamed runs. Models close before toolsets because model selection happens after toolset acquisition.
 
+### Fallback models
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	model := ai.NewFallbackModel(
+		openai.NewModel("gpt-5-mini"),
+		ai.WithFallbackModels(openai.NewModel("gpt-4.1-mini")),
+	)
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "What is the capital of France?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+The default policy advances only for `ModelAPIError` values, such as non-success provider responses. Use `WithFallbackOnError` or `WithFallbackOnResponse` to replace that policy. Exhausted request failures are aggregated in `FallbackExhaustedError`. A suspended response is pinned to the model that created it, so continuation does not restart from the primary model. Streaming falls back only when opening a stream fails. It never switches models after emitting the first event.
+
+Use `WrapModel` as the base for a transparent model decorator. It forwards streaming, lifecycle, settings, tool-search, native-history, and continuation behavior. `UnwrapModel` lets provider-specific capabilities recognize nested decorators without bypassing request behavior.
+
 ## Suspended responses
 
 Use OpenAI background mode for model requests that may take a long time:

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -354,5 +355,59 @@ func TestCapabilityProcessesHistory(t *testing.T) {
 	}
 	if len(result.Messages()) != 6 {
 		t.Fatalf("stored history must stay intact, got %d", len(result.Messages()))
+	}
+}
+
+func TestCombinedCapabilitiesFlattenNestedGroups(t *testing.T) {
+	var log []string
+	setup := func(name string) func(*ai.CapabilityRegistry) error {
+		return func(*ai.CapabilityRegistry) error {
+			log = append(log, name+":setup")
+			return nil
+		}
+	}
+	outer := &traceCapability{name: "outer", log: &log, setup: setup("outer")}
+	first := &traceCapability{name: "first", log: &log, setup: setup("first")}
+	second := &traceCapability{name: "second", log: &log, setup: setup("second")}
+	members := []ai.Capability{first, ai.CombineCapabilities(second)}
+	combined := ai.CombineCapabilities(members...)
+	if err := combined.Setup(&ai.CapabilityRegistry{}); err != nil {
+		t.Fatal(err)
+	}
+	members[0] = outer
+	agent := ai.NewAgent[deps, string](
+		fakes.NewTestModel(), ai.WithCapabilities(outer, combined, ai.CombineCapabilities()),
+	)
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"outer:setup", "first:setup", "second:setup",
+		"outer:run-in", "first:run-in", "second:run-in",
+		"outer:model", "first:model", "second:model",
+		"second:run-out", "first:run-out", "outer:run-out",
+	}
+	if !slices.Equal(log, want) {
+		t.Fatalf("unexpected combined capability order:\n got %v\nwant %v", log, want)
+	}
+}
+
+func TestCombinedCapabilitiesCanBeScopedToRun(t *testing.T) {
+	var log []string
+	first := &traceCapability{name: "first", log: &log}
+	second := &traceCapability{name: "second", log: &log}
+	agent := ai.NewAgent[deps, string](fakes.NewTestModel())
+	if _, err := agent.Run(
+		t.Context(), "go", deps{},
+		ai.WithRunCapabilities(ai.CombineCapabilities(first, second)),
+	); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"first:run-in", "second:run-in", "first:model", "second:model",
+		"second:run-out", "first:run-out",
+	}
+	if !slices.Equal(log, want) {
+		t.Fatalf("unexpected run combined capability order: got %v want %v", log, want)
 	}
 }

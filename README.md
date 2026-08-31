@@ -704,7 +704,7 @@ func (Redactor) WrapToolCall(ctx context.Context, ri *ai.RunInfo, call ai.ToolCa
 agent := ai.NewAgent[Deps, string](model, ai.WithCapabilities(Redactor{}))
 ```
 
-Implement the run, model-request, tool, output, or stream hook interfaces you need - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Function adapters are available for before, after, and error hooks. Wrappers remain interfaces because they usually carry state or resource lifecycles.
+Implement the run, model-request, tool, output, or stream hook interfaces you need - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Function adapters are available for before, after, and error hooks. Wrappers remain interfaces because they usually carry state or resource lifecycles. Use `ai.CombineCapabilities(...)` to package an ordered group; nested groups flatten when you register them on an agent or one run.
 
 Before hooks run in capability order. After and error hooks run in reverse order. This matches middleware nesting. An error hook may return a replacement response. Return `ai.Retryf(...)` from a before or after hook to consume the output retry budget and ask the model to respond again. A response rejected by an after hook remains in history. `ModelRequestContext.Clone` detaches mutable request data when a hook needs to retain or inspect a snapshot.
 
@@ -720,7 +720,16 @@ Stream wrappers only change events seen by the consumer. They do not change accu
 
 ## Why no graph?
 
-The agent run is a plain loop: call model, execute tool calls, repeat. PydanticAI's graph layer exists for history and durability reasons that do not apply here. Fewer layers means the whole loop fits in one file you can read.
+The agent run is a plain loop: call the model, execute tool calls, and repeat. You intercept behavior at semantic boundaries instead of replacing graph nodes:
+
+| PydanticAI graph boundary | Go API |
+| --- | --- |
+| User prompt and request preparation | `BeforeModelRequestHook` and `ModelRequestWrapper` |
+| Model request execution | model-request before, after, error, and wrapper hooks |
+| Tool-call node | separate tool validation, tool execution, and output lifecycles |
+| End or redirect | run lifecycle hooks, `RunOutcome`, retries, deferred results, and queued messages |
+
+These hooks can short-circuit or recover the same operations without exposing internal node types. Public node replacement and manual graph advancement are intentionally unsupported. A future iterative run driver will expose manual progression and external enqueue without introducing a graph abstraction.
 
 ## Testing your agents
 

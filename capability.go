@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"sync/atomic"
 )
 
@@ -171,8 +172,35 @@ type StreamEventProcessor interface {
 	ProcessStreamEvent(ctx context.Context, ri *RunInfo, event StreamEvent) (StreamEvent, error)
 }
 
+type combinedCapability struct {
+	capabilities []Capability
+}
+
+func (combinedCapability) Setup(*CapabilityRegistry) error { return nil }
+
+// CombineCapabilities groups capabilities while preserving their middleware order.
+// Nested groups are flattened when registered on an agent or run.
+func CombineCapabilities(capabilities ...Capability) Capability {
+	return combinedCapability{capabilities: slices.Clone(capabilities)}
+}
+
+func flattenCapabilities(capabilities []Capability) []Capability {
+	var flattened []Capability
+	for _, capability := range capabilities {
+		if combined, ok := capability.(combinedCapability); ok {
+			flattened = append(flattened, flattenCapabilities(combined.capabilities)...)
+			continue
+		}
+		flattened = append(flattened, capability)
+	}
+	return flattened
+}
+
 // WithCapabilities registers capabilities on the agent. Slice order is
 // middleware order: the first capability is outermost.
-func WithCapabilities(caps ...Capability) Option {
-	return func(c *config) { c.capabilities = append(c.capabilities, caps...) }
+func WithCapabilities(capabilities ...Capability) Option {
+	capabilities = flattenCapabilities(capabilities)
+	return func(config *config) {
+		config.capabilities = append(config.capabilities, capabilities...)
+	}
 }

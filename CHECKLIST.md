@@ -173,11 +173,11 @@ Status:
 - [x] History processing can be expressed as model-request middleware.
 - [x] Runs, prepared model requests, function-tool validation/execution, and output validation/processing have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Model hooks can detach snapshots, modify requests, switch models, recover errors, and request budgeted retries that preserve rejected responses. Tool and output hooks transform raw or typed values, recover ordinary errors, and preserve retry/failure control flow. Run wrappers can short-circuit, transform, or recover type-checked outcomes while cancellation remains terminal.
 - [x] Output validation/processing hooks cover raw structured repair, schema/decoding/semantic validation, final typed processing, wrapper and recovery composition, normal and early outputs, and streaming partial/final values.
-- [ ] Audit upstream node lifecycle hooks against the plain loop, add meaningful step interception not covered by request/tool/output hooks, and document graph-node replacement as intentionally unsupported.
+- [x] Audited upstream user-prompt/model-request/call-tools/end node lifecycles against the plain loop. Focused request, tool validation/execution, output, run-outcome, retry, deferred, and enqueue hooks cover semantic interception; public internal-node replacement remains intentionally excluded with the graph API.
 - [x] Function-tool schema validation, typed decoding, and semantic argument validation are separate from local execution, with dedicated wrappers and before/after/error hooks. Static approvals and external calls defer only after validation, wrapper-modified raw arguments are revalidated, and validated values retain their registered concrete Go type. After-validation and before/after-execution hooks can request durable approval or external execution without changing tool registration; validation-error hooks cannot defer invalid arguments.
 - [x] Event-stream wrapper and per-event processor with standard capability middleware ordering.
 - [ ] Capability ordering constraints and outermost/innermost tiers.
-- [ ] Combined and wrapper capabilities.
+- [~] `CombineCapabilities` packages and recursively flattens ordered groups for agent-wide or per-run registration without changing setup or middleware order. Transparent wrapper-capability helpers remain.
 - [x] Capability-provided static/per-step model settings and adaptive model selection.
 - [x] Per-run capabilities are set up once per run, contribute static instructions/settings/raw tools, participate in every middleware hook, enable event processing for `Run`, and leave agent configuration unchanged.
 - [x] Deferred-call handler hook with detached requests/results, ordered composition, partial handling, and streamed lifecycle events.
@@ -232,7 +232,7 @@ Status:
 ## Next work
 
 1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
-2. Audit upstream node lifecycle semantics against the plain loop and document the focused request/tool/output replacements.
+2. Add capability ordering tiers and transparent wrapper-capability composition without exposing graph internals.
 3. Add provider-managed search for Anthropic and OpenAI Responses; OpenAI Responses client search already uses native wire items in streaming and non-streaming requests.
 4. Add explicit compaction capabilities and provider-specific triggering settings; Anthropic/OpenAI Responses mapping, trimming, and visibility reset are complete.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.

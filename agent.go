@@ -404,7 +404,10 @@ func WithRunToolsets[Deps any](toolsets ...Toolset[Deps]) RunOption {
 // WithRunCapabilities adds capabilities for one run without modifying the
 // agent. Agent capabilities remain outermost in middleware order.
 func WithRunCapabilities(capabilities ...Capability) RunOption {
-	return func(c *runConfig) { c.capabilities = append(c.capabilities, capabilities...) }
+	capabilities = flattenCapabilities(capabilities)
+	return func(config *runConfig) {
+		config.capabilities = append(config.capabilities, capabilities...)
+	}
 }
 
 // WithRunTools adds reusable tools for one run without modifying the agent.

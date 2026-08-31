@@ -1,6 +1,7 @@
 package openai_test
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -52,13 +53,30 @@ func normalizedText(event ai.StreamEvent) string {
 }
 
 func TestStreamTextDeltas(t *testing.T) {
-	model := newServer(t, sseHandler(t, []string{
+	var customHeader string
+	handler := sseHandler(t, []string{
 		`{"id":"chat-stream","model":"gpt-5","created":1735689600,"service_tier":"default","system_fingerprint":"fp-1","choices":[{"delta":{"content":"Hel"},"logprobs":{"content":[{"token":"Hel","logprob":-0.1}]}}]}`,
 		`{"model":"gpt-5","choices":[{"delta":{"content":"lo"},"finish_reason":"stop","logprobs":{"content":[{"token":"lo","logprob":-0.2}]}}]}`,
 		`{"model":"gpt-5","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2}}`,
 		`[DONE]`,
-	}))
-	events, err := collect(t, model, ai.ModelRequestParams{AllowText: true})
+	})
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		customHeader = r.Header.Get("x-custom")
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["store"] != true {
+			t.Errorf("extra body missing: %v", body)
+		}
+		handler(w, r)
+	})
+	events, err := collect(t, model, ai.ModelRequestParams{
+		AllowText: true,
+		Settings: ai.ModelSettings{
+			ExtraHeaders: map[string]string{"x-custom": "stream"}, ExtraBody: map[string]any{"store": true},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,8 +91,8 @@ func TestStreamTextDeltas(t *testing.T) {
 			finish = ev
 		}
 	}
-	if text != "Hello" || textPartID != "text" {
-		t.Fatalf("unexpected text %q with part ID %q", text, textPartID)
+	if text != "Hello" || textPartID != "text" || customHeader != "stream" {
+		t.Fatalf("unexpected text %q with part ID %q or header %q", text, textPartID, customHeader)
 	}
 	if finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 2 || finish.Usage.Requests != 1 {
 		t.Fatalf("unexpected usage %+v", finish.Usage)

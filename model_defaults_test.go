@@ -89,6 +89,8 @@ func TestModelSettingsCloneIsDetached(t *testing.T) {
 		PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
 		LogitBias: map[string]int{"42": 10}, Logprobs: &logprobs, TopLogprobs: &topLogprobs,
 		ServiceTier:   ai.ServiceTierPriority,
+		ExtraHeaders:  map[string]string{"x-test": "original"},
+		ExtraBody:     map[string]any{"nested": map[string]any{"value": "original"}},
 		StopSequences: []string{"stop"}, ParallelToolCalls: &parallel,
 		Thinking: &ai.ThinkingSettings{
 			Level: ai.ThinkingLevelLow, TokenBudget: &budget, IncludeThoughts: &includeThoughts,
@@ -105,6 +107,8 @@ func TestModelSettingsCloneIsDetached(t *testing.T) {
 	cloned.LogitBias["42"] = -10
 	*cloned.Logprobs = false
 	*cloned.TopLogprobs = 1
+	cloned.ExtraHeaders["x-test"] = "changed"
+	cloned.ExtraBody["nested"].(map[string]any)["value"] = "changed"
 	cloned.Thinking.Level = ai.ThinkingLevelHigh
 	*cloned.Thinking.TokenBudget = 1
 	*cloned.Thinking.IncludeThoughts = false
@@ -112,8 +116,9 @@ func TestModelSettingsCloneIsDetached(t *testing.T) {
 		original.StopSequences[0] != "stop" || !*original.ParallelToolCalls ||
 		*original.PresencePenalty != 0.3 || *original.FrequencyPenalty != 0.4 ||
 		original.LogitBias["42"] != 10 || !*original.Logprobs || *original.TopLogprobs != 5 ||
-		original.ServiceTier != ai.ServiceTierPriority || original.Thinking.Level != ai.ThinkingLevelLow ||
-		*original.Thinking.TokenBudget != 2048 ||
+		original.ServiceTier != ai.ServiceTierPriority || original.ExtraHeaders["x-test"] != "original" ||
+		original.ExtraBody["nested"].(map[string]any)["value"] != "original" ||
+		original.Thinking.Level != ai.ThinkingLevelLow || *original.Thinking.TokenBudget != 2048 ||
 		!*original.Thinking.IncludeThoughts {
 		t.Fatalf("clone mutated original settings: %+v", original)
 	}
@@ -138,13 +143,16 @@ func TestRunThinkingSettingsOverrideAgentSettings(t *testing.T) {
 		Thinking:        &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
 		PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
 		LogitBias: map[string]int{"42": 10}, Logprobs: &logprobs, TopLogprobs: &topLogprobs,
-		ServiceTier: ai.ServiceTierPriority,
+		ServiceTier:  ai.ServiceTierPriority,
+		ExtraHeaders: map[string]string{"x-test": "value"},
+		ExtraBody:    map[string]any{"custom": map[string]any{"enabled": true}},
 	}))
 	if err != nil || result.Output != "done" || requested.Thinking == nil ||
 		requested.Thinking.Level != ai.ThinkingLevelHigh || *requested.PresencePenalty != presencePenalty ||
 		*requested.FrequencyPenalty != frequencyPenalty || requested.LogitBias["42"] != 10 ||
 		!*requested.Logprobs || *requested.TopLogprobs != topLogprobs ||
-		requested.ServiceTier != ai.ServiceTierPriority {
+		requested.ServiceTier != ai.ServiceTierPriority || requested.ExtraHeaders["x-test"] != "value" ||
+		requested.ExtraBody["custom"].(map[string]any)["enabled"] != true {
 		t.Fatalf("unexpected settings override result=%+v err=%v settings=%+v", result, err, requested)
 	}
 }

@@ -230,6 +230,8 @@ agent := ai.NewAgent[Deps, string](
 
 OpenAI Chat and Gemini accept presence and frequency penalties. OpenAI Chat also accepts `LogitBias`. OpenAI Chat, OpenAI Responses, and Gemini return available log probabilities in provider details. Unified service tiers map to each provider's wire values, including Anthropic's `standard_only` and Gemini's `standard` values.
 
+Use `ExtraHeaders` for provider preview headers or gateway routing. OpenAI and Anthropic also accept `ExtraBody` for new provider fields that do not have a typed setting yet. Both maps are detached per run. Extra body fields cannot replace typed request fields. This prevents an extension value from silently changing the model, tools, output schema, or another validated setting.
+
 A tool can stop its run through `RunContext.Cancel`. Cancellation reaches sibling tools through `context.Context`, waits for their cleanup, and returns an error matching `ai.ErrRunCancelled`:
 
 ```go

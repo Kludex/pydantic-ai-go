@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -91,11 +92,29 @@ func TestChatThinkingSettings(t *testing.T) {
 	}
 }
 
+func TestExtraBodyRejectsConflictsAndInvalidValues(t *testing.T) {
+	model := openai.NewModel("gpt-5")
+	for name, body := range map[string]map[string]any{
+		"typed field conflict": {"model": "other"},
+		"invalid value":        {"custom": func() {}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				ExtraBody: body,
+			}})
+			if err == nil || !strings.Contains(err.Error(), "openai: marshal request") {
+				t.Fatalf("unexpected extra body error: %v", err)
+			}
+		})
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
-	var gotAuth string
+	var gotAuth, gotCustom string
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
+		gotCustom = r.Header.Get("x-custom")
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Error(err)
 		}
@@ -132,14 +151,16 @@ func TestRequestTextResponse(t *testing.T) {
 			MaxTokens: 100, Temperature: &temp,
 			PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
 			LogitBias: map[string]int{"42": 10}, Logprobs: &logprobs, TopLogprobs: &topLogprobs,
-			ServiceTier: ai.ServiceTierPriority,
+			ServiceTier:  ai.ServiceTierPriority,
+			ExtraHeaders: map[string]string{"x-custom": "value"},
+			ExtraBody:    map[string]any{"store": true},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotAuth != "Bearer test-key" {
-		t.Fatalf("unexpected auth header %q", gotAuth)
+	if gotAuth != "Bearer test-key" || gotCustom != "value" {
+		t.Fatalf("unexpected headers auth=%q custom=%q", gotAuth, gotCustom)
 	}
 	messages := gotBody["messages"].([]any)
 	if len(messages) != 2 {
@@ -149,7 +170,8 @@ func TestRequestTextResponse(t *testing.T) {
 		gotBody["presence_penalty"].(float64) != presencePenalty ||
 		gotBody["frequency_penalty"].(float64) != frequencyPenalty ||
 		gotBody["logit_bias"].(map[string]any)["42"].(float64) != 10 || gotBody["logprobs"] != true ||
-		gotBody["top_logprobs"].(float64) != float64(topLogprobs) || gotBody["service_tier"] != "priority" {
+		gotBody["top_logprobs"].(float64) != float64(topLogprobs) || gotBody["service_tier"] != "priority" ||
+		gotBody["store"] != true {
 		t.Fatalf("settings not sent: %v", gotBody)
 	}
 	if resp.Text() != "Hello!" {

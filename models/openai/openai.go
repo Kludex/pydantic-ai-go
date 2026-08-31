@@ -102,7 +102,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(payload)
+	body, err := marshalRequest(payload, params.Settings.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
@@ -112,6 +112,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	setExtraHeaders(req, params.Settings.ExtraHeaders)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

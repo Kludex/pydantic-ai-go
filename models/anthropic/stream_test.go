@@ -56,16 +56,15 @@ func normalizedAnthropicText(event ai.StreamEvent) string {
 
 func TestStreamEvents(t *testing.T) {
 	var gotStream bool
-	var gotAccept string
+	var gotAccept, gotCustom string
+	var gotBody map[string]any
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotAccept = r.Header.Get("Accept")
-		var body struct {
-			Stream bool `json:"stream"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		gotCustom = r.Header.Get("x-custom")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Error(err)
 		}
-		gotStream = body.Stream
+		gotStream = gotBody["stream"] == true
 		anthropicSSE(t, []string{
 			`{"type":"message_start","message":{"id":"message-stream","model":"claude-stream","usage":{"input_tokens":5,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}}`,
 			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"H"}}`,
@@ -83,12 +82,14 @@ func TestStreamEvents(t *testing.T) {
 			`{"type":"message_stop"}`,
 		})(w, r)
 	})
-	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{})
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ExtraHeaders: map[string]string{"x-custom": "stream"}, ExtraBody: map[string]any{"container": "stream"},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !gotStream || gotAccept != "text/event-stream" {
-		t.Fatalf("stream request not configured: stream=%v accept=%q", gotStream, gotAccept)
+	if !gotStream || gotAccept != "text/event-stream" || gotCustom != "stream" || gotBody["container"] != "stream" {
+		t.Fatalf("stream request not configured: stream=%v accept=%q custom=%q body=%v", gotStream, gotAccept, gotCustom, gotBody)
 	}
 	var text, thinking, signature, args string
 	var textPartID, thinkingPartID, argsPartID string

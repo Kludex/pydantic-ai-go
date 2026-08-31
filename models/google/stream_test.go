@@ -54,9 +54,10 @@ func normalizedGoogleText(event ai.StreamEvent) string {
 }
 
 func TestStreamEvents(t *testing.T) {
-	var path, query, accept string
+	var path, query, accept, custom string
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		path, query, accept = r.URL.Path, r.URL.RawQuery, r.Header.Get("Accept")
+		custom = r.Header.Get("x-custom")
 		w.Header().Set("x-gemini-service-tier", "FLEX")
 		googleSSE(t, []string{
 			`{"responseId":"response-stream","modelVersion":"gemini-stream","candidates":[{"content":{"parts":[{"text":"Hel","thoughtSignature":"text-signature"}]}}]}`,
@@ -65,12 +66,15 @@ func TestStreamEvents(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP","avgLogprobs":-0.25,"logprobsResult":{"chosenCandidates":[{"token":"lo"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
 		})(w, r)
 	})
-	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{})
+	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ExtraHeaders: map[string]string{"x-custom": "stream"},
+	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasSuffix(path, ":streamGenerateContent") || query != "alt=sse" || accept != "text/event-stream" {
-		t.Fatalf("unexpected request path=%q query=%q accept=%q", path, query, accept)
+	if !strings.HasSuffix(path, ":streamGenerateContent") || query != "alt=sse" ||
+		accept != "text/event-stream" || custom != "stream" {
+		t.Fatalf("unexpected request path=%q query=%q accept=%q custom=%q", path, query, accept, custom)
 	}
 	var text, thinking, args string
 	var textPartID, textSignature, thinkingPartID, thinkingSignature, argsPartID string

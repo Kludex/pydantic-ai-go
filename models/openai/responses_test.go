@@ -40,9 +40,10 @@ func newResponsesServerWithOptions(
 
 func TestResponsesTextResponse(t *testing.T) {
 	var gotBody map[string]any
-	var gotPath string
+	var gotPath, gotCustom string
 	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
+		gotCustom = r.Header.Get("x-custom")
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Error(err)
 		}
@@ -71,18 +72,20 @@ func TestResponsesTextResponse(t *testing.T) {
 		Settings: ai.ModelSettings{
 			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, Temperature: &temperature,
 			Logprobs: &logprobs, TopLogprobs: &topLogprobs, ServiceTier: ai.ServiceTierPriority,
+			ExtraHeaders: map[string]string{"x-custom": "value"}, ExtraBody: map[string]any{"store": true},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotPath != "/responses" {
-		t.Fatalf("unexpected path %q", gotPath)
+	if gotPath != "/responses" || gotCustom != "value" {
+		t.Fatalf("unexpected path %q or custom header %q", gotPath, gotCustom)
 	}
 	if gotBody["instructions"] != "be brief" || gotBody["temperature"] != nil ||
 		gotBody["reasoning"].(map[string]any)["effort"] != "high" ||
 		gotBody["top_logprobs"].(float64) != float64(topLogprobs) ||
-		gotBody["include"].([]any)[0] != "message.output_text.logprobs" || gotBody["service_tier"] != "priority" {
+		gotBody["include"].([]any)[0] != "message.output_text.logprobs" || gotBody["service_tier"] != "priority" ||
+		gotBody["store"] != true {
 		t.Fatalf("instructions or reasoning not sent: %v", gotBody)
 	}
 	if resp.Text() != "Hello!" {

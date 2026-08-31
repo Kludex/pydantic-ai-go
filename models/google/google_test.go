@@ -162,10 +162,11 @@ func TestServiceTierMapping(t *testing.T) {
 
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
-	var gotKey, gotPath string
+	var gotKey, gotPath, gotCustom string
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-gemini-service-tier", "PRIORITY")
 		gotKey = r.Header.Get("x-goog-api-key")
+		gotCustom = r.Header.Get("x-custom")
 		gotPath = r.URL.Path
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Error(err)
@@ -207,13 +208,14 @@ func TestRequestTextResponse(t *testing.T) {
 			MaxTokens: 100, Temperature: &temp,
 			PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
 			Logprobs: &logprobs, TopLogprobs: &topLogprobs, ServiceTier: ai.ServiceTierDefault,
+			ExtraHeaders: map[string]string{"x-custom": "value"},
 		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotKey != "test-key" {
-		t.Fatalf("unexpected api key header %q", gotKey)
+	if gotKey != "test-key" || gotCustom != "value" {
+		t.Fatalf("unexpected headers key=%q custom=%q", gotKey, gotCustom)
 	}
 	if !strings.HasSuffix(gotPath, "/models/gemini-2.5-flash:generateContent") {
 		t.Fatalf("unexpected path %q", gotPath)

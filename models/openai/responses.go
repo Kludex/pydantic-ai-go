@@ -49,13 +49,13 @@ func (m *ResponsesModel) DefaultModelSettings() ai.ModelSettings { return m.defa
 // Request implements ai.Model.
 func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 	if responseID, ok := suspendedResponsesID(msgs); ok {
-		return m.retrieveResponse(ctx, responseID)
+		return m.retrieveResponse(ctx, responseID, params.Settings.ExtraHeaders)
 	}
 	payload, err := m.buildResponsesPayload(msgs, params, true)
 	if err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(payload)
+	body, err := marshalRequest(payload, params.Settings.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
@@ -65,6 +65,7 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	setExtraHeaders(req, params.Settings.ExtraHeaders)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -123,7 +124,9 @@ func (m *ResponsesModel) CancelSuspendedResponse(ctx context.Context, response a
 	return nil
 }
 
-func (m *ResponsesModel) retrieveResponse(ctx context.Context, responseID string) (*ai.ModelResponse, error) {
+func (m *ResponsesModel) retrieveResponse(
+	ctx context.Context, responseID string, headers map[string]string,
+) (*ai.ModelResponse, error) {
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, m.baseURL+"/responses/"+url.PathEscape(responseID), nil,
 	)
@@ -131,6 +134,7 @@ func (m *ResponsesModel) retrieveResponse(ctx context.Context, responseID string
 		return nil, err
 	}
 	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	setExtraHeaders(req, headers)
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai: retrieve background response: %w", err)

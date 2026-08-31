@@ -181,6 +181,8 @@ type ModelSettings struct {
 	Logprobs          *bool
 	TopLogprobs       *int
 	ServiceTier       ServiceTier
+	ExtraHeaders      map[string]string
+	ExtraBody         map[string]any
 	StopSequences     []string
 	ParallelToolCalls *bool
 	Thinking          *ThinkingSettings
@@ -196,6 +198,8 @@ func (s ModelSettings) Clone() ModelSettings {
 	s.LogitBias = maps.Clone(s.LogitBias)
 	s.Logprobs = clonePointer(s.Logprobs)
 	s.TopLogprobs = clonePointer(s.TopLogprobs)
+	s.ExtraHeaders = maps.Clone(s.ExtraHeaders)
+	s.ExtraBody = cloneSchemaMap(s.ExtraBody)
 	s.StopSequences = slices.Clone(s.StopSequences)
 	s.ParallelToolCalls = clonePointer(s.ParallelToolCalls)
 	if s.Thinking != nil {
@@ -282,6 +286,12 @@ func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettin
 	}
 	if override.ServiceTier != "" {
 		base.ServiceTier = override.ServiceTier
+	}
+	if override.ExtraHeaders != nil {
+		base.ExtraHeaders = maps.Clone(override.ExtraHeaders)
+	}
+	if override.ExtraBody != nil {
+		base.ExtraBody = cloneSchemaMap(override.ExtraBody)
 	}
 	if override.StopSequences != nil {
 		base.StopSequences = slices.Clone(override.StopSequences)

@@ -34,6 +34,7 @@ func (m *Model) StreamRequest(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-goog-api-key", m.apiKey)
 	req.Header.Set("Accept", "text/event-stream")
+	setExtraHeaders(req, params.Settings.ExtraHeaders)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

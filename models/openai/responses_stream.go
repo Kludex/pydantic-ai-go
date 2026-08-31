@@ -23,20 +23,20 @@ func (m *ResponsesModel) StreamRequest(
 	if responseID, ok := suspendedResponsesID(msgs); ok {
 		sequence, hasSequence := suspendedResponsesSequence(msgs)
 		if !hasSequence {
-			response, err := m.retrieveResponse(ctx, responseID)
+			response, err := m.retrieveResponse(ctx, responseID, params.Settings.ExtraHeaders)
 			if err != nil {
 				return nil, err
 			}
 			return staticResponsesEventStream(response), nil
 		}
-		return m.retrieveResponseStream(ctx, responseID, sequence)
+		return m.retrieveResponseStream(ctx, responseID, sequence, params.Settings.ExtraHeaders)
 	}
 	payload, err := m.buildResponsesPayload(msgs, params, true)
 	if err != nil {
 		return nil, err
 	}
 	payload.Stream = true
-	body, err := json.Marshal(payload)
+	body, err := marshalRequest(payload, params.Settings.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
@@ -47,6 +47,7 @@ func (m *ResponsesModel) StreamRequest(
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	req.Header.Set("Accept", "text/event-stream")
+	setExtraHeaders(req, params.Settings.ExtraHeaders)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -64,7 +65,7 @@ func (m *ResponsesModel) StreamRequest(
 }
 
 func (m *ResponsesModel) retrieveResponseStream(
-	ctx context.Context, responseID string, sequence int,
+	ctx context.Context, responseID string, sequence int, headers map[string]string,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 	query := url.Values{"stream": {"true"}, "starting_after": {strconv.Itoa(sequence)}}
 	req, err := http.NewRequestWithContext(
@@ -76,6 +77,7 @@ func (m *ResponsesModel) retrieveResponseStream(
 	}
 	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	req.Header.Set("Accept", "text/event-stream")
+	setExtraHeaders(req, headers)
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai: retrieve background response stream: %w", err)

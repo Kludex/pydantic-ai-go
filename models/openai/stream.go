@@ -23,7 +23,7 @@ func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, param
 	}
 	payload.Stream = true
 	payload.StreamOptions = &streamOptions{IncludeUsage: true}
-	body, err := json.Marshal(payload)
+	body, err := marshalRequest(payload, params.Settings.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
@@ -34,6 +34,7 @@ func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, param
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	req.Header.Set("Accept", "text/event-stream")
+	setExtraHeaders(req, params.Settings.ExtraHeaders)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

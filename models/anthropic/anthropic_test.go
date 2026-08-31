@@ -172,12 +172,30 @@ func TestServiceTierMapping(t *testing.T) {
 	}
 }
 
+func TestExtraBodyRejectsConflictsAndInvalidValues(t *testing.T) {
+	model := anthropic.NewModel("claude")
+	for name, body := range map[string]map[string]any{
+		"typed field conflict": {"model": "other"},
+		"invalid value":        {"custom": func() {}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				ExtraBody: body,
+			}})
+			if err == nil || !strings.Contains(err.Error(), "anthropic: marshal request") {
+				t.Fatalf("unexpected extra body error: %v", err)
+			}
+		})
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
-	var gotKey, gotVersion string
+	var gotKey, gotVersion, gotCustom string
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		gotKey = r.Header.Get("x-api-key")
 		gotVersion = r.Header.Get("anthropic-version")
+		gotCustom = r.Header.Get("x-custom")
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Error(err)
 		}
@@ -195,18 +213,23 @@ func TestRequestTextResponse(t *testing.T) {
 	resp, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{
 		Instructions: "be brief",
 		AllowText:    true,
-		Settings:     ai.ModelSettings{ServiceTier: ai.ServiceTierDefault},
+		Settings: ai.ModelSettings{
+			ServiceTier:  ai.ServiceTierDefault,
+			ExtraHeaders: map[string]string{"x-custom": "value"},
+			ExtraBody:    map[string]any{"container": "test-container"},
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gotKey != "test-key" || gotVersion != "2023-06-01" {
-		t.Fatalf("unexpected headers key=%q version=%q", gotKey, gotVersion)
+	if gotKey != "test-key" || gotVersion != "2023-06-01" || gotCustom != "value" {
+		t.Fatalf("unexpected headers key=%q version=%q custom=%q", gotKey, gotVersion, gotCustom)
 	}
 	if gotBody["system"] != "be brief" {
 		t.Fatalf("system prompt not sent: %v", gotBody)
 	}
-	if gotBody["max_tokens"].(float64) != 4096 || gotBody["service_tier"] != "standard_only" {
+	if gotBody["max_tokens"].(float64) != 4096 || gotBody["service_tier"] != "standard_only" ||
+		gotBody["container"] != "test-container" {
 		t.Fatalf("default settings not applied: %v", gotBody)
 	}
 	if resp.Text() != "Hello!" {

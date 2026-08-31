@@ -24,7 +24,7 @@ func (m *Model) StreamRequest(
 		return nil, err
 	}
 	payload.Stream = true
-	body, err := json.Marshal(payload)
+	body, err := marshalRequest(payload, params.Settings.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
@@ -33,6 +33,7 @@ func (m *Model) StreamRequest(
 		return nil, err
 	}
 	m.setRequestHeaders(req, payload, true)
+	setExtraHeaders(req, params.Settings.ExtraHeaders)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

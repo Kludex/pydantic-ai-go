@@ -55,7 +55,9 @@ func TestResponsesCountTokens(t *testing.T) {
 	}
 	parallel := true
 	usage, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{
-		Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}},
+		Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.TextContent{Text: "hello"}, ai.ImageURL{URL: "https://example.com/image.png"},
+		}}},
 	}}, ai.ModelRequestParams{
 		Instructions: "Be brief.",
 		Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
@@ -73,6 +75,10 @@ func TestResponsesCountTokens(t *testing.T) {
 	if body["model"] != "gpt-5" || body["instructions"] != "Be brief." || body["store"] != true ||
 		body["max_output_tokens"] != nil || body["background"] != nil || body["include"] != nil {
 		t.Fatalf("unexpected token count body: %v", body)
+	}
+	content := body["input"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 || content[1].(map[string]any)["type"] != "input_image" {
+		t.Fatalf("token count omitted multimodal content: %#v", content)
 	}
 	if _, err := model.CountTokens(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
 		!strings.Contains(err.Error(), "cannot count tokens without messages") {
@@ -166,6 +172,59 @@ func TestResponsesRefusal(t *testing.T) {
 		filtered.Response().ProviderDetails["refusal"] != "I cannot help with that request." ||
 		filtered.Response().ProviderDetails["finish_reason"] != nil {
 		t.Fatalf("unexpected Responses refusal: %v response=%+v", err, filtered)
+	}
+}
+
+func TestResponsesMultimodalInput(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`))
+	})
+	result, err := ai.NewAgent[struct{}, string](model).RunParts(t.Context(), []ai.UserContent{
+		ai.TextContent{Text: "describe"},
+		ai.ImageURL{URL: "https://example.com/image.png"},
+		ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
+	}, struct{}{})
+	if err != nil || result.Output != "done" {
+		t.Fatalf("unexpected multimodal result=%+v err=%v", result, err)
+	}
+	input := body["input"].([]any)
+	content := input[0].(map[string]any)["content"].([]any)
+	if len(content) != 3 || content[0].(map[string]any)["type"] != "input_text" ||
+		content[0].(map[string]any)["text"] != "describe" ||
+		content[1].(map[string]any)["image_url"] != "https://example.com/image.png" ||
+		content[2].(map[string]any)["image_url"] != "data:image/png;base64,aW1hZ2U=" {
+		t.Fatalf("unexpected Responses multimodal content: %#v", content)
+	}
+}
+
+func TestResponsesRejectsUnsupportedUserContent(t *testing.T) {
+	text := ai.TextContent{Text: "pointer"}
+	tests := []struct {
+		name    string
+		content ai.UserContent
+		want    string
+	}{
+		{name: "pointer", content: &text, want: "unsupported Responses user content type *ai.TextContent"},
+		{name: "non-image binary", content: ai.BinaryContent{
+			Data: []byte("document"), MediaType: "application/pdf",
+		}, want: `Responses binary input requires an image media type, got "application/pdf"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := newResponsesServer(t, func(http.ResponseWriter, *http.Request) {
+				t.Fatal("request sent with unsupported content")
+			})
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{test.content}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected content error: %v", err)
+			}
+		})
 	}
 }
 

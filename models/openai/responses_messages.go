@@ -1,9 +1,11 @@
 package openai
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -97,7 +99,11 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 		case ai.SystemPromptPart:
 			out = append(out, responsesInput{Role: "system", Content: part.Content})
 		case ai.UserPromptPart:
-			out = append(out, responsesInput{Role: "user", Content: part.Content})
+			content, err := responsesUserContent(part)
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, responsesInput{Role: "user", Content: content})
 		case ai.ToolReturnPart:
 			if c.clientToolSearch && part.ToolKind == ai.ToolPartKindToolSearch {
 				tools, err := c.discoveredTools(part.Content)
@@ -135,6 +141,30 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 		}
 	}
 	return out, nil
+}
+
+func responsesUserContent(prompt ai.UserPromptPart) (any, error) {
+	if len(prompt.Contents) == 0 {
+		return prompt.Content, nil
+	}
+	content := make([]responsesInputContent, 0, len(prompt.Contents))
+	for _, item := range prompt.Contents {
+		switch item := item.(type) {
+		case ai.TextContent:
+			content = append(content, responsesInputContent{Type: "input_text", Text: item.Text})
+		case ai.ImageURL:
+			content = append(content, responsesInputContent{Type: "input_image", ImageURL: item.URL})
+		case ai.BinaryContent:
+			if !strings.HasPrefix(item.MediaType, "image/") {
+				return nil, fmt.Errorf("openai: Responses binary input requires an image media type, got %q", item.MediaType)
+			}
+			imageURL := "data:" + item.MediaType + ";base64," + base64.StdEncoding.EncodeToString(item.Data)
+			content = append(content, responsesInputContent{Type: "input_image", ImageURL: imageURL})
+		default:
+			return nil, fmt.Errorf("openai: unsupported Responses user content type %T", item)
+		}
+	}
+	return content, nil
 }
 
 func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([]responsesInput, error) {

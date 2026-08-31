@@ -359,7 +359,7 @@ type responsesReasoning struct {
 type responsesInput struct {
 	// message
 	Role    string `json:"role,omitempty"`
-	Content string `json:"content,omitempty"`
+	Content any    `json:"content,omitempty"`
 	// function_call and function_call_output items
 	Type             string          `json:"type,omitempty"`
 	ID               string          `json:"id,omitempty"`
@@ -373,6 +373,12 @@ type responsesInput struct {
 	Phase            string          `json:"phase,omitempty"`
 	Tools            []responsesTool `json:"tools,omitempty"`
 	EncryptedContent string          `json:"encrypted_content,omitempty"`
+}
+
+type responsesInputContent struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
 }
 
 type responsesTool struct {

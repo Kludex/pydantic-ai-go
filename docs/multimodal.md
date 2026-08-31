@@ -33,7 +33,9 @@ func main() {
 
 `RunParts` preserves content order. Put the instruction before or after the image according to the prompt you want the provider to receive.
 
-OpenAI Chat Completions, Anthropic Messages, and Google Gemini accept `ImageURL`. The remote server must be able to fetch the URL.
+OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini accept `ImageURL`. The remote server must be able to fetch the URL.
+
+OpenAI Responses renders ordered `input_text` and `input_image` items. Its `/responses/input_tokens` count includes the same multimodal request.
 
 ## Send inline image bytes
 

@@ -615,6 +615,8 @@ type run[Deps, Output any] struct {
 	emitMu               sync.Mutex
 	commitStreamedOutput bool
 	recordSelectedModel  func(string)
+	observeUsage         func(Usage)
+	usagePublishMu       sync.Mutex
 }
 
 func (r *run[Deps, Output]) openToolsets(ctx context.Context) error {
@@ -1016,6 +1018,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	}
 	if !request.AdditionalUsage.IsZero() {
 		r.usage.Add(request.AdditionalUsage)
+		r.publishUsage(nil)
 		if err := r.usageLimits.check(r.info.Usage()); err != nil {
 			return nil, err
 		}
@@ -1849,7 +1852,14 @@ func (r *run[Deps, Output]) doModelRequest(
 				return r.emitStreamEvent(reindexContinuationEvent(event, eventOffset))
 			}
 		}
-		segment, err := r.requestModelSegment(ctx, segmentMessages, params, emit)
+		observe := func(segment *ModelResponse) {
+			current := segment
+			if response != nil {
+				current, _ = mergeModelResponses(response, segment)
+			}
+			r.publishUsage(current)
+		}
+		segment, err := r.requestModelSegment(ctx, segmentMessages, params, emit, observe)
 		if err != nil {
 			prior := response
 			partial := response
@@ -1916,6 +1926,7 @@ func (r *run[Deps, Output]) doModelRequest(
 
 func (r *run[Deps, Output]) requestModelSegment(
 	ctx context.Context, msgs []ModelMessage, params ModelRequestParams, emit func(StreamEvent) bool,
+	observe func(*ModelResponse),
 ) (*ModelResponse, error) {
 	provider := ""
 	if model, ok := r.model.(NativeToolSearchHistoryModel); ok {
@@ -1930,6 +1941,9 @@ func (r *run[Deps, Output]) requestModelSegment(
 	if r.emit == nil {
 		response, err := r.model.Request(ctx, msgs, params)
 		fillResponseCost(response)
+		if response != nil {
+			observe(response)
+		}
 		return response, err
 	}
 	if sm, ok := r.model.(StreamingModel); ok {
@@ -1937,7 +1951,7 @@ func (r *run[Deps, Output]) requestModelSegment(
 		if err != nil {
 			return nil, err
 		}
-		response, err := accumulate(events, params, emit)
+		response, err := accumulate(events, params, emit, observe)
 		fillResponseCost(response)
 		return response, err
 	}
@@ -1945,9 +1959,25 @@ func (r *run[Deps, Output]) requestModelSegment(
 	if err != nil {
 		return nil, err
 	}
-	response, err := accumulate(replayAsEvents(resp), params, emit)
+	response, err := accumulate(replayAsEvents(resp), params, emit, observe)
 	fillResponseCost(response)
 	return response, err
+}
+
+func (r *run[Deps, Output]) publishUsage(response *ModelResponse) {
+	if r.observeUsage == nil {
+		return
+	}
+	r.usagePublishMu.Lock()
+	defer r.usagePublishMu.Unlock()
+	usage := r.usage.Clone()
+	usage.ToolCalls = int(r.toolCalls.Load())
+	if response != nil {
+		priced := cloneModelResponse(response)
+		fillResponseCost(priced)
+		usage.Add(priced.Usage)
+	}
+	r.observeUsage(usage)
 }
 
 func (r *run[Deps, Output]) waitForContinuation(ctx context.Context, response *ModelResponse) error {
@@ -1991,6 +2021,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			if resp != nil {
 				fillResponseCost(resp)
 				r.usage.Add(resp.Usage)
+				r.publishUsage(nil)
 				if applyErr := r.applyResponseToolKinds(resp); applyErr != nil {
 					return nil, applyErr
 				}
@@ -2007,6 +2038,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		}
 		fillResponseCost(resp)
 		r.usage.Add(resp.Usage)
+		r.publishUsage(nil)
 		if err := r.applyResponseToolKinds(resp); err != nil {
 			return nil, err
 		}
@@ -2446,6 +2478,7 @@ func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) c
 		!entry.def.ExternalExecution && (!resolving || resolution.kind != deferredCallExternal) {
 		if part, ok := outcome.part.(ToolReturnPart); ok && part.Outcome == ToolReturnOutcomeSuccess {
 			r.toolCalls.Add(1)
+			r.publishUsage(nil)
 		}
 	}
 	if outcome.err == nil && outcome.part != nil && !outcome.outputCall {

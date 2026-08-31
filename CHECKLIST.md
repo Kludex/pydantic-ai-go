@@ -36,7 +36,7 @@ Status:
 - [x] Fresh run and conversation IDs populate all generated requests/responses; explicit run IDs reject history collisions, while conversation IDs inherit from history or reset through `WithConversationID("new")`.
 - [x] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, arbitrary integer details, and optional USD cost. `genai-prices` calculates each model request automatically, preserves provider costs, exposes explicit `ModelResponse.Price()` diagnostics, contributes to tracing and cost limits, and keeps unknown cost distinct from zero.
 - [ ] Add an optional automatic-pricing diagnostic sink for unexpected calculation failures and unavailable costs, as a Go equivalent to upstream warning categories.
-- [ ] Expose detached live usage and best-effort current-request cost from `StreamedRun` before terminal completion.
+- [x] `StreamedRun.Usage()` returns detached live usage, including provider token snapshots, successful tool-call counts, and best-effort current-request cost before terminal completion.
 
 ### Messages and persisted history
 

@@ -1014,3 +1014,43 @@ func TestRunStreamCanStopNativeFallbackLifecycle(t *testing.T) {
 		})
 	}
 }
+
+func TestStreamedRunUsageIsLiveAndDetached(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ResponseMetadataEvent{
+				Usage:     ai.Usage{Requests: 1, InputTokens: 5, Details: map[string]int{"provider": 1}},
+				ModelName: "gpt-5", ProviderName: "openai",
+			},
+			ai.TextDeltaEvent{Delta: "done"},
+			ai.FinishEvent{
+				Usage:     ai.Usage{Requests: 1, InputTokens: 5, OutputTokens: 2, Details: map[string]int{"provider": 1}},
+				ModelName: "gpt-5", ProviderName: "openai",
+			},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	if !stream.Usage().IsZero() {
+		t.Fatalf("usage was nonzero before stream consumption: %+v", stream.Usage())
+	}
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		usage := stream.Usage()
+		if usage.InputTokens != 5 || usage.CostUSD == nil || *usage.CostUSD <= 0 {
+			t.Fatalf("missing live usage for %T: %+v", event, usage)
+		}
+		usage.Details["provider"] = 99
+		if stream.Usage().Details["provider"] != 1 {
+			t.Fatalf("live usage was not detached: %+v", stream.Usage())
+		}
+		if _, ok := event.(ai.FinishEvent); ok && usage.OutputTokens != 2 {
+			t.Fatalf("finish usage was not visible while handling finish: %+v", usage)
+		}
+	}
+	if stream.Result() == nil || stream.Usage().OutputTokens != 2 ||
+		*stream.Usage().CostUSD != *stream.Result().Usage().CostUSD {
+		t.Fatalf("terminal live usage differs from result: live=%+v result=%+v", stream.Usage(), stream.Result())
+	}
+}

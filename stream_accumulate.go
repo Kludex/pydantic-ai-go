@@ -64,6 +64,7 @@ func (p *accumulatedPart) responsePart() ResponsePart {
 // deltas may be interleaved while response order follows first appearance.
 func accumulate(
 	events iter.Seq2[ModelStreamEvent, error], params ModelRequestParams, emit func(StreamEvent) bool,
+	observe func(*ModelResponse),
 ) (*ModelResponse, error) {
 	response := &ModelResponse{}
 	parts := make([]*accumulatedPart, 0)
@@ -72,7 +73,13 @@ func accumulate(
 	var lastStarted *accumulatedPart
 	finalResultSent := false
 
+	notify := func() {
+		if observe != nil {
+			observe(cloneModelResponse(response))
+		}
+	}
 	emitEvent := func(event StreamEvent) error {
+		notify()
 		if emit != nil && !emit(event) {
 			return context.Canceled
 		}
@@ -187,6 +194,7 @@ func accumulate(
 			response.ProviderResponseID = event.ProviderResponseID
 			response.FinishReason = event.FinishReason
 			response.State = event.State
+			notify()
 		case TextDeltaEvent:
 			part, started, err := partForDelta(event.PartID, ResponsePartKindText)
 			if err != nil {

@@ -19,7 +19,7 @@ func TestAccumulateUnknownEvent(t *testing.T) {
 	events := iter.Seq2[ModelStreamEvent, error](func(yield func(ModelStreamEvent, error) bool) {
 		yield(alienStreamEvent{}, nil)
 	})
-	if _, err := accumulate(events, ModelRequestParams{}, nil); err == nil {
+	if _, err := accumulate(events, ModelRequestParams{}, nil, nil); err == nil {
 		t.Fatal("expected error for unknown event type")
 	}
 }

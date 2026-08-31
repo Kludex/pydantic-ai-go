@@ -539,7 +539,7 @@ func printPrice(response ai.ModelResponse) error {
 }
 ```
 
-`UsageLimits.CostLimitUSD` enforces automatically calculated and provider-supplied costs. It does not reject a run when cost is unavailable. Request spans include known cost as `operation.cost`. `UsageLimits.ToolCallLimit` rejects a batch before any function tool runs when its projected successful-call count exceeds the limit.
+`UsageLimits.CostLimitUSD` enforces automatically calculated and provider-supplied costs. It does not reject a run when cost is unavailable. During streaming, `StreamedRun.Usage()` returns a detached live snapshot with the latest provider token counts and a best-effort current-request cost. Request spans include known cost as `operation.cost`. `UsageLimits.ToolCallLimit` rejects a batch before any function tool runs when its projected successful-call count exceeds the limit.
 
 ## Structured output
 

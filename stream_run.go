@@ -5,6 +5,7 @@ import (
 	"errors"
 	"iter"
 	"strconv"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,8 @@ type StreamedRun[Output any] struct {
 	result        *RunResult[Output]
 	suspended     *SuspendedRun
 	partialOutput func(raw, toolCallID string) (Output, bool, error)
+	usageMu       sync.RWMutex
+	usage         Usage
 }
 
 // SuspendedRun is a resumable snapshot captured when a stream consumer
@@ -33,6 +36,20 @@ func (s *SuspendedRun) Messages() []ModelMessage { return cloneModelMessages(s.m
 
 // Usage returns usage accumulated through the detached response.
 func (s *SuspendedRun) Usage() Usage { return s.usage.Clone() }
+
+// Usage returns a detached snapshot accumulated so far. During a model stream,
+// it includes the provider's latest token snapshot and a best-effort cost.
+func (s *StreamedRun[Output]) Usage() Usage {
+	s.usageMu.RLock()
+	defer s.usageMu.RUnlock()
+	return s.usage.Clone()
+}
+
+func (s *StreamedRun[Output]) setUsage(usage Usage) {
+	s.usageMu.Lock()
+	defer s.usageMu.Unlock()
+	s.usage = usage.Clone()
+}
 
 // Events streams normalized part lifecycle, final-result, and finish events
 // across every model request in the run. The sequence can be ranged once.
@@ -238,6 +255,8 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 		}
 		defer func() { _ = closeRun() }()
 		run.recordSelectedModel = func(name string) { recordRunModel(span, name) }
+		run.observeUsage = streamedRun.setUsage
+		run.publishUsage(nil)
 		run.commitStreamedOutput = commitFirstOutput
 		streamedRun.partialOutput = func(raw, toolCallID string) (Output, bool, error) {
 			return run.validatePartialOutput(run.ctx, raw, toolCallID)

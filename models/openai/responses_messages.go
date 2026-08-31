@@ -229,8 +229,17 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				Name: part.ToolName, Arguments: string(part.Args), Namespace: namespace,
 			})
 		case ai.NativeToolCallPart:
-			if !c.serverToolSearch || part.ProviderName != c.providerName ||
-				part.ToolKind != ai.ToolPartKindToolSearch {
+			if part.ProviderName != c.providerName {
+				continue
+			}
+			if part.ToolKind == ai.ToolPartKindWebSearch {
+				status, _ := part.ProviderDetails["status"].(string)
+				out = append(out, responsesInput{
+					Type: "web_search_call", ID: part.ID, Action: slices.Clone(part.Args), Status: status,
+				})
+				continue
+			}
+			if !c.serverToolSearch || part.ToolKind != ai.ToolPartKindToolSearch {
 				continue
 			}
 			var arguments any = map[string]any{}

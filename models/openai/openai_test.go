@@ -211,6 +211,27 @@ func TestRequestTextResponse(t *testing.T) {
 	}
 }
 
+func TestChatNativeToolCompatibility(t *testing.T) {
+	model := newServer(t, openAIRequestRecorder(t, nil))
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+	}); err == nil || !strings.Contains(err.Error(), `Chat Completions does not support native tool "web_search"`) {
+		t.Fatalf("unexpected required native-tool error: %v", err)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{Optional: true}},
+	}); err != nil {
+		t.Fatalf("optional native tool should be omitted: %v", err)
+	}
+	for _, nativeTool := range []ai.NativeTool{nil, (*ai.WebSearchTool)(nil)} {
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{nativeTool},
+		}); err == nil || !strings.Contains(err.Error(), "native tool must not be nil") {
+			t.Fatalf("unexpected nil native-tool error: %v", err)
+		}
+	}
+}
+
 func TestRequestToolCallRoundTrip(t *testing.T) {
 	var gotBody map[string]any
 	first := true

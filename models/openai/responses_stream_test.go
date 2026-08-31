@@ -3,6 +3,7 @@ package openai_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -599,6 +600,67 @@ func TestResponsesBackgroundStreamRequestFailures(t *testing.T) {
 			t.Fatal("expected stream retrieve read error")
 		}
 	})
+}
+
+func TestResponsesStreamWebSearchNativeTool(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.created","response":{"id":"response","created_at":100,"status":"in_progress"}}`,
+		`{"type":"response.output_item.added","output_index":0,"item":{"type":"web_search_call","id":"web-1","status":"in_progress"}}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"type":"web_search_call","id":"web-1","status":"completed","action":{"type":"search","query":"Go news"}}}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","created_at":100,"status":"completed","usage":{}}}`,
+		`[DONE]`,
+	}))
+	events, err := collect(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start ai.ToolCallStartEvent
+	var delta ai.ToolCallDeltaEvent
+	var returned ai.NativeToolReturnEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			start = event
+		case ai.ToolCallDeltaEvent:
+			delta = event
+		case ai.NativeToolReturnEvent:
+			returned = event
+		}
+	}
+	if !start.Native || start.ToolKind != ai.ToolPartKindWebSearch || start.ToolCallID != "web-1" ||
+		delta.ArgsDelta != `{"type":"search","query":"Go news"}` || returned.Part.ToolCallID != "web-1" ||
+		returned.Part.ToolKind != ai.ToolPartKindWebSearch || returned.Part.Content.(map[string]any)["status"] != "completed" {
+		t.Fatalf("unexpected streamed web search events: start=%+v delta=%+v return=%+v", start, delta, returned)
+	}
+}
+
+func TestResponsesStreamWebSearchConsumerBreaks(t *testing.T) {
+	for _, breakAfter := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("event %d", breakAfter), func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, []string{
+				`{"type":"response.output_item.added","item":{"type":"web_search_call","id":"web","status":"in_progress"}}`,
+				`{"type":"response.output_item.done","item":{"type":"web_search_call","id":"web","status":"completed"}}`,
+				`[DONE]`,
+			}))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen++
+				if seen == breakAfter {
+					break
+				}
+			}
+			if seen != breakAfter {
+				t.Fatalf("stream yielded %d events before break, want %d", seen, breakAfter)
+			}
+		})
+	}
 }
 
 func TestResponsesStreamUsesNativeDeferredToolSearch(t *testing.T) {

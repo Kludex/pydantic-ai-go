@@ -53,9 +53,10 @@ type Agent[Deps, Output any] struct {
 	capInstructionIDs  map[string]struct{}
 	outputValidators   []func(ctx context.Context, rc *RunContext[Deps], out Output) error
 
-	tools    []toolEntry[Deps]
-	toolsets []Toolset[Deps]
-	started  atomic.Bool
+	tools       []toolEntry[Deps]
+	nativeTools []NativeTool
+	toolsets    []Toolset[Deps]
+	started     atomic.Bool
 }
 
 type toolEntry[Deps any] struct {
@@ -119,6 +120,10 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		}
 	}
 	a.sequentialTools = cfg.sequentialTools
+	a.nativeTools = CloneNativeTools(cfg.nativeTools)
+	if err := validateNativeTools(a.nativeTools); err != nil {
+		panic(err.Error())
+	}
 	var err error
 	a.capabilities, err = sortCapabilities(cfg.capabilities, cfg.capabilities)
 	if err != nil {
@@ -168,9 +173,13 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 				},
 			})
 		}
+		a.nativeTools = append(a.nativeTools, CloneNativeTools(reg.nativeTools)...)
 		a.capSettings = append(a.capSettings, capabilitySettingsLayer{
 			static: reg.modelSettings, provider: capabilityModelSettingsProvider(capability),
 		})
+	}
+	if err := validateNativeTools(a.nativeTools); err != nil {
+		panic(err.Error())
 	}
 	return a
 }
@@ -360,6 +369,17 @@ func (a *Agent[Deps, Output]) AddTool(tool Tool[Deps]) {
 	a.tools = append(a.tools, tool.entry)
 }
 
+// AddNativeTool registers a provider-executed tool. Required tools fail on
+// providers that do not support their kind; optional tools may be omitted.
+func (a *Agent[Deps, Output]) AddNativeTool(tool NativeTool) {
+	a.checkNotStarted()
+	tools := append(CloneNativeTools(a.nativeTools), cloneNativeTool(tool))
+	if err := validateNativeTools(tools); err != nil {
+		panic(err.Error())
+	}
+	a.nativeTools = tools
+}
+
 func (a *Agent[Deps, Output]) checkNotStarted() {
 	if a.started.Load() {
 		panic("ai: cannot modify an agent after its first run")
@@ -386,7 +406,14 @@ type config struct {
 	promptedTemplate string
 	endStrategy      EndStrategy
 	sequentialTools  bool
+	nativeTools      []NativeTool
 	capabilities     []Capability
+}
+
+// WithNativeTools registers provider-executed tools on every run.
+func WithNativeTools(tools ...NativeTool) Option {
+	cloned := CloneNativeTools(tools)
+	return func(c *config) { c.nativeTools = append(c.nativeTools, CloneNativeTools(cloned)...) }
 }
 
 // OutputMode selects how structured output is requested from the model.
@@ -580,10 +607,17 @@ type runConfig struct {
 	instructionsFuncs []erasedInstructionsFunc
 	modelSelectors    []erasedModelSelectorFunc
 	tools             []erasedTool
+	nativeTools       []NativeTool
 	toolsets          []any
 	capabilities      []Capability
 	deferredResults   *DeferredToolResults
 	resumeSuspended   bool
+}
+
+// WithRunNativeTools adds provider-executed tools for one run without modifying the agent.
+func WithRunNativeTools(tools ...NativeTool) RunOption {
+	cloned := CloneNativeTools(tools)
+	return func(c *runConfig) { c.nativeTools = append(c.nativeTools, CloneNativeTools(cloned)...) }
 }
 
 // WithRunToolsets adds composable toolsets for one run without modifying the agent.

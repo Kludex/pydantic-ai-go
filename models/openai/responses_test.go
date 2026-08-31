@@ -61,6 +61,7 @@ func TestResponsesCountTokens(t *testing.T) {
 	}}, ai.ModelRequestParams{
 		Instructions: "Be brief.",
 		Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		NativeTools:  []ai.NativeTool{ai.WebSearchTool{SearchContextSize: ai.WebSearchContextLow}},
 		Settings: ai.ModelSettings{
 			MaxTokens: 100, ParallelToolCalls: &parallel,
 			ExtraHeaders: map[string]string{"X-Custom": "value"}, ExtraBody: map[string]any{"store": true},
@@ -79,6 +80,11 @@ func TestResponsesCountTokens(t *testing.T) {
 	content := body["input"].([]any)[0].(map[string]any)["content"].([]any)
 	if len(content) != 2 || content[1].(map[string]any)["type"] != "input_image" {
 		t.Fatalf("token count omitted multimodal content: %#v", content)
+	}
+	tools := body["tools"].([]any)
+	if len(tools) != 2 || tools[0].(map[string]any)["type"] != "web_search" ||
+		tools[1].(map[string]any)["type"] != "function" {
+		t.Fatalf("token count omitted native or function tools: %#v", tools)
 	}
 	if _, err := model.CountTokens(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
 		!strings.Contains(err.Error(), "cannot count tokens without messages") {
@@ -172,6 +178,129 @@ func TestResponsesRefusal(t *testing.T) {
 		filtered.Response().ProviderDetails["refusal"] != "I cannot help with that request." ||
 		filtered.Response().ProviderDetails["finish_reason"] != nil {
 		t.Fatalf("unexpected Responses refusal: %v response=%+v", err, filtered)
+	}
+}
+
+type unsupportedNativeTool struct{ optional bool }
+
+func (tool unsupportedNativeTool) Kind() string                   { return "unsupported" }
+func (tool unsupportedNativeTool) UniqueID() string               { return "unsupported" }
+func (tool unsupportedNativeTool) IsOptional() bool               { return tool.optional }
+func (tool unsupportedNativeTool) CloneNativeTool() ai.NativeTool { return tool }
+
+func TestResponsesWebSearchNativeTool(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[
+				{"type":"web_search_call","id":"web-1","status":"completed","action":{"type":"search","query":"Go news"}},
+				{"type":"message","id":"message","content":[{"type":"output_text","text":"done"}]}
+			]
+		}`))
+	})
+	external := false
+	response, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: "search"},
+	}}}, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{
+		SearchContextSize: ai.WebSearchContextHigh,
+		UserLocation: &ai.WebSearchUserLocation{
+			City: "Paris", Country: "FR", Region: "IDF", Timezone: "Europe/Paris",
+		},
+		AllowedDomains: []string{"go.dev"}, ExternalWebAccess: &external,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	location := tool["user_location"].(map[string]any)
+	filters := tool["filters"].(map[string]any)
+	if tool["type"] != "web_search" || tool["search_context_size"] != "high" ||
+		tool["external_web_access"] != false || location["type"] != "approximate" || location["city"] != "Paris" ||
+		filters["allowed_domains"].([]any)[0] != "go.dev" {
+		t.Fatalf("unexpected web search request: %#v", tool)
+	}
+	if len(response.Parts) != 3 {
+		t.Fatalf("unexpected web search response: %#v", response.Parts)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if call.ToolKind != ai.ToolPartKindWebSearch || call.ToolCallID != "web-1" ||
+		string(call.Args) != `{"type":"search","query":"Go news"}` || returned.ToolCallID != "web-1" ||
+		returned.ToolKind != ai.ToolPartKindWebSearch || returned.Content.(map[string]any)["status"] != "completed" {
+		t.Fatalf("unexpected normalized web search parts: call=%+v return=%+v", call, returned)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{&ai.WebSearchTool{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool = body["tools"].([]any)[0].(map[string]any)
+	if tool["search_context_size"] != "medium" || tool["user_location"] != nil || tool["filters"] != nil ||
+		tool["external_web_access"] != nil {
+		t.Fatalf("unexpected default web search request: %#v", tool)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := body["input"].([]any)[0].(map[string]any)
+	if replayed["type"] != "web_search_call" || replayed["id"] != "web-1" ||
+		replayed["action"].(map[string]any)["query"] != "Go news" || replayed["status"] != "completed" {
+		t.Fatalf("unexpected web search replay: %#v", replayed)
+	}
+}
+
+func TestResponsesNativeToolCompatibility(t *testing.T) {
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["tools"] != nil {
+			t.Errorf("optional unsupported tool was sent: %#v", body)
+		}
+		_, _ = response.Write([]byte(`{"model":"gpt-5","output":[],"usage":{}}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{unsupportedNativeTool{optional: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{unsupportedNativeTool{}},
+	}); err == nil || !strings.Contains(err.Error(), `does not support native tool "unsupported"`) {
+		t.Fatalf("unexpected unsupported tool error: %v", err)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{SearchContextSize: "huge"}},
+	}); err == nil || !strings.Contains(err.Error(), "invalid web search context size") {
+		t.Fatalf("unexpected web search validation error: %v", err)
+	}
+	var nilTool *ai.WebSearchTool
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{nilTool},
+	}); err == nil || !strings.Contains(err.Error(), "must not be nil") {
+		t.Fatalf("unexpected nil native tool error: %v", err)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{ToolName: "unknown", ProviderName: "openai"},
+	}}}, ai.ModelRequestParams{}); err != nil {
+		t.Fatalf("unrelated native history should be omitted: %v", err)
+	}
+}
+
+func TestResponsesWebSearchWithoutAction(t *testing.T) {
+	model := newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"model":"gpt-5","output":[{"type":"web_search_call","id":"web","status":"failed"}]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call := response.Parts[0].(ai.NativeToolCallPart); string(call.Args) != `{}` {
+		t.Fatalf("missing web search action was not normalized: %+v", call)
 	}
 }
 

@@ -21,6 +21,7 @@ func (request ModelRequestContext) Clone() ModelRequestContext {
 	request.Params.InstructionParts = cloneInstructionParts(request.Params.InstructionParts)
 	request.Params.Tools = cloneToolDefinitions(request.Params.Tools)
 	request.Params.DeferredTools = cloneToolDefinitions(request.Params.DeferredTools)
+	request.Params.NativeTools = CloneNativeTools(request.Params.NativeTools)
 	if request.Params.OutputTool != nil {
 		outputTool := cloneToolDefinition(*request.Params.OutputTool)
 		request.Params.OutputTool = &outputTool

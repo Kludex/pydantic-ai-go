@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"reflect"
 	"strings"
 	"time"
 
@@ -322,6 +323,14 @@ type chatFunction struct {
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*chatRequest, error) {
+	for _, nativeTool := range params.NativeTools {
+		if nativeToolIsNil(nativeTool) {
+			return nil, fmt.Errorf("openai: native tool must not be nil")
+		}
+		if !nativeTool.IsOptional() {
+			return nil, fmt.Errorf("openai: Chat Completions does not support native tool %q", nativeTool.Kind())
+		}
+	}
 	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
 	if err != nil {
 		return nil, err
@@ -406,6 +415,14 @@ type jsonSchemaFormat struct {
 	Name   string         `json:"name"`
 	Schema map[string]any `json:"schema"`
 	Strict *bool          `json:"strict,omitempty"`
+}
+
+func nativeToolIsNil(tool ai.NativeTool) bool {
+	if tool == nil {
+		return true
+	}
+	value := reflect.ValueOf(tool)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }
 
 func openAIServiceTier(tier ai.ServiceTier) (ai.ServiceTier, error) {

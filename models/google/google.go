@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -312,6 +313,14 @@ type thinkingConfig struct {
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
+	for _, nativeTool := range params.NativeTools {
+		if nativeTool == nil || (reflect.ValueOf(nativeTool).Kind() == reflect.Pointer && reflect.ValueOf(nativeTool).IsNil()) {
+			return nil, fmt.Errorf("google: native tool must not be nil")
+		}
+		if !nativeTool.IsOptional() {
+			return nil, fmt.Errorf("google: native tool %q is not implemented", nativeTool.Kind())
+		}
+	}
 	req := &generateRequest{}
 	if params.Instructions != "" {
 		req.SystemInstruction = &content{Parts: []part{{Text: params.Instructions}}}

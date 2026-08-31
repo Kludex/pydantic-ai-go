@@ -285,6 +285,7 @@ type ToolPartKind string
 const (
 	ToolPartKindToolSearch     ToolPartKind = "tool-search"
 	ToolPartKindCapabilityLoad ToolPartKind = "capability-load"
+	ToolPartKindWebSearch      ToolPartKind = "web-search"
 )
 
 // ToolCallPart is a tool call requested by the model.

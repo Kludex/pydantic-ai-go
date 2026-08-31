@@ -165,6 +165,8 @@ type ModelRequestParams struct {
 	// DeferredTools contains prepared definitions hidden by the agent. Providers
 	// with native deferral may advertise them without making them executable.
 	DeferredTools []ToolDefinition
+	// NativeTools are executed by a compatible model provider.
+	NativeTools []NativeTool
 	// OutputTool, when non-nil, is the tool the model must call to
 	// produce the final structured output.
 	OutputTool *ToolDefinition

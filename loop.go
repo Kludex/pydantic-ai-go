@@ -148,6 +148,7 @@ func (a *Agent[Deps, Output]) newRun(
 	runCapabilityInstructions := []InstructionPart(nil)
 	capSettings := slices.Clone(a.capSettings)
 	var runCapabilityTools []capabilityTool
+	var runCapabilityNativeTools []NativeTool
 	capInstructionIDs := make(map[string]struct{}, len(a.capInstructionIDs)+len(runCapabilities))
 	for id := range a.capInstructionIDs {
 		capInstructionIDs[id] = struct{}{}
@@ -179,6 +180,7 @@ func (a *Agent[Deps, Output]) newRun(
 		}
 		runCapabilityInstructions = append(runCapabilityInstructions, instructions...)
 		runCapabilityTools = append(runCapabilityTools, registry.tools...)
+		runCapabilityNativeTools = append(runCapabilityNativeTools, CloneNativeTools(registry.nativeTools)...)
 		capSettings = append(capSettings, capabilitySettingsLayer{
 			static: registry.modelSettings, provider: capabilityModelSettingsProvider(capability),
 		})
@@ -186,6 +188,12 @@ func (a *Agent[Deps, Output]) newRun(
 	limits := a.usageLimits
 	if cfg.usageLimits != nil {
 		limits = *cfg.usageLimits
+	}
+	nativeTools := append(CloneNativeTools(a.nativeTools), CloneNativeTools(cfg.nativeTools)...)
+	nativeTools = append(nativeTools, runCapabilityNativeTools...)
+	if err := validateNativeTools(nativeTools); err != nil {
+		cancellation.finish()
+		return nil, err
 	}
 	if limits != (UsageLimits{}) {
 		postRequestLimits := usageLimitsCapability{limits: limits}
@@ -199,7 +207,8 @@ func (a *Agent[Deps, Output]) newRun(
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int), availabilityRefused: make(map[string]struct{}),
 		runSettings: cfg.settings, usageLimits: limits,
-		tools: slices.Clone(a.tools), toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
+		tools: slices.Clone(a.tools), nativeTools: nativeTools,
+		toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		runMetadata: cloneSchemaMap(cfg.metadata), runMetadataFuncs: slices.Clone(cfg.metadataFuncs),
 		prompt:           cloneUserPromptPart(prompt),
@@ -638,6 +647,7 @@ type run[Deps, Output any] struct {
 	currentOutputTool          *ToolDefinition
 	currentOutputValidator     *schema.Validator
 	tools                      []toolEntry[Deps]
+	nativeTools                []NativeTool
 	toolsets                   []Toolset[Deps]
 	toolsetClosers             []ToolsetCloseFunc
 	currentToolEntries         map[string]toolEntry[Deps]
@@ -1074,6 +1084,10 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			return nil, err
 		}
 		reconcileHookInstructions(&request.Params, previousInstructions, previousParts)
+	}
+	request.Params.NativeTools = CloneNativeTools(request.Params.NativeTools)
+	if err := validateNativeTools(request.Params.NativeTools); err != nil {
+		return nil, err
 	}
 	if request.ReplaceHistory {
 		r.messages = cloneModelMessages(request.Messages)
@@ -1673,6 +1687,7 @@ func toolSearchResultNames(content any) []string {
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
 	params := r.baseParams
+	params.NativeTools = CloneNativeTools(r.nativeTools)
 	rc := r.rc.clone()
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.outputMaxRetries

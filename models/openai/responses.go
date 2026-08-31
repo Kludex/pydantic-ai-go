@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -378,6 +379,7 @@ type responsesInput struct {
 	CallID           any             `json:"call_id,omitempty"`
 	Name             string          `json:"name,omitempty"`
 	Arguments        any             `json:"arguments,omitempty"`
+	Action           json.RawMessage `json:"action,omitempty"`
 	Namespace        string          `json:"namespace,omitempty"`
 	Output           string          `json:"output,omitempty"`
 	Execution        string          `json:"execution,omitempty"`
@@ -394,13 +396,70 @@ type responsesInputContent struct {
 }
 
 type responsesTool struct {
-	Type         string         `json:"type"`
-	Name         string         `json:"name,omitempty"`
-	Description  string         `json:"description,omitempty"`
-	Parameters   map[string]any `json:"parameters,omitempty"`
-	Strict       *bool          `json:"strict,omitempty"`
-	DeferLoading bool           `json:"defer_loading,omitempty"`
-	Execution    string         `json:"execution,omitempty"`
+	Type              string                      `json:"type"`
+	Name              string                      `json:"name,omitempty"`
+	Description       string                      `json:"description,omitempty"`
+	Parameters        map[string]any              `json:"parameters,omitempty"`
+	Strict            *bool                       `json:"strict,omitempty"`
+	DeferLoading      bool                        `json:"defer_loading,omitempty"`
+	Execution         string                      `json:"execution,omitempty"`
+	SearchContextSize ai.WebSearchContextSize     `json:"search_context_size,omitempty"`
+	UserLocation      *responsesWebSearchLocation `json:"user_location,omitempty"`
+	Filters           *responsesWebSearchFilters  `json:"filters,omitempty"`
+	ExternalWebAccess *bool                       `json:"external_web_access,omitempty"`
+}
+
+type responsesWebSearchLocation struct {
+	Type     string `json:"type"`
+	City     string `json:"city,omitempty"`
+	Country  string `json:"country,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
+}
+
+type responsesWebSearchFilters struct {
+	AllowedDomains []string `json:"allowed_domains"`
+}
+
+func prepareResponsesNativeTool(nativeTool ai.NativeTool) (responsesTool, bool, error) {
+	if nativeToolIsNil(nativeTool) {
+		return responsesTool{}, false, fmt.Errorf("openai: native tool must not be nil")
+	}
+	var webSearch ai.WebSearchTool
+	switch tool := nativeTool.(type) {
+	case ai.WebSearchTool:
+		webSearch = tool
+	case *ai.WebSearchTool:
+		webSearch = *tool
+	default:
+		if nativeTool.IsOptional() {
+			return responsesTool{}, false, nil
+		}
+		return responsesTool{}, false, fmt.Errorf("openai: Responses does not support native tool %q", nativeTool.Kind())
+	}
+	contextSize := webSearch.SearchContextSize
+	if contextSize == "" {
+		contextSize = ai.WebSearchContextMedium
+	}
+	if contextSize != ai.WebSearchContextLow && contextSize != ai.WebSearchContextMedium &&
+		contextSize != ai.WebSearchContextHigh {
+		return responsesTool{}, false, fmt.Errorf("openai: invalid web search context size %q", contextSize)
+	}
+	tool := responsesTool{Type: "web_search", SearchContextSize: contextSize}
+	if webSearch.UserLocation != nil {
+		tool.UserLocation = &responsesWebSearchLocation{
+			Type: "approximate", City: webSearch.UserLocation.City, Country: webSearch.UserLocation.Country,
+			Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
+		}
+	}
+	if len(webSearch.AllowedDomains) > 0 {
+		tool.Filters = &responsesWebSearchFilters{AllowedDomains: slices.Clone(webSearch.AllowedDomains)}
+	}
+	if webSearch.ExternalWebAccess != nil {
+		external := *webSearch.ExternalWebAccess
+		tool.ExternalWebAccess = &external
+	}
+	return tool, true, nil
 }
 
 func (m *ResponsesModel) buildResponsesPayload(
@@ -455,6 +514,15 @@ func (m *ResponsesModel) buildResponsesPayload(
 		(searchTool.ToolSearchStrategy == ai.ToolSearchStrategyKeywords ||
 			searchTool.ToolSearchStrategy == ai.ToolSearchStrategyCustom)
 	serverToolSearch := activeToolSearch && !clientToolSearch
+	for _, nativeTool := range params.NativeTools {
+		tool, include, err := prepareResponsesNativeTool(nativeTool)
+		if err != nil {
+			return nil, err
+		}
+		if include {
+			req.Tools = append(req.Tools, tool)
+		}
+	}
 	deferred := make(map[string]ai.ToolDefinition, len(params.DeferredTools))
 	if activeToolSearch {
 		for _, tool := range params.DeferredTools {
@@ -571,6 +639,7 @@ type responsesOutputItem struct {
 	CallID           *string         `json:"call_id"`
 	Name             string          `json:"name"`
 	Arguments        json.RawMessage `json:"arguments"`
+	Action           json.RawMessage `json:"action"`
 	Namespace        string          `json:"namespace"`
 	Execution        string          `json:"execution"`
 	Status           string          `json:"status"`
@@ -735,6 +804,21 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 				ToolName: item.Name, Args: arguments, ToolCallID: responsesCallID(item.CallID),
 				ID: item.ID, ProviderName: "openai", ProviderDetails: providerDetails,
 			})
+		case "web_search_call":
+			arguments := slices.Clone(item.Action)
+			if len(arguments) == 0 || string(arguments) == "null" {
+				arguments = json.RawMessage(`{}`)
+			}
+			resp.Parts = append(resp.Parts,
+				ai.NativeToolCallPart{
+					ToolName: "web_search", Args: arguments, ToolCallID: item.ID, ToolKind: ai.ToolPartKindWebSearch,
+					ID: item.ID, ProviderName: "openai", ProviderDetails: map[string]any{"status": item.Status},
+				},
+				ai.NativeToolReturnPart{
+					ToolName: "web_search", ToolCallID: item.ID, ToolKind: ai.ToolPartKindWebSearch,
+					Content: map[string]any{"status": item.Status}, Timestamp: timestamp, ProviderName: "openai",
+				},
+			)
 		case "tool_search_call":
 			arguments, err := normalizeResponsesToolSearchArguments(item.Arguments, item.Execution)
 			if err != nil {

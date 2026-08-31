@@ -10,6 +10,7 @@ import (
 	"iter"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -321,6 +322,15 @@ func (m *ResponsesModel) responsesEventStream(
 							return
 						}
 					}
+				case "web_search_call":
+					emittedParts = true
+					if !yield(ai.ToolCallStartEvent{
+						PartID: responsesToolPartID(event), ToolName: "web_search", ToolCallID: event.Item.ID,
+						ToolKind: ai.ToolPartKindWebSearch, ID: event.Item.ID, ProviderName: m.providerName, Native: true,
+						ProviderDetails: map[string]any{"status": event.Item.Status},
+					}, nil) {
+						return
+					}
 				case "tool_search_call":
 					emittedParts = true
 					switch event.Item.Execution {
@@ -368,8 +378,30 @@ func (m *ResponsesModel) responsesEventStream(
 					return
 				}
 			case "response.output_item.done":
-				if event.Item.Type == "tool_search_call" &&
-					(event.Item.Execution == "client" || event.Item.Execution == "server") {
+				switch {
+				case event.Item.Type == "web_search_call":
+					arguments := slices.Clone(event.Item.Action)
+					if len(arguments) == 0 || string(arguments) == "null" {
+						arguments = json.RawMessage(`{}`)
+					}
+					if !yield(ai.ToolCallDeltaEvent{
+						PartID: responsesToolPartID(event), ToolCallID: event.Item.ID, ArgsDelta: string(arguments),
+					}, nil) {
+						return
+					}
+					emittedParts = true
+					if !yield(ai.NativeToolReturnEvent{
+						PartID: "return:" + event.Item.ID,
+						Part: ai.NativeToolReturnPart{
+							ToolName: "web_search", ToolCallID: event.Item.ID, ToolKind: ai.ToolPartKindWebSearch,
+							Content: map[string]any{"status": event.Item.Status}, Timestamp: responseTimestamp,
+							ProviderName: m.providerName,
+						},
+					}, nil) {
+						return
+					}
+				case event.Item.Type == "tool_search_call" &&
+					(event.Item.Execution == "client" || event.Item.Execution == "server"):
 					arguments, err := normalizeResponsesToolSearchArguments(event.Item.Arguments, event.Item.Execution)
 					if err != nil {
 						yield(nil, err)
@@ -381,7 +413,7 @@ func (m *ResponsesModel) responsesEventStream(
 					}, nil) {
 						return
 					}
-				} else if event.Item.Type == "tool_search_output" && event.Item.Execution == "server" {
+				case event.Item.Type == "tool_search_output" && event.Item.Execution == "server":
 					emittedParts = true
 					callID := responsesEffectiveCallID(event.Item)
 					if responsesCallID(event.Item.CallID) == "" && len(nullServerSearchCalls) == 1 {

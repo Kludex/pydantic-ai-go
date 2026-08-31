@@ -613,6 +613,27 @@ func TestRetryAndSystemParts(t *testing.T) {
 }
 
 func TestErrors(t *testing.T) {
+	t.Run("native tools", func(t *testing.T) {
+		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+		})
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+		}); err == nil || !strings.Contains(err.Error(), `native tool "web_search" is not implemented`) {
+			t.Fatalf("unexpected native-tool error: %v", err)
+		}
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{Optional: true}},
+		}); err != nil {
+			t.Fatalf("optional native tool should be omitted: %v", err)
+		}
+		var nilTool *ai.WebSearchTool
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{nilTool},
+		}); err == nil || !strings.Contains(err.Error(), "native tool must not be nil") {
+			t.Fatalf("unexpected nil native-tool error: %v", err)
+		}
+	})
 	t.Run("api error", func(t *testing.T) {
 		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusTooManyRequests)

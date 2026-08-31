@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 
@@ -339,6 +340,14 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*messagesRequest, error) {
+	for _, nativeTool := range params.NativeTools {
+		if nativeTool == nil || (reflect.ValueOf(nativeTool).Kind() == reflect.Pointer && reflect.ValueOf(nativeTool).IsNil()) {
+			return nil, fmt.Errorf("anthropic: native tool must not be nil")
+		}
+		if !nativeTool.IsOptional() {
+			return nil, fmt.Errorf("anthropic: native tool %q is not implemented", nativeTool.Kind())
+		}
+	}
 	thinking, err := anthropicThinking(params.Settings.Thinking)
 	if err != nil {
 		return nil, err

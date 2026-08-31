@@ -29,6 +29,7 @@ type CapabilityIDProvider interface {
 // CapabilityRegistry collects what a capability contributes at setup.
 type CapabilityRegistry struct {
 	tools         []capabilityTool
+	nativeTools   []NativeTool
 	instructions  []InstructionPart
 	modelSettings []ModelSettings
 }
@@ -41,6 +42,11 @@ type capabilityTool struct {
 // AddTool registers a tool from an explicit definition, like Agent.AddRawTool.
 func (r *CapabilityRegistry) AddTool(def ToolDefinition, fn func(ctx context.Context, rawArgs json.RawMessage) (any, error)) {
 	r.tools = append(r.tools, capabilityTool{def: def, call: fn})
+}
+
+// AddNativeTool registers a provider-executed tool for this capability.
+func (r *CapabilityRegistry) AddNativeTool(tool NativeTool) {
+	r.nativeTools = append(r.nativeTools, cloneNativeTool(tool))
 }
 
 // AddInstructions appends static instructions to the agent's.

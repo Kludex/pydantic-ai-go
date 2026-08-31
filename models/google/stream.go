@@ -10,6 +10,7 @@ import (
 	"iter"
 	"net/http"
 	"strings"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -58,11 +59,14 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		modelName := m.name
 		responseID := ""
 		finishReason := ""
+		responseTimestamp := time.Now().UTC()
+		webSearchEmitted := false
 		var logprobs map[string]any
 		var avgLogprobs *float64
 		blockReason := ""
 		blockReasonMessage := ""
 		var safetyRatings []map[string]any
+		var groundingMetadata map[string]any
 		received := false
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -106,6 +110,25 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 			if chunk.Candidates[0].AvgLogprobs != nil {
 				avgLogprobs = chunk.Candidates[0].AvgLogprobs
 			}
+			if chunk.Candidates[0].GroundingMetadata != nil {
+				groundingMetadata = chunk.Candidates[0].GroundingMetadata
+			}
+			if !webSearchEmitted {
+				call, returned := googleWebSearchParts(
+					chunk.Candidates[0].GroundingMetadata, responseID, m.providerName, responseTimestamp,
+				)
+				if call != nil {
+					partID := "web-search:" + call.ToolCallID
+					if !yield(ai.ToolCallStartEvent{
+						PartID: partID, ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+						ToolKind: call.ToolKind, ProviderName: call.ProviderName, Native: true,
+					}, nil) || !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(call.Args)}, nil) ||
+						!yield(ai.NativeToolReturnEvent{PartID: "return:" + call.ToolCallID, Part: *returned}, nil) {
+						return
+					}
+					webSearchEmitted = true
+				}
+			}
 			for index, part := range chunk.Candidates[0].Content.Parts {
 				if !emitPart(yield, part, index, m.providerName) {
 					return
@@ -142,6 +165,9 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		}
 		if serviceTier != "" {
 			providerDetails["service_tier"] = strings.ToLower(serviceTier)
+		}
+		if groundingMetadata != nil {
+			providerDetails["grounding_metadata"] = groundingMetadata
 		}
 		if len(providerDetails) == 0 {
 			providerDetails = nil

@@ -33,7 +33,7 @@ func main() {
 
 A native tool runs inside the model provider. The agent records its calls and returns in history, but it does not execute them as local Go functions.
 
-`WebSearchTool` is provider-neutral. OpenAI Responses currently renders it as the hosted `web_search` tool. Its static and streamed responses become `NativeToolCallPart` and `NativeToolReturnPart` values with `ToolPartKindWebSearch`.
+`WebSearchTool` is provider-neutral. OpenAI Responses renders it as the hosted `web_search` tool. Gemini renders it as `googleSearch`. Static and streamed responses become `NativeToolCallPart` and `NativeToolReturnPart` values with `ToolPartKindWebSearch`.
 
 ## Configure search
 
@@ -47,7 +47,9 @@ A native tool runs inside the model provider. The agent records its calls and re
 | `ExternalWebAccess` | Allow or forbid live web access where supported. `nil` uses the provider default. |
 | `Optional` | Omit the tool instead of failing when the selected provider does not support it. |
 
-Providers support different subsets of these fields. OpenAI Responses currently sends context size, location, allowed domains, and external web access. Unsupported portable fields are left out of its request.
+Providers support different subsets of these fields. OpenAI Responses sends context size, location, allowed domains, and external web access. Gemini currently sends only the native `googleSearch` declaration. Unsupported portable fields are left out of each request.
+
+Gemini 3 can combine provider-native tools with function tools. Earlier Gemini models reject that combination before the HTTP request. Grounded Gemini responses retain complete `grounding_metadata` provider details while exposing search queries and returned web sources through normalized native-tool parts.
 
 A required native tool fails before the provider request when the selected model adapter cannot render it. This prevents silent behavior changes. Set `Optional` only when your application has another valid path.
 

@@ -15,6 +15,13 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/google"
 )
 
+type unsupportedNativeTool struct{ optional bool }
+
+func (tool unsupportedNativeTool) Kind() string                   { return "unsupported" }
+func (tool unsupportedNativeTool) UniqueID() string               { return "unsupported" }
+func (tool unsupportedNativeTool) IsOptional() bool               { return tool.optional }
+func (tool unsupportedNativeTool) CloneNativeTool() ai.NativeTool { return tool }
+
 func newServer(t *testing.T, handler http.HandlerFunc) *google.Model {
 	t.Helper()
 	return newNamedServer(t, "gemini-2.5-flash", handler)
@@ -37,7 +44,7 @@ func TestGoogleCountTokensByTransport(t *testing.T) {
 		t.Run(string(transport), func(t *testing.T) {
 			var body map[string]any
 			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-				if request.URL.Path != "/models/gemini:countTokens" || request.Header.Get("x-goog-api-key") != "key" {
+				if request.URL.Path != "/models/gemini-3:countTokens" || request.Header.Get("x-goog-api-key") != "key" {
 					t.Errorf("unexpected token count request: %s headers=%v", request.URL.String(), request.Header)
 				}
 				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
@@ -46,7 +53,7 @@ func TestGoogleCountTokensByTransport(t *testing.T) {
 				_, _ = response.Write([]byte(`{"totalTokens":23}`))
 			}))
 			defer server.Close()
-			model := google.NewModel("gemini", google.WithProvider(google.ProviderConfig{
+			model := google.NewModel("gemini-3", google.WithProvider(google.ProviderConfig{
 				Transport: transport, Name: "custom", BaseURL: server.URL, APIKey: "key", HTTPClient: server.Client(),
 			}))
 			usage, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{
@@ -54,6 +61,7 @@ func TestGoogleCountTokensByTransport(t *testing.T) {
 			}}, ai.ModelRequestParams{
 				Instructions: "Be brief.",
 				Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+				NativeTools:  []ai.NativeTool{ai.WebSearchTool{}},
 				Settings:     ai.ModelSettings{ExtraHeaders: map[string]string{"X-Test": "value"}},
 			})
 			if err != nil {
@@ -70,6 +78,12 @@ func TestGoogleCountTokensByTransport(t *testing.T) {
 			if transport == google.TransportVertexAI &&
 				(!hasSystem || !hasTools || body["generationConfig"] == nil || body["toolConfig"] != nil) {
 				t.Fatalf("Vertex count has invalid generation context: %v", body)
+			}
+			if transport == google.TransportVertexAI {
+				tools := body["tools"].([]any)
+				if len(tools) != 2 || tools[0].(map[string]any)["googleSearch"] == nil {
+					t.Fatalf("Vertex count omitted native tools: %#v", tools)
+				}
 			}
 			if transport == google.TransportGeminiAPI && (hasSystem || hasTools) {
 				t.Fatalf("Gemini API count included unsupported context: %v", body)
@@ -612,18 +626,85 @@ func TestRetryAndSystemParts(t *testing.T) {
 	}
 }
 
+func TestGoogleWebSearchGroundingMetadata(t *testing.T) {
+	responses := []string{
+		`{
+			"responseId":"response","modelVersion":"gemini-3-flash","candidates":[{
+				"content":{"parts":[{"text":"answer"}]},"finishReason":"STOP",
+				"groundingMetadata":{
+					"webSearchQueries":[1,"Go news"],
+					"groundingChunks":[1,{}, {"web":{"uri":"https://go.dev/blog","title":"Go Blog"}}]
+				}
+			}]
+		}`,
+		`{"candidates":[{"content":{"parts":[{"text":"answer"}]},"groundingMetadata":{"webSearchQueries":["query"]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"text":"answer"}]},"groundingMetadata":{"webSearchQueries":[1]}}]}`,
+	}
+	index := 0
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(responses[index]))
+		index++
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Timestamp.IsZero() || len(response.Parts) != 3 ||
+		response.ProviderDetails["grounding_metadata"] == nil {
+		t.Fatalf("unexpected grounded response: %+v", response)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	results := returned.Content.([]map[string]any)
+	if call.ToolKind != ai.ToolPartKindWebSearch || call.ToolCallID != "response:web_search" ||
+		string(call.Args) != `{"queries":["Go news"]}` || returned.ToolCallID != call.ToolCallID ||
+		returned.Timestamp != response.Timestamp || len(results) != 1 || results[0]["title"] != "Go Blog" {
+		t.Fatalf("unexpected grounded tool parts: call=%+v return=%+v", call, returned)
+	}
+	response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	results = response.Parts[1].(ai.NativeToolReturnPart).Content.([]map[string]any)
+	if response.Parts[0].(ai.NativeToolCallPart).ToolCallID != "web_search" || len(results) != 0 {
+		t.Fatalf("unexpected grounding without response ID or chunks: %#v", response.Parts)
+	}
+	response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 1 {
+		t.Fatalf("non-string search queries produced native parts: %#v", response.Parts)
+	}
+}
+
 func TestErrors(t *testing.T) {
 	t.Run("native tools", func(t *testing.T) {
-		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		var body map[string]any
+		handler := func(w http.ResponseWriter, request *http.Request) {
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
 			_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
-		})
+		}
+		model := newServer(t, handler)
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
 			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
-		}); err == nil || !strings.Contains(err.Error(), `native tool "web_search" is not implemented`) {
+		}); err != nil {
+			t.Fatal(err)
+		}
+		tools := body["tools"].([]any)
+		if len(tools) != 1 || tools[0].(map[string]any)["googleSearch"] == nil ||
+			tools[0].(map[string]any)["functionDeclarations"] != nil {
+			t.Fatalf("unexpected Google web-search tool: %#v", tools)
+		}
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{unsupportedNativeTool{}},
+		}); err == nil || !strings.Contains(err.Error(), `native tool "unsupported" is not implemented`) {
 			t.Fatalf("unexpected native-tool error: %v", err)
 		}
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-			NativeTools: []ai.NativeTool{ai.WebSearchTool{Optional: true}},
+			NativeTools: []ai.NativeTool{unsupportedNativeTool{optional: true}},
 		}); err != nil {
 			t.Fatalf("optional native tool should be omitted: %v", err)
 		}
@@ -632,6 +713,21 @@ func TestErrors(t *testing.T) {
 			NativeTools: []ai.NativeTool{nilTool},
 		}); err == nil || !strings.Contains(err.Error(), "native tool must not be nil") {
 			t.Fatalf("unexpected nil native-tool error: %v", err)
+		}
+		combined := ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+			Tools:       []ai.ToolDefinition{{Name: "work", Schema: map[string]any{"type": "object"}}},
+		}
+		if _, err := model.Request(t.Context(), nil, combined); err == nil ||
+			!strings.Contains(err.Error(), "does not support function and native tools together") {
+			t.Fatalf("unexpected combined-tool error: %v", err)
+		}
+		gemini3 := newNamedServer(t, "gemini-3-flash", handler)
+		if _, err := gemini3.Request(t.Context(), nil, combined); err != nil {
+			t.Fatalf("Gemini 3 combined tools failed: %v", err)
+		}
+		if len(body["tools"].([]any)) != 2 {
+			t.Fatalf("Gemini 3 omitted combined tools: %#v", body["tools"])
 		}
 	})
 	t.Run("api error", func(t *testing.T) {

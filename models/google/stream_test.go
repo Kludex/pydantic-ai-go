@@ -40,6 +40,66 @@ func collectGoogleStream(
 	return events, nil
 }
 
+func TestGoogleStreamWebSearchGroundingMetadata(t *testing.T) {
+	grounding := `"groundingMetadata":{"webSearchQueries":["Go news"],"groundingChunks":[{"web":{"uri":"https://go.dev","title":"Go"}}]}`
+	model := newServer(t, googleSSE(t, []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"first"}]},` + grounding + `}]}`,
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"second"}]},` + grounding + `}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":2}}`,
+	}))
+	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var starts, deltas, returns int
+	var returned ai.NativeToolReturnEvent
+	var finish ai.FinishEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			if event.Native && event.ToolKind == ai.ToolPartKindWebSearch {
+				starts++
+			}
+		case ai.ToolCallDeltaEvent:
+			if strings.Contains(event.ArgsDelta, "Go news") {
+				deltas++
+			}
+		case ai.NativeToolReturnEvent:
+			returns++
+			returned = event
+		case ai.FinishEvent:
+			finish = event
+		}
+	}
+	if starts != 1 || deltas != 1 || returns != 1 || returned.Part.Timestamp.IsZero() ||
+		returned.Part.Content.([]map[string]any)[0]["title"] != "Go" ||
+		finish.ProviderDetails["grounding_metadata"] == nil {
+		t.Fatalf("unexpected streamed grounding events: %#v", events)
+	}
+}
+
+func TestGoogleStreamWebSearchConsumerBreak(t *testing.T) {
+	model := newServer(t, googleSSE(t, []string{
+		`{"responseId":"response","candidates":[{"groundingMetadata":{"webSearchQueries":["query"]}}]}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen++
+		break
+	}
+	if seen != 1 {
+		t.Fatalf("stream yielded %d events before break", seen)
+	}
+}
+
 func normalizedGoogleText(event ai.StreamEvent) string {
 	switch event := event.(type) {
 	case ai.PartStartEvent:

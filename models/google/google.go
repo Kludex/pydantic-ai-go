@@ -12,6 +12,7 @@ import (
 	"os"
 	"reflect"
 	"strings"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	jsonschema "github.com/Kludex/pydantic-ai-go/internal/schema"
@@ -275,7 +276,8 @@ type functionResponse struct {
 }
 
 type toolsParam struct {
-	FunctionDeclarations []functionDeclaration `json:"functionDeclarations"`
+	FunctionDeclarations []functionDeclaration `json:"functionDeclarations,omitempty"`
+	GoogleSearch         *struct{}             `json:"googleSearch,omitempty"`
 }
 
 type functionDeclaration struct {
@@ -312,16 +314,34 @@ type thinkingConfig struct {
 	ThinkingLevel   string `json:"thinkingLevel,omitempty"`
 }
 
-func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
-	for _, nativeTool := range params.NativeTools {
+func googleNativeTools(nativeTools []ai.NativeTool) ([]toolsParam, error) {
+	var tools []toolsParam
+	for _, nativeTool := range nativeTools {
 		if nativeTool == nil || (reflect.ValueOf(nativeTool).Kind() == reflect.Pointer && reflect.ValueOf(nativeTool).IsNil()) {
 			return nil, fmt.Errorf("google: native tool must not be nil")
 		}
-		if !nativeTool.IsOptional() {
-			return nil, fmt.Errorf("google: native tool %q is not implemented", nativeTool.Kind())
+		switch nativeTool.(type) {
+		case ai.WebSearchTool, *ai.WebSearchTool:
+			tools = append(tools, toolsParam{GoogleSearch: &struct{}{}})
+		default:
+			if !nativeTool.IsOptional() {
+				return nil, fmt.Errorf("google: native tool %q is not implemented", nativeTool.Kind())
+			}
 		}
 	}
-	req := &generateRequest{}
+	return tools, nil
+}
+
+func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
+	nativeTools, err := googleNativeTools(params.NativeTools)
+	if err != nil {
+		return nil, err
+	}
+	if len(nativeTools) > 0 && (len(params.Tools) > 0 || params.OutputTool != nil) &&
+		!strings.Contains(strings.ToLower(m.name), "gemini-3") {
+		return nil, fmt.Errorf("google: model %q does not support function and native tools together", m.name)
+	}
+	req := &generateRequest{Tools: nativeTools}
 	if params.Instructions != "" {
 		req.SystemInstruction = &content{Parts: []part{{Text: params.Instructions}}}
 	}
@@ -388,7 +408,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.GenerationConfig.ResponseSchema = transformSchema(params.OutputSchema)
 	}
 	if len(declarations) > 0 {
-		req.Tools = []toolsParam{{FunctionDeclarations: declarations}}
+		req.Tools = append(req.Tools, toolsParam{FunctionDeclarations: declarations})
 	}
 	return req, nil
 }
@@ -634,10 +654,11 @@ type generateResponse struct {
 		Content struct {
 			Parts []part `json:"parts"`
 		} `json:"content"`
-		FinishReason   string           `json:"finishReason"`
-		SafetyRatings  []map[string]any `json:"safetyRatings"`
-		LogprobsResult map[string]any   `json:"logprobsResult"`
-		AvgLogprobs    *float64         `json:"avgLogprobs"`
+		FinishReason      string           `json:"finishReason"`
+		SafetyRatings     []map[string]any `json:"safetyRatings"`
+		LogprobsResult    map[string]any   `json:"logprobsResult"`
+		AvgLogprobs       *float64         `json:"avgLogprobs"`
+		GroundingMetadata map[string]any   `json:"groundingMetadata"`
 	} `json:"candidates"`
 	PromptFeedback struct {
 		BlockReason        string           `json:"blockReason"`
@@ -724,6 +745,54 @@ func googleFinishReason(reason string) ai.FinishReason {
 	}[reason]
 }
 
+func googleWebSearchParts(
+	metadata map[string]any, responseID, providerName string, timestamp time.Time,
+) (*ai.NativeToolCallPart, *ai.NativeToolReturnPart) {
+	rawQueries, ok := metadata["webSearchQueries"].([]any)
+	if !ok || len(rawQueries) == 0 {
+		return nil, nil
+	}
+	queries := make([]string, 0, len(rawQueries))
+	for _, rawQuery := range rawQueries {
+		if query, ok := rawQuery.(string); ok {
+			queries = append(queries, query)
+		}
+	}
+	if len(queries) == 0 {
+		return nil, nil
+	}
+	args, _ := json.Marshal(map[string]any{"queries": queries})
+	var results []map[string]any
+	if chunks, ok := metadata["groundingChunks"].([]any); ok {
+		for _, rawChunk := range chunks {
+			chunk, ok := rawChunk.(map[string]any)
+			if !ok {
+				continue
+			}
+			web, ok := chunk["web"].(map[string]any)
+			if !ok {
+				continue
+			}
+			result := make(map[string]any, len(web))
+			for key, value := range web {
+				result[key] = value
+			}
+			results = append(results, result)
+		}
+	}
+	callID := responseID + ":web_search"
+	if responseID == "" {
+		callID = "web_search"
+	}
+	return &ai.NativeToolCallPart{
+			ToolName: "web_search", ToolCallID: callID, ToolKind: ai.ToolPartKindWebSearch,
+			Args: args, ProviderName: providerName,
+		}, &ai.NativeToolReturnPart{
+			ToolName: "web_search", ToolCallID: callID, ToolKind: ai.ToolPartKindWebSearch,
+			Content: results, Timestamp: timestamp, ProviderName: providerName,
+		}
+}
+
 func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) {
 	var gr generateResponse
 	if err := json.Unmarshal(data, &gr); err != nil {
@@ -759,13 +828,21 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 	if gr.Candidates[0].AvgLogprobs != nil {
 		providerDetails["avg_logprobs"] = *gr.Candidates[0].AvgLogprobs
 	}
+	if gr.Candidates[0].GroundingMetadata != nil {
+		providerDetails["grounding_metadata"] = gr.Candidates[0].GroundingMetadata
+	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil
 	}
 	resp := &ai.ModelResponse{
-		ModelName: gr.ModelVersion, Usage: gr.UsageMetadata.usage(),
+		ModelName: gr.ModelVersion, Usage: gr.UsageMetadata.usage(), Timestamp: time.Now().UTC(),
 		ProviderDetails: providerDetails, ProviderResponseID: gr.ResponseID,
 		FinishReason: googleFinishReason(gr.Candidates[0].FinishReason), State: ai.ModelResponseStateComplete,
+	}
+	if call, returned := googleWebSearchParts(
+		gr.Candidates[0].GroundingMetadata, gr.ResponseID, providerName, resp.Timestamp,
+	); call != nil {
+		resp.Parts = append(resp.Parts, *call, *returned)
 	}
 	for _, p := range gr.Candidates[0].Content.Parts {
 		partProviderName, providerDetails := googlePartMetadata(p.ThoughtSignature, providerName)

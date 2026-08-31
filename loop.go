@@ -1962,6 +1962,7 @@ func (r *run[Deps, Output]) compileCurrentSchemas(params ModelRequestParams) err
 func cloneToolDefinition(def ToolDefinition) ToolDefinition {
 	def.Schema = cloneSchemaMap(def.Schema)
 	def.ReturnSchema = cloneSchemaMap(def.ReturnSchema)
+	def.IncludeReturnSchema = clonePointer(def.IncludeReturnSchema)
 	def.Metadata = cloneSchemaMap(def.Metadata)
 	def.ApprovalMetadata = cloneSchemaMap(def.ApprovalMetadata)
 	if def.Strict != nil {

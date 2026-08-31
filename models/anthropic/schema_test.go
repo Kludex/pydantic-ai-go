@@ -11,6 +11,46 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
 )
 
+func TestAnthropicToolReturnSchemaDescriptionFallback(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		tool := body["tools"].([]any)[0].(map[string]any)
+		want := "Lookup.\n\nReturn schema:\n\n{\n  \"type\": \"string\"\n}"
+		if tool["description"] != want {
+			t.Errorf("unexpected return schema description: %q", tool["description"])
+		}
+		_, _ = response.Write([]byte(`{
+			"model":"claude","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"done"}],
+			"usage":{"input_tokens":1,"output_tokens":1}
+		}`))
+	}))
+	defer server.Close()
+	included := true
+	model := anthropic.NewModel(
+		"claude", anthropic.WithBaseURL(server.URL), anthropic.WithAPIKey("key"),
+		anthropic.WithHTTPClient(server.Client()),
+	)
+	definition := ai.ToolDefinition{
+		Name: "lookup", Description: "Lookup.", Schema: map[string]any{"type": "object"},
+		ReturnSchema: map[string]any{"type": "string"}, IncludeReturnSchema: &included,
+	}
+	if _, err := model.Request(
+		t.Context(), nil, ai.ModelRequestParams{Tools: []ai.ToolDefinition{definition}},
+	); err != nil {
+		t.Fatal(err)
+	}
+	definition.ReturnSchema = map[string]any{"bad": make(chan struct{})}
+	if _, err := model.Request(
+		t.Context(), nil, ai.ModelRequestParams{Tools: []ai.ToolDefinition{definition}},
+	); err == nil || !strings.Contains(err.Error(), "marshal return schema") {
+		t.Fatalf("unexpected return schema error: %v", err)
+	}
+}
+
 func TestAnthropicStrictToolProfile(t *testing.T) {
 	tests := []struct {
 		name      string

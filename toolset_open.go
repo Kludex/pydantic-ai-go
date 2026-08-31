@@ -68,6 +68,12 @@ func openWrappedToolset[Deps any](
 			wrapper.toolset = toolset
 			return wrapper
 		}
+	case returnSchemaToolset[Deps]:
+		wrapped = wrapper.toolset
+		replace = func(toolset Toolset[Deps]) Toolset[Deps] {
+			wrapper.toolset = toolset
+			return wrapper
+		}
 	case defaultedToolset[Deps]:
 		wrapped = wrapper.toolset
 		replace = func(toolset Toolset[Deps]) Toolset[Deps] {

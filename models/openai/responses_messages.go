@@ -55,6 +55,10 @@ func trimOpenAICompactionMessages(messages []ai.ModelMessage, providerNames ...s
 }
 
 func prepareResponsesFunctionTool(definition ai.ToolDefinition, strictSupport bool) (responsesTool, error) {
+	definition, err := ai.PrepareToolReturnSchema(definition, false)
+	if err != nil {
+		return responsesTool{}, err
+	}
 	schema, strict, err := prepareOpenAITool(definition, strictSupport)
 	if err != nil {
 		return responsesTool{}, err

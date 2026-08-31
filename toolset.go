@@ -106,6 +106,12 @@ func PrepareToolset[Deps any](toolset Toolset[Deps], prepare ToolsPrepareFunc[De
 	return preparedToolset[Deps]{toolset: toolset, prepare: prepare}
 }
 
+// WithToolReturnSchemas includes return schemas for wrapped tools unless a
+// tool explicitly opts out with WithReturnSchemaIncluded(false).
+func WithToolReturnSchemas[Deps any](toolset Toolset[Deps]) Toolset[Deps] {
+	return returnSchemaToolset[Deps]{toolset: toolset}
+}
+
 // DeferLoadingToolset hides all wrapped tools, or the selected names, until
 // another tool reveals them through ToolReturn.Tools.
 func DeferLoadingToolset[Deps any](toolset Toolset[Deps], names ...string) Toolset[Deps] {
@@ -392,6 +398,34 @@ func (t preparedToolset[Deps]) ToolsetInstructions(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]InstructionPart, error) {
 	return resolveToolsetInstructions(ctx, rc, t.toolset)
+}
+
+type returnSchemaToolset[Deps any] struct {
+	toolset Toolset[Deps]
+}
+
+func (returnSchemaToolset[Deps]) relaysToolsetInstructions() {}
+
+func (toolset returnSchemaToolset[Deps]) Tools(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]Tool[Deps], error) {
+	tools, err := resolveToolsetTools(ctx, rc, toolset.toolset)
+	if err != nil {
+		return nil, err
+	}
+	for index := range tools {
+		if tools[index].entry.def.IncludeReturnSchema == nil {
+			included := true
+			tools[index].entry.def.IncludeReturnSchema = &included
+		}
+	}
+	return tools, nil
+}
+
+func (toolset returnSchemaToolset[Deps]) ToolsetInstructions(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]InstructionPart, error) {
+	return resolveToolsetInstructions(ctx, rc, toolset.toolset)
 }
 
 type defaultedToolset[Deps any] struct {

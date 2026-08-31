@@ -51,6 +51,10 @@ func wrappedToolsetForRun[Deps any](
 		resolved, err := toolsetForRun(ctx, rc, wrapper.toolset)
 		wrapper.toolset = resolved
 		return wrapper, true, err
+	case returnSchemaToolset[Deps]:
+		resolved, err := toolsetForRun(ctx, rc, wrapper.toolset)
+		wrapper.toolset = resolved
+		return wrapper, true, err
 	case defaultedToolset[Deps]:
 		resolved, err := toolsetForRun(ctx, rc, wrapper.toolset)
 		wrapper.toolset = resolved
@@ -118,6 +122,10 @@ func wrappedToolsetForRunStep[Deps any](
 		wrapper.toolset = resolved
 		return wrapper, true, err
 	case preparedToolset[Deps]:
+		resolved, err := toolsetForRunStep(ctx, rc, wrapper.toolset)
+		wrapper.toolset = resolved
+		return wrapper, true, err
+	case returnSchemaToolset[Deps]:
 		resolved, err := toolsetForRunStep(ctx, rc, wrapper.toolset)
 		wrapper.toolset = resolved
 		return wrapper, true, err

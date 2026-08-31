@@ -89,7 +89,7 @@ Status:
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets; a deferred-but-hidden tool receives one free availability correction before later refusals charge its budget.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
-- [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
+- [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, return-schema, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
 - [x] `RequireApprovalToolset` wraps all or selected original names, and `RequireApprovalToolsetWhen` evaluates validated calls dynamically; both forward instructions and run/step/open/close lifecycle.
 - [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.
 - [x] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history.
@@ -202,7 +202,7 @@ Status:
 - [x] Prefix, rename, filter, prepare, combine, and set-tool-metadata helpers through composable toolsets.
 - [x] `ReinjectSystemPrompt` restores static, one-time, and dynamic legacy system prompts to request-only history snapshots, preserves authoritative existing prompts by default, strips untrusted prompts on demand, drops emptied requests, and leaves durable history unchanged.
 - [x] Central empty-response content-filter failures plus opt-in `RaiseContentFilterError` for partial/refusal responses, including provider-specific reason messages, complete interoperable response bodies, detached inspection, and ordinary or streamed runs.
-- [ ] Include selected function-tool return schemas in provider definitions, with explicit per-tool overrides and description fallback for providers without structured return-schema fields.
+- [x] `IncludeToolReturnSchemas`, `WithToolReturnSchemas`, selectors, and `WithReturnSchemaIncluded` advertise detached reflected or explicit return schemas. Gemini receives native `responseJsonSchema`; OpenAI Chat/Responses, Z.AI, Azure, and Anthropic receive stable JSON in descriptions. Explicit per-tool inclusion or omission wins.
 - [x] Shared in-process concurrency gates support context-aware admission, running/waiting/available metrics, optional bounded-queue backpressure, model wrappers that hold slots through stream consumption, and whole-run capability limits.
 
 ### Integrations
@@ -235,7 +235,7 @@ Status:
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
 - [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused instruction, output, provider, MCP, and OpenTelemetry guides cover stable source-qualified prompts, output functions and unions, OpenAI-compatible/Azure setup, shared-session lifecycle, direct protocol operations, privacy, format compatibility, and usage attribution. Dedicated multimodal and broader capability examples remain.
-- [~] Focused instruction, output, provider, MCP, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for broader capabilities, deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
+- [~] Focused instruction, output, provider, MCP, capability, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
@@ -250,4 +250,4 @@ Status:
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP shared sessions with task-extension-specific APIs; model-backed sampling, elicitation, current-protocol multi-round-trip input retries, OAuth transport attachment, and authorization guidance are complete.
 4. Extend upstream message fixtures as remaining persisted part types land.
-5. Add the remaining provider-native tools, richer content parts, provider metadata, tool return-schema advertisement, and OpenAI-compatible providers after completing Z.AI Chat Completions and content-filter handling.
+5. Add the remaining provider-native tools, richer content parts, provider metadata, and OpenAI-compatible providers; Z.AI Chat Completions, content-filter handling, system-prompt reinjection, and tool return-schema advertisement are complete.

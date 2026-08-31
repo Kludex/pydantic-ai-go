@@ -30,6 +30,33 @@ func newNamedServer(t *testing.T, name string, handler http.HandlerFunc, extra .
 	return google.NewModel(name, append(opts, extra...)...)
 }
 
+func TestGeminiNativeToolReturnSchema(t *testing.T) {
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		tools := body["tools"].([]any)
+		declarations := tools[0].(map[string]any)["functionDeclarations"].([]any)
+		declaration := declarations[0].(map[string]any)
+		responseSchema := declaration["responseJsonSchema"].(map[string]any)
+		if responseSchema["type"] != "string" || declaration["description"] != "Lookup." {
+			t.Errorf("unexpected native return schema: %v", declaration)
+		}
+		_, _ = response.Write([]byte(`{
+			"candidates":[{"content":{"parts":[{"text":"done"}]},"finishReason":"STOP"}]
+		}`))
+	})
+	included := true
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Tools: []ai.ToolDefinition{{
+		Name: "lookup", Description: "Lookup.", Schema: map[string]any{"type": "object"},
+		ReturnSchema: map[string]any{"type": "string"}, IncludeReturnSchema: &included,
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestDefaultSettingsAreDetached(t *testing.T) {
 	stop := []string{"stop"}
 	model := google.NewModel("gemini-test", google.WithDefaultSettings(ai.ModelSettings{

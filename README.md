@@ -272,7 +272,7 @@ func TestAgent(t *testing.T) {
 | Configure a provider or compatible endpoint | [Provider configuration](docs/providers.md) |
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |
-| Add middleware | `Capability` and its focused hook interfaces |
+| Add middleware | [`Capability` and its focused hook interfaces](docs/capabilities.md) |
 | Add OpenTelemetry | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |
 | Call a model without an agent | `RequestModel` or `StreamModel` |
 | Drive a run one event at a time | `AgentRun` |

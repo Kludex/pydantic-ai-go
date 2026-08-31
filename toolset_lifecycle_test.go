@@ -91,6 +91,7 @@ func TestToolsetRunStepAndResourceLifecycle(t *testing.T) {
 	) ([]ai.ToolDefinition, error) {
 		return definitions, nil
 	})
+	wrapped = ai.WithToolReturnSchemas(wrapped)
 	wrapped = ai.WithToolsetMaxRetries(wrapped, 2)
 	wrapped = ai.WithToolsetTimeout(wrapped, time.Second)
 	wrapped = ai.DeferLoadingToolset(wrapped, "missing")
@@ -116,7 +117,8 @@ func TestToolsetRunStepAndResourceLifecycle(t *testing.T) {
 			}
 		}
 		if remoteDefinition.Description != fmt.Sprintf("step %d", request) ||
-			remoteDefinition.ToolsetID != "remote" || ownedDefinition.ToolsetID != "owner" {
+			remoteDefinition.ToolsetID != "remote" || ownedDefinition.ToolsetID != "owner" ||
+			remoteDefinition.IncludeReturnSchema == nil || !*remoteDefinition.IncludeReturnSchema {
 			t.Fatalf(
 				"unexpected remote definitions on step %d: work=%+v owned=%+v",
 				request, remoteDefinition, ownedDefinition,

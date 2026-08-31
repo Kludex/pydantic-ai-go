@@ -435,6 +435,12 @@ func WithReturnSchema(returnSchema map[string]any) ToolOption {
 	return func(d *ToolDefinition) { d.ReturnSchema = cloneSchemaMap(returnSchema) }
 }
 
+// WithReturnSchemaIncluded explicitly includes or omits the tool's return
+// schema in provider definitions. The default is omitted.
+func WithReturnSchemaIncluded(included bool) ToolOption {
+	return func(definition *ToolDefinition) { definition.IncludeReturnSchema = &included }
+}
+
 // WithSequential makes a tool an execution barrier. Independent tools run
 // concurrently by default. Calls before this tool finish first, this tool
 // runs alone, and later calls start afterward.

@@ -213,6 +213,7 @@ type functionDeclaration struct {
 	Name                 string         `json:"name"`
 	Description          string         `json:"description,omitempty"`
 	ParametersJSONSchema map[string]any `json:"parametersJsonSchema,omitempty"`
+	ResponseJSONSchema   map[string]any `json:"responseJsonSchema,omitempty"`
 }
 
 type toolConfig struct {
@@ -501,10 +502,12 @@ func (model *Model) googleThoughtSignature(providerName string, details map[stri
 }
 
 func convertTool(def ai.ToolDefinition) functionDeclaration {
+	def, _ = ai.PrepareToolReturnSchema(def, true)
 	return functionDeclaration{
 		Name:                 def.Name,
 		Description:          def.Description,
 		ParametersJSONSchema: transformSchema(def.Schema),
+		ResponseJSONSchema:   transformSchema(def.ReturnSchema),
 	}
 }
 

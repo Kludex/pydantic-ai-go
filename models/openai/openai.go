@@ -492,6 +492,10 @@ func (model *Model) convertResponse(m ai.ModelResponse) []chatMessage {
 }
 
 func convertTool(def ai.ToolDefinition, supportsStrict bool) (chatTool, error) {
+	def, err := ai.PrepareToolReturnSchema(def, false)
+	if err != nil {
+		return chatTool{}, err
+	}
 	schema, strict, err := prepareOpenAITool(def, supportsStrict)
 	if err != nil {
 		return chatTool{}, err

@@ -342,8 +342,10 @@ type ToolDefinition struct {
 	Description string         `json:"description,omitempty"`
 	Schema      map[string]any `json:"parameters_json_schema"`
 	// ReturnSchema describes the tool value for discovery and dynamic clients.
-	// It is local metadata and is not sent to providers.
 	ReturnSchema map[string]any `json:"-"`
+	// IncludeReturnSchema controls whether ReturnSchema is sent to the model.
+	// Nil defaults to false unless a capability or toolset enables it.
+	IncludeReturnSchema *bool `json:"-"`
 	// Sequential makes this tool an execution barrier. Calls before it
 	// finish first; the tool then runs alone; later calls start afterward.
 	Sequential bool `json:"-"`

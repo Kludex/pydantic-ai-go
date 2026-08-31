@@ -60,6 +60,63 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 	}
 }
 
+func TestOpenAIToolReturnSchemaDescriptionFallback(t *testing.T) {
+	var descriptions []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		tools := body["tools"].([]any)
+		tool := tools[0].(map[string]any)
+		description, _ := tool["description"].(string)
+		if function, ok := tool["function"].(map[string]any); ok {
+			description, _ = function["description"].(string)
+		}
+		descriptions = append(descriptions, description)
+		if strings.HasSuffix(request.URL.Path, "/responses") {
+			_, _ = io.WriteString(response, `{
+				"id":"response","model":"model","status":"completed",
+				"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]
+			}`)
+			return
+		}
+		_, _ = io.WriteString(response, `{
+			"model":"model","choices":[{"message":{"content":"done"},"finish_reason":"stop"}]
+		}`)
+	}))
+	defer server.Close()
+	included := true
+	definition := ai.ToolDefinition{
+		Name: "lookup", Description: "Lookup.", Schema: map[string]any{"type": "object"},
+		ReturnSchema: map[string]any{"type": "string"}, IncludeReturnSchema: &included,
+	}
+	provider := openai.ProviderConfig{Name: "compatible", BaseURL: server.URL, HTTPClient: server.Client()}
+	models := []ai.Model{
+		openai.NewModel("model", openai.WithProvider(provider)),
+		openai.NewResponsesModel("model", openai.WithProvider(provider)),
+	}
+	for _, model := range models {
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Tools: []ai.ToolDefinition{definition}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, description := range descriptions {
+		if description != "Lookup.\n\nReturn schema:\n\n{\n  \"type\": \"string\"\n}" {
+			t.Fatalf("unexpected return schema description: %q", description)
+		}
+	}
+	invalid := definition
+	invalid.ReturnSchema = map[string]any{"bad": make(chan struct{})}
+	for _, model := range models {
+		if _, err := model.Request(
+			t.Context(), nil, ai.ModelRequestParams{Tools: []ai.ToolDefinition{invalid}},
+		); err == nil || !strings.Contains(err.Error(), "marshal return schema") {
+			t.Fatalf("unexpected return schema error: %v", err)
+		}
+	}
+}
+
 func TestOpenAIChatCompatibility(t *testing.T) {
 	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

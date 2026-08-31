@@ -25,6 +25,10 @@ var anthropicStrictFormats = map[string]bool{
 func prepareAnthropicTool(
 	def ai.ToolDefinition, supportsStrict bool, warningHandler func(SchemaWarning),
 ) (toolParam, error) {
+	def, err := ai.PrepareToolReturnSchema(def, false)
+	if err != nil {
+		return toolParam{}, err
+	}
 	strict := def.Strict != nil && *def.Strict
 	schema := jsonschema.Transform(def.Schema, func(node map[string]any) {
 		delete(node, "title")

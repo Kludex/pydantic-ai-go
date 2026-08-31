@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"reflect"
 	"slices"
 	"strings"
 
@@ -377,11 +376,11 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 }
 
 func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]toolParam, error) {
+	if err := ai.ValidateNativeTools(nativeTools); err != nil {
+		return nil, fmt.Errorf("anthropic: native tools: %w", err)
+	}
 	var tools []toolParam
 	for _, nativeTool := range nativeTools {
-		if nativeTool == nil || (reflect.ValueOf(nativeTool).Kind() == reflect.Pointer && reflect.ValueOf(nativeTool).IsNil()) {
-			return nil, fmt.Errorf("anthropic: native tool must not be nil")
-		}
 		switch nativeTool := nativeTool.(type) {
 		case ai.WebSearchTool:
 			tools = append(tools, anthropicWebSearchTool(modelName, nativeTool))
@@ -397,6 +396,8 @@ func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]tool
 				version = "code_execution_20260120"
 			}
 			tools = append(tools, toolParam{Type: version, Name: "code_execution"})
+		case ai.MemoryTool, *ai.MemoryTool:
+			tools = append(tools, toolParam{Type: "memory_20250818", Name: "memory"})
 		default:
 			if nativeTool.IsOptional() {
 				continue
@@ -468,6 +469,19 @@ func anthropicSupportsDynamicFiltering(modelName string) bool {
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*messagesRequest, error) {
+	memoryEnabled := hasAnthropicMemoryTool(params.NativeTools)
+	if memoryEnabled {
+		memoryDefined := false
+		for _, tool := range params.Tools {
+			if tool.Name == "memory" {
+				memoryDefined = true
+				break
+			}
+		}
+		if !memoryDefined {
+			return nil, fmt.Errorf("anthropic: native memory requires a function tool named %q", "memory")
+		}
+	}
 	nativeTools, err := anthropicNativeTools(m.name, params.NativeTools)
 	if err != nil {
 		return nil, err
@@ -551,6 +565,9 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		}
 	}
 	for _, tool := range params.Tools {
+		if memoryEnabled && tool.Name == "memory" {
+			continue
+		}
 		if serverToolSearch && tool.Name == ai.ToolSearchName {
 			continue
 		}
@@ -608,6 +625,16 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")
 	}
 	return req, nil
+}
+
+func hasAnthropicMemoryTool(nativeTools []ai.NativeTool) bool {
+	for _, nativeTool := range nativeTools {
+		switch nativeTool.(type) {
+		case ai.MemoryTool, *ai.MemoryTool:
+			return true
+		}
+	}
+	return false
 }
 
 func anthropicContainerUploads(nativeTools []ai.NativeTool) []string {

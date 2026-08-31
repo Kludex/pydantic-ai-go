@@ -263,6 +263,24 @@ func (tool FileSearchTool) CloneNativeTool() NativeTool {
 	return tool
 }
 
+// MemoryTool asks a compatible provider to use an application-defined memory tool.
+// Providers may require a local function tool named "memory" to execute commands.
+type MemoryTool struct {
+	Optional bool
+}
+
+// Kind returns the stable native-tool discriminator.
+func (MemoryTool) Kind() string { return "memory" }
+
+// UniqueID identifies this native tool within one model request.
+func (MemoryTool) UniqueID() string { return "memory" }
+
+// IsOptional reports whether an unsupported model may omit the tool.
+func (tool MemoryTool) IsOptional() bool { return tool.Optional }
+
+// CloneNativeTool returns a detached definition.
+func (tool MemoryTool) CloneNativeTool() NativeTool { return tool }
+
 // WebFetchTool asks a compatible provider to retrieve content from URLs.
 type WebFetchTool struct {
 	MaxUses          int

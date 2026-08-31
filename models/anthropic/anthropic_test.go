@@ -1556,6 +1556,75 @@ func TestAnthropicServerManagedToolSearch(t *testing.T) {
 	}
 }
 
+func TestAnthropicMemoryTool(t *testing.T) {
+	requestCount := 0
+	var bodies []map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		requestCount++
+		if requestCount == 1 {
+			_, _ = response.Write([]byte(`{
+				"id":"message-memory","model":"claude-sonnet-4-6","stop_reason":"tool_use",
+				"content":[{"type":"tool_use","id":"memory-1","name":"memory","input":{"command":"view","path":"/memories"}}],
+				"usage":{}
+			}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"message-final","model":"claude-sonnet-4-6","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"Mexico City"}],"usage":{}
+		}`))
+	})
+	type memoryCommand struct {
+		Command string `json:"command"`
+		Path    string `json:"path"`
+	}
+	called := false
+	agent := ai.NewAgent[struct{}, string](model, ai.WithNativeTools(ai.MemoryTool{}))
+	ai.AddSimpleTool(agent, "memory", func(_ context.Context, command memoryCommand) (string, error) {
+		called = true
+		if command.Command != "view" || command.Path != "/memories" {
+			t.Fatalf("unexpected memory command: %+v", command)
+		}
+		return "The user lives in Mexico City.", nil
+	})
+	result, err := agent.Run(t.Context(), "Where do I live?", struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !called || result.Output != "Mexico City" || requestCount != 2 {
+		t.Fatalf("unexpected memory run: called=%v output=%q requests=%d", called, result.Output, requestCount)
+	}
+	for _, body := range bodies {
+		tools := body["tools"].([]any)
+		if len(tools) != 1 || tools[0].(map[string]any)["type"] != "memory_20250818" ||
+			tools[0].(map[string]any)["name"] != "memory" || tools[0].(map[string]any)["input_schema"] != nil {
+			t.Fatalf("unexpected native memory definition: %#v", tools)
+		}
+	}
+	secondMessages := bodies[1]["messages"].([]any)
+	toolResult := secondMessages[len(secondMessages)-1].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if toolResult["type"] != "tool_result" || toolResult["tool_use_id"] != "memory-1" {
+		t.Fatalf("unexpected memory result: %#v", toolResult)
+	}
+}
+
+func TestAnthropicMemoryToolRequiresFunction(t *testing.T) {
+	model := newServer(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("memory request was sent without a function implementation")
+	})
+	for _, native := range []ai.NativeTool{ai.MemoryTool{}, &ai.MemoryTool{}} {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{native}})
+		if err == nil || !strings.Contains(err.Error(), `requires a function tool named "memory"`) {
+			t.Fatalf("unexpected memory validation error: %v", err)
+		}
+	}
+}
+
 func TestAnthropicNativeToolSearchStrategies(t *testing.T) {
 	var body map[string]any
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {

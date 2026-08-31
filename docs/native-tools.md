@@ -206,6 +206,44 @@ Google sends the same IDs as Gemini file-search store names. Older Gemini respon
 
 `MaxNumResults`, `Instructions`, and `RetrievalMode` are portable fields reserved for providers that expose those controls. OpenAI and Google ignore them. xAI collections-search rendering remains provider-parity work.
 
+## Add client-managed memory
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+type MemoryCommand struct {
+	Command string `json:"command"`
+	Path    string `json:"path"`
+}
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-6"),
+		ai.WithNativeTools(ai.MemoryTool{}),
+	)
+	ai.AddSimpleTool(agent, "memory", func(_ context.Context, command MemoryCommand) (string, error) {
+		return fmt.Sprintf("execute %s on %s", command.Command, command.Path), nil
+	})
+
+	result, err := agent.Run(context.Background(), "Remember that I live in Mexico City.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Anthropic's memory declaration controls the command schema shown to the model. Your local function tool named `memory` owns storage and executes each command. This keeps persistence, authorization, tenancy, and deletion policy inside your application. A missing or deferred `memory` function fails before transport instead of advertising a tool that cannot run.
+
 ## Execute code
 
 ```go

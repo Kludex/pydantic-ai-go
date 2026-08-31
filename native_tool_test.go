@@ -110,6 +110,14 @@ func TestFileSearchToolIsDetached(t *testing.T) {
 	}
 }
 
+func TestMemoryToolIdentity(t *testing.T) {
+	tool := ai.MemoryTool{Optional: true}
+	if !tool.IsOptional() || tool.Kind() != "memory" || tool.UniqueID() != "memory" ||
+		tool.CloneNativeTool() != tool {
+		t.Fatalf("unexpected memory tool identity: %+v", tool)
+	}
+}
+
 func TestNativeToolsFromAgentRunAndCapability(t *testing.T) {
 	tests := map[string]func(*ai.Agent[struct{}, string]) []ai.RunOption{
 		"agent method": func(agent *ai.Agent[struct{}, string]) []ai.RunOption {

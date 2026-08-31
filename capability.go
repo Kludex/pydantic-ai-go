@@ -64,8 +64,8 @@ func (ri *RunInfo) Usage() Usage {
 	return usage
 }
 
-// Messages returns the conversation so far in this run.
-func (ri *RunInfo) Messages() []ModelMessage { return *ri.messages }
+// Messages returns a detached snapshot of the conversation so far.
+func (ri *RunInfo) Messages() []ModelMessage { return cloneModelMessages(*ri.messages) }
 
 // ModelRequestFunc continues the model-request chain.
 type ModelRequestFunc func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error)

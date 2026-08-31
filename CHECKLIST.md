@@ -170,7 +170,7 @@ Status:
 - [x] Setup contributions for static instructions, model settings, and raw tools.
 - [x] Run, model request, tool call, and dynamic instruction hooks.
 - [x] Ordered middleware composition; first capability is outermost.
-- [x] History processing can be expressed as model-request middleware.
+- [x] `HistoryProcessor` provides composable request-only history middleware with detached input/output snapshots and `RunInfo`; durable history replacement remains an explicit model-request hook action.
 - [x] Runs, prepared model requests, function-tool validation/execution, and output validation/processing have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Model hooks can detach snapshots, modify requests, switch models, recover errors, and request budgeted retries that preserve rejected responses. Tool and output hooks transform raw or typed values, recover ordinary errors, and preserve retry/failure control flow. Run wrappers can short-circuit, transform, or recover type-checked outcomes while cancellation remains terminal.
 - [x] Output validation/processing hooks cover raw structured repair, schema/decoding/semantic validation, final typed processing, wrapper and recovery composition, normal and early outputs, and streaming partial/final values.
 - [x] Audited upstream user-prompt/model-request/call-tools/end node lifecycles against the plain loop. Focused request, tool validation/execution, output, run-outcome, retry, deferred, and enqueue hooks cover semantic interception; public internal-node replacement remains intentionally excluded with the graph API.
@@ -187,7 +187,7 @@ Status:
 - [ ] MCP client capability and MCP toolset.
 - [ ] Web search, web fetch, X search, and provider-native tools.
 - [x] Portable thinking configuration through common model settings, including per-run and dynamic setting layers.
-- [~] Provider-neutral compaction boundaries, stateful OpenAI Responses/Anthropic compaction, OpenAI stateless message/custom triggers, direct compaction requests, durable history replacement, and usage-limit accounting are complete. Reusable token-based history processors, model-wrapper unwrapping, dedicated compaction tracing, and provider-neutral summarization helpers remain.
+- [~] Provider-neutral compaction boundaries, composable message history processors, stateful OpenAI Responses/Anthropic compaction, OpenAI stateless message/custom triggers, direct compaction requests, durable history replacement, and usage-limit accounting are complete. Token-based trimming, model-wrapper unwrapping, dedicated compaction tracing, and provider-neutral summarization helpers remain.
 - [~] Local tool search is available as a composable toolset; deferred capability loading remains.
 - [x] Prefix, rename, filter, prepare, combine, and set-tool-metadata helpers through composable toolsets.
 - [ ] Reinjected system prompts and content-filter error handling.
@@ -234,6 +234,6 @@ Status:
 1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
 2. Add transparent wrapper-capability composition without exposing graph internals; grouped composition and ordering constraints are complete.
 3. Add provider-managed search for Anthropic and OpenAI Responses; OpenAI Responses client search already uses native wire items in streaming and non-streaming requests.
-4. Add reusable token/message history processors and provider-neutral summarization helpers; provider-native compaction settings, triggering, mapping, trimming, visibility reset, and usage accounting are complete.
+4. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
 6. Extend upstream message fixtures as remaining persisted part types land.

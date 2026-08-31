@@ -118,6 +118,30 @@ func TestFallbackStreamingReplaysCompaction(t *testing.T) {
 	}
 }
 
+func TestStoppingFallbackCompactionUnwindsStream(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.CompactionPart{Content: "Summary."}, ai.TextPart{Content: "done"},
+		}}, nil
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event, ok := event.(ai.PartStartEvent); ok {
+			if _, compacted := event.Part.(ai.CompactionPart); compacted {
+				break
+			}
+		}
+	}
+	if stream.Result() != nil {
+		t.Fatalf("stopped compaction stream completed: %+v", stream.Result())
+	}
+}
+
 func TestDuplicateCompactionStreamIDIsRejected(t *testing.T) {
 	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
 		return []ai.ModelStreamEvent{

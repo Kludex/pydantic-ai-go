@@ -28,7 +28,7 @@ Status:
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
-- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, history, reusable tools/toolsets, and additive capabilities with setup contributions. Typed output specialization remains.
+- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode/tool configuration, usage limits, retry limits, history, reusable tools/toolsets, and additive capabilities with setup contributions. Typed output specialization remains.
 - [x] Typed agent/run and untyped capability model selectors run before every logical request with step, completed-history, prior-model, model-ID, deps, and usage context.
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
@@ -75,7 +75,7 @@ Status:
 - [x] Typed semantic argument validators run after JSON Schema validation and Go decoding but before execution for dependency-aware, simple, prepared, and raw-schema tools, with retry and terminal-failure semantics.
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
 - [x] Per-toolset retry and timeout defaults preserve explicit per-tool overrides.
-- [ ] Output-tool-specific retry overrides.
+- [x] Output-tool-specific retry overrides through `OutputToolConfig.MaxRetries`, including per-run output-tool configuration.
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
 - [x] Failed and interrupted tool returns use Anthropic error results and Gemini error responses.
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
@@ -150,7 +150,7 @@ Status:
 - [ ] Prompted JSON output fallback, including end-strategy handling.
 - [ ] Multiple output alternatives / union outputs.
 - [ ] Image and binary outputs.
-- [x] Output tool name, description, strict mode, and sequential execution-barrier configuration through `OutputToolConfig`.
+- [x] Output tool name, description, strict mode, sequential execution barrier, and independent retry configuration through `OutputToolConfig`, with per-run replacement.
 - [x] Output-tool definitions can be modified, renamed, or omitted from fresh copies before each request through `AddOutputToolPrepareFunc`.
 
 ## P1 - Capabilities and ecosystem

@@ -139,6 +139,14 @@ func (a *Agent[Deps, Output]) newRun(
 		validateRetryLimits(*cfg.retryLimits)
 		r.retryLimits = *cfg.retryLimits
 	}
+	r.outputTool = cloneOutputToolConfig(a.outputTool)
+	if cfg.outputTool != nil {
+		r.outputTool = cloneOutputToolConfig(*cfg.outputTool)
+	}
+	r.outputMaxRetries = r.retryLimits.Output
+	if r.outputTool.MaxRetries != nil {
+		r.outputMaxRetries = *r.outputTool.MaxRetries
+	}
 	for _, erased := range cfg.toolsets {
 		toolset, ok := erased.(Toolset[Deps])
 		if !ok {
@@ -202,7 +210,7 @@ func (a *Agent[Deps, Output]) newRun(
 	r.newMessages = len(r.messages)
 	settings := mergeModelSettings(a.settings, cfg.settings)
 	r.rc = &RunContext[Deps]{
-		Deps: deps, MaxRetries: r.retryLimits.Output, RunID: runID, ConversationID: conversationID,
+		Deps: deps, MaxRetries: r.outputMaxRetries, RunID: runID, ConversationID: conversationID,
 		Model: model, ModelSettings: settings, UsageLimits: limits,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, cancellation: cancellation,
 	}
@@ -217,7 +225,7 @@ func (a *Agent[Deps, Output]) newRun(
 	}
 	validateOutputMode(outputMode)
 	var err error
-	r.params, err = a.buildParams(r.staticInstructions, settings, outputMode, r.tools)
+	r.params, err = a.buildParams(r.staticInstructions, settings, outputMode, r.outputTool, r.tools)
 	if err != nil {
 		cancellation.finish()
 		return nil, err
@@ -459,6 +467,8 @@ type run[Deps, Output any] struct {
 	usage                  Usage
 	toolCalls              atomic.Int64
 	retryLimits            RetryLimits
+	outputTool             OutputToolConfig
+	outputMaxRetries       int
 	toolRetries            map[string]int
 	outputRetry            int
 	retriesMu              sync.Mutex
@@ -748,7 +758,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	params := r.params
 	rc := *r.rc
 	rc.Retry = r.outputRetryCount()
-	rc.MaxRetries = r.retryLimits.Output
+	rc.MaxRetries = r.outputMaxRetries
 	settings, err := r.prepareModelSettings(ctx, &rc)
 	if err != nil {
 		return ModelRequestParams{}, err
@@ -1659,7 +1669,7 @@ func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) {
 func (r *run[Deps, Output]) outputRunContext(toolCallID string) *RunContext[Deps] {
 	rc := *r.rc
 	rc.Retry = r.outputRetryCount()
-	rc.MaxRetries = r.retryLimits.Output
+	rc.MaxRetries = r.outputMaxRetries
 	rc.ToolCallID = toolCallID
 	return &rc
 }
@@ -1693,8 +1703,8 @@ func (r *run[Deps, Output]) countOutputRetry() error {
 	r.retriesMu.Lock()
 	defer r.retriesMu.Unlock()
 	r.outputRetry++
-	if r.outputRetry > r.retryLimits.Output {
-		return fmt.Errorf("%w: output exceeded %d retries", ErrMaxRetriesExceeded, r.retryLimits.Output)
+	if r.outputRetry > r.outputMaxRetries {
+		return fmt.Errorf("%w: output exceeded %d retries", ErrMaxRetriesExceeded, r.outputMaxRetries)
 	}
 	return nil
 }
@@ -1898,6 +1908,7 @@ func (a *Agent[Deps, Output]) buildParams(
 	instructionParts []InstructionPart,
 	settings ModelSettings,
 	outputMode OutputMode,
+	outputTool OutputToolConfig,
 	tools []toolEntry[Deps],
 ) (ModelRequestParams, error) {
 	instructions := make([]string, 0, len(instructionParts))
@@ -1924,17 +1935,17 @@ func (a *Agent[Deps, Output]) buildParams(
 		params.AllowText = true
 		return params, nil
 	}
-	name := a.outputTool.Name
+	name := outputTool.Name
 	if name == "" {
 		name = outputToolName
 	}
-	description := a.outputTool.Description
+	description := outputTool.Description
 	if description == "" {
 		description = "The final result of the run."
 	}
 	params.OutputTool = &ToolDefinition{
 		Name: name, Description: description, Schema: s,
-		Sequential: a.outputTool.Sequential, Strict: a.outputTool.Strict,
+		Sequential: outputTool.Sequential, Strict: outputTool.Strict,
 	}
 	return params, nil
 }

@@ -67,11 +67,8 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	a.settings = cfg.settings.Clone()
 	a.usageLimits = cfg.limits
 	a.outputMode = cfg.outputMode
-	a.outputTool = cfg.outputTool
-	if cfg.outputTool.Strict != nil {
-		strict := *cfg.outputTool.Strict
-		a.outputTool.Strict = &strict
-	}
+	a.outputTool = cloneOutputToolConfig(cfg.outputTool)
+	validateOutputToolConfig(a.outputTool)
 	validateOutputMode(a.outputMode)
 	if cfg.endStrategy != "" {
 		switch cfg.endStrategy {
@@ -361,6 +358,7 @@ type runConfig struct {
 	usageLimits       *UsageLimits
 	retryLimits       *RetryLimits
 	outputMode        *OutputMode
+	outputTool        *OutputToolConfig
 	modelID           string
 	runID             string
 	conversationID    *string
@@ -507,6 +505,25 @@ func WithRunUsageLimits(limits UsageLimits) RunOption {
 // WithRunOutputMode selects the structured-output mode for one run.
 func WithRunOutputMode(mode OutputMode) RunOption {
 	return func(c *runConfig) { c.outputMode = &mode }
+}
+
+// WithRunOutputTool customizes the structured output tool for one run.
+func WithRunOutputTool(outputTool OutputToolConfig) RunOption {
+	outputTool = cloneOutputToolConfig(outputTool)
+	validateOutputToolConfig(outputTool)
+	return func(c *runConfig) { c.outputTool = &outputTool }
+}
+
+func cloneOutputToolConfig(config OutputToolConfig) OutputToolConfig {
+	config.Strict = clonePointer(config.Strict)
+	config.MaxRetries = clonePointer(config.MaxRetries)
+	return config
+}
+
+func validateOutputToolConfig(config OutputToolConfig) {
+	if config.MaxRetries != nil && *config.MaxRetries < 0 {
+		panic(fmt.Sprintf("ai: output tool max retries must be non-negative, got %d", *config.MaxRetries))
+	}
 }
 
 func validateOutputMode(mode OutputMode) {

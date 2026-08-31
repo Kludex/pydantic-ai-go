@@ -3,6 +3,7 @@ package ai_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,6 +52,76 @@ func TestOutputToolConfigurationAndPreparation(t *testing.T) {
 	}
 	if result.Output != (weather{City: "Oslo", TempC: 3}) || request != 2 {
 		t.Fatalf("unexpected output result=%+v requests=%d", result.Output, request)
+	}
+}
+
+func TestOutputToolRetryOverride(t *testing.T) {
+	zero := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: params.OutputTool.Name, ToolCallID: "result", Args: []byte(`{"city":`),
+		}}}, nil
+	})
+	agent := ai.NewAgent[deps, weather](model,
+		ai.WithRetryLimits(ai.RetryLimits{Output: 5, Tools: 1}),
+		ai.WithOutputTool(ai.OutputToolConfig{MaxRetries: &zero}),
+	)
+	_, err := agent.Run(t.Context(), "weather", deps{})
+	if !errors.Is(err, ai.ErrMaxRetriesExceeded) || !strings.Contains(err.Error(), "output exceeded 0 retries") {
+		t.Fatalf("unexpected output retry error: %v", err)
+	}
+}
+
+func TestRunOutputToolConfiguration(t *testing.T) {
+	one := 1
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		if params.OutputTool.Name != "run_result" || params.OutputTool.Description != "Run result." {
+			t.Fatalf("run output tool config missing: %+v", params.OutputTool)
+		}
+		args := []byte(`{"city":`)
+		if request == 2 {
+			args = []byte(`{"city":"Oslo","temp_c":3}`)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: params.OutputTool.Name, ToolCallID: "result", Args: args,
+		}}}, nil
+	})
+	agent := ai.NewAgent[deps, weather](model, ai.WithRetryLimits(ai.RetryLimits{Output: 0, Tools: 1}))
+	option := ai.WithRunOutputTool(ai.OutputToolConfig{
+		Name: "run_result", Description: "Run result.", MaxRetries: &one,
+	})
+	one = 0
+	result, err := agent.Run(t.Context(), "weather", deps{}, option)
+	if err != nil || result.Output.TempC != 3 || request != 2 {
+		t.Fatalf("run output config failed: result=%+v requests=%d err=%v", result, request, err)
+	}
+}
+
+func TestOutputToolRetryValidation(t *testing.T) {
+	for name, build := range map[string]func(){
+		"agent": func() {
+			value := -1
+			ai.NewAgent[deps, weather](nil, ai.WithOutputTool(ai.OutputToolConfig{MaxRetries: &value}))
+		},
+		"run": func() {
+			value := -1
+			ai.WithRunOutputTool(ai.OutputToolConfig{MaxRetries: &value})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			build()
+		})
 	}
 }
 

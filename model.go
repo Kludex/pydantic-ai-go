@@ -172,6 +172,8 @@ type OutputToolConfig struct {
 	Description string
 	Sequential  bool
 	Strict      *bool
+	// MaxRetries overrides the run's output retry budget for this output tool.
+	MaxRetries *int
 }
 
 // ToolDefinition describes a tool to the model.

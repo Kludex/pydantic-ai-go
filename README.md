@@ -331,15 +331,17 @@ Customize the tool contract without changing the output type:
 
 ```go
 strict := true
+outputRetries := 2
 agent := ai.NewAgent[Deps, Weather](model, ai.WithOutputTool(ai.OutputToolConfig{
 	Name:        "weather_result",
 	Description: "Return the validated weather.",
 	Strict:      &strict,
 	Sequential:  true,
+	MaxRetries:  &outputRetries,
 }))
 ```
 
-Use `AddOutputToolPrepareFunc` to rename, modify, or omit a fresh output-tool definition before each model request. Preparation runs after model selection and dynamic settings.
+`MaxRetries` overrides the general output retry budget while leaving function-tool budgets unchanged. Use `WithRunOutputTool` to replace this configuration for one run. Use `AddOutputToolPrepareFunc` to rename, modify, or omit a fresh output-tool definition before each model request. Preparation runs after model selection and dynamic settings.
 
 ### Tool calls alongside output
 

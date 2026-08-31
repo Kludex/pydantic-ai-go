@@ -16,12 +16,13 @@ import (
 // ResponsesModel calls the OpenAI Responses API, the successor to Chat
 // Completions. Create one with NewResponsesModel.
 type ResponsesModel struct {
-	name              string
-	apiKey            string
-	baseURL           string
-	httpClient        *http.Client
-	strictToolSupport bool
-	defaultSettings   ai.ModelSettings
+	name                string
+	apiKey              string
+	baseURL             string
+	httpClient          *http.Client
+	strictToolSupport   bool
+	deferredToolSupport bool
+	defaultSettings     ai.ModelSettings
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
@@ -30,7 +31,8 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 	m := NewModel(name, opts...)
 	return &ResponsesModel{
 		name: m.name, apiKey: m.apiKey, baseURL: m.baseURL, httpClient: m.httpClient,
-		strictToolSupport: m.strictToolSupport, defaultSettings: m.defaultSettings,
+		strictToolSupport: m.strictToolSupport, deferredToolSupport: m.deferredToolSupport,
+		defaultSettings: m.defaultSettings,
 	}
 }
 
@@ -42,7 +44,7 @@ func (m *ResponsesModel) DefaultModelSettings() ai.ModelSettings { return m.defa
 
 // Request implements ai.Model.
 func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
-	payload, err := m.buildResponsesPayload(msgs, params)
+	payload, err := m.buildResponsesPayload(msgs, params, true)
 	if err != nil {
 		return nil, err
 	}
@@ -95,25 +97,32 @@ type responsesInput struct {
 	Role    string `json:"role,omitempty"`
 	Content string `json:"content,omitempty"`
 	// function_call and function_call_output items
-	Type             string `json:"type,omitempty"`
-	ID               string `json:"id,omitempty"`
-	CallID           string `json:"call_id,omitempty"`
-	Name             string `json:"name,omitempty"`
-	Arguments        string `json:"arguments,omitempty"`
-	Namespace        string `json:"namespace,omitempty"`
-	Output           string `json:"output,omitempty"`
-	EncryptedContent string `json:"encrypted_content,omitempty"`
+	Type             string          `json:"type,omitempty"`
+	ID               string          `json:"id,omitempty"`
+	CallID           string          `json:"call_id,omitempty"`
+	Name             string          `json:"name,omitempty"`
+	Arguments        any             `json:"arguments,omitempty"`
+	Namespace        string          `json:"namespace,omitempty"`
+	Output           string          `json:"output,omitempty"`
+	Execution        string          `json:"execution,omitempty"`
+	Status           string          `json:"status,omitempty"`
+	Tools            []responsesTool `json:"tools,omitempty"`
+	EncryptedContent string          `json:"encrypted_content,omitempty"`
 }
 
 type responsesTool struct {
-	Type        string         `json:"type"`
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	Parameters  map[string]any `json:"parameters"`
-	Strict      *bool          `json:"strict,omitempty"`
+	Type         string         `json:"type"`
+	Name         string         `json:"name,omitempty"`
+	Description  string         `json:"description,omitempty"`
+	Parameters   map[string]any `json:"parameters,omitempty"`
+	Strict       *bool          `json:"strict,omitempty"`
+	DeferLoading bool           `json:"defer_loading,omitempty"`
+	Execution    string         `json:"execution,omitempty"`
 }
 
-func (m *ResponsesModel) buildResponsesPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*responsesRequest, error) {
+func (m *ResponsesModel) buildResponsesPayload(
+	msgs []ai.ModelMessage, params ai.ModelRequestParams, nativeDeferred bool,
+) (*responsesRequest, error) {
 	req := &responsesRequest{
 		Model:        m.name,
 		Instructions: params.Instructions,
@@ -121,34 +130,73 @@ func (m *ResponsesModel) buildResponsesPayload(msgs []ai.ModelMessage, params ai
 		Temperature:  params.Settings.Temperature,
 		TopP:         params.Settings.TopP,
 	}
+	var searchTool *ai.ToolDefinition
+	if nativeDeferred && m.deferredToolSupport && len(params.DeferredTools) > 0 {
+		for _, tool := range params.Tools {
+			if tool.ToolKind == ai.ToolPartKindToolSearch && tool.Name == ai.ToolSearchName {
+				definition := tool
+				searchTool = &definition
+				break
+			}
+		}
+	}
+	deferred := make(map[string]ai.ToolDefinition, len(params.DeferredTools))
+	if searchTool != nil {
+		for _, tool := range params.DeferredTools {
+			deferred[tool.Name] = tool
+		}
+	}
+	converter := responsesMessageConverter{
+		clientToolSearch: searchTool != nil,
+		deferred:         deferred,
+		rendered:         make(map[string]struct{}),
+		strictSupport:    m.strictToolSupport,
+	}
 	for _, msg := range msgs {
-		items, err := convertResponsesMessage(msg)
+		items, err := converter.convert(msg)
 		if err != nil {
 			return nil, err
 		}
 		req.Input = append(req.Input, items...)
 	}
 	for _, tool := range params.Tools {
-		schema, strict, err := prepareOpenAITool(tool, m.strictToolSupport)
+		if searchTool != nil && (tool.Name == ai.ToolSearchName || tool.DeferLoading) {
+			continue
+		}
+		converted, err := prepareResponsesFunctionTool(tool, m.strictToolSupport)
 		if err != nil {
 			return nil, err
 		}
-		req.Tools = append(req.Tools, responsesTool{
-			Type: "function", Name: tool.Name, Description: tool.Description, Parameters: schema, Strict: strict,
-		})
+		req.Tools = append(req.Tools, converted)
+	}
+	if searchTool != nil {
+		for _, tool := range params.DeferredTools {
+			converted, err := prepareResponsesFunctionTool(tool, m.strictToolSupport)
+			if err != nil {
+				return nil, err
+			}
+			converted.DeferLoading = true
+			req.Tools = append(req.Tools, converted)
+		}
 	}
 	if params.OutputTool != nil {
-		schema, strict, err := prepareOpenAITool(*params.OutputTool, m.strictToolSupport)
+		converted, err := prepareResponsesFunctionTool(*params.OutputTool, m.strictToolSupport)
 		if err != nil {
 			return nil, err
 		}
-		req.Tools = append(req.Tools, responsesTool{
-			Type: "function", Name: params.OutputTool.Name, Description: params.OutputTool.Description,
-			Parameters: schema, Strict: strict,
-		})
+		req.Tools = append(req.Tools, converted)
 		if !params.AllowText {
 			req.ToolChoice = "required"
 		}
+	}
+	if searchTool != nil {
+		schema, _, err := prepareOpenAITool(*searchTool, m.strictToolSupport)
+		if err != nil {
+			return nil, err
+		}
+		req.Tools = append(req.Tools, responsesTool{
+			Type: "tool_search", Description: searchTool.Description, Parameters: schema, Execution: "client",
+		})
 	}
 	if len(req.Tools) > 0 {
 		req.ParallelToolCalls = params.Settings.ParallelToolCalls
@@ -157,81 +205,6 @@ func (m *ResponsesModel) buildResponsesPayload(msgs []ai.ModelMessage, params ai
 		return nil, fmt.Errorf("openai: the Responses model does not support native JSON output mode yet; use OutputModeTool")
 	}
 	return req, nil
-}
-
-func convertResponsesMessage(msg ai.ModelMessage) ([]responsesInput, error) {
-	switch m := msg.(type) {
-	case ai.ModelRequest:
-		return convertResponsesRequest(m)
-	case ai.ModelResponse:
-		return convertResponsesResponse(m), nil
-	default:
-		return nil, fmt.Errorf("openai: unknown message type %T", msg)
-	}
-}
-
-func convertResponsesRequest(m ai.ModelRequest) ([]responsesInput, error) {
-	var out []responsesInput
-	for _, p := range m.Parts {
-		switch part := p.(type) {
-		case ai.SystemPromptPart:
-			out = append(out, responsesInput{Role: "system", Content: part.Content})
-		case ai.UserPromptPart:
-			out = append(out, responsesInput{Role: "user", Content: part.Content})
-		case ai.ToolReturnPart:
-			content, err := contentString(part.Content)
-			if err != nil {
-				return nil, err
-			}
-			out = append(out, responsesInput{Type: "function_call_output", CallID: part.ToolCallID, Output: content})
-		case ai.ToolAvailabilityDeltaPart:
-		case ai.RetryPromptPart:
-			content := part.ModelResponse()
-			if part.ToolCallID != "" {
-				out = append(out, responsesInput{Type: "function_call_output", CallID: part.ToolCallID, Output: content})
-			} else {
-				out = append(out, responsesInput{Role: "user", Content: content})
-			}
-		default:
-			return nil, fmt.Errorf("openai: unknown request part type %T", p)
-		}
-	}
-	return out, nil
-}
-
-func convertResponsesResponse(m ai.ModelResponse) []responsesInput {
-	var out []responsesInput
-	for _, p := range m.Parts {
-		switch part := p.(type) {
-		case ai.TextPart:
-			id := ""
-			if part.ProviderName == "" || part.ProviderName == "openai" {
-				id = part.ID
-			}
-			out = append(out, responsesInput{Role: "assistant", Content: part.Content, ID: id})
-		case ai.ThinkingPart:
-			if (part.ProviderName == "" || part.ProviderName == "openai") &&
-				(part.ID != "" || part.Signature != "") {
-				out = append(out, responsesInput{
-					Type: "reasoning", ID: part.ID, EncryptedContent: part.Signature,
-				})
-			}
-		case ai.ToolCallPart:
-			id := ""
-			if part.ProviderName == "" || part.ProviderName == "openai" {
-				id = part.ID
-			}
-			namespace := ""
-			if part.ProviderName == "" || part.ProviderName == "openai" {
-				namespace, _ = part.ProviderDetails["namespace"].(string)
-			}
-			out = append(out, responsesInput{
-				Type: "function_call", ID: id, CallID: part.ToolCallID,
-				Name: part.ToolName, Arguments: string(part.Args), Namespace: namespace,
-			})
-		}
-	}
-	return out
 }
 
 type incompleteDetails struct {
@@ -252,11 +225,13 @@ type responsesResponse struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		CallID           string `json:"call_id"`
-		Name             string `json:"name"`
-		Arguments        string `json:"arguments"`
-		Namespace        string `json:"namespace"`
-		EncryptedContent string `json:"encrypted_content"`
+		CallID           string          `json:"call_id"`
+		Name             string          `json:"name"`
+		Arguments        json.RawMessage `json:"arguments"`
+		Namespace        string          `json:"namespace"`
+		Execution        string          `json:"execution"`
+		Status           string          `json:"status"`
+		EncryptedContent string          `json:"encrypted_content"`
 		Summary          []struct {
 			Text string `json:"text"`
 		} `json:"summary"`
@@ -353,13 +328,34 @@ func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
 				}
 			}
 		case "function_call":
+			arguments, err := normalizeResponsesArguments(item.Arguments)
+			if err != nil {
+				return nil, err
+			}
 			var providerDetails map[string]any
 			if item.Namespace != "" {
 				providerDetails = map[string]any{"namespace": item.Namespace}
 			}
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{
-				ToolName: item.Name, Args: json.RawMessage(item.Arguments), ToolCallID: item.CallID,
+				ToolName: item.Name, Args: arguments, ToolCallID: item.CallID,
 				ID: item.ID, ProviderName: "openai", ProviderDetails: providerDetails,
+			})
+		case "tool_search_call":
+			if item.Execution != "client" {
+				return nil, fmt.Errorf("openai: server-executed tool search is not supported yet")
+			}
+			arguments, err := normalizeResponsesArguments(item.Arguments)
+			if err != nil {
+				return nil, err
+			}
+			callID := item.CallID
+			if callID == "" {
+				callID = item.ID
+			}
+			resp.Parts = append(resp.Parts, ai.ToolCallPart{
+				ToolName: ai.ToolSearchName, Args: arguments, ToolCallID: callID,
+				ToolKind: ai.ToolPartKindToolSearch, ID: item.ID, ProviderName: "openai",
+				ProviderDetails: map[string]any{"execution": item.Execution, "status": item.Status},
 			})
 		case "reasoning":
 			if len(item.Summary) == 0 && item.EncryptedContent != "" {
@@ -379,6 +375,21 @@ func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
 		}
 	}
 	return resp, nil
+}
+
+func normalizeResponsesArguments(raw json.RawMessage) (json.RawMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage(`{}`), nil
+	}
+	if raw[0] != '"' {
+		return append(json.RawMessage(nil), raw...), nil
+	}
+	var arguments string
+	_ = json.Unmarshal(raw, &arguments)
+	if !json.Valid([]byte(arguments)) {
+		return nil, fmt.Errorf("openai: invalid response arguments %q", arguments)
+	}
+	return json.RawMessage(arguments), nil
 }
 
 var _ ai.Model = (*ResponsesModel)(nil)

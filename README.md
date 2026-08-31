@@ -251,7 +251,7 @@ agent.AddToolset(catalog)
 
 The wrapper exposes `search_tools`. Default search uses case-insensitive word overlap across tool names and descriptions, prioritizes undiscovered matches, and returns typed `ToolSearchResult` values. Set `ToolSearchConfig.Search` to use an external index. Custom search receives detached definitions and its unknown or duplicate names are ignored.
 
-Anthropic 4.5+ models advertise the hidden schemas with `defer_loading`, replay local search results as `tool_reference` blocks, and render other reveals as `tool_addition` blocks. This keeps the stable visible-tool prefix small without changing local execution safety. Use `anthropic.WithDeferredToolSupport(false)` for compatible endpoints that do not implement this wire protocol.
+Anthropic 4.5+ models advertise the hidden schemas with `defer_loading`, replay local search results as `tool_reference` blocks, and render other reveals as `tool_addition` blocks. OpenAI Responses does the same for non-streaming requests with client-executed `tool_search`, `tool_search_output`, and `additional_tools` items. This keeps the stable visible-tool prefix small without changing local execution safety. Streaming OpenAI Responses requests currently use the portable local-search fallback. Use each provider's `WithDeferredToolSupport(false)` option for compatible endpoints that do not implement its native wire protocol.
 
 Stateful toolsets can implement three small optional interfaces:
 

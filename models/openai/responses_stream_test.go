@@ -90,6 +90,34 @@ func TestResponsesStreamEvents(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamUsesPortableDeferredToolFallback(t *testing.T) {
+	var gotBody map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		sseHandler(t, []string{
+			`{"type":"response.completed","response":{"model":"gpt-5","status":"completed","usage":{}}}`,
+			`[DONE]`,
+		})(w, r)
+	})
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	_, err := collect(t, model, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{
+			Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch,
+		}},
+		DeferredTools: []ai.ToolDefinition{{Name: "hidden", Schema: schema, DeferLoading: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := gotBody["tools"].([]any)
+	if len(tools) != 1 || tools[0].(map[string]any)["type"] != "function" ||
+		tools[0].(map[string]any)["name"] != ai.ToolSearchName {
+		t.Fatalf("stream did not use local deferred fallback: %+v", tools)
+	}
+}
+
 func TestResponsesStreamConsumerBreakOnEncryptedReasoning(t *testing.T) {
 	model := newResponsesServer(t, sseHandler(t, []string{
 		`{"type":"response.output_item.added","item":{"id":"reason","type":"reasoning","encrypted_content":"signature"}}`,

@@ -302,7 +302,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		}
 		req.ToolAdditions = hasAnthropicToolAdditions(trimmedMessages, deferredNames)
 	}
-	req.Compaction = compaction
+	req.Compaction = compaction || hasCompactionEdit(params.Settings.ExtraBody)
 	if _, overridden := params.Settings.ExtraBody["context_management"]; compaction && !overridden {
 		req.ContextManagement = map[string]any{
 			"edits": []any{map[string]any{"type": "compact_20260112"}},

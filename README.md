@@ -746,7 +746,11 @@ agent := ai.NewAgent[Deps, string](fakes.NewTestModel())
 
 ## Interoperability
 
-Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. Text, thinking, tool-call, and compaction parts retain provider IDs and details. Compaction resets deferred-tool discoveries from the summarized window while later reveals remain active. OpenTelemetry spans follow the GenAI semantic conventions and are free unless you set a global tracer provider.
+Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. Text, thinking, tool-call, and compaction parts retain provider IDs and details.
+
+Use `openai.NewCompaction(openai.WithCompactionTokenThreshold(100_000))` with a Responses model. Use `anthropic.NewCompaction(...)` for Anthropic's input-token trigger, optional summary instructions, and pause-after-compaction behavior. Both are capabilities, so you can install them on an agent or one run. They preserve explicit context-management settings and reject the wrong model type. Compaction parts reset deferred-tool discoveries from the summarized window while later reveals remain active.
+
+OpenTelemetry spans follow the GenAI semantic conventions and are free unless you set a global tracer provider.
 
 ## Status
 

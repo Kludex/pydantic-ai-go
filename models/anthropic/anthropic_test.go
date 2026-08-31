@@ -18,6 +18,13 @@ import (
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
 )
 
+type unsupportedNativeTool struct{ optional bool }
+
+func (tool unsupportedNativeTool) Kind() string                   { return "unsupported" }
+func (tool unsupportedNativeTool) UniqueID() string               { return "unsupported" }
+func (tool unsupportedNativeTool) IsOptional() bool               { return tool.optional }
+func (tool unsupportedNativeTool) CloneNativeTool() ai.NativeTool { return tool }
+
 func newServer(t *testing.T, handler http.HandlerFunc) *anthropic.Model {
 	t.Helper()
 	return newServerWithOptions(t, handler)
@@ -56,6 +63,7 @@ func TestAnthropicCountTokens(t *testing.T) {
 	}}, ai.ModelRequestParams{
 		Instructions: "Be brief.",
 		Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		NativeTools:  []ai.NativeTool{ai.WebSearchTool{}},
 		Settings: ai.ModelSettings{
 			MaxTokens: 100, Temperature: &temperature, ParallelToolCalls: &parallel,
 			ExtraHeaders: map[string]string{"X-Test": "value"}, ExtraBody: map[string]any{"custom": true},
@@ -70,6 +78,11 @@ func TestAnthropicCountTokens(t *testing.T) {
 	if body["model"] != "claude-sonnet-4-5" || body["system"] != "Be brief." || body["custom"] != true ||
 		body["max_tokens"] != nil || body["temperature"] != nil {
 		t.Fatalf("unexpected token count body: %v", body)
+	}
+	tools := body["tools"].([]any)
+	if len(tools) != 2 || tools[0].(map[string]any)["type"] != "web_search_20250305" ||
+		tools[1].(map[string]any)["name"] != "lookup" {
+		t.Fatalf("token count omitted native or function tools: %#v", tools)
 	}
 }
 
@@ -718,14 +731,38 @@ func TestRetryAndSystemParts(t *testing.T) {
 
 func TestErrors(t *testing.T) {
 	t.Run("native tools", func(t *testing.T) {
-		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{"content":[]}`)) })
+		var body map[string]any
+		model := newServer(t, func(w http.ResponseWriter, request *http.Request) {
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+		})
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
-		}); err == nil || !strings.Contains(err.Error(), `native tool "web_search" is not implemented`) {
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{
+				UserLocation: &ai.WebSearchUserLocation{
+					City: "Paris", Country: "FR", Region: "IDF", Timezone: "Europe/Paris",
+				},
+				AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"example.com"}, MaxUses: 3,
+			}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		tool := body["tools"].([]any)[0].(map[string]any)
+		location := tool["user_location"].(map[string]any)
+		if tool["type"] != "web_search_20250305" || tool["name"] != "web_search" ||
+			tool["max_uses"] != float64(3) || tool["allowed_domains"].([]any)[0] != "go.dev" ||
+			tool["blocked_domains"].([]any)[0] != "example.com" || location["type"] != "approximate" ||
+			location["city"] != "Paris" {
+			t.Fatalf("unexpected Anthropic web-search tool: %#v", tool)
+		}
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{unsupportedNativeTool{}},
+		}); err == nil || !strings.Contains(err.Error(), `native tool "unsupported" is not implemented`) {
 			t.Fatalf("unexpected native-tool error: %v", err)
 		}
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-			NativeTools: []ai.NativeTool{ai.WebSearchTool{Optional: true}},
+			NativeTools: []ai.NativeTool{unsupportedNativeTool{optional: true}},
 		}); err != nil {
 			t.Fatalf("optional native tool should be omitted: %v", err)
 		}
@@ -1147,6 +1184,107 @@ func TestAnthropicCompactionContextManagementOverride(t *testing.T) {
 	if len(edits) != 1 || edits[0].(map[string]any)["type"] != "custom" ||
 		beta != "custom-beta,compact-2026-01-12" {
 		t.Fatalf("compaction overrides were replaced: body=%+v beta=%q", body, beta)
+	}
+}
+
+func TestAnthropicDynamicWebSearchVersion(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+	}))
+	defer server.Close()
+	model := anthropic.NewModel(
+		"claude-sonnet-4-6", anthropic.WithAPIKey("key"), anthropic.WithBaseURL(server.URL),
+		anthropic.WithHTTPClient(server.Client()),
+	)
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{&ai.WebSearchTool{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if tool := body["tools"].([]any)[0].(map[string]any); tool["type"] != "web_search_20260209" ||
+		tool["max_uses"] != nil || tool["user_location"] != nil {
+		t.Fatalf("unexpected dynamic web search tool: %#v", tool)
+	}
+}
+
+func TestAnthropicWebSearchResponseAndReplay(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"claude-sonnet-4-5","content":[
+				{"type":"server_tool_use","id":"web-1","name":"web_search","input":{"query":"Go news"},"caller":{"type":"code_execution_20250825"}},
+				{"type":"web_search_tool_result","tool_use_id":"web-1","content":[{"type":"web_search_result","url":"https://go.dev","title":"Go"}],"caller":{"type":"code_execution_20250825"}},
+				{"type":"text","text":"done"}
+			]
+		}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 3 {
+		t.Fatalf("unexpected web search response: %#v", response.Parts)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	results := returned.Content.([]any)
+	if call.ToolKind != ai.ToolPartKindWebSearch || call.ToolCallID != "web-1" ||
+		string(call.Args) != `{"query":"Go news"}` || call.ProviderDetails["anthropic_caller"] == nil ||
+		returned.ToolKind != ai.ToolPartKindWebSearch || returned.ToolCallID != "web-1" || len(results) != 1 ||
+		returned.ProviderDetails["anthropic_caller"] == nil {
+		t.Fatalf("unexpected normalized web search: call=%+v return=%+v", call, returned)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	content := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 3 || content[0].(map[string]any)["type"] != "server_tool_use" ||
+		content[0].(map[string]any)["name"] != "web_search" || content[0].(map[string]any)["caller"] == nil ||
+		content[1].(map[string]any)["type"] != "web_search_tool_result" ||
+		content[1].(map[string]any)["caller"] == nil {
+		t.Fatalf("unexpected web search replay: %#v", content)
+	}
+
+	history := ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{ToolName: "web_search", ToolCallID: "empty", ToolKind: ai.ToolPartKindWebSearch,
+			ProviderName: "anthropic"},
+		ai.NativeToolReturnPart{ToolName: "web_search", ToolCallID: "empty", ToolKind: ai.ToolPartKindWebSearch,
+			ProviderName: "anthropic", Content: nil},
+		ai.NativeToolCallPart{ToolName: "web_search", ToolKind: ai.ToolPartKindWebSearch, ProviderName: "other"},
+		ai.NativeToolReturnPart{ToolName: "web_search", ToolKind: ai.ToolPartKindWebSearch, ProviderName: "other"},
+	}}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{history}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	content = body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 2 || content[0].(map[string]any)["input"].(map[string]any) == nil {
+		t.Fatalf("unexpected empty or foreign web search replay: %#v", content)
+	}
+}
+
+func TestAnthropicWebSearchEmptyPayloads(t *testing.T) {
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"content":[
+			{"type":"server_tool_use","id":"web","name":"web_search","input":null,"caller":{"type":"direct"}},
+			{"type":"web_search_tool_result","tool_use_id":"web","caller":{"type":"direct"}}
+		]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if string(call.Args) != `{}` || call.ProviderDetails != nil || returned.Content != nil ||
+		returned.ProviderDetails != nil {
+		t.Fatalf("unexpected empty web-search parts: call=%+v return=%+v", call, returned)
 	}
 }
 

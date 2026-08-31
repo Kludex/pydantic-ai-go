@@ -336,6 +336,78 @@ func TestStreamEarlyBreak(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamWebSearch(t *testing.T) {
+	model := newServer(t, anthropicSSE(t, []string{
+		`{"type":"message_start","message":{"id":"response","model":"claude-sonnet-4-5","usage":{}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"web-1","name":"web_search","input":{},"caller":{"type":"code_execution_20250825"}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"Go news\"}"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"web_search_tool_result","tool_use_id":"web-1","content":[{"type":"web_search_result","url":"https://go.dev"}],"caller":{"type":"code_execution_20250825"}}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		`{"type":"message_stop"}`,
+	}))
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start ai.ToolCallStartEvent
+	var delta ai.ToolCallDeltaEvent
+	var returned ai.NativeToolReturnEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			start = event
+		case ai.ToolCallDeltaEvent:
+			delta = event
+		case ai.NativeToolReturnEvent:
+			returned = event
+		}
+	}
+	if !start.Native || start.ToolName != "web_search" || start.ToolKind != ai.ToolPartKindWebSearch ||
+		start.ProviderDetails["anthropic_caller"] == nil || delta.ArgsDelta != `{"query":"Go news"}` ||
+		returned.Part.ToolKind != ai.ToolPartKindWebSearch || returned.Part.ToolCallID != "web-1" ||
+		len(returned.Part.Content.([]any)) != 1 || returned.Part.ProviderDetails["anthropic_caller"] == nil {
+		t.Fatalf("unexpected streamed web search events: %#v", events)
+	}
+}
+
+func TestAnthropicStreamWebSearchEdges(t *testing.T) {
+	t.Run("empty arguments", func(t *testing.T) {
+		model := newServer(t, anthropicSSE(t, []string{
+			`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"web","name":"web_search","input":null}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_stop"}`,
+		}))
+		events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if delta := events[1].(ai.ToolCallDeltaEvent); delta.ArgsDelta != `{}` {
+			t.Fatalf("unexpected empty web-search delta: %+v", delta)
+		}
+	})
+	t.Run("consumer break on return", func(t *testing.T) {
+		model := newServer(t, anthropicSSE(t, []string{
+			`{"type":"content_block_start","index":0,"content_block":{"type":"web_search_tool_result","tool_use_id":"web","content":[]}}`,
+		}))
+		stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := 0
+		for _, err := range stream {
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen++
+			break
+		}
+		if seen != 1 {
+			t.Fatalf("stream yielded %d events before break", seen)
+		}
+	})
+}
+
 func TestAnthropicStreamServerManagedToolSearch(t *testing.T) {
 	model := newServer(t, anthropicSSE(t, []string{
 		`{"type":"message_start","message":{"id":"message-1","model":"claude-sonnet-4-6","usage":{}}}`,

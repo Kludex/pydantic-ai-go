@@ -9,6 +9,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -106,9 +107,17 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				}
 				usage = event.Message.Usage.usage()
 			case "content_block_start":
-				if _, ok := anthropicToolSearchStrategy(event.ContentBlock.Name); event.ContentBlock.Type == "server_tool_use" && ok {
+				_, toolSearch := anthropicToolSearchStrategy(event.ContentBlock.Name)
+				if event.ContentBlock.Type == "server_tool_use" && (event.ContentBlock.Name == "web_search" || toolSearch) {
 					searchCalls[event.Index] = event.ContentBlock
 					searchArgs[event.Index] = &strings.Builder{}
+					continue
+				}
+				if event.ContentBlock.Type == "web_search_tool_result" {
+					part := parseAnthropicWebSearchResult(event.ContentBlock)
+					if !yield(ai.NativeToolReturnEvent{PartID: strconv.Itoa(event.Index), Part: part}, nil) {
+						return
+					}
 					continue
 				}
 				if event.ContentBlock.Type == "tool_search_tool_result" {
@@ -169,19 +178,36 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 					raw = json.RawMessage(arguments)
 				}
 				strategy, _ := anthropicToolSearchStrategy(block.Name)
-				args, err := normalizeAnthropicToolSearchArguments(raw, strategy)
-				if err != nil {
-					yield(nil, err)
-					return
+				toolName := ai.ToolSearchName
+				toolKind := ai.ToolPartKindToolSearch
+				var details map[string]any
+				var args json.RawMessage
+				if block.Name == "web_search" {
+					toolName = "web_search"
+					toolKind = ai.ToolPartKindWebSearch
+					args = slices.Clone(raw)
+					if len(args) == 0 || string(args) == "null" {
+						args = json.RawMessage(`{}`)
+					}
+				} else {
+					var err error
+					args, err = normalizeAnthropicToolSearchArguments(raw, strategy)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					details = map[string]any{"strategy": strategy}
 				}
-				details := map[string]any{"strategy": strategy}
 				if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
+					if details == nil {
+						details = map[string]any{}
+					}
 					details["anthropic_caller"] = block.Caller
 				}
 				partID := strconv.Itoa(event.Index)
 				if !yield(ai.ToolCallStartEvent{
-					PartID: partID, ToolName: ai.ToolSearchName, ToolCallID: block.ID,
-					ToolKind: ai.ToolPartKindToolSearch, ProviderName: "anthropic",
+					PartID: partID, ToolName: toolName, ToolCallID: block.ID,
+					ToolKind: toolKind, ProviderName: "anthropic",
 					ProviderDetails: details, Native: true,
 				}, nil) {
 					return

@@ -295,12 +295,24 @@ type toolReferenceContent struct {
 }
 
 type toolParam struct {
-	Type         string         `json:"type,omitempty"`
-	Name         string         `json:"name"`
-	Description  string         `json:"description,omitempty"`
-	InputSchema  map[string]any `json:"input_schema,omitempty"`
-	Strict       *bool          `json:"strict,omitempty"`
-	DeferLoading bool           `json:"defer_loading,omitempty"`
+	Type           string                      `json:"type,omitempty"`
+	Name           string                      `json:"name"`
+	Description    string                      `json:"description,omitempty"`
+	InputSchema    map[string]any              `json:"input_schema,omitempty"`
+	Strict         *bool                       `json:"strict,omitempty"`
+	DeferLoading   bool                        `json:"defer_loading,omitempty"`
+	MaxUses        int                         `json:"max_uses,omitempty"`
+	AllowedDomains []string                    `json:"allowed_domains,omitempty"`
+	BlockedDomains []string                    `json:"blocked_domains,omitempty"`
+	UserLocation   *anthropicWebSearchLocation `json:"user_location,omitempty"`
+}
+
+type anthropicWebSearchLocation struct {
+	Type     string `json:"type"`
+	City     string `json:"city,omitempty"`
+	Country  string `json:"country,omitempty"`
+	Region   string `json:"region,omitempty"`
+	Timezone string `json:"timezone,omitempty"`
 }
 
 type toolChoiceParam struct {
@@ -339,14 +351,60 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 	return blocks, nil
 }
 
-func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*messagesRequest, error) {
-	for _, nativeTool := range params.NativeTools {
+func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]toolParam, error) {
+	var tools []toolParam
+	for _, nativeTool := range nativeTools {
 		if nativeTool == nil || (reflect.ValueOf(nativeTool).Kind() == reflect.Pointer && reflect.ValueOf(nativeTool).IsNil()) {
 			return nil, fmt.Errorf("anthropic: native tool must not be nil")
 		}
-		if !nativeTool.IsOptional() {
+		var webSearch ai.WebSearchTool
+		switch tool := nativeTool.(type) {
+		case ai.WebSearchTool:
+			webSearch = tool
+		case *ai.WebSearchTool:
+			webSearch = *tool
+		default:
+			if nativeTool.IsOptional() {
+				continue
+			}
 			return nil, fmt.Errorf("anthropic: native tool %q is not implemented", nativeTool.Kind())
 		}
+		version := "web_search_20250305"
+		if anthropicSupportsDynamicFiltering(modelName) {
+			version = "web_search_20260209"
+		}
+		tool := toolParam{
+			Type: version, Name: "web_search", MaxUses: webSearch.MaxUses,
+			AllowedDomains: slices.Clone(webSearch.AllowedDomains),
+			BlockedDomains: slices.Clone(webSearch.BlockedDomains),
+		}
+		if webSearch.UserLocation != nil {
+			tool.UserLocation = &anthropicWebSearchLocation{
+				Type: "approximate", City: webSearch.UserLocation.City, Country: webSearch.UserLocation.Country,
+				Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
+			}
+		}
+		tools = append(tools, tool)
+	}
+	return tools, nil
+}
+
+func anthropicSupportsDynamicFiltering(modelName string) bool {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-mythos-preview", "claude-sonnet-4-6",
+		"claude-sonnet-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*messagesRequest, error) {
+	nativeTools, err := anthropicNativeTools(m.name, params.NativeTools)
+	if err != nil {
+		return nil, err
 	}
 	thinking, err := anthropicThinking(params.Settings.Thinking)
 	if err != nil {
@@ -358,6 +416,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	}
 	req := &messagesRequest{
 		Model:       m.name,
+		Tools:       nativeTools,
 		MaxTokens:   params.Settings.MaxTokens,
 		System:      params.Instructions,
 		Temperature: params.Settings.Temperature,
@@ -699,7 +758,24 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 		case ai.ToolCallPart:
 			blocks = append(blocks, contentBlock{Type: "tool_use", ID: p.ToolCallID, Name: p.ToolName, Input: p.Args})
 		case ai.NativeToolCallPart:
-			if p.ProviderName != "anthropic" || p.ToolKind != ai.ToolPartKindToolSearch || len(deferredNames) == 0 {
+			if p.ProviderName != "anthropic" {
+				continue
+			}
+			if p.ToolKind == ai.ToolPartKindWebSearch {
+				input := slices.Clone(p.Args)
+				if len(input) == 0 {
+					input = json.RawMessage(`{}`)
+				}
+				block := contentBlock{
+					Type: "server_tool_use", ID: p.ToolCallID, Name: "web_search", Input: input,
+				}
+				if caller, ok := p.ProviderDetails["anthropic_caller"].(map[string]any); ok {
+					block.Caller = caller
+				}
+				blocks = append(blocks, block)
+				continue
+			}
+			if p.ToolKind != ai.ToolPartKindToolSearch || len(deferredNames) == 0 {
 				continue
 			}
 			strategy, _ := p.ProviderDetails["strategy"].(string)
@@ -719,7 +795,20 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			}
 			blocks = append(blocks, block)
 		case ai.NativeToolReturnPart:
-			if p.ProviderName != "anthropic" || p.ToolKind != ai.ToolPartKindToolSearch || len(deferredNames) == 0 {
+			if p.ProviderName != "anthropic" {
+				continue
+			}
+			if p.ToolKind == ai.ToolPartKindWebSearch {
+				block := contentBlock{
+					Type: "web_search_tool_result", ToolUseID: p.ToolCallID, Content: p.Content,
+				}
+				if caller, ok := p.ProviderDetails["anthropic_caller"].(map[string]any); ok {
+					block.Caller = caller
+				}
+				blocks = append(blocks, block)
+				continue
+			}
+			if p.ToolKind != ai.ToolPartKindToolSearch || len(deferredNames) == 0 {
 				continue
 			}
 			content, err := anthropicToolSearchReplayResult(p, deferredNames)
@@ -887,6 +976,21 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		case "tool_use":
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{ToolName: block.Name, Args: block.Input, ToolCallID: block.ID})
 		case "server_tool_use":
+			if block.Name == "web_search" {
+				args := slices.Clone(block.Input)
+				if len(args) == 0 || string(args) == "null" {
+					args = json.RawMessage(`{}`)
+				}
+				var details map[string]any
+				if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
+					details = map[string]any{"anthropic_caller": block.Caller}
+				}
+				resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
+					ToolName: "web_search", Args: args, ToolCallID: block.ID,
+					ToolKind: ai.ToolPartKindWebSearch, ProviderName: "anthropic", ProviderDetails: details,
+				})
+				continue
+			}
 			if block.Name != "tool_search_tool_bm25" && block.Name != "tool_search_tool_regex" {
 				return nil, fmt.Errorf("anthropic: unsupported server tool %q", block.Name)
 			}
@@ -906,6 +1010,8 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 				ToolName: ai.ToolSearchName, Args: args, ToolCallID: block.ID,
 				ToolKind: ai.ToolPartKindToolSearch, ProviderName: "anthropic", ProviderDetails: details,
 			})
+		case "web_search_tool_result":
+			resp.Parts = append(resp.Parts, parseAnthropicWebSearchResult(block))
 		case "tool_search_tool_result":
 			part, err := parseAnthropicToolSearchResult(block)
 			if err != nil {
@@ -954,6 +1060,21 @@ func normalizeAnthropicToolSearchArguments(raw json.RawMessage, strategy string)
 		queries = append(queries, query)
 	}
 	return json.Marshal(map[string]any{"queries": queries})
+}
+
+func parseAnthropicWebSearchResult(block responseContentBlock) ai.NativeToolReturnPart {
+	var content any
+	if len(block.Content) > 0 {
+		_ = json.Unmarshal(block.Content, &content)
+	}
+	var details map[string]any
+	if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
+		details = map[string]any{"anthropic_caller": block.Caller}
+	}
+	return ai.NativeToolReturnPart{
+		ToolName: "web_search", ToolCallID: block.ToolUseID, ToolKind: ai.ToolPartKindWebSearch,
+		Content: content, ProviderName: "anthropic", ProviderDetails: details,
+	}
 }
 
 func parseAnthropicToolSearchResult(block responseContentBlock) (ai.NativeToolReturnPart, error) {

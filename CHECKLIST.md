@@ -52,10 +52,10 @@ Status:
 - [x] Implemented requests/responses preserve timestamps, local metadata, run/conversation IDs, normalized finish reasons, provider details/URLs/names, response IDs, and lifecycle state, including deprecated `vendor_*` aliases.
 - [x] Text, thinking, and function-tool-call parts preserve IDs, signatures, provider names/details, and typed tool kinds through serialization, fallback replay, keyed streaming accumulation, and consumer-safe copies.
 - [x] Retry prompts preserve structured validation errors and timestamps, format provider feedback consistently, and retain JSON Schema keyword, location, message, and offending input details.
-- [x] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
+- [x] Failed, denied, and interrupted tool-return outcome values, typed return tool kinds, request state, and synthesized history repair after run cancellation.
 - [x] Synthesized-return metadata markers and deterministic, idempotent repair of trailing, interior, shadowed-ID, malformed-order, and empty-ID dangling calls.
 - [x] Orphaned tool results are removed while plain validation feedback is preserved; consecutive requests and synthetic responses are merged with tool results hoisted before user-facing content.
-- [~] `ToolReturn` metadata is preserved; separate return value, extra content, and revealed tools remain.
+- [~] Rich `ToolReturn` values separate the provider-facing return value, trailing multimodal user content, and local metadata while preserving provider-valid concurrent ordering. Revealed tools remain.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, signature, provider-metadata, and tool-argument deltas across bundled providers and fallback replay.
 - [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, `FinalResultEvent`, and metadata-bearing `FinishEvent` with typed, applicable deltas.
 - [ ] Enqueued-message events.
@@ -77,6 +77,7 @@ Status:
 - [x] Per-toolset retry and timeout defaults preserve explicit per-tool overrides.
 - [x] Output-tool-specific retry overrides through `OutputToolConfig.MaxRetries`, including per-run output-tool configuration.
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
+- [ ] Reflected tool return schemas and explicit rejection of nested rich `ToolReturn` values.
 - [x] Failed and interrupted tool returns use Anthropic error results and Gemini error responses.
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
@@ -221,7 +222,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add per-run typed output specialization and stateful toolset lifecycle.
-3. Add rich tool return values, extra content, and revealed tools.
+3. Add revealed tools to rich tool returns, backed by deferred tool visibility and tool-availability delta history.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

@@ -396,7 +396,7 @@ func repairDanglingToolCalls(messages []ModelMessage) ([]ModelMessage, []Request
 		if item.active || item.dangling {
 			call := item.call
 			dangling[item.responseIndex] = append(dangling[item.responseIndex], ToolReturnPart{
-				ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+				ToolName: call.ToolName, ToolCallID: call.ToolCallID, ToolKind: call.ToolKind,
 				Content:  "The tool call was interrupted before a result was produced.",
 				Outcome:  ToolReturnOutcomeInterrupted,
 				Metadata: map[string]any{SynthesizedToolReturnMetadataKey: true},
@@ -578,13 +578,7 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 			for partIndex, part := range message.Parts {
 				switch part := part.(type) {
 				case UserPromptPart:
-					part.Contents = slices.Clone(part.Contents)
-					for contentIndex, content := range part.Contents {
-						if binary, ok := content.(BinaryContent); ok {
-							binary.Data = slices.Clone(binary.Data)
-							part.Contents[contentIndex] = binary
-						}
-					}
+					part.Contents = cloneUserContents(part.Contents)
 					message.Parts[partIndex] = part
 				case ToolReturnPart:
 					part.Metadata = cloneSchemaMap(part.Metadata)
@@ -601,6 +595,17 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 				}
 			}
 			cloned[index] = message
+		}
+	}
+	return cloned
+}
+
+func cloneUserContents(contents []UserContent) []UserContent {
+	cloned := slices.Clone(contents)
+	for index, content := range cloned {
+		if binary, ok := content.(BinaryContent); ok {
+			binary.Data = slices.Clone(binary.Data)
+			cloned[index] = binary
 		}
 	}
 	return cloned
@@ -1007,7 +1012,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			for _, call := range calls {
 				part := ToolReturnPart{
 					ToolName: call.ToolName, Content: toolSkipped, ToolCallID: call.ToolCallID,
-					Outcome: ToolReturnOutcomeSuccess,
+					ToolKind: call.ToolKind, Outcome: ToolReturnOutcomeSuccess,
 				}
 				parts = append(parts, part)
 				if !r.emitStreamEvent(FunctionToolResultEvent{Part: part}) {
@@ -1061,6 +1066,7 @@ func (r *run[Deps, Output]) earlyNativeOutput(
 
 type callOutcome[Output any] struct {
 	part          RequestPart
+	extraParts    []RequestPart
 	output        *Output
 	outputCall    bool
 	functionCall  bool
@@ -1149,7 +1155,7 @@ func (r *run[Deps, Output]) executeCallsEarly(
 		if winner != nil {
 			outcomes[i].part = ToolReturnPart{
 				ToolName: call.ToolName, Content: outputSkipped, ToolCallID: call.ToolCallID,
-				Outcome: ToolReturnOutcomeSuccess,
+				ToolKind: call.ToolKind, Outcome: ToolReturnOutcomeSuccess,
 			}
 			continue
 		}
@@ -1164,7 +1170,7 @@ func (r *run[Deps, Output]) executeCallsEarly(
 			if !r.isOutputCall(call) {
 				outcomes[i].part = ToolReturnPart{
 					ToolName: call.ToolName, Content: toolSkipped, ToolCallID: call.ToolCallID,
-					Outcome: ToolReturnOutcomeSuccess,
+					ToolKind: call.ToolKind, Outcome: ToolReturnOutcomeSuccess,
 				}
 			}
 		}
@@ -1200,7 +1206,7 @@ func (r *run[Deps, Output]) executeCallsGraceful(
 		if r.isOutputCall(call) && winner != nil {
 			outcomes[i].part = ToolReturnPart{
 				ToolName: call.ToolName, Content: outputSkipped, ToolCallID: call.ToolCallID,
-				Outcome: ToolReturnOutcomeSuccess,
+				ToolKind: call.ToolKind, Outcome: ToolReturnOutcomeSuccess,
 			}
 			continue
 		}
@@ -1293,14 +1299,16 @@ func (r *run[Deps, Output]) executeIndexBatch(
 }
 
 func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) callOutcome[Output] {
-	part, output, err := r.executeCall(ctx, call)
+	part, extraParts, output, err := r.executeCall(ctx, call)
 	_, registered := r.findTool(call.ToolName)
 	_, available := r.currentTools[call.ToolName]
 	outcome := callOutcome[Output]{
-		part: part, output: output, outputCall: r.isOutputCall(call), functionCall: registered && available, err: err,
+		part: part, extraParts: extraParts, output: output, outputCall: r.isOutputCall(call),
+		functionCall: registered && available, err: err,
 	}
 	if err == nil && errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
 		outcome.part = nil
+		outcome.extraParts = nil
 		outcome.output = nil
 	}
 	if outcome.err == nil && outcome.part != nil && outcome.functionCall {
@@ -1345,12 +1353,14 @@ func (r *run[Deps, Output]) callIsBarrier(call ToolCallPart, outputToolsConcurre
 
 func completedCallParts[Output any](outcomes []callOutcome[Output]) []RequestPart {
 	parts := make([]RequestPart, 0, len(outcomes))
+	var extraParts []RequestPart
 	for _, outcome := range outcomes {
 		if outcome.err == nil && outcome.part != nil {
 			parts = append(parts, outcome.part)
+			extraParts = append(extraParts, outcome.extraParts...)
 		}
 	}
-	return parts
+	return append(parts, extraParts...)
 }
 
 func (r *run[Deps, Output]) collectCallOutcomes(
@@ -1364,10 +1374,12 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 	var winner *Output
 	winningPart := -1
 	functionRetry := false
+	var extraParts []RequestPart
 	for index, outcome := range outcomes {
 		if outcome.part != nil {
 			parts = append(parts, outcome.part)
 			partPositions[index] = len(parts) - 1
+			extraParts = append(extraParts, outcome.extraParts...)
 		}
 		if outcome.output != nil {
 			if winner == nil {
@@ -1396,7 +1408,7 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 	if err := r.emitPendingCallResults(outcomes); err != nil {
 		return nil, nil, err
 	}
-	return parts, winner, nil
+	return append(parts, extraParts...), winner, nil
 }
 
 func (r *run[Deps, Output]) emitPendingCallResults(outcomes []callOutcome[Output]) error {
@@ -1416,28 +1428,33 @@ func (r *run[Deps, Output]) emitPendingCallResults(outcomes []callOutcome[Output
 	return nil
 }
 
-// executeCall runs one tool call. It returns the request part to send back
-// to the model and a validated value for a successful output tool.
-func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) (RequestPart, *Output, error) {
+// executeCall runs one tool call. It returns the tool result, any trailing
+// user content, and a validated value for a successful output tool.
+func (r *run[Deps, Output]) executeCall(
+	ctx context.Context, call ToolCallPart,
+) (RequestPart, []RequestPart, *Output, error) {
 	if r.isOutputCall(call) {
-		return r.finalizeOutputCall(ctx, call)
+		part, output, err := r.finalizeOutputCall(ctx, call)
+		return part, nil, output, err
 	}
 	entry, registered := r.findTool(call.ToolName)
 	_, available := r.currentTools[call.ToolName]
 	if !registered || !available {
 		if err := r.countToolRetry(call.ToolName); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		return RetryPromptPart{
 			Content: r.unknownToolMessage(call.ToolName), ToolName: call.ToolName, ToolCallID: call.ToolCallID,
-		}, nil, nil
+		}, nil, nil, nil
 	}
 	if validator := r.currentToolValidators[call.ToolName]; validator != nil {
 		if err := validator.ValidateJSON(call.Args); err != nil {
 			if retryErr := r.countToolRetry(call.ToolName); retryErr != nil {
-				return nil, nil, retryErr
+				return nil, nil, nil, retryErr
 			}
-			return validationRetryPrompt(err, call.Args, call.ToolName, call.ToolCallID, "invalid arguments"), nil, nil
+			return validationRetryPrompt(
+				err, call.Args, call.ToolName, call.ToolCallID, "invalid arguments",
+			), nil, nil, nil
 		}
 	}
 	toolRC := *r.rc
@@ -1461,20 +1478,43 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	switch {
 	case errors.As(err, &failed):
 		return ToolReturnPart{
-			ToolName: call.ToolName, Content: failed.Message, ToolCallID: call.ToolCallID,
+			ToolName: call.ToolName, Content: failed.Message, ToolCallID: call.ToolCallID, ToolKind: call.ToolKind,
 			Outcome: ToolReturnOutcomeFailed,
-		}, nil, nil
+		}, nil, nil, nil
 	case errors.As(err, &retry):
 		if err := r.countToolRetry(call.ToolName); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
-		return RetryPromptPart{Content: retry.Message, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
+		return RetryPromptPart{
+			Content: retry.Message, ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+		}, nil, nil, nil
 	case err != nil:
-		return nil, nil, fmt.Errorf("ai: tool %q: %w", call.ToolName, err)
+		return nil, nil, nil, fmt.Errorf("ai: tool %q: %w", call.ToolName, err)
+	}
+
+	returnValue := content
+	var metadata map[string]any
+	var extraParts []RequestPart
+	var rich *ToolReturn
+	switch value := content.(type) {
+	case ToolReturn:
+		rich = &value
+	case *ToolReturn:
+		rich = value
+	}
+	if rich != nil {
+		returnValue = rich.ReturnValue
+		metadata = cloneSchemaMap(rich.Metadata)
+		if len(rich.Content) > 0 {
+			extraParts = []RequestPart{UserPromptPart{Contents: cloneUserContents(rich.Content)}}
+		}
+	} else if _, ok := content.(*ToolReturn); ok {
+		returnValue = nil
 	}
 	return ToolReturnPart{
-		ToolName: call.ToolName, Content: content, ToolCallID: call.ToolCallID, Outcome: ToolReturnOutcomeSuccess,
-	}, nil, nil
+		ToolName: call.ToolName, Content: returnValue, ToolCallID: call.ToolCallID, ToolKind: call.ToolKind,
+		Outcome: ToolReturnOutcomeSuccess, Metadata: metadata,
+	}, extraParts, nil, nil
 }
 
 func (r *run[Deps, Output]) unknownToolMessage(name string) string {
@@ -1523,7 +1563,7 @@ func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCal
 	}
 	return ToolReturnPart{
 		ToolName: call.ToolName, Content: finalResultProcessed, ToolCallID: call.ToolCallID,
-		Outcome: ToolReturnOutcomeSuccess,
+		ToolKind: call.ToolKind, Outcome: ToolReturnOutcomeSuccess,
 	}, &out, nil
 }
 

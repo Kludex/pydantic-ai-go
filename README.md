@@ -200,6 +200,26 @@ result, err := agent.Run(
 
 `WithRunTools` does not mutate the agent or leak tools into concurrent runs. A tool name cannot duplicate an agent tool or another per-run tool. Use `agent.AddTool(weatherTool)` to register the same value permanently. `Tool.Definition()` returns a detached copy for inspection.
 
+Return `ToolReturn` when a tool needs to keep application metadata or send additional user content outside the provider's tool-result message:
+
+```go
+ai.AddSimpleTool(agent, "inspect_receipt", func(
+	_ context.Context,
+	args ReceiptArgs,
+) (ai.ToolReturn, error) {
+	return ai.ToolReturn{
+		ReturnValue: Receipt{Total: args.Total},
+		Content: []ai.UserContent{
+			ai.TextContent{Text: "The original receipt follows."},
+			ai.BinaryContent{Data: args.Image, MediaType: "image/png"},
+		},
+		Metadata: map[string]any{"audit_id": args.AuditID},
+	}, nil
+})
+```
+
+`ReturnValue` becomes the tool result. `Content` becomes a trailing user prompt after every result in the same concurrent batch, which preserves provider-valid tool-call ordering. `Metadata` remains in local history and is not sent to the model.
+
 Compose larger collections with toolsets:
 
 ```go

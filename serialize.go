@@ -148,7 +148,7 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 		}
 		return wirePartWithTimestamp(wirePart{
 			PartKind: "tool-return", Content: content, ToolName: part.ToolName,
-			ToolCallID: part.ToolCallID, Outcome: part.Outcome, Metadata: part.Metadata,
+			ToolCallID: part.ToolCallID, ToolKind: part.ToolKind, Outcome: part.Outcome, Metadata: part.Metadata,
 		}, part.Timestamp), nil
 	case RetryPromptPart:
 		content := mustJSON(part.Content)
@@ -282,7 +282,7 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 			_ = json.Unmarshal(wp.Content, &content)
 		}
 		part := ToolReturnPart{
-			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID,
+			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID, ToolKind: wp.ToolKind,
 			Outcome: wp.Outcome, Metadata: wp.Metadata,
 		}
 		if wp.Timestamp != nil {

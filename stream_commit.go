@@ -189,7 +189,7 @@ func (r *run[Deps, Output]) committedCallOutcome(call ToolCallPart, winner bool)
 	return callOutcome[Output]{
 		part: ToolReturnPart{
 			ToolName: call.ToolName, Content: content, ToolCallID: call.ToolCallID,
-			Outcome: ToolReturnOutcomeSuccess,
+			ToolKind: call.ToolKind, Outcome: ToolReturnOutcomeSuccess,
 		},
 		outputCall:   r.isOutputCall(call),
 		functionCall: !r.isOutputCall(call),
@@ -210,7 +210,7 @@ func (r *run[Deps, Output]) executeOneCommitted(
 		return callOutcome[Output]{
 			part: ToolReturnPart{
 				ToolName: call.ToolName, Content: outputValidationFailed, ToolCallID: call.ToolCallID,
-				Outcome: ToolReturnOutcomeSuccess,
+				ToolKind: call.ToolKind, Outcome: ToolReturnOutcomeSuccess,
 			},
 			outputCall: true,
 		}

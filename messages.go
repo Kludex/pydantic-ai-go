@@ -161,6 +161,8 @@ const (
 	ToolReturnOutcomeSuccess ToolReturnOutcome = "success"
 	// ToolReturnOutcomeFailed marks a terminal failure the model should adapt to.
 	ToolReturnOutcomeFailed ToolReturnOutcome = "failed"
+	// ToolReturnOutcomeDenied marks a call rejected by an approval policy.
+	ToolReturnOutcomeDenied ToolReturnOutcome = "denied"
 	// ToolReturnOutcomeInterrupted marks a synthesized result for an interrupted call.
 	ToolReturnOutcomeInterrupted ToolReturnOutcome = "interrupted"
 )
@@ -169,11 +171,21 @@ const (
 // incomplete history rather than produced by tool execution.
 const SynthesizedToolReturnMetadataKey = "pydantic_ai_synthesized_tool_return"
 
+// ToolReturn separates the value sent as a tool result from additional user
+// content and application-only metadata. Return it directly from a function
+// tool when the result needs this richer shape.
+type ToolReturn struct {
+	ReturnValue any
+	Content     []UserContent
+	Metadata    map[string]any
+}
+
 // ToolReturnPart carries the result of a tool call back to the model.
 type ToolReturnPart struct {
 	ToolName   string
 	Content    any
 	ToolCallID string
+	ToolKind   ToolPartKind
 	Outcome    ToolReturnOutcome
 	Metadata   map[string]any
 	Timestamp  time.Time

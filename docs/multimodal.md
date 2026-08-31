@@ -19,7 +19,10 @@ func main() {
 	result, err := agent.RunParts(
 		context.Background(),
 		[]ai.UserContent{
-			ai.TextContent{Text: "Describe this image in one sentence."},
+			ai.TextContent{
+				Text:     "Describe this image in one sentence.",
+				Metadata: map[string]any{"source": "diagram-review"},
+			},
 			ai.ImageURL{URL: "https://example.com/diagram.png"},
 		},
 		struct{}{},
@@ -31,7 +34,9 @@ func main() {
 }
 ```
 
-`RunParts` preserves content order. Put the instruction before or after the image according to the prompt you want the provider to receive.
+`RunParts` preserves content order.
+Put the instruction before or after the image according to the prompt you want the provider to receive.
+`TextContent.Metadata` remains in message history for your application but is not sent to the model.
 
 OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google models accept `ImageURL`. OpenAI and Anthropic can fetch the URL directly. Google downloads ordinary Gemini API URLs with SSRF protection, but sends Gemini Files API and Vertex AI URLs directly.
 

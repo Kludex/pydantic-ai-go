@@ -122,6 +122,7 @@ func TestFileContentRunValuesAreDetached(t *testing.T) {
 	metadata := func(kind string) map[string]any {
 		return map[string]any{"nested": map[string]any{"kind": kind}}
 	}
+	textMetadata := metadata("text")
 	imageMetadata := metadata("image")
 	audioMetadata := metadata("audio")
 	documentMetadata := metadata("document")
@@ -131,15 +132,17 @@ func TestFileContentRunValuesAreDetached(t *testing.T) {
 		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
 	) (*ai.ModelResponse, error) {
 		contents := messages[len(messages)-1].(ai.ModelRequest).Parts[0].(ai.UserPromptPart).Contents
-		contents[0].(ai.ImageURL).VendorMetadata["nested"].(map[string]any)["kind"] = "changed"
-		contents[1].(ai.AudioURL).VendorMetadata["nested"].(map[string]any)["kind"] = "changed"
-		contents[2].(ai.DocumentURL).VendorMetadata["nested"].(map[string]any)["kind"] = "changed"
-		binary := contents[3].(ai.BinaryContent)
+		contents[0].(ai.TextContent).Metadata.(map[string]any)["nested"].(map[string]any)["kind"] = "changed"
+		contents[1].(ai.ImageURL).VendorMetadata["nested"].(map[string]any)["kind"] = "changed"
+		contents[2].(ai.AudioURL).VendorMetadata["nested"].(map[string]any)["kind"] = "changed"
+		contents[3].(ai.DocumentURL).VendorMetadata["nested"].(map[string]any)["kind"] = "changed"
+		binary := contents[4].(ai.BinaryContent)
 		binary.Data[0] = 'X'
 		binary.VendorMetadata["nested"].(map[string]any)["kind"] = "changed"
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
 	})
 	result, err := ai.NewAgent[struct{}, string](model).RunParts(t.Context(), []ai.UserContent{
+		ai.TextContent{Text: "inspect", Metadata: textMetadata},
 		ai.ImageURL{URL: "https://example.com/image.png", VendorMetadata: imageMetadata},
 		ai.AudioURL{URL: "https://example.com/audio.mp3", VendorMetadata: audioMetadata},
 		ai.DocumentURL{URL: "https://example.com/document.pdf", VendorMetadata: documentMetadata},
@@ -149,7 +152,8 @@ func TestFileContentRunValuesAreDetached(t *testing.T) {
 		t.Fatalf("unexpected result=%+v err=%v", result, err)
 	}
 	for kind, value := range map[string]map[string]any{
-		"image": imageMetadata, "audio": audioMetadata, "document": documentMetadata, "binary": binaryMetadata,
+		"text": textMetadata, "image": imageMetadata, "audio": audioMetadata,
+		"document": documentMetadata, "binary": binaryMetadata,
 	} {
 		if value["nested"].(map[string]any)["kind"] != kind {
 			t.Fatalf("caller %s metadata was mutated", kind)

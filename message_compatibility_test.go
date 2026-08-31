@@ -71,6 +71,32 @@ func TestUnmarshalUpstreamMultimodalMessageFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamSanitizedMessageFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_sanitized.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(messages) != 3 {
+		t.Fatalf("expected 3 sanitized messages, got %d", len(messages))
+	}
+	prompt := messages[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
+	if len(prompt.Contents) != 2 {
+		t.Fatalf("unexpected sanitized prompt: %+v", prompt)
+	}
+	image := prompt.Contents[1].(ai.ImageURL)
+	compaction := messages[1].(ai.ModelResponse).Parts[0].(ai.CompactionPart)
+	tail := messages[2].(ai.ModelResponse)
+	if image.ForceDownload != ai.FileDownloadNever ||
+		image.Identifier != "01a7df" || compaction.ProviderDetails[ai.StandingPromptPlantedKey] != nil ||
+		len(tail.Parts) != 2 {
+		t.Fatalf("unexpected sanitized fixture: %+v", messages)
+	}
+}
+
 func TestUnmarshalUpstreamCachePointFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/messages/upstream_cache_point.json")
 	if err != nil {

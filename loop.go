@@ -927,6 +927,9 @@ func cloneUserContents(contents []UserContent) []UserContent {
 	cloned := slices.Clone(contents)
 	for index, content := range cloned {
 		switch content := content.(type) {
+		case TextContent:
+			content.Metadata = cloneSchemaValue(content.Metadata)
+			cloned[index] = content
 		case BinaryContent:
 			content.Data = slices.Clone(content.Data)
 			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)

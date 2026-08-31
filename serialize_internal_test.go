@@ -42,6 +42,25 @@ func TestMarshalUnknownUserContent(t *testing.T) {
 	}
 }
 
+func TestSanitizeUnknownPartTypes(t *testing.T) {
+	messages := []ModelMessage{
+		ModelRequest{Parts: []RequestPart{alienRequestPart{}}},
+		ModelResponse{Parts: []ResponsePart{alienResponsePart{}}},
+	}
+	sanitized, report, err := SanitizeMessages(messages, MessageSanitizationOptions{})
+	if err != nil || report.Changed() || len(sanitized) != 2 {
+		t.Fatalf("unexpected sanitization: messages=%+v report=%+v err=%v", sanitized, report, err)
+	}
+}
+
+func TestUnmarshalMalformedNativeToolReturn(t *testing.T) {
+	if _, err := unmarshalResponsePart(wirePart{
+		PartKind: "builtin-tool-return", Content: []byte(`{`),
+	}); err == nil {
+		t.Fatal("expected malformed native tool return error")
+	}
+}
+
 func TestStringContentFallback(t *testing.T) {
 	// Non-string raw content falls back to the raw bytes, e.g. legacy
 	// histories where system prompt content was a number.

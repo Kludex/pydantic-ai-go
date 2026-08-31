@@ -140,9 +140,10 @@ type UserContent interface {
 	userContentKind() string
 }
 
-// TextContent is a text item in a multimodal prompt.
+// TextContent is a text item with application metadata that providers do not receive.
 type TextContent struct {
-	Text string
+	Text     string
+	Metadata any
 }
 
 func (TextContent) userContentKind() string { return "text-content" }

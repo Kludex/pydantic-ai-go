@@ -271,7 +271,7 @@ func TestAgent(t *testing.T) {
 | Require approval | `WithApprovalRequired` and `DeferredToolResults` |
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
-| Trim or summarize old conversation turns | [`TokenHistoryTrimmer` and `HistorySummarizer`](docs/history.md) |
+| Sanitize, trim, or summarize conversation history | [`SanitizeMessages` and history capabilities](docs/history.md) |
 | Compact old provider history | [`ModelCompactor` and compaction capabilities](docs/compaction.md) |
 | Send images, documents, audio, video, or uploaded files | [`RunParts`](docs/multimodal.md) |
 | Use provider-native web tools | [`WebSearchTool` and `WebFetchTool`](docs/native-tools.md) |

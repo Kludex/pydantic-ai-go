@@ -185,13 +185,13 @@ func marshalResponsePart(p ResponsePart) (wirePart, error) {
 		}, nil
 	case FilePart:
 		content, _ := json.Marshal(struct {
-			Data           []byte         `json:"data"`
+			Data           urlBase64Bytes `json:"data"`
 			MediaType      string         `json:"media_type"`
 			VendorMetadata map[string]any `json:"vendor_metadata,omitempty"`
 			Kind           string         `json:"kind"`
 			Identifier     string         `json:"identifier"`
 		}{
-			Data: part.Content.Data, MediaType: part.Content.MediaType,
+			Data: urlBase64Bytes(part.Content.Data), MediaType: part.Content.MediaType,
 			VendorMetadata: part.Content.VendorMetadata, Kind: "binary",
 			Identifier: part.Content.ResolvedIdentifier(),
 		})
@@ -330,6 +330,10 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 		if len(wp.Content) > 0 {
 			_ = json.Unmarshal(wp.Content, &content)
 		}
+		content, err := narrowToolReturnContent(content)
+		if err != nil {
+			return nil, fmt.Errorf("ai: unmarshal tool return content: %w", err)
+		}
 		part := ToolReturnPart{
 			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID, ToolKind: wp.ToolKind,
 			Outcome: wp.Outcome, Metadata: wp.Metadata,
@@ -371,7 +375,7 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 		}, nil
 	case "file":
 		var content struct {
-			Data           []byte         `json:"data"`
+			Data           urlBase64Bytes `json:"data"`
 			MediaType      string         `json:"media_type"`
 			VendorMetadata map[string]any `json:"vendor_metadata"`
 			Identifier     string         `json:"identifier"`
@@ -381,7 +385,7 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 		}
 		return FilePart{
 			Content: BinaryContent{
-				Data: content.Data, MediaType: content.MediaType,
+				Data: []byte(content.Data), MediaType: content.MediaType,
 				VendorMetadata: content.VendorMetadata, Identifier: content.Identifier,
 			},
 			ID:           wp.ID,
@@ -400,6 +404,10 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 	case "builtin-tool-return":
 		var content any
 		if err := json.Unmarshal(wp.Content, &content); err != nil {
+			return nil, fmt.Errorf("ai: unmarshal native tool return content: %w", err)
+		}
+		content, err := narrowToolReturnContent(content)
+		if err != nil {
 			return nil, fmt.Errorf("ai: unmarshal native tool return content: %w", err)
 		}
 		part := NativeToolReturnPart{
@@ -450,12 +458,13 @@ type wireUserContent struct {
 	Kind           string         `json:"kind"`
 	Content        string         `json:"content,omitempty"`
 	URL            string         `json:"url,omitempty"`
-	Data           []byte         `json:"data,omitempty"`
+	Data           urlBase64Bytes `json:"data,omitempty"`
 	MediaType      string         `json:"media_type,omitempty"`
 	FileID         string         `json:"file_id,omitempty"`
 	ProviderName   string         `json:"provider_name,omitempty"`
 	Identifier     string         `json:"identifier,omitempty"`
 	VendorMetadata map[string]any `json:"vendor_metadata,omitempty"`
+	Metadata       any            `json:"metadata,omitempty"`
 	ForceDownload  any            `json:"force_download,omitempty"`
 	TTL            CachePointTTL  `json:"ttl,omitempty"`
 }
@@ -468,7 +477,7 @@ func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
 	for _, c := range part.Contents {
 		switch item := c.(type) {
 		case TextContent:
-			items = append(items, wireUserContent{Kind: "text-content", Content: item.Text})
+			items = append(items, wireUserContent{Kind: "text-content", Content: item.Text, Metadata: item.Metadata})
 		case ImageURL:
 			wire, err := marshalFileURL(
 				"image-url", item.URL, item.ResolvedMediaType, item.ResolvedIdentifier(), item.ForceDownload,
@@ -507,7 +516,7 @@ func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
 			items = append(items, wire)
 		case BinaryContent:
 			items = append(items, wireUserContent{
-				Kind: "binary", Data: item.Data, MediaType: item.MediaType,
+				Kind: "binary", Data: urlBase64Bytes(item.Data), MediaType: item.MediaType,
 				Identifier: item.ResolvedIdentifier(), VendorMetadata: item.VendorMetadata,
 			})
 		case CachePoint:
@@ -534,73 +543,75 @@ func unmarshalUserContent(raw json.RawMessage) (UserPromptPart, error) {
 	if err := json.Unmarshal(raw, &s); err == nil {
 		return UserPromptPart{Content: s}, nil
 	}
-	var items []wireUserContent
+	var items []json.RawMessage
 	if err := json.Unmarshal(raw, &items); err != nil {
 		return UserPromptPart{}, fmt.Errorf("ai: unmarshal user prompt content: %w", err)
 	}
 	part := UserPromptPart{}
-	for _, item := range items {
-		switch item.Kind {
-		case "text-content":
-			part.Contents = append(part.Contents, TextContent{Text: item.Content})
-		case "image-url":
-			forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "image")
-			if err != nil {
-				return UserPromptPart{}, err
-			}
-			part.Contents = append(part.Contents, ImageURL{
-				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
-				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
-			})
-		case "video-url":
-			forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "video")
-			if err != nil {
-				return UserPromptPart{}, err
-			}
-			part.Contents = append(part.Contents, VideoURL{
-				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
-				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
-			})
-		case "audio-url":
-			forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "audio")
-			if err != nil {
-				return UserPromptPart{}, err
-			}
-			part.Contents = append(part.Contents, AudioURL{
-				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
-				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
-			})
-		case "document-url":
-			forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "document")
-			if err != nil {
-				return UserPromptPart{}, err
-			}
-			part.Contents = append(part.Contents, DocumentURL{
-				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
-				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
-			})
-		case "binary":
-			part.Contents = append(part.Contents, BinaryContent{
-				Data: item.Data, MediaType: item.MediaType, Identifier: item.Identifier,
-				VendorMetadata: item.VendorMetadata,
-			})
-		case "cache-point":
-			point := CachePoint{TTL: item.TTL}
-			ttl, err := point.ResolvedTTL()
-			if err != nil {
-				return UserPromptPart{}, err
-			}
-			part.Contents = append(part.Contents, CachePoint{TTL: ttl})
-		case "uploaded-file":
-			part.Contents = append(part.Contents, UploadedFile{
-				FileID: item.FileID, ProviderName: item.ProviderName, MediaType: item.MediaType,
-				Identifier: item.Identifier, VendorMetadata: item.VendorMetadata,
-			})
-		default:
-			return UserPromptPart{}, fmt.Errorf("ai: unknown user content kind %q", item.Kind)
+	for _, rawItem := range items {
+		var text string
+		if err := json.Unmarshal(rawItem, &text); err == nil {
+			part.Contents = append(part.Contents, TextContent{Text: text})
+			continue
 		}
+		var item wireUserContent
+		if err := json.Unmarshal(rawItem, &item); err != nil {
+			return UserPromptPart{}, fmt.Errorf("ai: unmarshal user content: %w", err)
+		}
+		content, err := unmarshalUserContentItem(item)
+		if err != nil {
+			return UserPromptPart{}, err
+		}
+		part.Contents = append(part.Contents, content)
 	}
 	return part, nil
+}
+
+func unmarshalUserContentItem(item wireUserContent) (UserContent, error) {
+	switch item.Kind {
+	case "text-content":
+		return TextContent{Text: item.Content, Metadata: item.Metadata}, nil
+	case "image-url":
+		forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "image")
+		return ImageURL{
+			URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+			ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+		}, err
+	case "video-url":
+		forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "video")
+		return VideoURL{
+			URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+			ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+		}, err
+	case "audio-url":
+		forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "audio")
+		return AudioURL{
+			URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+			ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+		}, err
+	case "document-url":
+		forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "document")
+		return DocumentURL{
+			URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+			ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+		}, err
+	case "binary":
+		return BinaryContent{
+			Data: []byte(item.Data), MediaType: item.MediaType, Identifier: item.Identifier,
+			VendorMetadata: item.VendorMetadata,
+		}, nil
+	case "cache-point":
+		point := CachePoint{TTL: item.TTL}
+		ttl, err := point.ResolvedTTL()
+		return CachePoint{TTL: ttl}, err
+	case "uploaded-file":
+		return UploadedFile{
+			FileID: item.FileID, ProviderName: item.ProviderName, MediaType: item.MediaType,
+			Identifier: item.Identifier, VendorMetadata: item.VendorMetadata,
+		}, nil
+	default:
+		return nil, fmt.Errorf("ai: unknown user content kind %q", item.Kind)
+	}
 }
 
 func marshalFileURL(

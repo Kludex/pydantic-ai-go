@@ -347,6 +347,7 @@ type responsesRequest struct {
 	Stream            bool                `json:"stream,omitempty"`
 	Background        *bool               `json:"background,omitempty"`
 	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
+	Text              *responsesText      `json:"text,omitempty"`
 	TopLogprobs       *int                `json:"top_logprobs,omitempty"`
 	Include           []string            `json:"include,omitempty"`
 	ServiceTier       ai.ServiceTier      `json:"service_tier,omitempty"`
@@ -354,6 +355,17 @@ type responsesRequest struct {
 
 type responsesReasoning struct {
 	Effort string `json:"effort,omitempty"`
+}
+
+type responsesText struct {
+	Format responsesTextFormat `json:"format"`
+}
+
+type responsesTextFormat struct {
+	Type   string         `json:"type"`
+	Name   string         `json:"name"`
+	Schema map[string]any `json:"schema"`
+	Strict *bool          `json:"strict,omitempty"`
 }
 
 type responsesInput struct {
@@ -510,7 +522,18 @@ func (m *ResponsesModel) buildResponsesPayload(
 		req.ParallelToolCalls = params.Settings.ParallelToolCalls
 	}
 	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
-		return nil, fmt.Errorf("openai: the Responses model does not support native JSON output mode yet; use OutputModeTool")
+		strict := true
+		schema, _, err := prepareOpenAISchema(params.OutputSchema, &strict)
+		if err != nil {
+			return nil, fmt.Errorf("openai: output schema: %w", err)
+		}
+		var strictFlag *bool
+		if m.strictToolSupport {
+			strictFlag = &strict
+		}
+		req.Text = &responsesText{Format: responsesTextFormat{
+			Type: "json_schema", Name: "final_result", Schema: schema, Strict: strictFlag,
+		}}
 	}
 	return req, nil
 }

@@ -938,19 +938,68 @@ func TestResponsesToolSearchResponseErrorsAndFallbacks(t *testing.T) {
 	}
 }
 
+type responsesNativeResult struct {
+	City string `json:"city"`
+}
+
+func TestResponsesNativeOutputAgent(t *testing.T) {
+	model := newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"model":"gpt-5","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{\"city\":\"Paris\"}"}]}]}`))
+	})
+	result, err := ai.NewAgent[struct{}, responsesNativeResult](
+		model, ai.WithOutputMode(ai.OutputModeNative),
+	).Run(t.Context(), "capital", struct{}{})
+	if err != nil || result.Output.City != "Paris" {
+		t.Fatalf("unexpected native output result=%+v err=%v", result, err)
+	}
+}
+
 func TestResponsesErrors(t *testing.T) {
-	t.Run("native output unsupported", func(t *testing.T) {
-		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
-		params := ai.ModelRequestParams{OutputSchema: map[string]any{"type": "object"}}
-		_, err := model.Request(t.Context(), nil, params)
-		if err == nil || !strings.Contains(err.Error(), "OutputModeTool") {
-			t.Fatalf("expected unsupported error, got %v", err)
+	t.Run("native output", func(t *testing.T) {
+		var requests []map[string]any
+		model := newResponsesServer(t, func(w http.ResponseWriter, request *http.Request) {
+			var body map[string]any
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			requests = append(requests, body)
+			_, _ = w.Write([]byte(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{}"}]}]}`))
+		})
+		params := ai.ModelRequestParams{
+			OutputSchema: map[string]any{"type": "object", "additionalProperties": false},
+			OutputMode:   ai.OutputModeNative,
+		}
+		if _, err := model.Request(t.Context(), nil, params); err != nil {
+			t.Fatal(err)
+		}
+		format := requests[0]["text"].(map[string]any)["format"].(map[string]any)
+		if format["type"] != "json_schema" || format["name"] != "final_result" || format["strict"] != true ||
+			format["schema"].(map[string]any)["type"] != "object" {
+			t.Fatalf("unexpected native output format: %#v", format)
 		}
 		params.OutputMode = ai.OutputModePrompted
 		if _, err := model.Request(t.Context(), nil, params); err != nil {
 			t.Fatalf("prompted output should not request native mode: %v", err)
 		}
+		if requests[1]["text"] != nil {
+			t.Fatalf("prompted output sent a native format: %#v", requests[1])
+		}
 	})
+	t.Run("invalid native output schema", func(t *testing.T) {
+		model := newResponsesServer(t, func(http.ResponseWriter, *http.Request) {
+			t.Fatal("request sent with invalid output schema")
+		})
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			OutputSchema: map[string]any{
+				"type": "object", "properties": map[string]any{"values": map[string]any{"type": "array"}},
+			},
+			OutputMode: ai.OutputModeNative,
+		})
+		if err == nil || !strings.Contains(err.Error(), "output schema") {
+			t.Fatalf("unexpected native schema error: %v", err)
+		}
+	})
+
 	t.Run("api error", func(t *testing.T) {
 		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)

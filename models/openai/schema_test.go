@@ -335,6 +335,15 @@ func TestOpenAIStrictOptOutAndProfileOverride(t *testing.T) {
 	if _, ok := responsesBody["tools"].([]any)[0].(map[string]any)["strict"]; ok {
 		t.Fatalf("Responses strict flag should respect profile override: %v", responsesBody)
 	}
+	if _, err := responses.Request(t.Context(), nil, ai.ModelRequestParams{
+		OutputSchema: params.Tools[0].Schema, OutputMode: ai.OutputModeNative,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	format := responsesBody["text"].(map[string]any)["format"].(map[string]any)
+	if _, ok := format["strict"]; ok {
+		t.Fatalf("Responses native output should respect strict profile override: %v", format)
+	}
 }
 
 func TestResponsesStrictSchemaInference(t *testing.T) {

@@ -222,7 +222,7 @@ func main() {
 ```
 
 - `OutputModeTool` asks the model to call a final-result tool.
-- `OutputModeNative` uses the provider's native JSON Schema feature.
+- `OutputModeNative` uses the provider's native JSON Schema feature. OpenAI Chat Completions, OpenAI Responses, and Gemini support it.
 - `OutputModePrompted` puts the schema in the instructions and validates returned JSON.
 - `OutputModeAuto` resolves the mode after model selection.
 

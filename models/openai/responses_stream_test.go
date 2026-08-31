@@ -796,9 +796,15 @@ func TestResponsesStreamRequestErrors(t *testing.T) {
 		}
 	})
 	t.Run("native output", func(t *testing.T) {
-		model := newResponsesServer(t, sseHandler(t, nil))
-		if _, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{OutputSchema: map[string]any{"type": "object"}}); err == nil {
-			t.Fatal("expected native output error")
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.output_text.delta","item_id":"message","delta":"{}"}`,
+			`{"type":"response.completed","response":{"model":"gpt-5","status":"completed","usage":{}}}`,
+			`[DONE]`,
+		}))
+		if _, err := collect(t, model, ai.ModelRequestParams{
+			OutputSchema: map[string]any{"type": "object"}, OutputMode: ai.OutputModeNative,
+		}); err != nil {
+			t.Fatalf("native output should stream: %v", err)
 		}
 		prompted := newResponsesServer(t, sseHandler(t, []string{
 			`{"type":"response.completed","response":{"model":"gpt-5","status":"completed","usage":{}}}`,

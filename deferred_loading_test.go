@@ -27,6 +27,9 @@ func TestDeferredToolRevealAndHistoryResume(t *testing.T) {
 	) (*ai.ModelResponse, error) {
 		request++
 		names := toolDefinitionNames(params.Tools)
+		if !slices.Equal(toolDefinitionNames(params.DeferredTools), []string{"secret"}) {
+			t.Fatalf("deferred tool corpus missing from provider parameters: %+v", params.DeferredTools)
+		}
 		switch request {
 		case 1:
 			if !slices.Equal(names, []string{"loader", "public"}) {
@@ -105,8 +108,9 @@ func TestDeferredToolRevealAndHistoryResume(t *testing.T) {
 	resumeModel := fakes.NewFunctionModel(func(
 		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
 	) (*ai.ModelResponse, error) {
-		if !slices.Equal(toolDefinitionNames(params.Tools), []string{"loader", "public", "secret"}) {
-			t.Fatalf("history did not retain reveal: %+v", params.Tools)
+		if !slices.Equal(toolDefinitionNames(params.Tools), []string{"loader", "public", "secret"}) ||
+			!slices.Equal(toolDefinitionNames(params.DeferredTools), []string{"secret"}) {
+			t.Fatalf("history did not retain reveal: %+v", params)
 		}
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "resumed"}}}, nil
 	})

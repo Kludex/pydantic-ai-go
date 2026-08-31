@@ -89,6 +89,9 @@ type ModelRequestParams struct {
 	// Providers may use these boundaries for prompt caching.
 	InstructionParts []InstructionPart
 	Tools            []ToolDefinition
+	// DeferredTools contains prepared definitions hidden by the agent. Providers
+	// with native deferral may advertise them without making them executable.
+	DeferredTools []ToolDefinition
 	// OutputTool, when non-nil, is the tool the model must call to
 	// produce the final structured output.
 	OutputTool *ToolDefinition
@@ -197,7 +200,7 @@ type ToolDefinition struct {
 	// local lifecycle metadata and is not sent to providers.
 	ToolsetID string `json:"-"`
 	// DeferLoading hides the tool until a rich tool return reveals its name.
-	// It is resolved by the agent and is not sent to providers.
+	// Native providers may advertise its schema without making it executable.
 	DeferLoading bool `json:"-"`
 	// ToolKind identifies framework-managed typed tool calls and returns.
 	ToolKind   ToolPartKind `json:"-"`

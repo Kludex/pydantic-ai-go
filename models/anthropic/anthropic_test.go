@@ -18,13 +18,21 @@ import (
 
 func newServer(t *testing.T, handler http.HandlerFunc) *anthropic.Model {
 	t.Helper()
+	return newServerWithOptions(t, handler)
+}
+
+func newServerWithOptions(
+	t *testing.T, handler http.HandlerFunc, opts ...anthropic.Option,
+) *anthropic.Model {
+	t.Helper()
 	server := httptest.NewServer(handler)
 	t.Cleanup(server.Close)
-	return anthropic.NewModel("claude-sonnet-4-5",
+	options := []anthropic.Option{
 		anthropic.WithAPIKey("test-key"),
 		anthropic.WithBaseURL(server.URL),
 		anthropic.WithHTTPClient(server.Client()),
-	)
+	}
+	return anthropic.NewModel("claude-sonnet-4-5", append(options, opts...)...)
 }
 
 func TestDefaultSettingsAreDetached(t *testing.T) {
@@ -178,6 +186,175 @@ func TestRequestToolUseRoundTrip(t *testing.T) {
 	}
 	if len(gotBody["tools"].([]any)) != 1 {
 		t.Fatalf("tools not sent: %v", gotBody["tools"])
+	}
+}
+
+func TestNativeDeferredToolRendering(t *testing.T) {
+	var gotBody map[string]any
+	var gotBeta string
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		gotBeta = r.Header.Get("anthropic-beta")
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{
+			"model":"claude-sonnet-4-5","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"done"}],"usage":{}
+		}`))
+	})
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	search := ai.ToolDefinition{Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch}
+	first := ai.ToolDefinition{Name: "first", Schema: schema, DeferLoading: true}
+	second := ai.ToolDefinition{Name: "second", Schema: schema, DeferLoading: true}
+	messages := []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+			Args: []byte(`{"queries":["first"]}`),
+		}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.ToolReturnPart{
+				ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+				Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "first"}}},
+			},
+			ai.ToolAvailabilityDeltaPart{ToolsAdded: []string{"first"}, ToolCallID: "search"},
+		}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "loader", ToolCallID: "loader", Args: []byte(`{}`),
+		}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.ToolReturnPart{ToolName: "loader", ToolCallID: "loader", Content: "loaded"},
+			ai.ToolAvailabilityDeltaPart{ToolsAdded: []string{"unknown", "second"}, ToolCallID: "loader"},
+		}},
+	}
+	_, err := model.Request(t.Context(), messages, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{search, first}, DeferredTools: []ai.ToolDefinition{first, second}, AllowText: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireTools := gotBody["tools"].([]any)
+	if gotBeta != "mid-conversation-tool-changes-2026-07-01" {
+		t.Fatalf("tool-addition beta header missing: %q", gotBeta)
+	}
+	if len(wireTools) != 3 || wireTools[0].(map[string]any)["name"] != ai.ToolSearchName ||
+		wireTools[0].(map[string]any)["defer_loading"] != nil ||
+		wireTools[1].(map[string]any)["defer_loading"] != true ||
+		wireTools[2].(map[string]any)["defer_loading"] != true {
+		t.Fatalf("unexpected deferred tool definitions: %+v", wireTools)
+	}
+	wireMessages := gotBody["messages"].([]any)
+	searchResult := wireMessages[1].(map[string]any)["content"].([]any)
+	if len(searchResult) != 1 {
+		t.Fatalf("search availability delta was rendered twice: %+v", searchResult)
+	}
+	reference := searchResult[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if reference["type"] != "tool_reference" || reference["tool_name"] != "first" {
+		t.Fatalf("unexpected search tool reference: %+v", reference)
+	}
+	loaderResult := wireMessages[3].(map[string]any)["content"].([]any)
+	addition := loaderResult[1].(map[string]any)
+	toolReference := addition["tool"].(map[string]any)
+	if addition["type"] != "tool_addition" || toolReference["type"] != "tool_reference" ||
+		toolReference["name"] != "second" {
+		t.Fatalf("unexpected tool addition: %+v", addition)
+	}
+}
+
+func TestNativeDeferredToolRenderingEdgeCases(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{
+			"model":"claude-sonnet-4-5","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"done"}],"usage":{}
+		}`))
+	})
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	deferred := ai.ToolDefinition{Name: "hidden", Schema: schema, DeferLoading: true}
+	output := ai.ToolDefinition{Name: "final_result", Schema: schema}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		OutputTool: &output, DeferredTools: []ai.ToolDefinition{deferred},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if tools := gotBody["tools"].([]any); len(tools) != 2 ||
+		tools[0].(map[string]any)["name"] != "hidden" || tools[0].(map[string]any)["defer_loading"] != true {
+		t.Fatalf("output tool did not stabilize deferred definitions: %+v", tools)
+	}
+
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{deferred}, DeferredTools: []ai.ToolDefinition{deferred},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if tool := gotBody["tools"].([]any)[0].(map[string]any); tool["defer_loading"] != nil {
+		t.Fatalf("all-deferred request was not downgraded safely: %+v", tool)
+	}
+
+	search := ai.ToolDefinition{Name: ai.ToolSearchName, Schema: schema}
+	searchCall := ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+		ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+	}}}
+	for name, content := range map[string]any{
+		"empty": ai.ToolSearchResult{Message: "nothing"},
+		"filtered": ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{
+			{Name: "unknown"}, {Name: "hidden"}, {Name: "hidden"},
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			messages := []ai.ModelMessage{searchCall, ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{
+				ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+				Content: content,
+			}}}}
+			if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{
+				Tools: []ai.ToolDefinition{search}, DeferredTools: []ai.ToolDefinition{deferred},
+			}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	for name, content := range map[string]any{"marshal": make(chan int), "parse": "bad"} {
+		t.Run(name, func(t *testing.T) {
+			messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{
+				ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+				Content: content,
+			}}}}
+			if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{
+				Tools: []ai.ToolDefinition{search}, DeferredTools: []ai.ToolDefinition{deferred},
+			}); err == nil {
+				t.Fatal("expected invalid tool-search history error")
+			}
+		})
+	}
+
+	var disabledBody map[string]any
+	disabled := newServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&disabledBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"done"}],"usage":{}}`))
+	}, anthropic.WithDeferredToolSupport(false))
+	if _, err := disabled.Request(t.Context(), nil, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{search}, DeferredTools: []ai.ToolDefinition{deferred},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if tools := disabledBody["tools"].([]any); len(tools) != 1 ||
+		tools[0].(map[string]any)["name"] != ai.ToolSearchName {
+		t.Fatalf("deferred support override was ignored: %+v", tools)
+	}
+
+	strict := true
+	invalid := deferred
+	invalid.Strict = &strict
+	invalid.Schema = map[string]any{"$defs": map[string]any{"bad": "not a schema"}}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{search}, DeferredTools: []ai.ToolDefinition{invalid},
+	}); err == nil {
+		t.Fatal("expected invalid deferred schema error")
 	}
 }
 

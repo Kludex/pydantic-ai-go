@@ -969,9 +969,11 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	}
 	r.currentDeferredTools = make(map[string]struct{})
 	visibleTools := make([]ToolDefinition, 0, len(tools))
+	deferredTools := make([]ToolDefinition, 0, len(tools))
 	for _, definition := range tools {
 		if definition.DeferLoading {
 			r.currentDeferredTools[definition.Name] = struct{}{}
+			deferredTools = append(deferredTools, cloneToolDefinition(definition))
 			if _, revealed := r.revealedTools[definition.Name]; !revealed {
 				continue
 			}
@@ -979,6 +981,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		visibleTools = append(visibleTools, definition)
 	}
 	params.Tools = visibleTools
+	params.DeferredTools = deferredTools
 	if err := r.compileCurrentSchemas(params); err != nil {
 		return ModelRequestParams{}, err
 	}

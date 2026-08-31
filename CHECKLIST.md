@@ -87,7 +87,7 @@ Status:
 - [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.
 - [x] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history.
 - [x] Local `search_tools` discovery through `WithToolSearch`, with typed results, configurable detached search callbacks, word-bounded relevance, undiscovered-first ranking, result limits, and independent retries.
-- [ ] Provider-native tool search, deferred definitions, and mid-conversation tool-addition rendering for Anthropic and OpenAI Responses; bundled providers currently use local search, local withholding, and persisted reveal deltas.
+- [~] Anthropic 4.5+ models render deferred definitions, local search results as `tool_reference` blocks, and other reveals as `tool_addition` blocks with the required beta header. Anthropic server-side search and OpenAI Responses native rendering remain.
 - [ ] Reset derived tool-discovery visibility at compaction boundaries once `CompactionPart` is implemented.
 - [ ] Native/builtin tools distinct from function tools.
 
@@ -125,7 +125,7 @@ Status:
 
 - [x] OpenAI Chat Completions.
 - [~] OpenAI Responses: text/reasoning/function-call streaming plus response/item IDs, encrypted reasoning, function namespaces, status, timestamps, and background metadata; native output, multimodal content, builtin tools, and background continuation remain.
-- [~] Anthropic Messages: text/thinking/function-tool streaming, signed-thinking round trips, multimodal input, response IDs, stop reasons, and suspended `pause_turn` state; automatic pause continuation, citations, and native tools remain.
+- [~] Anthropic Messages: text/thinking/function-tool streaming, signed-thinking round trips, multimodal input, response IDs, stop reasons, suspended `pause_turn` state, and provider-native deferred-definition/reveal rendering; automatic pause continuation, native server search, citations, and other native tools remain.
 - [~] Google Gemini: text/thinking/function-tool streaming, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.
@@ -182,7 +182,7 @@ Status:
 - [ ] Web search, web fetch, X search, and provider-native tools.
 - [ ] Thinking configuration.
 - [ ] Compaction and history processing helpers.
-- [ ] Tool search and deferred capability loading.
+- [~] Local tool search is available as a composable toolset; deferred capability loading remains.
 - [x] Prefix, rename, filter, prepare, combine, and set-tool-metadata helpers through composable toolsets.
 - [ ] Reinjected system prompts and content-filter error handling.
 - [ ] Thread/concurrency executor configuration.
@@ -225,7 +225,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add provider-native tool search, deferred definitions, and mid-conversation addition rendering for Anthropic and OpenAI Responses.
+2. Add Anthropic server-side tool search and OpenAI Responses native search, deferred definitions, and mid-conversation additions.
 3. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 4. Add streamed deferred request and result events with that lifecycle.
 5. Add MCP now that raw/dynamic toolsets have run and step lifecycle support, after deferred calls define the pause/resume boundary.

@@ -19,13 +19,14 @@ const defaultMaxTokens = 4096
 
 // Model calls the Anthropic Messages API. Create one with NewModel.
 type Model struct {
-	name              string
-	apiKey            string
-	baseURL           string
-	httpClient        *http.Client
-	strictToolSupport bool
-	schemaWarning     func(SchemaWarning)
-	defaultSettings   ai.ModelSettings
+	name                string
+	apiKey              string
+	baseURL             string
+	httpClient          *http.Client
+	strictToolSupport   bool
+	deferredToolSupport bool
+	schemaWarning       func(SchemaWarning)
+	defaultSettings     ai.ModelSettings
 }
 
 // Option configures a Model.
@@ -52,6 +53,12 @@ func WithStrictToolSupport(enabled bool) Option {
 	return func(m *Model) { m.strictToolSupport = enabled }
 }
 
+// WithDeferredToolSupport overrides native deferred-tool rendering. Disable
+// it for Anthropic-compatible endpoints that do not support defer_loading.
+func WithDeferredToolSupport(enabled bool) Option {
+	return func(m *Model) { m.deferredToolSupport = enabled }
+}
+
 // SchemaWarning describes a lossy strict-schema conversion.
 type SchemaWarning struct {
 	ToolName string
@@ -68,11 +75,12 @@ func WithSchemaWarningHandler(handler func(SchemaWarning)) Option {
 // NewModel creates a Model for the named Anthropic model, e.g. "claude-sonnet-4-5".
 func NewModel(name string, opts ...Option) *Model {
 	m := &Model{
-		name:              name,
-		apiKey:            os.Getenv("ANTHROPIC_API_KEY"),
-		baseURL:           "https://api.anthropic.com/v1",
-		httpClient:        http.DefaultClient,
-		strictToolSupport: supportsStrictTools(name),
+		name:                name,
+		apiKey:              os.Getenv("ANTHROPIC_API_KEY"),
+		baseURL:             "https://api.anthropic.com/v1",
+		httpClient:          http.DefaultClient,
+		strictToolSupport:   supportsStrictTools(name),
+		deferredToolSupport: supportsDeferredTools(name),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -100,9 +108,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", m.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
+	m.setRequestHeaders(req, payload, false)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -124,6 +130,18 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	return response, err
 }
 
+func (m *Model) setRequestHeaders(req *http.Request, payload *messagesRequest, stream bool) {
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", m.apiKey)
+	req.Header.Set("anthropic-version", "2023-06-01")
+	if payload.ToolAdditions {
+		req.Header.Set("anthropic-beta", "mid-conversation-tool-changes-2026-07-01")
+	}
+	if stream {
+		req.Header.Set("Accept", "text/event-stream")
+	}
+}
+
 // APIError is a non-200 response from the Anthropic API.
 type APIError struct {
 	StatusCode int
@@ -135,16 +153,17 @@ func (e *APIError) Error() string {
 }
 
 type messagesRequest struct {
-	Model       string           `json:"model"`
-	MaxTokens   int              `json:"max_tokens"`
-	System      string           `json:"system,omitempty"`
-	Messages    []messageParam   `json:"messages"`
-	Tools       []toolParam      `json:"tools,omitempty"`
-	ToolChoice  *toolChoiceParam `json:"tool_choice,omitempty"`
-	Temperature *float64         `json:"temperature,omitempty"`
-	TopP        *float64         `json:"top_p,omitempty"`
-	Stop        []string         `json:"stop_sequences,omitempty"`
-	Stream      bool             `json:"stream,omitempty"`
+	Model         string           `json:"model"`
+	MaxTokens     int              `json:"max_tokens"`
+	System        string           `json:"system,omitempty"`
+	Messages      []messageParam   `json:"messages"`
+	Tools         []toolParam      `json:"tools,omitempty"`
+	ToolChoice    *toolChoiceParam `json:"tool_choice,omitempty"`
+	Temperature   *float64         `json:"temperature,omitempty"`
+	TopP          *float64         `json:"top_p,omitempty"`
+	Stop          []string         `json:"stop_sequences,omitempty"`
+	Stream        bool             `json:"stream,omitempty"`
+	ToolAdditions bool             `json:"-"`
 }
 
 type messageParam struct {
@@ -165,16 +184,28 @@ type contentBlock struct {
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
 	// tool_result
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	Content   string `json:"content,omitempty"`
-	IsError   bool   `json:"is_error,omitempty"`
+	ToolUseID string              `json:"tool_use_id,omitempty"`
+	Content   any                 `json:"content,omitempty"`
+	IsError   bool                `json:"is_error,omitempty"`
+	Tool      *toolReferenceParam `json:"tool,omitempty"`
+}
+
+type toolReferenceParam struct {
+	Type string `json:"type"`
+	Name string `json:"name"`
+}
+
+type toolReferenceContent struct {
+	Type     string `json:"type"`
+	ToolName string `json:"tool_name"`
 }
 
 type toolParam struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description,omitempty"`
-	InputSchema map[string]any `json:"input_schema"`
-	Strict      *bool          `json:"strict,omitempty"`
+	Name         string         `json:"name"`
+	Description  string         `json:"description,omitempty"`
+	InputSchema  map[string]any `json:"input_schema"`
+	Strict       *bool          `json:"strict,omitempty"`
+	DeferLoading bool           `json:"defer_loading,omitempty"`
 }
 
 type toolChoiceParam struct {
@@ -225,19 +256,40 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens
 	}
+	nativeDeferred := m.deferredToolSupport && len(params.DeferredTools) > 0 && hasStableAnthropicTool(params)
+	deferredNames := make(map[string]struct{}, len(params.DeferredTools))
+	if nativeDeferred {
+		for _, tool := range params.DeferredTools {
+			deferredNames[tool.Name] = struct{}{}
+		}
+		req.ToolAdditions = hasAnthropicToolAdditions(msgs, deferredNames)
+	}
 	for _, msg := range msgs {
-		converted, err := convertMessage(msg)
+		converted, err := convertMessage(msg, deferredNames)
 		if err != nil {
 			return nil, err
 		}
 		req.Messages = append(req.Messages, converted...)
 	}
 	for _, tool := range params.Tools {
+		if nativeDeferred && tool.DeferLoading {
+			continue
+		}
 		converted, err := prepareAnthropicTool(tool, m.strictToolSupport, m.schemaWarning)
 		if err != nil {
 			return nil, err
 		}
 		req.Tools = append(req.Tools, converted)
+	}
+	if nativeDeferred {
+		for _, tool := range params.DeferredTools {
+			converted, err := prepareAnthropicTool(tool, m.strictToolSupport, m.schemaWarning)
+			if err != nil {
+				return nil, err
+			}
+			converted.DeferLoading = true
+			req.Tools = append(req.Tools, converted)
+		}
 	}
 	if params.OutputTool != nil {
 		converted, err := prepareAnthropicTool(*params.OutputTool, m.strictToolSupport, m.schemaWarning)
@@ -262,10 +314,43 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	return req, nil
 }
 
-func convertMessage(msg ai.ModelMessage) ([]messageParam, error) {
+func hasAnthropicToolAdditions(msgs []ai.ModelMessage, deferredNames map[string]struct{}) bool {
+	for _, message := range msgs {
+		request, ok := message.(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		for _, part := range request.Parts {
+			delta, ok := part.(ai.ToolAvailabilityDeltaPart)
+			if !ok {
+				continue
+			}
+			for _, name := range delta.ToolsAdded {
+				if _, deferred := deferredNames[name]; deferred {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func hasStableAnthropicTool(params ai.ModelRequestParams) bool {
+	if params.OutputTool != nil {
+		return true
+	}
+	for _, tool := range params.Tools {
+		if !tool.DeferLoading {
+			return true
+		}
+	}
+	return false
+}
+
+func convertMessage(msg ai.ModelMessage, deferredNames map[string]struct{}) ([]messageParam, error) {
 	switch m := msg.(type) {
 	case ai.ModelRequest:
-		return convertRequest(m)
+		return convertRequest(m, deferredNames)
 	case ai.ModelResponse:
 		return convertResponse(m), nil
 	default:
@@ -273,8 +358,9 @@ func convertMessage(msg ai.ModelMessage) ([]messageParam, error) {
 	}
 }
 
-func convertRequest(m ai.ModelRequest) ([]messageParam, error) {
+func convertRequest(m ai.ModelRequest, deferredNames map[string]struct{}) ([]messageParam, error) {
 	var blocks []contentBlock
+	searchReveals := make(map[string]struct{})
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.SystemPromptPart:
@@ -288,6 +374,27 @@ func convertRequest(m ai.ModelRequest) ([]messageParam, error) {
 			}
 			blocks = append(blocks, converted...)
 		case ai.ToolReturnPart:
+			if p.ToolKind == ai.ToolPartKindToolSearch && len(deferredNames) > 0 {
+				names, message, err := anthropicToolSearchResult(p.Content, deferredNames)
+				if err != nil {
+					return nil, err
+				}
+				var content any
+				if len(names) == 0 {
+					content = []contentBlock{{Type: "text", Text: message}}
+				} else {
+					references := make([]toolReferenceContent, len(names))
+					for index, name := range names {
+						references[index] = toolReferenceContent{Type: "tool_reference", ToolName: name}
+						searchReveals[name] = struct{}{}
+					}
+					content = references
+				}
+				blocks = append(blocks, contentBlock{
+					Type: "tool_result", ToolUseID: p.ToolCallID, Content: content,
+				})
+				continue
+			}
 			content, err := contentString(p.Content)
 			if err != nil {
 				return nil, err
@@ -297,6 +404,17 @@ func convertRequest(m ai.ModelRequest) ([]messageParam, error) {
 				IsError: p.Outcome == ai.ToolReturnOutcomeFailed || p.Outcome == ai.ToolReturnOutcomeInterrupted,
 			})
 		case ai.ToolAvailabilityDeltaPart:
+			for _, name := range p.ToolsAdded {
+				if _, deferred := deferredNames[name]; !deferred {
+					continue
+				}
+				if _, fromSearch := searchReveals[name]; fromSearch {
+					continue
+				}
+				blocks = append(blocks, contentBlock{
+					Type: "tool_addition", Tool: &toolReferenceParam{Type: "tool_reference", Name: name},
+				})
+			}
 		case ai.RetryPromptPart:
 			content := p.ModelResponse()
 			if p.ToolCallID != "" {
@@ -309,6 +427,36 @@ func convertRequest(m ai.ModelRequest) ([]messageParam, error) {
 		}
 	}
 	return []messageParam{{Role: "user", Content: blocks}}, nil
+}
+
+func anthropicToolSearchResult(
+	content any, deferredNames map[string]struct{},
+) ([]string, string, error) {
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return nil, "", fmt.Errorf("anthropic: marshal tool search return: %w", err)
+	}
+	var result ai.ToolSearchResult
+	if err := json.Unmarshal(encoded, &result); err != nil {
+		return nil, "", fmt.Errorf("anthropic: parse tool search return: %w", err)
+	}
+	names := make([]string, 0, len(result.DiscoveredTools))
+	seen := make(map[string]struct{}, len(result.DiscoveredTools))
+	for _, match := range result.DiscoveredTools {
+		if _, deferred := deferredNames[match.Name]; !deferred {
+			continue
+		}
+		if _, duplicate := seen[match.Name]; duplicate {
+			continue
+		}
+		seen[match.Name] = struct{}{}
+		names = append(names, match.Name)
+	}
+	message := result.Message
+	if message == "" {
+		message = "No matching tools found. The tools you need may not be available."
+	}
+	return names, message, nil
 }
 
 func convertResponse(m ai.ModelResponse) []messageParam {
@@ -326,6 +474,18 @@ func convertResponse(m ai.ModelResponse) []messageParam {
 		}
 	}
 	return []messageParam{{Role: "assistant", Content: blocks}}
+}
+
+func supportsDeferredTools(name string) bool {
+	for _, prefix := range []string{
+		"claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-5",
+		"claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func supportsStrictTools(name string) bool {

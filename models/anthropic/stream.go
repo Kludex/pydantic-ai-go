@@ -32,10 +32,7 @@ func (m *Model) StreamRequest(
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", m.apiKey)
-	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("Accept", "text/event-stream")
+	m.setRequestHeaders(req, payload, true)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {

@@ -109,7 +109,7 @@ func NewModel(name string, options ...Option) *Model {
 func (model *Model) Request(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*ai.ModelResponse, error) {
-	prepared, err := model.prepareParams(params)
+	ctx, prepared, err := model.prepareParams(ctx, params)
 	if err != nil {
 		return nil, err
 	}
@@ -120,25 +120,46 @@ func (model *Model) Request(
 func (model *Model) StreamRequest(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
-	prepared, err := model.prepareParams(params)
+	ctx, prepared, err := model.prepareParams(ctx, params)
 	if err != nil {
 		return nil, err
 	}
 	return model.model.StreamRequest(ctx, messages, prepared)
 }
 
-func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequestParams, error) {
+func (model *Model) prepareParams(
+	ctx context.Context, params ai.ModelRequestParams,
+) (context.Context, ai.ModelRequestParams, error) {
 	name := strings.TrimPrefix(model.Name(), "~")
 	provider, routedModel, found := strings.Cut(name, "/")
 	if !found || provider == "" || routedModel == "" {
-		return ai.ModelRequestParams{}, fmt.Errorf(
+		return ctx, ai.ModelRequestParams{}, fmt.Errorf(
 			"openrouter: model name %q must use the provider/model form", model.Name(),
 		)
 	}
 	settings, err := prepareSettings(params.Settings)
 	if err != nil {
-		return ai.ModelRequestParams{}, err
+		return ctx, ai.ModelRequestParams{}, err
+	}
+	settings, cacheSettings, err := extractCacheSettings(settings)
+	if err != nil {
+		return ctx, ai.ModelRequestParams{}, err
+	}
+	cache := openai.ChatPromptCache{}
+	switch provider {
+	case "anthropic":
+		cache = openai.ChatPromptCache{
+			InstructionsTTL: string(cacheSettings[cacheInstructionsKey]),
+			MessagesTTL:     string(cacheSettings[cacheMessagesKey]),
+			ToolsTTL:        string(cacheSettings[cacheToolsKey]),
+			IncludeTTL:      true, SupportsDynamicInstructions: true,
+		}
+	case "google":
+		cache = openai.ChatPromptCache{
+			InstructionsTTL: string(cacheSettings[cacheInstructionsKey]),
+			MessagesTTL:     string(cacheSettings[cacheMessagesKey]),
+		}
 	}
 	params.Settings = settings
-	return params, nil
+	return openai.WithChatPromptCache(ctx, cache), params, nil
 }

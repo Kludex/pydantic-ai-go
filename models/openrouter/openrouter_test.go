@@ -198,6 +198,19 @@ func TestOpenRouterNativeToolDefaultsAndCompatibility(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "invalid thinking level") {
 		t.Fatalf("unexpected request settings error: %v", err)
 	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ExtraBody: map[string]any{"openrouter_cache_messages": "5m"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []any{true, "1d"} {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"openrouter_cache_messages": value},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "cache") {
+			t.Fatalf("unexpected cache setting error for %#v: %v", value, err)
+		}
+	}
 }
 
 func TestOpenRouterModelNameValidation(t *testing.T) {
@@ -210,6 +223,80 @@ func TestOpenRouterModelNameValidation(t *testing.T) {
 		if _, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{}); err == nil {
 			t.Fatalf("stream accepted invalid model %q", name)
 		}
+	}
+}
+
+func TestOpenRouterPromptCaching(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`))
+	}))
+	defer server.Close()
+	settings, err := (openrouter.Settings{
+		CacheInstructions:    openrouter.CacheTTL1Hour,
+		CacheMessages:        openrouter.CacheTTL5Minutes,
+		CacheToolDefinitions: openrouter.CacheTTL1Hour,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := func(modelName string) {
+		t.Helper()
+		model := openrouter.NewModel(
+			modelName, openrouter.WithBaseURL(server.URL), openrouter.WithHTTPClient(server.Client()),
+		)
+		_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "question"},
+		}}}, ai.ModelRequestParams{
+			Instructions: "static\n\ndynamic",
+			InstructionParts: []ai.InstructionPart{
+				{Content: "static"}, {Content: "dynamic", Dynamic: true},
+			},
+			Tools:       []ai.ToolDefinition{{Name: "local", Schema: map[string]any{"type": "object"}}},
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{}}, Settings: settings,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	request("anthropic/claude-sonnet-4.6")
+	anthropicMessages := bodies[0]["messages"].([]any)
+	instruction := anthropicMessages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	lastMessage := anthropicMessages[2].(map[string]any)["content"].([]any)[0].(map[string]any)
+	tools := bodies[0]["tools"].([]any)
+	if instruction["cache_control"].(map[string]any)["ttl"] != "1h" ||
+		lastMessage["cache_control"].(map[string]any)["ttl"] != "5m" ||
+		tools[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" ||
+		tools[1].(map[string]any)["cache_control"] != nil {
+		t.Fatalf("unexpected Anthropic cache boundaries: %#v", bodies[0])
+	}
+
+	request("google/gemini-3-flash")
+	googleMessages := bodies[1]["messages"].([]any)
+	if _, cached := googleMessages[0].(map[string]any)["content"].([]any); cached {
+		t.Fatalf("dynamic Google instructions were cached: %#v", googleMessages)
+	}
+	googleLast := googleMessages[2].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if cache := googleLast["cache_control"].(map[string]any); cache["type"] != "ephemeral" || cache["ttl"] != nil {
+		t.Fatalf("unexpected Google message cache boundary: %#v", googleLast)
+	}
+	if bodies[1]["tools"].([]any)[0].(map[string]any)["cache_control"] != nil {
+		t.Fatalf("Google tool definition was cached: %#v", bodies[1]["tools"])
+	}
+
+	request("openai/gpt-5")
+	encodedBytes, err := json.Marshal(bodies[2])
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := string(encodedBytes)
+	if strings.Contains(encoded, "cache_control") || strings.Contains(encoded, "openrouter_cache_") {
+		t.Fatalf("unsupported cache settings leaked to OpenRouter: %s", encoded)
 	}
 }
 

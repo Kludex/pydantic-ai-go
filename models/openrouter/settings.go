@@ -91,6 +91,20 @@ type Reasoning struct {
 	Enabled   *bool           `json:"enabled,omitempty"`
 }
 
+// CacheTTL selects the lifetime of one OpenRouter prompt-cache breakpoint.
+type CacheTTL string
+
+const (
+	CacheTTL5Minutes CacheTTL = "5m"
+	CacheTTL1Hour    CacheTTL = "1h"
+)
+
+const (
+	cacheInstructionsKey = "openrouter_cache_instructions"
+	cacheMessagesKey     = "openrouter_cache_messages"
+	cacheToolsKey        = "openrouter_cache_tool_definitions"
+)
+
 // UsageConfig requests OpenRouter's extended usage and cost fields.
 type UsageConfig struct {
 	Include bool `json:"include"`
@@ -98,13 +112,16 @@ type UsageConfig struct {
 
 // Settings combines portable settings with OpenRouter routing extensions.
 type Settings struct {
-	Common     ai.ModelSettings
-	Models     []string
-	Provider   *ProviderRouting
-	Preset     string
-	Transforms []Transform
-	Reasoning  *Reasoning
-	Usage      *UsageConfig
+	Common               ai.ModelSettings
+	Models               []string
+	Provider             *ProviderRouting
+	Preset               string
+	Transforms           []Transform
+	Reasoning            *Reasoning
+	Usage                *UsageConfig
+	CacheInstructions    CacheTTL
+	CacheMessages        CacheTTL
+	CacheToolDefinitions CacheTTL
 }
 
 // Build returns detached portable settings accepted by agents and direct requests.
@@ -170,6 +187,25 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 			return ai.ModelSettings{}, err
 		}
 	}
+	cacheSettings := []struct {
+		name string
+		ttl  CacheTTL
+	}{
+		{name: cacheInstructionsKey, ttl: settings.CacheInstructions},
+		{name: cacheMessagesKey, ttl: settings.CacheMessages},
+		{name: cacheToolsKey, ttl: settings.CacheToolDefinitions},
+	}
+	for _, cache := range cacheSettings {
+		if cache.ttl == "" {
+			continue
+		}
+		if err := validateCacheTTL(cache.ttl); err != nil {
+			return ai.ModelSettings{}, err
+		}
+		if err := set(cache.name, cache.ttl); err != nil {
+			return ai.ModelSettings{}, err
+		}
+	}
 	common.ExtraBody = extra
 	return prepareSettings(common)
 }
@@ -203,6 +239,36 @@ func prepareSettings(settings ai.ModelSettings) (ai.ModelSettings, error) {
 	}
 	settings.ExtraBody = extra
 	return settings, nil
+}
+
+func extractCacheSettings(settings ai.ModelSettings) (ai.ModelSettings, map[string]CacheTTL, error) {
+	extra := maps.Clone(settings.ExtraBody)
+	cache := map[string]CacheTTL{}
+	for _, name := range []string{cacheInstructionsKey, cacheMessagesKey, cacheToolsKey} {
+		value, exists := extra[name]
+		if !exists {
+			continue
+		}
+		delete(extra, name)
+		var ttl CacheTTL
+		switch value := value.(type) {
+		case CacheTTL:
+			ttl = value
+		case string:
+			ttl = CacheTTL(value)
+		default:
+			return ai.ModelSettings{}, nil, fmt.Errorf("openrouter: cache setting %q must be a TTL string", name)
+		}
+		if err := validateCacheTTL(ttl); err != nil {
+			return ai.ModelSettings{}, nil, err
+		}
+		cache[name] = ttl
+	}
+	if len(extra) == 0 {
+		extra = nil
+	}
+	settings.ExtraBody = extra
+	return settings, cache, nil
 }
 
 func openRouterReasoningEffort(level ai.ThinkingLevel) (string, bool, error) {
@@ -240,6 +306,15 @@ func validateProviderRouting(provider ProviderRouting) error {
 		}
 	}
 	return nil
+}
+
+func validateCacheTTL(ttl CacheTTL) error {
+	switch ttl {
+	case CacheTTL5Minutes, CacheTTL1Hour:
+		return nil
+	default:
+		return fmt.Errorf("openrouter: invalid cache TTL %q", ttl)
+	}
 }
 
 func validateReasoningEffort(effort ReasoningEffort) error {

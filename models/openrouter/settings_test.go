@@ -123,6 +123,10 @@ func TestOpenRouterSettingsValidation(t *testing.T) {
 			}},
 			want: "mutually exclusive",
 		},
+		"cache TTL": {
+			settings: openrouter.Settings{CacheMessages: "1d"},
+			want:     "invalid cache TTL",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := test.settings.Build()
@@ -142,6 +146,18 @@ func TestOpenRouterSettingsValidation(t *testing.T) {
 		{name: "transforms", settings: openrouter.Settings{Transforms: []openrouter.Transform{openrouter.TransformMiddleOut}}},
 		{name: "reasoning", settings: openrouter.Settings{Reasoning: &openrouter.Reasoning{Enabled: &enabled}}},
 		{name: "usage", settings: openrouter.Settings{Usage: &openrouter.UsageConfig{Include: true}}},
+		{
+			name:     "openrouter_cache_instructions",
+			settings: openrouter.Settings{CacheInstructions: openrouter.CacheTTL5Minutes},
+		},
+		{
+			name:     "openrouter_cache_messages",
+			settings: openrouter.Settings{CacheMessages: openrouter.CacheTTL5Minutes},
+		},
+		{
+			name:     "openrouter_cache_tool_definitions",
+			settings: openrouter.Settings{CacheToolDefinitions: openrouter.CacheTTL5Minutes},
+		},
 	}
 	for _, test := range conflicts {
 		t.Run("conflict "+test.name, func(t *testing.T) {

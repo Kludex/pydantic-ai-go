@@ -240,7 +240,7 @@ func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettin
 
 // Request implements ai.Model.
 func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
-	payload, err := m.buildPayload(msgs, params)
+	payload, err := m.buildPayload(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
@@ -334,9 +334,10 @@ type chatMessage struct {
 }
 
 type contentPart struct {
-	Type     string    `json:"type"`
-	Text     string    `json:"text,omitempty"`
-	ImageURL *imageURL `json:"image_url,omitempty"`
+	Type         string            `json:"type"`
+	Text         string            `json:"text,omitempty"`
+	ImageURL     *imageURL         `json:"image_url,omitempty"`
+	CacheControl *chatCacheControl `json:"cache_control,omitempty"`
 }
 
 type imageURL struct {
@@ -355,8 +356,9 @@ type functionCall struct {
 }
 
 type chatTool struct {
-	Type     string       `json:"type"`
-	Function chatFunction `json:"function"`
+	Type         string            `json:"type"`
+	Function     chatFunction      `json:"function"`
+	CacheControl *chatCacheControl `json:"cache_control,omitempty"`
 }
 
 type chatFunction struct {
@@ -366,7 +368,9 @@ type chatFunction struct {
 	Strict      *bool          `json:"strict,omitempty"`
 }
 
-func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*chatRequest, error) {
+func (m *Model) buildPayload(
+	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
+) (*chatRequest, error) {
 	if m.chatCompatibility.NativeToolFunc == nil {
 		for _, nativeTool := range params.NativeTools {
 			if nativeToolIsNil(nativeTool) {
@@ -410,8 +414,37 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Temperature = nil
 		req.TopP = nil
 	}
+	cache := chatPromptCacheFromContext(ctx)
 	if params.Instructions != "" {
-		req.Messages = append(req.Messages, chatMessage{Role: "system", Content: params.Instructions})
+		if cache.InstructionsTTL != "" && len(params.InstructionParts) > 0 {
+			firstInstruction := len(req.Messages)
+			lastStaticInstruction := -1
+			hasDynamicInstructions := false
+			for _, instruction := range params.InstructionParts {
+				req.Messages = append(req.Messages, chatMessage{Role: "system", Content: instruction.Content})
+				if instruction.Dynamic {
+					hasDynamicInstructions = true
+				} else {
+					lastStaticInstruction = len(req.Messages) - 1
+				}
+			}
+			cacheIndex := len(req.Messages) - 1
+			if hasDynamicInstructions {
+				if cache.SupportsDynamicInstructions {
+					cacheIndex = lastStaticInstruction
+				} else {
+					cacheIndex = -1
+				}
+			}
+			if cacheIndex >= firstInstruction {
+				addChatMessageCache(&req.Messages[cacheIndex], cache.InstructionsTTL, cache.IncludeTTL)
+			}
+		} else {
+			req.Messages = append(req.Messages, chatMessage{Role: "system", Content: params.Instructions})
+			if cache.InstructionsTTL != "" {
+				addChatMessageCache(&req.Messages[len(req.Messages)-1], cache.InstructionsTTL, cache.IncludeTTL)
+			}
+		}
 	}
 	for _, msg := range msgs {
 		converted, err := m.convertMessage(msg)
@@ -419,6 +452,9 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			return nil, err
 		}
 		req.Messages = append(req.Messages, converted...)
+	}
+	if cache.MessagesTTL != "" && len(req.Messages) > 0 {
+		addChatMessageCache(&req.Messages[len(req.Messages)-1], cache.MessagesTTL, cache.IncludeTTL)
 	}
 	for _, tool := range params.Tools {
 		converted, err := convertTool(tool, m.strictToolSupport)
@@ -436,6 +472,11 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		if !params.AllowText {
 			req.ToolChoice = "required"
 		}
+	}
+	if cache.ToolsTTL != "" && len(req.Tools) > 0 {
+		tool := req.Tools[len(req.Tools)-1].(chatTool)
+		tool.CacheControl = newChatCacheControl(cache.ToolsTTL, cache.IncludeTTL)
+		req.Tools[len(req.Tools)-1] = tool
 	}
 	if m.chatCompatibility.NativeToolFunc != nil {
 		for _, nativeTool := range params.NativeTools {

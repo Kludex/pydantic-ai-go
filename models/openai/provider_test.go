@@ -590,6 +590,108 @@ func TestOpenAIExtendedResponseVariants(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatPromptCache(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`))
+	}))
+	defer server.Close()
+	model := openai.NewModel("routed", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+	ctx := openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
+		InstructionsTTL: "1h", MessagesTTL: "5m", ToolsTTL: "1h",
+		IncludeTTL: true, SupportsDynamicInstructions: true,
+	})
+	_, err := model.Request(ctx, []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.TextContent{Text: "look"}, ai.ImageURL{URL: "https://example.com/image.png"},
+		}},
+	}}}, ai.ModelRequestParams{
+		Instructions: "static one\n\nstatic two\n\ndynamic",
+		InstructionParts: []ai.InstructionPart{
+			{Content: "static one"}, {Content: "static two"}, {Content: "dynamic", Dynamic: true},
+		},
+		Tools: []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := bodies[0]["messages"].([]any)
+	static := messages[1].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if static["text"] != "static two" || static["cache_control"].(map[string]any)["ttl"] != "1h" ||
+		messages[2].(map[string]any)["content"] != "dynamic" {
+		t.Fatalf("unexpected instruction cache boundary: %#v", messages)
+	}
+	userContent := messages[3].(map[string]any)["content"].([]any)
+	if userContent[1].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" {
+		t.Fatalf("unexpected message cache boundary: %#v", userContent)
+	}
+	tool := bodies[0]["tools"].([]any)[0].(map[string]any)
+	if tool["cache_control"].(map[string]any)["ttl"] != "1h" {
+		t.Fatalf("unexpected tool cache boundary: %#v", tool)
+	}
+
+	ctx = openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
+		InstructionsTTL: "5m", IncludeTTL: false,
+	})
+	_, err = model.Request(ctx, nil, ai.ModelRequestParams{
+		Instructions: "static\n\ndynamic",
+		InstructionParts: []ai.InstructionPart{
+			{Content: "static"}, {Content: "dynamic", Dynamic: true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range bodies[1]["messages"].([]any) {
+		if _, ok := message.(map[string]any)["content"].([]any); ok {
+			t.Fatalf("dynamic-incompatible instructions were cached: %#v", bodies[1])
+		}
+	}
+
+	ctx = openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
+		InstructionsTTL: "5m", SupportsDynamicInstructions: true,
+	})
+	_, err = model.Request(ctx, nil, ai.ModelRequestParams{
+		Instructions: "dynamic", InstructionParts: []ai.InstructionPart{{Content: "dynamic", Dynamic: true}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bodies[2]["messages"].([]any)[0].(map[string]any)["content"] != "dynamic" {
+		t.Fatalf("all-dynamic instructions were cached: %#v", bodies[2])
+	}
+
+	ctx = openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{InstructionsTTL: "5m"})
+	_, err = model.Request(ctx, nil, ai.ModelRequestParams{Instructions: "aggregate"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	aggregate := bodies[3]["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if aggregate["cache_control"].(map[string]any)["type"] != "ephemeral" ||
+		aggregate["cache_control"].(map[string]any)["ttl"] != nil {
+		t.Fatalf("unexpected aggregate cache boundary: %#v", aggregate)
+	}
+
+	ctx = openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{MessagesTTL: "5m"})
+	_, err = model.Request(ctx, []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: ""}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: "tool", ToolCallID: "call", Args: []byte(`{}`)}}},
+	}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Request(ctx, []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: ""},
+	}}}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOpenAIChatCompatibilityValidation(t *testing.T) {
 	for name, compatibility := range map[string]openai.ChatCompatibility{
 		"empty reason":              {FinishReasons: map[string]ai.FinishReason{"": ai.FinishReasonStop}},

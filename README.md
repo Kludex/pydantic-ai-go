@@ -10,6 +10,70 @@ You create an `Agent` with a `Model`, register tools on it, and call `Run`. The 
 go get github.com/Kludex/pydantic-ai-go
 ```
 
+## Direct model requests
+
+Use `RequestModel` when you need provider-normalized messages without an agent loop:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	model := openai.NewModel("gpt-5-mini")
+	response, err := ai.RequestModel(context.Background(), model, []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "What is the capital of France?"},
+		}},
+	}, ai.ModelRequestParams{AllowText: true})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(response.Text())
+}
+```
+
+`StreamModel` returns normalized part lifecycle events and a detached live response snapshot:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	model := openai.NewModel("gpt-5-mini")
+	messages := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "Who was Albert Einstein?"},
+		}},
+	}
+	stream := ai.StreamModel(context.Background(), model, messages, ai.ModelRequestParams{AllowText: true})
+	for event, err := range stream.Events() {
+		if err != nil {
+			log.Fatal(err)
+		}
+		fmt.Printf("%T\n", event)
+	}
+	fmt.Println(stream.Response().Text())
+}
+```
+
+Both APIs apply model defaults, validate portable settings, restore instruction parts from history, translate foreign native tool-search history, calculate cost, and continue suspended responses. Direct streams have one consumer. Cancel their context to stop an in-flight request.
+
 ## Example
 
 ```go

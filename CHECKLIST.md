@@ -208,7 +208,7 @@ Status:
 ## P2 - Broader PydanticAI surface
 
 - [x] `AgentRun` provides manual normalized-event progression through `StartRun`, `StartRunParts`, and `ResumeRun`, with external enqueue, idle enqueue, cancellation, live usage, deterministic cleanup, and no public graph internals.
-- [ ] Direct model API without an agent loop.
+- [x] Direct `RequestModel` and single-consumer `StreamModel` APIs without an agent loop, including detached inputs/live snapshots, model defaults, settings validation, restored historical instructions, provider-native history adaptation, normalized fallback streaming, per-segment timeouts and pricing, model lifecycle, and automatic suspended-response continuation.
 - [ ] Embeddings API and provider implementations.
 - [ ] Realtime voice/audio API and providers.
 - [ ] MCP server support.
@@ -235,8 +235,8 @@ Status:
 
 ## Next work
 
-1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
-2. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
-3. Add token-aware trimming, model-wrapper unwrapping, and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
+1. Add model wrappers, fallback chains, concurrency limiting, and wrapper-aware provider capability detection.
+2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
+3. Extend MCP with explicit shared sessions, prompts/resources, sampling, elicitation, task extension, and OAuth examples.
 4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.
 5. Extend upstream message fixtures as remaining persisted part types land.

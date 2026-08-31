@@ -224,6 +224,9 @@ func (s ModelSettings) Clone() ModelSettings {
 }
 
 func validateModelSettings(settings ModelSettings) error {
+	if settings.RequestTimeout < 0 {
+		return fmt.Errorf("ai: request timeout must be non-negative, got %s", settings.RequestTimeout)
+	}
 	if settings.TopLogprobs != nil {
 		if *settings.TopLogprobs < 0 {
 			return fmt.Errorf("ai: top logprobs must be non-negative, got %d", *settings.TopLogprobs)

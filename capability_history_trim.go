@@ -28,7 +28,7 @@ func (err *HistoryTokenLimitError) Error() string {
 func (*HistoryTokenLimitError) Unwrap() error { return ErrHistoryTokenLimitExceeded }
 
 // TokenHistoryTrimmer removes the oldest complete user turns until a request
-// fits MaxInputTokens. It never changes durable run history.
+// fits MaxInputTokens. It does not request durable history replacement.
 //
 // MinimumRecentTurns defaults to one. The current run's complete turn is always
 // protected. Token counts include instructions, tools, and output schemas.

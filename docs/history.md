@@ -56,7 +56,9 @@ func main() {
 
 The current run's turn is always protected. `MinimumRecentTurns` defaults to one. Keeping whole turns prevents a function-tool call from being separated from its return value.
 
-Trimming changes only the request snapshot. `Result.Messages()` still contains the complete durable history. You can persist that history and apply a different limit on the next run.
+By itself, trimming changes only the request snapshot. `Result.Messages()` still contains the complete durable history. You can persist that history and apply a different limit on the next run.
+
+A preceding model-request hook can explicitly set `ModelRequestContext.ReplaceHistory`. In that composition, the final processed snapshot becomes durable.
 
 `ErrHistoryTokenLimitExceeded` means the protected turns and request configuration exceed the limit. Inspect `HistoryTokenLimitError.Usage` for the smallest count the trimmer could send.
 
@@ -64,6 +66,63 @@ Trimming changes only the request snapshot. `Result.Messages()` still contains t
 > Token-aware trimming calls the selected model's token-counting endpoint more than once when trimming is needed. This adds latency and may consume a separate provider rate limit.
 
 The selected model must implement `TokenCountingModel`. OpenAI Responses, Anthropic Messages, Gemini Developer API, and Vertex AI provide token counting. See [Usage limits and token counting](usage.md) for endpoint details and unsupported-model handling.
+
+## Summarize old turns
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	summaryAgent := ai.NewAgent[struct{}, string](
+		openai.NewResponsesModel("gpt-5-mini"),
+		ai.WithInstructions("Preserve decisions, constraints, and unresolved work."),
+	)
+	summarizer := ai.HistorySummarizer{
+		MinimumRecentTurns: 3,
+		Summarize: func(
+			ctx context.Context,
+			_ *ai.RunInfo,
+			messages []ai.ModelMessage,
+		) (ai.HistorySummary, error) {
+			result, err := summaryAgent.Run(
+				ctx,
+				"Summarize the preceding conversation.",
+				struct{}{},
+				ai.WithMessageHistory(messages),
+			)
+			if err != nil {
+				return ai.HistorySummary{}, err
+			}
+			return ai.HistorySummary{Content: result.Output, Usage: result.Usage()}, nil
+		},
+	}
+
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewResponsesModel("gpt-5"),
+		ai.WithCapabilities(summarizer),
+	)
+	result, err := agent.Run(context.Background(), "Continue the design review.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`HistorySummarizer` sends only complete old user turns to your callback. It replaces them with one portable assistant text response. The replacement is durable, so a tool loop reuses the summary instead of paying to generate it again.
+
+Return the summary model's `Usage`. The outer run adds that usage before its primary request and applies `UsageLimits` immediately. This prevents a hidden summarization request from escaping your application budget.
+
+The callback receives detached messages and can use any provider or summarization service. It must be safe when concurrent runs use the same agent.
 
 ## Write a custom history processor
 

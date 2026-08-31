@@ -331,6 +331,84 @@ func TestOpenAIChatCompatibility(t *testing.T) {
 	}
 }
 
+func TestOpenAIChatVideoCompatibility(t *testing.T) {
+	videoServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/typed.webm" {
+			response.Header().Set("Content-Type", "video/webm")
+		} else {
+			response.Header().Set("Content-Type", "application/octet-stream")
+		}
+		_, _ = response.Write([]byte("downloaded"))
+	}))
+	defer videoServer.Close()
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = io.WriteString(response, `{
+			"id":"response","model":"compatible","choices":[{"message":{"content":"done"},"finish_reason":"stop"}]
+		}`)
+	}))
+	defer server.Close()
+	options := []openai.Option{openai.WithProvider(openai.ProviderConfig{
+		Name: "provider", BaseURL: server.URL, HTTPClient: server.Client(),
+	})}
+	plain := openai.NewModel("compatible", options...)
+	for name, content := range map[string]ai.UserContent{
+		"URL":    ai.VideoURL{URL: "https://example.com/video.mp4"},
+		"inline": ai.BinaryContent{Data: []byte("video"), MediaType: "video/mp4"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := plain.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{content}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil || !strings.Contains(err.Error(), "does not support") {
+				t.Fatalf("unexpected unsupported video error: %v", err)
+			}
+		})
+	}
+	compatible := openai.NewModel("compatible", append(options, openai.WithChatCompatibility(
+		openai.ChatCompatibility{VideoInput: true},
+	))...)
+	response, err := compatible.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.VideoURL{URL: "https://example.com/video.mp4"},
+			ai.BinaryContent{Data: []byte("video"), MediaType: "video/mp4"},
+			ai.VideoURL{URL: videoServer.URL + "/typed.webm", ForceDownload: ai.FileDownloadAllowLocal},
+			ai.VideoURL{URL: videoServer.URL + "/fallback.mp4", ForceDownload: ai.FileDownloadAllowLocal},
+		}},
+	}}}, ai.ModelRequestParams{})
+	if err != nil || response.Text() != "done" {
+		t.Fatalf("unexpected compatible video response=%+v err=%v", response, err)
+	}
+	parts := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(parts) != 4 || parts[0].(map[string]any)["type"] != "video_url" ||
+		parts[1].(map[string]any)["video_url"].(map[string]any)["url"] !=
+			"data:video/mp4;base64,dmlkZW8=" ||
+		parts[2].(map[string]any)["video_url"].(map[string]any)["url"] !=
+			"data:video/webm;base64,ZG93bmxvYWRlZA==" ||
+		parts[3].(map[string]any)["video_url"].(map[string]any)["url"] !=
+			"data:video/mp4;base64,ZG93bmxvYWRlZA==" {
+		t.Fatalf("unexpected compatible video body: %#v", body)
+	}
+	for name, video := range map[string]ai.VideoURL{
+		"blocked local": {URL: videoServer.URL + "/blocked.mp4", ForceDownload: ai.FileDownloadSafe},
+		"YouTube":       {URL: "https://youtu.be/example", ForceDownload: ai.FileDownloadSafe},
+		"unknown media": {URL: videoServer.URL + "/unknown", ForceDownload: ai.FileDownloadAllowLocal},
+		"invalid mode":  {URL: "https://example.com/video.mp4", ForceDownload: "invalid"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := compatible.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{video}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil {
+				t.Fatal("invalid compatible video request succeeded")
+			}
+		})
+	}
+}
+
 func TestOpenAIExtendedChatCompatibility(t *testing.T) {
 	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

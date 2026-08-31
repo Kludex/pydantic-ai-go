@@ -37,6 +37,50 @@ OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini
 
 OpenAI Responses renders ordered `input_text` and `input_image` items. Its `/responses/input_tokens` count includes the same multimodal request.
 
+## Send a video
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openrouter"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		openrouter.NewModel("google/gemini-3-pro-preview"),
+	)
+	result, err := agent.RunParts(
+		context.Background(),
+		[]ai.UserContent{
+			ai.TextContent{Text: "Describe this video in one sentence."},
+			ai.VideoURL{URL: "https://example.com/demo.mp4"},
+		},
+		struct{}{},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+OpenRouter sends `VideoURL` as its `video_url` extension. It also sends `BinaryContent` with a `video/*` media type as an inline video data URL.
+
+`VideoURL` infers common video media types from the URL extension. Set `MediaType` when the URL has no recognizable extension. `ResolvedIdentifier()` returns a stable six-character identifier unless you provide `Identifier`.
+
+Google sends YouTube URLs, Gemini Files API URLs, and Vertex `gs://` URLs directly. It downloads other video URLs and sends the bytes inline. The downloader limits responses to 50 MiB, pins validated DNS addresses to prevent rebinding, and blocks private networks and cloud metadata endpoints.
+
+Set `ForceDownload: ai.FileDownloadSafe` to download an OpenRouter URL with the same protections. Set `ForceDownload: ai.FileDownloadAllowLocal` only when you intentionally need a private host. Cloud metadata endpoints remain blocked in both modes.
+
+> [!WARNING]
+> `FileDownloadAllowLocal` permits requests to loopback and private network addresses. Use it only with trusted URLs. The URL and every redirect remain restricted to HTTP or HTTPS.
+
 ## Send inline image bytes
 
 ```go

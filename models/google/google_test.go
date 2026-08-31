@@ -1405,6 +1405,100 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	}
 }
 
+func TestVideoURLPrompt(t *testing.T) {
+	videoServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/typed.mp4" {
+			response.Header().Set("Content-Type", "video/quicktime")
+		} else {
+			response.Header().Set("Content-Type", "application/octet-stream")
+		}
+		_, _ = response.Write([]byte("video"))
+	}))
+	defer videoServer.Close()
+	var gotBody map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	})
+	metadata := map[string]any{
+		"start_offset": "1s", "end_offset": "2s", "media_resolution": "MEDIA_RESOLUTION_HIGH",
+	}
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.VideoURL{URL: "https://youtu.be/example", VendorMetadata: metadata},
+		ai.VideoURL{URL: "https://generativelanguage.googleapis.com/v1beta/files/video", MediaType: "video/mp4"},
+		ai.VideoURL{URL: videoServer.URL + "/clip.webm", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.VideoURL{URL: videoServer.URL + "/typed.mp4", ForceDownload: ai.FileDownloadAllowLocal},
+	}}}}}
+	response, err := model.Request(t.Context(), messages, ai.ModelRequestParams{})
+	if err != nil || response.Text() != "done" {
+		t.Fatalf("unexpected Google video response=%+v err=%v", response, err)
+	}
+	parts := gotBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	first := parts[0].(map[string]any)
+	if metadata["start_offset"] != "1s" || metadata["startOffset"] != nil || metadata["media_resolution"] == nil {
+		t.Fatalf("Google mutated video metadata: %#v", metadata)
+	}
+	if first["fileData"].(map[string]any)["fileUri"] != "https://youtu.be/example" ||
+		first["mediaResolution"] != "MEDIA_RESOLUTION_HIGH" ||
+		first["videoMetadata"].(map[string]any)["startOffset"] != "1s" ||
+		first["videoMetadata"].(map[string]any)["endOffset"] != "2s" {
+		t.Fatalf("unexpected YouTube part: %#v", first)
+	}
+	if parts[1].(map[string]any)["fileData"].(map[string]any)["fileUri"] !=
+		"https://generativelanguage.googleapis.com/v1beta/files/video" {
+		t.Fatalf("unexpected Files API video: %#v", parts[1])
+	}
+	inline := parts[2].(map[string]any)["inlineData"].(map[string]any)
+	typed := parts[3].(map[string]any)["inlineData"].(map[string]any)
+	if inline["mimeType"] != "video/webm" || inline["data"] != "dmlkZW8=" ||
+		typed["mimeType"] != "video/quicktime" {
+		t.Fatalf("unexpected inline videos: fallback=%#v typed=%#v", inline, typed)
+	}
+
+	for name, video := range map[string]ai.VideoURL{
+		"blocked local":  {URL: videoServer.URL + "/clip.webm"},
+		"forced YouTube": {URL: "https://youtu.be/example", ForceDownload: ai.FileDownloadSafe},
+		"unknown media":  {URL: "https://example.com/video"},
+		"invalid mode":   {URL: "https://example.com/video.mp4", ForceDownload: "invalid"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{video}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil {
+				t.Fatal("invalid Google video request succeeded")
+			}
+		})
+	}
+}
+
+func TestVertexVideoURLPrompt(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	}))
+	defer server.Close()
+	model := google.NewModel("gemini-3-pro", google.WithProvider(google.ProviderConfig{
+		Transport: google.TransportVertexAI, Name: "google-cloud", BaseURL: server.URL,
+		APIKey: "key", HTTPClient: server.Client(),
+	}))
+	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{ai.VideoURL{URL: "gs://bucket/video.mp4"}}},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	file := gotBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)[0].(map[string]any)["fileData"].(map[string]any)
+	if file["fileUri"] != "gs://bucket/video.mp4" || file["mimeType"] != "video/mp4" {
+		t.Fatalf("unexpected Vertex video: %#v", file)
+	}
+}
+
 func TestMultimodalUnknownContent(t *testing.T) {
 	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 	for name, item := range map[string]ai.UserContent{

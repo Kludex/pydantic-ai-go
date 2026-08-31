@@ -15,6 +15,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/internal/download"
 	jsonschema "github.com/Kludex/pydantic-ai-go/internal/schema"
 )
 
@@ -89,7 +90,7 @@ func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettin
 
 // Request implements ai.Model.
 func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
-	payload, err := m.buildPayload(msgs, params)
+	payload, err := m.buildPayload(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
@@ -136,7 +137,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 func (m *Model) CountTokens(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (ai.Usage, error) {
-	payload, err := m.buildPayload(messages, params)
+	payload, err := m.buildPayload(ctx, messages, params)
 	if err != nil {
 		return ai.Usage{}, err
 	}
@@ -232,6 +233,8 @@ type part struct {
 	ToolResponse        *googleToolResponse  `json:"toolResponse,omitempty"`
 	Thought             bool                 `json:"thought,omitempty"`
 	ThoughtSignature    string               `json:"thoughtSignature,omitempty"`
+	VideoMetadata       map[string]any       `json:"videoMetadata,omitempty"`
+	MediaResolution     any                  `json:"mediaResolution,omitempty"`
 }
 
 type executableCode struct {
@@ -266,7 +269,7 @@ type fileData struct {
 	FileURI  string `json:"fileUri"`
 }
 
-func (model *Model) convertUserPrompt(p ai.UserPromptPart) ([]part, error) {
+func (model *Model) convertUserPrompt(ctx context.Context, p ai.UserPromptPart) ([]part, error) {
 	if len(p.Contents) == 0 {
 		return []part{{Text: p.Content}}, nil
 	}
@@ -287,6 +290,53 @@ func (model *Model) convertUserPrompt(p ai.UserPromptPart) ([]part, error) {
 			}})
 		case ai.ImageURL:
 			parts = append(parts, part{FileData: &fileData{FileURI: item.URL}})
+		case ai.VideoURL:
+			if err := item.ForceDownload.Validate(); err != nil {
+				return nil, err
+			}
+			mediaType, err := item.ResolvedMediaType()
+			if err != nil {
+				return nil, err
+			}
+			videoPart := part{}
+			direct := item.IsYouTube() ||
+				(model.transport == TransportVertexAI && strings.HasPrefix(item.URL, "gs://")) ||
+				(model.transport != TransportVertexAI && item.ForceDownload == ai.FileDownloadNever &&
+					strings.HasPrefix(item.URL, "https://generativelanguage.googleapis.com/v1beta/files"))
+			if direct && item.ForceDownload == ai.FileDownloadNever {
+				videoPart.FileData = &fileData{MimeType: mediaType, FileURI: item.URL}
+			} else {
+				if item.IsYouTube() {
+					return nil, fmt.Errorf("google: downloading YouTube videos is not supported")
+				}
+				downloaded, err := download.Fetch(ctx, item.URL, item.ForceDownload == ai.FileDownloadAllowLocal)
+				if err != nil {
+					return nil, err
+				}
+				if downloaded.MediaType != "" {
+					mediaType = downloaded.MediaType
+				}
+				videoPart.InlineData = &inlineData{
+					MimeType: mediaType, Data: base64.StdEncoding.EncodeToString(downloaded.Data),
+				}
+			}
+			videoMetadata := cloneGoogleMap(item.VendorMetadata)
+			if resolution, exists := videoMetadata["media_resolution"]; exists {
+				videoPart.MediaResolution = resolution
+				delete(videoMetadata, "media_resolution")
+			}
+			if start, exists := videoMetadata["start_offset"]; exists {
+				videoMetadata["startOffset"] = start
+				delete(videoMetadata, "start_offset")
+			}
+			if end, exists := videoMetadata["end_offset"]; exists {
+				videoMetadata["endOffset"] = end
+				delete(videoMetadata, "end_offset")
+			}
+			if len(videoMetadata) > 0 {
+				videoPart.VideoMetadata = videoMetadata
+			}
+			parts = append(parts, videoPart)
 		case ai.UploadedFile:
 			if item.ProviderName != model.providerName {
 				return nil, fmt.Errorf("google: uploaded file %q belongs to provider %q", item.FileID, item.ProviderName)
@@ -486,7 +536,9 @@ func supportsImageOutput(modelName string) bool {
 	return strings.Contains(strings.ToLower(modelName), "image")
 }
 
-func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
+func (m *Model) buildPayload(
+	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
+) (*generateRequest, error) {
 	nativeTools, generatedImageConfig, err := googleNativeTools(params.NativeTools, m.name, m.transport)
 	if err != nil {
 		return nil, err
@@ -534,7 +586,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		}
 	}
 	for _, msg := range msgs {
-		converted, err := m.convertMessage(msg)
+		converted, err := m.convertMessage(ctx, msg)
 		if err != nil {
 			return nil, err
 		}
@@ -657,10 +709,10 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 	return config, nil
 }
 
-func (model *Model) convertMessage(msg ai.ModelMessage) ([]content, error) {
+func (model *Model) convertMessage(ctx context.Context, msg ai.ModelMessage) ([]content, error) {
 	switch message := msg.(type) {
 	case ai.ModelRequest:
-		return model.convertRequest(message)
+		return model.convertRequest(ctx, message)
 	case ai.ModelResponse:
 		return model.convertResponse(message)
 	default:
@@ -668,14 +720,14 @@ func (model *Model) convertMessage(msg ai.ModelMessage) ([]content, error) {
 	}
 }
 
-func (model *Model) convertRequest(m ai.ModelRequest) ([]content, error) {
+func (model *Model) convertRequest(ctx context.Context, m ai.ModelRequest) ([]content, error) {
 	var parts []part
 	for _, p := range m.Parts {
 		switch rp := p.(type) {
 		case ai.SystemPromptPart:
 			parts = append(parts, part{Text: rp.Content})
 		case ai.UserPromptPart:
-			converted, err := model.convertUserPrompt(rp)
+			converted, err := model.convertUserPrompt(ctx, rp)
 			if err != nil {
 				return nil, err
 			}

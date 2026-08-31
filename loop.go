@@ -930,6 +930,9 @@ func cloneUserContents(contents []UserContent) []UserContent {
 		case BinaryContent:
 			content.Data = slices.Clone(content.Data)
 			cloned[index] = content
+		case VideoURL:
+			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
+			cloned[index] = content
 		case UploadedFile:
 			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
 			cloned[index] = content

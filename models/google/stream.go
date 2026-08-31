@@ -19,7 +19,7 @@ import (
 func (m *Model) StreamRequest(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
-	payload, err := m.buildPayload(msgs, params)
+	payload, err := m.buildPayload(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}

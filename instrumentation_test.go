@@ -376,31 +376,37 @@ func TestInstrumentationMessageVersions(t *testing.T) {
 	}{
 		{
 			version:       2,
-			wantInput:     []string{`"role":"user"`, `"type":"image-url"`, `"type":"binary"`},
+			wantInput:     []string{`"role":"user"`, `"type":"image-url"`, `"type":"video-url"`, `"type":"binary"`},
 			unwantedInput: []string{`"role":"tool"`, `"type":"uri"`, `"type":"blob"`},
 			unwantedOut:   []string{`"type":"reasoning"`},
 		},
 		{
 			version:       3,
-			wantInput:     []string{`"role":"user"`, `"type":"image-url"`, `"type":"binary"`},
+			wantInput:     []string{`"role":"user"`, `"type":"image-url"`, `"type":"video-url"`, `"type":"binary"`},
 			unwantedInput: []string{`"role":"tool"`, `"type":"uri"`, `"type":"blob"`},
 			wantOutput:    []string{`"type":"reasoning"`},
 		},
 		{
-			version:       4,
-			wantInput:     []string{`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"type":"blob"`},
+			version: 4,
+			wantInput: []string{
+				`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"modality":"video"`, `"type":"blob"`,
+			},
 			unwantedInput: []string{`"role":"tool"`, `"type":"image-url"`},
 			wantOutput:    []string{`"type":"reasoning"`},
 		},
 		{
-			version:       5,
-			wantInput:     []string{`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"type":"blob"`},
+			version: 5,
+			wantInput: []string{
+				`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"modality":"video"`, `"type":"blob"`,
+			},
 			unwantedInput: []string{`"role":"tool"`, `"type":"image-url"`},
 			wantOutput:    []string{`"type":"reasoning"`},
 		},
 		{
-			version:       6,
-			wantInput:     []string{`"role":"tool"`, `"type":"uri"`, `"type":"blob"`},
+			version: 6,
+			wantInput: []string{
+				`"role":"tool"`, `"type":"uri"`, `"modality":"video"`, `"type":"blob"`,
+			},
 			unwantedInput: []string{`"type":"image-url"`},
 			wantOutput:    []string{`"type":"reasoning"`},
 		},
@@ -422,6 +428,7 @@ func TestInstrumentationMessageVersions(t *testing.T) {
 			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
 				ai.UserPromptPart{Contents: []ai.UserContent{
 					ai.ImageURL{URL: "https://example.com/image.png"}, ai.ImageURL{URL: "://invalid"},
+					ai.VideoURL{URL: "https://example.com/video.mp4"}, ai.VideoURL{URL: "://invalid"},
 					ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
 				}},
 				ai.ToolReturnPart{ToolName: "lookup", ToolCallID: "call", Content: "result"},

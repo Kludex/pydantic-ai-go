@@ -482,6 +482,60 @@ func TestOpenRouterResponseVariants(t *testing.T) {
 	}
 }
 
+func TestOpenRouterVideoInput(t *testing.T) {
+	videoServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "video/webm")
+		_, _ = response.Write([]byte("video-bytes"))
+	}))
+	defer videoServer.Close()
+	var body map[string]any
+	apiServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = io.WriteString(response, `{
+			"id":"response","model":"google/gemini-3","choices":[{"message":{"content":"done"},"finish_reason":"stop"}]
+		}`)
+	}))
+	defer apiServer.Close()
+	model := openrouter.NewModel(
+		"google/gemini-3-pro", openrouter.WithBaseURL(apiServer.URL), openrouter.WithHTTPClient(apiServer.Client()),
+	)
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.TextContent{Text: "Describe these videos."},
+		ai.VideoURL{URL: "https://example.com/video.mp4"},
+		ai.BinaryContent{Data: []byte("inline"), MediaType: "video/mp4"},
+		ai.VideoURL{URL: videoServer.URL + "/clip.webm", ForceDownload: ai.FileDownloadAllowLocal},
+	}}}}}
+	response, err := model.Request(t.Context(), messages, ai.ModelRequestParams{})
+	if err != nil || response.Text() != "done" {
+		t.Fatalf("unexpected video response=%+v err=%v", response, err)
+	}
+	content := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 4 || content[0].(map[string]any)["type"] != "text" ||
+		content[1].(map[string]any)["video_url"].(map[string]any)["url"] != "https://example.com/video.mp4" ||
+		content[2].(map[string]any)["video_url"].(map[string]any)["url"] != "data:video/mp4;base64,aW5saW5l" ||
+		content[3].(map[string]any)["video_url"].(map[string]any)["url"] !=
+			"data:video/webm;base64,dmlkZW8tYnl0ZXM=" {
+		t.Fatalf("unexpected OpenRouter video content: %#v", content)
+	}
+
+	for name, video := range map[string]ai.VideoURL{
+		"blocked local": {URL: videoServer.URL + "/clip.webm", ForceDownload: ai.FileDownloadSafe},
+		"YouTube":       {URL: "https://youtu.be/example", ForceDownload: ai.FileDownloadSafe},
+		"invalid mode":  {URL: "https://example.com/video.mp4", ForceDownload: "invalid"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{video}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil {
+				t.Fatal("invalid video request succeeded")
+			}
+		})
+	}
+}
+
 func TestOpenRouterProviderError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusBadRequest)

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/internal/download"
 )
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
@@ -79,6 +80,7 @@ type ChatCompatibility struct {
 	ReasoningDetails bool
 	LegacyMaxTokens  bool
 	ExtendedMetadata bool
+	VideoInput       bool
 	NativeToolFunc   ChatNativeToolFunc
 	FinishReasons    map[string]ai.FinishReason
 }
@@ -105,6 +107,7 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 			ReasoningDetails: compatibility.ReasoningDetails,
 			LegacyMaxTokens:  compatibility.LegacyMaxTokens,
 			ExtendedMetadata: compatibility.ExtendedMetadata,
+			VideoInput:       compatibility.VideoInput,
 			NativeToolFunc:   compatibility.NativeToolFunc,
 			FinishReasons:    maps.Clone(finishReasons),
 		}
@@ -350,11 +353,16 @@ type contentPart struct {
 	Type                  string                       `json:"type"`
 	Text                  string                       `json:"text,omitempty"`
 	ImageURL              *imageURL                    `json:"image_url,omitempty"`
+	VideoURL              *videoURL                    `json:"video_url,omitempty"`
 	CacheControl          *chatCacheControl            `json:"cache_control,omitempty"`
 	PromptCacheBreakpoint *openAIPromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 type imageURL struct {
+	URL string `json:"url"`
+}
+
+type videoURL struct {
 	URL string `json:"url"`
 }
 
@@ -473,7 +481,7 @@ func (m *Model) buildPayload(
 		}
 	}
 	for _, msg := range msgs {
-		converted, err := m.convertMessage(msg, cache)
+		converted, err := m.convertMessage(ctx, msg, cache)
 		if err != nil {
 			return nil, err
 		}
@@ -597,10 +605,12 @@ func openAIReasoningActive(effort string) bool {
 	return effort != "" && effort != "none"
 }
 
-func (model *Model) convertMessage(msg ai.ModelMessage, cache ChatPromptCache) ([]chatMessage, error) {
+func (model *Model) convertMessage(
+	ctx context.Context, msg ai.ModelMessage, cache ChatPromptCache,
+) ([]chatMessage, error) {
 	switch message := msg.(type) {
 	case ai.ModelRequest:
-		return convertRequest(message, cache)
+		return model.convertRequest(ctx, message, cache)
 	case ai.ModelResponse:
 		return model.convertResponse(message), nil
 	default:
@@ -608,14 +618,16 @@ func (model *Model) convertMessage(msg ai.ModelMessage, cache ChatPromptCache) (
 	}
 }
 
-func convertRequest(m ai.ModelRequest, cache ChatPromptCache) ([]chatMessage, error) {
+func (model *Model) convertRequest(
+	ctx context.Context, m ai.ModelRequest, cache ChatPromptCache,
+) ([]chatMessage, error) {
 	var out []chatMessage
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.SystemPromptPart:
 			out = append(out, chatMessage{Role: "system", Content: p.Content})
 		case ai.UserPromptPart:
-			msg, err := convertUserPrompt(p, cache)
+			msg, err := model.convertUserPrompt(ctx, p, cache)
 			if err != nil {
 				return nil, err
 			}
@@ -951,7 +963,9 @@ func contentString(content any) (string, error) {
 	return string(b), nil
 }
 
-func convertUserPrompt(p ai.UserPromptPart, cache ChatPromptCache) (chatMessage, error) {
+func (model *Model) convertUserPrompt(
+	ctx context.Context, p ai.UserPromptPart, cache ChatPromptCache,
+) (chatMessage, error) {
 	if len(p.Contents) == 0 {
 		return chatMessage{Role: "user", Content: p.Content}, nil
 	}
@@ -983,9 +997,46 @@ func convertUserPrompt(p ai.UserPromptPart, cache ChatPromptCache) (chatMessage,
 			parts = append(parts, contentPart{Type: "text", Text: item.Text})
 		case ai.ImageURL:
 			parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: item.URL}})
+		case ai.VideoURL:
+			if !model.chatCompatibility.VideoInput {
+				return chatMessage{}, fmt.Errorf("%s: Chat Completions does not support video URL input", model.providerName)
+			}
+			if err := item.ForceDownload.Validate(); err != nil {
+				return chatMessage{}, err
+			}
+			videoLocation := item.URL
+			if item.ForceDownload != ai.FileDownloadNever {
+				if item.IsYouTube() {
+					return chatMessage{}, fmt.Errorf("%s: downloading YouTube videos is not supported", model.providerName)
+				}
+				downloaded, err := download.Fetch(ctx, item.URL, item.ForceDownload == ai.FileDownloadAllowLocal)
+				if err != nil {
+					return chatMessage{}, err
+				}
+				mediaType := downloaded.MediaType
+				if mediaType == "" {
+					mediaType, err = item.ResolvedMediaType()
+					if err != nil {
+						return chatMessage{}, err
+					}
+				}
+				videoLocation = fmt.Sprintf(
+					"data:%s;base64,%s", mediaType, base64.StdEncoding.EncodeToString(downloaded.Data),
+				)
+			}
+			parts = append(parts, contentPart{Type: "video_url", VideoURL: &videoURL{URL: videoLocation}})
 		case ai.BinaryContent:
-			url := fmt.Sprintf("data:%s;base64,%s", item.MediaType, base64.StdEncoding.EncodeToString(item.Data))
-			parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: url}})
+			location := fmt.Sprintf("data:%s;base64,%s", item.MediaType, base64.StdEncoding.EncodeToString(item.Data))
+			if strings.HasPrefix(strings.ToLower(item.MediaType), "video/") {
+				if !model.chatCompatibility.VideoInput {
+					return chatMessage{}, fmt.Errorf(
+						"%s: Chat Completions does not support inline video input", model.providerName,
+					)
+				}
+				parts = append(parts, contentPart{Type: "video_url", VideoURL: &videoURL{URL: location}})
+			} else {
+				parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: location}})
+			}
 		default:
 			return chatMessage{}, fmt.Errorf("openai: unknown user content type %T", c)
 		}

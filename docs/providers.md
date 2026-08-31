@@ -184,6 +184,8 @@ OpenRouter reasoning details become separate `ThinkingPart` values. Text, summar
 
 The OpenRouter model supports native web search and advisor declarations. OpenRouter ignores `AdvisorTool.MaxUses` and `AdvisorTool.Caching`; it maps `MaxTokens` to `max_completion_tokens`. Use `WithAppAttribution` or `OPENROUTER_APP_URL` and `OPENROUTER_APP_TITLE` to identify your application.
 
+`VideoURL` and inline `video/*` binary content use OpenRouter's `video_url` extension. See [Multimodal input](multimodal.md) for safe forced downloads.
+
 Use `openrouter.Settings` for fallback models, provider routing, presets, context transforms, reasoning, extended usage, and prompt caching. `CacheInstructions`, `CacheMessages`, and `CacheToolDefinitions` add explicit cache boundaries only for supported downstream providers. Anthropic receives the selected TTL and keeps a static instruction boundary before dynamic instructions. Gemini receives message or stable-instruction boundaries without an unsupported TTL. Other routed providers ignore these settings.
 
 `Settings.Build` validates conflicts with `ExtraBody` and returns a detached `ModelSettings` snapshot.

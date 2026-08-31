@@ -443,6 +443,7 @@ type wireUserContent struct {
 	ProviderName   string         `json:"provider_name,omitempty"`
 	Identifier     string         `json:"identifier,omitempty"`
 	VendorMetadata map[string]any `json:"vendor_metadata,omitempty"`
+	ForceDownload  any            `json:"force_download,omitempty"`
 	TTL            CachePointTTL  `json:"ttl,omitempty"`
 }
 
@@ -457,6 +458,25 @@ func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
 			items = append(items, wireUserContent{Kind: "text-content", Content: item.Text})
 		case ImageURL:
 			items = append(items, wireUserContent{Kind: "image-url", URL: item.URL})
+		case VideoURL:
+			if err := item.ForceDownload.Validate(); err != nil {
+				return nil, err
+			}
+			mediaType, err := item.ResolvedMediaType()
+			if err != nil {
+				return nil, err
+			}
+			forceDownload := any(false)
+			switch item.ForceDownload {
+			case FileDownloadSafe:
+				forceDownload = true
+			case FileDownloadAllowLocal:
+				forceDownload = string(FileDownloadAllowLocal)
+			}
+			items = append(items, wireUserContent{
+				Kind: "video-url", URL: item.URL, MediaType: mediaType, Identifier: item.ResolvedIdentifier(),
+				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+			})
 		case BinaryContent:
 			items = append(items, wireUserContent{Kind: "binary", Data: item.Data, MediaType: item.MediaType})
 		case CachePoint:
@@ -494,6 +514,26 @@ func unmarshalUserContent(raw json.RawMessage) (UserPromptPart, error) {
 			part.Contents = append(part.Contents, TextContent{Text: item.Content})
 		case "image-url":
 			part.Contents = append(part.Contents, ImageURL{URL: item.URL})
+		case "video-url":
+			video := VideoURL{
+				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+				VendorMetadata: item.VendorMetadata,
+			}
+			switch forceDownload := item.ForceDownload.(type) {
+			case nil:
+			case bool:
+				if forceDownload {
+					video.ForceDownload = FileDownloadSafe
+				}
+			case string:
+				video.ForceDownload = FileDownloadMode(forceDownload)
+			default:
+				return UserPromptPart{}, fmt.Errorf("ai: invalid video force_download value %T", item.ForceDownload)
+			}
+			if err := video.ForceDownload.Validate(); err != nil {
+				return UserPromptPart{}, err
+			}
+			part.Contents = append(part.Contents, video)
 		case "binary":
 			part.Contents = append(part.Contents, BinaryContent{Data: item.Data, MediaType: item.MediaType})
 		case "cache-point":

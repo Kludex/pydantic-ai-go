@@ -104,6 +104,7 @@ func TestUserContentKinds(t *testing.T) {
 	}{
 		{TextContent{}, "text-content"},
 		{ImageURL{}, "image-url"},
+		{VideoURL{}, "video-url"},
 		{BinaryContent{}, "binary"},
 		{CachePoint{}, "cache-point"},
 		{UploadedFile{}, "uploaded-file"},

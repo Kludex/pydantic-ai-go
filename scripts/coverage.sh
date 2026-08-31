@@ -5,6 +5,7 @@ set -euo pipefail
 fail=0
 packages=(
     .
+    ./internal/download
     ./internal/schema
     ./evals
     ./models/fakes

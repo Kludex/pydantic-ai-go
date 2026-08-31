@@ -1556,15 +1556,218 @@ func TestAnthropicServerManagedToolSearch(t *testing.T) {
 	}
 }
 
-func TestAnthropicMemoryTool(t *testing.T) {
-	requestCount := 0
+func TestAnthropicMCPServerTool(t *testing.T) {
 	var bodies []map[string]any
+	var betas []string
 	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
 		bodies = append(bodies, body)
+		betas = append(betas, request.Header.Get("anthropic-beta"))
+		_, _ = response.Write([]byte(`{
+			"id":"message","model":"claude-sonnet-4-6","stop_reason":"end_turn","content":[
+				{"type":"mcp_tool_use","id":"call","server_name":"docs","name":"search","input":{"query":"Go"}},
+				{"type":"mcp_tool_result","tool_use_id":"call","content":[{"type":"text","text":"result"}],"is_error":false},
+				{"type":"mcp_tool_result","tool_use_id":"orphan","content":"missing call","is_error":true}
+			],"usage":{}
+		}`))
+	})
+	params := ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		&ai.MCPServerTool{
+			ID: "docs", URL: "https://example.com/mcp", AuthorizationToken: "secret",
+			Description: "ignored", AllowedTools: []string{}, Headers: map[string]string{"ignored": "value"},
+		},
+		ai.MCPServerTool{ID: "calendar", URL: "https://calendar.example.com/mcp", AllowedTools: []string{"events"}},
+	}}
+	response, err := model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	servers := bodies[0]["mcp_servers"].([]any)
+	first := servers[0].(map[string]any)
+	firstConfig := first["tool_configuration"].(map[string]any)
+	secondConfig := servers[1].(map[string]any)["tool_configuration"].(map[string]any)
+	if len(servers) != 2 || first["type"] != "url" || first["name"] != "docs" ||
+		first["url"] != "https://example.com/mcp" || first["authorization_token"] != "secret" ||
+		first["description"] != nil || first["headers"] != nil || firstConfig["enabled"] != false ||
+		len(firstConfig["allowed_tools"].([]any)) != 0 || secondConfig["enabled"] != true ||
+		secondConfig["allowed_tools"].([]any)[0] != "events" ||
+		!strings.Contains(betas[0], "mcp-client-2025-04-04") {
+		t.Fatalf("unexpected Anthropic MCP request: servers=%#v beta=%q", servers, betas[0])
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	orphan := response.Parts[2].(ai.NativeToolReturnPart)
+	content := returned.Content.(map[string]any)
+	if call.ToolName != "mcp_server:docs" || call.ToolCallID != "call" ||
+		call.ToolKind != ai.ToolPartKindMCPServer ||
+		string(call.Args) != `{"action":"call_tool","tool_args":{"query":"Go"},"tool_name":"search"}` ||
+		returned.ToolName != "mcp_server:docs" || content["is_error"] != false ||
+		content["content"].([]any)[0].(map[string]any)["text"] != "result" ||
+		orphan.ToolName != "mcp_server" || orphan.Content.(map[string]any)["is_error"] != true {
+		t.Fatalf("unexpected Anthropic MCP parts: %#v", response.Parts)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := bodies[1]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	use := replayed[0].(map[string]any)
+	result := replayed[1].(map[string]any)
+	if use["type"] != "mcp_tool_use" || use["server_name"] != "docs" || use["name"] != "search" ||
+		use["input"].(map[string]any)["query"] != "Go" || result["type"] != "mcp_tool_result" ||
+		result["tool_use_id"] != "call" || result["content"].([]any)[0].(map[string]any)["text"] != "result" {
+		t.Fatalf("unexpected Anthropic MCP replay: %#v", replayed)
+	}
+}
+
+func TestAnthropicMCPServerCountTokensOmission(t *testing.T) {
+	var body map[string]any
+	var beta string
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		beta = request.Header.Get("anthropic-beta")
+		_, _ = response.Write([]byte(`{"input_tokens":12}`))
+	})
+	usage, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: "hello"},
+	}}}, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.MCPServerTool{ID: "docs", URL: "https://example.com/mcp"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.InputTokens != 12 || body["mcp_servers"] != nil || strings.Contains(beta, "mcp-client-2025-04-04") {
+		t.Fatalf("MCP server leaked into token count: usage=%+v body=%#v beta=%q", usage, body, beta)
+	}
+}
+
+func TestAnthropicMCPServerErrors(t *testing.T) {
+	model := newServer(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("unsupported MCP connector reached transport")
+	})
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.MCPServerTool{ID: "calendar", URL: "x-openai-connector:calendar"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "OpenAI MCP connector URLs are not supported") {
+		t.Fatalf("unexpected connector error: %v", err)
+	}
+	var optionalBody map[string]any
+	var optionalBeta string
+	model = newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&optionalBody); err != nil {
+			t.Error(err)
+		}
+		optionalBeta = request.Header.Get("anthropic-beta")
+		_, _ = response.Write([]byte(`{"model":"claude","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.MCPServerTool{ID: "calendar", URL: "x-openai-connector:calendar", Optional: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if optionalBody["mcp_servers"] != nil || strings.Contains(optionalBeta, "mcp-client-2025-04-04") {
+		t.Fatalf("optional connector was not omitted: body=%#v beta=%q", optionalBody, optionalBeta)
+	}
+
+	tests := []struct {
+		name string
+		part ai.ResponsePart
+		want string
+	}{
+		{name: "server name", part: ai.NativeToolCallPart{
+			ToolName: "mcp_server", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{"action":"call_tool","tool_name":"search","tool_args":{}}`), ProviderName: "anthropic",
+		}, want: "invalid MCP server tool name"},
+		{name: "arguments", part: ai.NativeToolCallPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{`), ProviderName: "anthropic",
+		}, want: "parse MCP server arguments"},
+		{name: "action", part: ai.NativeToolCallPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{"action":"list_tools"}`), ProviderName: "anthropic",
+		}, want: "invalid MCP server action"},
+		{name: "tool name", part: ai.NativeToolCallPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{"action":"call_tool"}`), ProviderName: "anthropic",
+		}, want: "call tool name must not be empty"},
+		{name: "result marshal", part: ai.NativeToolReturnPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Content: make(chan int), ProviderName: "anthropic",
+		}, want: "marshal MCP server result"},
+		{name: "result shape", part: ai.NativeToolReturnPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Content: "invalid", ProviderName: "anthropic",
+		}, want: "parse MCP server result"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := newServer(t, func(http.ResponseWriter, *http.Request) {
+				t.Fatal("invalid MCP history reached transport")
+			})
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{
+				ProviderName: "anthropic", Parts: []ai.ResponsePart{test.part},
+			}}, ai.ModelRequestParams{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected MCP history error: %v", err)
+			}
+		})
+	}
+
+	model = newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"model":"claude","content":[{
+			"type":"mcp_tool_use","id":"call","server_name":"docs","name":"search","input":
+		}]}`))
+	})
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err == nil || !strings.Contains(err.Error(), "parse response") {
+		t.Fatalf("unexpected malformed MCP response error: %v", err)
+	}
+
+	var body map[string]any
+	model = newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"claude","content":[],"usage":{}}`))
+	})
+	_, err = model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{
+		ProviderName: "anthropic", Parts: []ai.ResponsePart{
+			ai.NativeToolCallPart{
+				ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+				Args: json.RawMessage(`{"action":"call_tool","tool_name":"search"}`), ProviderName: "anthropic",
+			},
+			ai.NativeToolReturnPart{
+				ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+				Content: map[string]any{"is_error": false}, ProviderName: "anthropic",
+			},
+		},
+	}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocks := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	input := blocks[0].(map[string]any)["input"]
+	resultContent, hasContent := blocks[1].(map[string]any)["content"]
+	if len(input.(map[string]any)) != 0 || !hasContent || resultContent != nil {
+		t.Fatalf("empty MCP values were not replayed: %#v", body)
+	}
+}
+
+func TestAnthropicMemoryTool(t *testing.T) {
+	requestCount := 0
+	var bodies []map[string]any
+	var betas []string
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		betas = append(betas, request.Header.Get("anthropic-beta"))
 		requestCount++
 		if requestCount == 1 {
 			_, _ = response.Write([]byte(`{
@@ -1599,17 +1802,39 @@ func TestAnthropicMemoryTool(t *testing.T) {
 	if !called || result.Output != "Mexico City" || requestCount != 2 {
 		t.Fatalf("unexpected memory run: called=%v output=%q requests=%d", called, result.Output, requestCount)
 	}
-	for _, body := range bodies {
+	for index, body := range bodies {
 		tools := body["tools"].([]any)
 		if len(tools) != 1 || tools[0].(map[string]any)["type"] != "memory_20250818" ||
-			tools[0].(map[string]any)["name"] != "memory" || tools[0].(map[string]any)["input_schema"] != nil {
-			t.Fatalf("unexpected native memory definition: %#v", tools)
+			tools[0].(map[string]any)["name"] != "memory" || tools[0].(map[string]any)["input_schema"] != nil ||
+			!strings.Contains(betas[index], "context-management-2025-06-27") {
+			t.Fatalf("unexpected native memory definition: tools=%#v beta=%q", tools, betas[index])
 		}
 	}
 	secondMessages := bodies[1]["messages"].([]any)
 	toolResult := secondMessages[len(secondMessages)-1].(map[string]any)["content"].([]any)[0].(map[string]any)
 	if toolResult["type"] != "tool_result" || toolResult["tool_use_id"] != "memory-1" {
 		t.Fatalf("unexpected memory result: %#v", toolResult)
+	}
+}
+
+func TestAnthropicNativeToolBetaHeaders(t *testing.T) {
+	var beta string
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		beta = request.Header.Get("anthropic-beta")
+		_, _ = response.Write([]byte(`{"model":"claude-sonnet-4-5","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.WebFetchTool{},
+		ai.CodeExecutionTool{Files: []ai.UploadedFile{{
+			ProviderName: "anthropic", FileID: "file-1",
+		}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(beta, "web-fetch-2025-09-10") ||
+		!strings.Contains(beta, "files-api-2025-04-14") {
+		t.Fatalf("missing native tool beta headers: %q", beta)
 	}
 }
 

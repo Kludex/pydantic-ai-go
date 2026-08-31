@@ -93,6 +93,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		searchCalls := make(map[int]responseContentBlock)
 		searchArgs := make(map[int]*strings.Builder)
+		mcpToolNames := make(map[string]string)
 		for scanner.Scan() {
 			data, ok := strings.CutPrefix(scanner.Text(), "data:")
 			if !ok {
@@ -118,13 +119,20 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				}
 			case "content_block_start":
 				_, toolSearch := anthropicToolSearchStrategy(event.ContentBlock.Name)
-				if event.ContentBlock.Type == "server_tool_use" &&
+				if event.ContentBlock.Type == "mcp_tool_use" || event.ContentBlock.Type == "server_tool_use" &&
 					(event.ContentBlock.Name == "web_search" || event.ContentBlock.Name == "web_fetch" ||
 						event.ContentBlock.Name == "code_execution" ||
 						event.ContentBlock.Name == "bash_code_execution" ||
 						event.ContentBlock.Name == "text_editor_code_execution" || toolSearch) {
 					searchCalls[event.Index] = event.ContentBlock
 					searchArgs[event.Index] = &strings.Builder{}
+					continue
+				}
+				if event.ContentBlock.Type == "mcp_tool_result" {
+					part := anthropicMCPResult(event.ContentBlock, mcpToolNames[event.ContentBlock.ToolUseID])
+					if !yield(ai.NativeToolReturnEvent{PartID: strconv.Itoa(event.Index), Part: part}, nil) {
+						return
+					}
 					continue
 				}
 				if event.ContentBlock.Type == "web_search_tool_result" ||
@@ -218,9 +226,20 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				toolKind := ai.ToolPartKindToolSearch
 				var details map[string]any
 				var args json.RawMessage
-				if block.Name == "web_search" || block.Name == "web_fetch" ||
+				switch {
+				case block.Type == "mcp_tool_use":
+					toolName = "mcp_server:" + block.ServerName
+					toolKind = ai.ToolPartKindMCPServer
+					var err error
+					args, err = anthropicMCPCallArgs(block.Name, raw)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					mcpToolNames[block.ID] = toolName
+				case block.Name == "web_search" || block.Name == "web_fetch" ||
 					block.Name == "code_execution" || block.Name == "bash_code_execution" ||
-					block.Name == "text_editor_code_execution" {
+					block.Name == "text_editor_code_execution":
 					toolName = block.Name
 					toolKind = ai.ToolPartKindWebSearch
 					switch block.Name {
@@ -237,7 +256,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 					if len(args) == 0 || string(args) == "null" {
 						args = json.RawMessage(`{}`)
 					}
-				} else {
+				default:
 					var err error
 					args, err = normalizeAnthropicToolSearchArguments(raw, strategy)
 					if err != nil {

@@ -440,6 +440,97 @@ func TestAnthropicStreamWebFetch(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamMCPServer(t *testing.T) {
+	model := newServer(t, anthropicSSE(t, []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"mcp_tool_use","id":"call","server_name":"docs","name":"search","input":{}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"Go\"}"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"mcp_tool_result","tool_use_id":"call","content":[{"type":"text","text":"result"}],"is_error":false}}`,
+		`{"type":"content_block_start","index":2,"content_block":{"type":"mcp_tool_result","tool_use_id":"orphan","content":"missing","is_error":true}}`,
+		`{"type":"message_stop"}`,
+	}))
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.MCPServerTool{ID: "docs", URL: "https://example.com/mcp"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := events[0].(ai.ToolCallStartEvent)
+	delta := events[1].(ai.ToolCallDeltaEvent)
+	returned := events[2].(ai.NativeToolReturnEvent)
+	orphan := events[3].(ai.NativeToolReturnEvent)
+	if !start.Native || start.ToolName != "mcp_server:docs" || start.ToolKind != ai.ToolPartKindMCPServer ||
+		start.ToolCallID != "call" ||
+		delta.ArgsDelta != `{"action":"call_tool","tool_args":{"query":"Go"},"tool_name":"search"}` ||
+		returned.Part.ToolName != "mcp_server:docs" ||
+		returned.Part.Content.(map[string]any)["content"].([]any)[0].(map[string]any)["text"] != "result" ||
+		orphan.Part.ToolName != "mcp_server" || orphan.Part.Content.(map[string]any)["is_error"] != true {
+		t.Fatalf("unexpected streamed MCP lifecycle: %#v", events)
+	}
+}
+
+func TestAnthropicStreamMCPServerEdges(t *testing.T) {
+	for name, events := range map[string][]string{
+		"malformed call": {
+			`{"type":"content_block_start","index":0,"content_block":{"type":"mcp_tool_use","id":"call","server_name":"docs","name":"search"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{"}}`,
+			`{"type":"content_block_stop","index":0}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newServer(t, anthropicSSE(t, events))
+			if _, err := collectAnthropicStream(t, model, ai.ModelRequestParams{}); err == nil ||
+				!strings.Contains(err.Error(), "parse MCP tool arguments") {
+				t.Fatalf("unexpected malformed MCP error: %v", err)
+			}
+		})
+	}
+
+	callEvents := []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"mcp_tool_use","id":"call","server_name":"docs","name":"search","input":{}}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"future"}`,
+	}
+	returnEvents := []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"mcp_tool_result","tool_use_id":"call","content":[]}}`,
+		`{"type":"future"}`,
+	}
+	for name, test := range map[string]struct {
+		events []string
+		stop   func(ai.ModelStreamEvent) bool
+	}{
+		"call": {events: callEvents, stop: func(event ai.ModelStreamEvent) bool {
+			_, ok := event.(ai.ToolCallStartEvent)
+			return ok
+		}},
+		"delta": {events: callEvents, stop: func(event ai.ModelStreamEvent) bool {
+			_, ok := event.(ai.ToolCallDeltaEvent)
+			return ok
+		}},
+		"return": {events: returnEvents, stop: func(event ai.ModelStreamEvent) bool {
+			_, ok := event.(ai.NativeToolReturnEvent)
+			return ok
+		}},
+	} {
+		t.Run("stop "+name, func(t *testing.T) {
+			model := newServer(t, anthropicSSE(t, test.events))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if test.stop(event) {
+					return
+				}
+			}
+			t.Fatal("target event was not emitted")
+		})
+	}
+}
+
 func TestAnthropicStreamWebSearchEdges(t *testing.T) {
 	t.Run("empty arguments", func(t *testing.T) {
 		model := newServer(t, anthropicSSE(t, []string{

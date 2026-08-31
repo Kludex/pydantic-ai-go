@@ -169,7 +169,11 @@ func (m *Model) CountTokens(
 		return ai.Usage{}, err
 	}
 	setExtraHeaders(req, params.Settings.ExtraHeaders)
-	m.setRequestHeaders(req, payload, false)
+	headerPayload := *payload
+	headerPayload.Betas = slices.DeleteFunc(slices.Clone(payload.Betas), func(beta string) bool {
+		return beta == "mcp-client-2025-04-04"
+	})
+	m.setRequestHeaders(req, &headerPayload, false)
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return ai.Usage{}, fmt.Errorf("anthropic: token count request: %w", err)
@@ -207,6 +211,11 @@ func (m *Model) setRequestHeaders(req *http.Request, payload *messagesRequest, s
 	if payload.Compaction && !slices.Contains(betas, "compact-2026-01-12") {
 		betas = append(betas, "compact-2026-01-12")
 	}
+	for _, beta := range payload.Betas {
+		if !slices.Contains(betas, beta) {
+			betas = append(betas, beta)
+		}
+	}
 	if len(betas) > 0 {
 		unique := make([]string, 0, len(betas))
 		for _, beta := range betas {
@@ -235,22 +244,37 @@ func (e *APIError) Error() string {
 func (*APIError) IsModelAPIError() bool { return true }
 
 type messagesRequest struct {
-	Model             string           `json:"model"`
-	MaxTokens         int              `json:"max_tokens"`
-	System            string           `json:"system,omitempty"`
-	Messages          []messageParam   `json:"messages"`
-	Tools             []toolParam      `json:"tools,omitempty"`
-	ToolChoice        *toolChoiceParam `json:"tool_choice,omitempty"`
-	Temperature       *float64         `json:"temperature,omitempty"`
-	TopP              *float64         `json:"top_p,omitempty"`
-	Stop              []string         `json:"stop_sequences,omitempty"`
-	Stream            bool             `json:"stream,omitempty"`
-	ToolAdditions     bool             `json:"-"`
-	Compaction        bool             `json:"-"`
-	Thinking          *thinkingParam   `json:"thinking,omitempty"`
-	ServiceTier       string           `json:"service_tier,omitempty"`
-	ContextManagement map[string]any   `json:"context_management,omitempty"`
-	Container         any              `json:"container,omitempty"`
+	Model             string               `json:"model"`
+	MaxTokens         int                  `json:"max_tokens"`
+	System            string               `json:"system,omitempty"`
+	Messages          []messageParam       `json:"messages"`
+	Tools             []toolParam          `json:"tools,omitempty"`
+	ToolChoice        *toolChoiceParam     `json:"tool_choice,omitempty"`
+	Temperature       *float64             `json:"temperature,omitempty"`
+	TopP              *float64             `json:"top_p,omitempty"`
+	Stop              []string             `json:"stop_sequences,omitempty"`
+	Stream            bool                 `json:"stream,omitempty"`
+	ToolAdditions     bool                 `json:"-"`
+	Compaction        bool                 `json:"-"`
+	Thinking          *thinkingParam       `json:"thinking,omitempty"`
+	ServiceTier       string               `json:"service_tier,omitempty"`
+	ContextManagement map[string]any       `json:"context_management,omitempty"`
+	Container         any                  `json:"container,omitempty"`
+	MCPServers        []anthropicMCPServer `json:"mcp_servers,omitempty"`
+	Betas             []string             `json:"-"`
+}
+
+type anthropicMCPServer struct {
+	Type               string                         `json:"type"`
+	Name               string                         `json:"name"`
+	URL                string                         `json:"url"`
+	AuthorizationToken string                         `json:"authorization_token,omitempty"`
+	ToolConfiguration  *anthropicMCPToolConfiguration `json:"tool_configuration,omitempty"`
+}
+
+type anthropicMCPToolConfiguration struct {
+	Enabled      bool     `json:"enabled"`
+	AllowedTools []string `json:"allowed_tools"`
 }
 
 type thinkingParam struct {
@@ -283,6 +307,7 @@ type contentBlock struct {
 	IsError          bool                `json:"is_error,omitempty"`
 	Tool             *toolReferenceParam `json:"tool,omitempty"`
 	FileID           string              `json:"file_id,omitempty"`
+	ServerName       string              `json:"server_name,omitempty"`
 }
 
 type toolReferenceParam struct {
@@ -398,6 +423,7 @@ func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]tool
 			tools = append(tools, toolParam{Type: version, Name: "code_execution"})
 		case ai.MemoryTool, *ai.MemoryTool:
 			tools = append(tools, toolParam{Type: "memory_20250818", Name: "memory"})
+		case ai.MCPServerTool, *ai.MCPServerTool:
 		default:
 			if nativeTool.IsOptional() {
 				continue
@@ -486,6 +512,59 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if err != nil {
 		return nil, err
 	}
+	var mcpServers []anthropicMCPServer
+	var nativeBetas []string
+	for _, nativeTool := range params.NativeTools {
+		var mcpServer *ai.MCPServerTool
+		var codeFiles []ai.UploadedFile
+		switch tool := nativeTool.(type) {
+		case ai.MCPServerTool:
+			copy := tool
+			mcpServer = &copy
+		case *ai.MCPServerTool:
+			mcpServer = tool
+		case ai.MemoryTool, *ai.MemoryTool:
+			if !slices.Contains(nativeBetas, "context-management-2025-06-27") {
+				nativeBetas = append(nativeBetas, "context-management-2025-06-27")
+			}
+		case ai.WebFetchTool, *ai.WebFetchTool:
+			if !anthropicSupportsDynamicFiltering(m.name) &&
+				!slices.Contains(nativeBetas, "web-fetch-2025-09-10") {
+				nativeBetas = append(nativeBetas, "web-fetch-2025-09-10")
+			}
+		case ai.CodeExecutionTool:
+			codeFiles = tool.Files
+		case *ai.CodeExecutionTool:
+			codeFiles = tool.Files
+		}
+		if mcpServer != nil {
+			if strings.HasPrefix(mcpServer.URL, "x-openai-connector:") {
+				if mcpServer.Optional {
+					continue
+				}
+				return nil, fmt.Errorf("anthropic: OpenAI MCP connector URLs are not supported")
+			}
+			server := anthropicMCPServer{
+				Type: "url", Name: mcpServer.ID, URL: mcpServer.URL,
+				AuthorizationToken: mcpServer.AuthorizationToken,
+			}
+			if mcpServer.AllowedTools != nil {
+				server.ToolConfiguration = &anthropicMCPToolConfiguration{
+					Enabled:      len(mcpServer.AllowedTools) > 0,
+					AllowedTools: slices.Clone(mcpServer.AllowedTools),
+				}
+			}
+			mcpServers = append(mcpServers, server)
+			if !slices.Contains(nativeBetas, "mcp-client-2025-04-04") {
+				nativeBetas = append(nativeBetas, "mcp-client-2025-04-04")
+			}
+		}
+		for _, file := range codeFiles {
+			if file.ProviderName == "anthropic" && !slices.Contains(nativeBetas, "files-api-2025-04-14") {
+				nativeBetas = append(nativeBetas, "files-api-2025-04-14")
+			}
+		}
+	}
 	thinking, err := anthropicThinking(params.Settings.Thinking)
 	if err != nil {
 		return nil, err
@@ -497,6 +576,8 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	req := &messagesRequest{
 		Model:       m.name,
 		Tools:       nativeTools,
+		MCPServers:  mcpServers,
+		Betas:       nativeBetas,
 		MaxTokens:   params.Settings.MaxTokens,
 		System:      params.Instructions,
 		Temperature: params.Settings.Temperature,
@@ -902,6 +983,34 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			if p.ProviderName != "anthropic" {
 				continue
 			}
+			if p.ToolKind == ai.ToolPartKindMCPServer {
+				serverName, ok := strings.CutPrefix(p.ToolName, "mcp_server:")
+				if !ok || serverName == "" {
+					return nil, fmt.Errorf("anthropic: invalid MCP server tool name %q", p.ToolName)
+				}
+				var arguments struct {
+					Action   string          `json:"action"`
+					ToolName string          `json:"tool_name"`
+					ToolArgs json.RawMessage `json:"tool_args"`
+				}
+				if err := json.Unmarshal(p.Args, &arguments); err != nil {
+					return nil, fmt.Errorf("anthropic: parse MCP server arguments: %w", err)
+				}
+				if arguments.Action != "call_tool" {
+					return nil, fmt.Errorf("anthropic: invalid MCP server action %q", arguments.Action)
+				}
+				if arguments.ToolName == "" {
+					return nil, fmt.Errorf("anthropic: MCP call tool name must not be empty")
+				}
+				if len(arguments.ToolArgs) == 0 {
+					arguments.ToolArgs = json.RawMessage(`{}`)
+				}
+				blocks = append(blocks, contentBlock{
+					Type: "mcp_tool_use", ID: p.ToolCallID, ServerName: serverName,
+					Name: arguments.ToolName, Input: arguments.ToolArgs,
+				})
+				continue
+			}
 			if p.ToolKind == ai.ToolPartKindCodeExecution {
 				wireName, _ := p.ProviderDetails["anthropic_tool_name"].(string)
 				if wireName != "bash_code_execution" && wireName != "text_editor_code_execution" {
@@ -953,6 +1062,27 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			blocks = append(blocks, block)
 		case ai.NativeToolReturnPart:
 			if p.ProviderName != "anthropic" {
+				continue
+			}
+			if p.ToolKind == ai.ToolPartKindMCPServer {
+				encoded, err := json.Marshal(p.Content)
+				if err != nil {
+					return nil, fmt.Errorf("anthropic: marshal MCP server result: %w", err)
+				}
+				var result struct {
+					Content json.RawMessage `json:"content"`
+					IsError bool            `json:"is_error"`
+				}
+				if err := json.Unmarshal(encoded, &result); err != nil {
+					return nil, fmt.Errorf("anthropic: parse MCP server result: %w", err)
+				}
+				content := result.Content
+				if len(content) == 0 {
+					content = json.RawMessage(`null`)
+				}
+				blocks = append(blocks, contentBlock{
+					Type: "mcp_tool_result", ToolUseID: p.ToolCallID, Content: content, IsError: result.IsError,
+				})
 				continue
 			}
 			if p.ToolKind == ai.ToolPartKindCodeExecution {
@@ -1081,6 +1211,8 @@ type responseContentBlock struct {
 	Content          json.RawMessage `json:"content"`
 	EncryptedContent string          `json:"encrypted_content"`
 	Caller           map[string]any  `json:"caller"`
+	ServerName       string          `json:"server_name"`
+	IsError          bool            `json:"is_error"`
 }
 
 type anthropicUsage struct {
@@ -1131,6 +1263,7 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		ModelName: mr.Model, Usage: mr.Usage.usage(), ProviderDetails: providerDetails,
 		ProviderResponseID: mr.ID, FinishReason: anthropicFinishReason(mr.StopReason), State: state,
 	}
+	mcpToolNames := make(map[string]string)
 	for _, block := range mr.Content {
 		switch block.Type {
 		case "text":
@@ -1149,6 +1282,16 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 			})
 		case "tool_use":
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{ToolName: block.Name, Args: block.Input, ToolCallID: block.ID})
+		case "mcp_tool_use":
+			args, _ := anthropicMCPCallArgs(block.Name, block.Input)
+			toolName := "mcp_server:" + block.ServerName
+			mcpToolNames[block.ID] = toolName
+			resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
+				ToolName: toolName, Args: args, ToolCallID: block.ID,
+				ToolKind: ai.ToolPartKindMCPServer, ProviderName: "anthropic",
+			})
+		case "mcp_tool_result":
+			resp.Parts = append(resp.Parts, anthropicMCPResult(block, mcpToolNames[block.ToolUseID]))
 		case "server_tool_use":
 			if block.Name == "code_execution" || block.Name == "bash_code_execution" ||
 				block.Name == "text_editor_code_execution" {
@@ -1264,6 +1407,33 @@ func normalizeAnthropicToolSearchArguments(raw json.RawMessage, strategy string)
 		queries = append(queries, query)
 	}
 	return json.Marshal(map[string]any{"queries": queries})
+}
+
+func anthropicMCPCallArgs(toolName string, raw json.RawMessage) (json.RawMessage, error) {
+	var toolArgs any = map[string]any{}
+	if len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &toolArgs); err != nil {
+			return nil, fmt.Errorf("anthropic: parse MCP tool arguments: %w", err)
+		}
+	}
+	args, _ := json.Marshal(map[string]any{
+		"action": "call_tool", "tool_name": toolName, "tool_args": toolArgs,
+	})
+	return args, nil
+}
+
+func anthropicMCPResult(block responseContentBlock, toolName string) ai.NativeToolReturnPart {
+	if toolName == "" {
+		toolName = "mcp_server"
+	}
+	var content any
+	if len(block.Content) > 0 {
+		_ = json.Unmarshal(block.Content, &content)
+	}
+	return ai.NativeToolReturnPart{
+		ToolName: toolName, ToolCallID: block.ToolUseID, ToolKind: ai.ToolPartKindMCPServer,
+		Content: map[string]any{"content": content, "is_error": block.IsError}, ProviderName: "anthropic",
+	}
 }
 
 func parseAnthropicCodeExecutionResult(block responseContentBlock) ai.NativeToolReturnPart {

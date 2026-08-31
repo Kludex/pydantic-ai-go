@@ -241,9 +241,9 @@ func main() {
 }
 ```
 
-`MCPServerTool` delegates the connection and tool execution to the model provider. OpenAI Responses accepts remote URLs and `x-openai-connector:<connector-id>` references. It normalizes server discovery and tool calls as `NativeToolCallPart` and `NativeToolReturnPart` values and replays their provider IDs on later requests.
+`MCPServerTool` delegates the connection and tool execution to the model provider. OpenAI Responses accepts remote URLs and `x-openai-connector:<connector-id>` references. Anthropic accepts remote URLs and advertises its required MCP beta automatically. Both normalize provider-owned calls as `NativeToolCallPart` and `NativeToolReturnPart` values and replay their provider IDs on later requests. OpenAI also exposes server discovery as a native lifecycle.
 
-The provider receives `AuthorizationToken` and `Headers`. Treat both as secrets. Restrict `AllowedTools` to operations the model may execute without local approval. Use the [`mcp`](mcp.md) package instead when your application must own the session, inspect every call, or request approval locally.
+OpenAI receives `AuthorizationToken` and `Headers`. Anthropic receives `AuthorizationToken` but does not support custom MCP headers or descriptions. Treat all credentials as secrets. Restrict `AllowedTools` to operations the model may execute without local approval. Use the [`mcp`](mcp.md) package instead when your application must own the session, inspect every call, or request approval locally.
 
 ## Add client-managed memory
 

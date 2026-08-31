@@ -746,6 +746,20 @@ Use `NewSSEToolset` for legacy SSE and `NewCommandToolset` for a stdio subproces
 
 MCP structured results remain structured. Text containing a JSON object or array is decoded. Image and audio results become `ai.BinaryContent`. Wrap the toolset with `FilterToolset`, `PrefixToolset`, `RequireApprovalToolset`, or `DeferLoadingToolset` like any other toolset.
 
+Load several servers from the `mcpServers` format used by Claude Desktop and Cursor:
+
+```go
+toolsets, err := aimcp.LoadToolsets[Deps](".mcp.json")
+if err != nil {
+	return err
+}
+for _, toolset := range toolsets {
+	agent.AddToolset(toolset)
+}
+```
+
+Each loaded toolset receives its server name as an ID and tool-name prefix. URL entries use Streamable HTTP, except paths ending in `/sse`. Command entries support `args`, `env`, and `cwd`. String values support `${NAME}` and `${NAME:-default}` expansion. Treat the file as trusted input because command entries can execute local programs and expansion can read process environment variables.
+
 ## Multimodal input
 
 `RunParts` sends images and files alongside text:

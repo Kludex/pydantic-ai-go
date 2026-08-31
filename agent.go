@@ -42,9 +42,10 @@ type Agent[Deps, Output any] struct {
 }
 
 type toolEntry[Deps any] struct {
-	def     ToolDefinition
-	call    toolFunc[Deps]
-	prepare ToolPrepareFunc[Deps]
+	def      ToolDefinition
+	validate toolValidateFunc[Deps]
+	execute  toolExecuteFunc[Deps]
+	prepare  ToolPrepareFunc[Deps]
 }
 
 type systemPromptRunner[Deps any] struct {
@@ -94,8 +95,20 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		a.capInstructions = append(a.capInstructions, reg.instructions...)
 		for _, tool := range reg.tools {
 			fn := tool.call
-			a.addTool(tool.def, func(ctx context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
-				return fn(ctx, rawArgs)
+			a.tools = append(a.tools, toolEntry[Deps]{
+				def: cloneToolDefinition(tool.def),
+				validate: func(_ context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+					return slices.Clone(rawArgs), nil
+				},
+				execute: func(ctx context.Context, _ *RunContext[Deps], validated any) (any, error) {
+					rawArgs, ok := validated.(json.RawMessage)
+					if !ok {
+						return nil, fmt.Errorf(
+							"validated arguments for tool %q have type %T, expected json.RawMessage", tool.def.Name, validated,
+						)
+					}
+					return fn(ctx, rawArgs)
+				},
 			})
 		}
 		a.capSettings = append(a.capSettings, capabilitySettingsLayer{
@@ -208,18 +221,9 @@ func (a *Agent[Deps, Output]) AddToolset(toolset Toolset[Deps]) {
 
 // AddTool registers a reusable tool on the agent.
 func (a *Agent[Deps, Output]) AddTool(tool Tool[Deps]) {
-	a.addPreparedTool(tool.entry.def, tool.entry.call, tool.entry.prepare)
-}
-
-func (a *Agent[Deps, Output]) addTool(def ToolDefinition, fn toolFunc[Deps]) {
-	a.addPreparedTool(def, fn, nil)
-}
-
-func (a *Agent[Deps, Output]) addPreparedTool(
-	def ToolDefinition, fn toolFunc[Deps], prepare ToolPrepareFunc[Deps],
-) {
 	a.checkNotStarted()
-	a.tools = append(a.tools, toolEntry[Deps]{def: cloneToolDefinition(def), call: fn, prepare: prepare})
+	tool.entry.def = cloneToolDefinition(tool.entry.def)
+	a.tools = append(a.tools, tool.entry)
 }
 
 func (a *Agent[Deps, Output]) checkNotStarted() {

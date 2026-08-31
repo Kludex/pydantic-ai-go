@@ -154,7 +154,19 @@ func (t toolSearchToolset[Deps]) searchTool(corpus []ToolDefinition) Tool[Deps] 
 		}
 		return ToolReturn{ReturnValue: result, Tools: matches}, nil
 	}
-	return Tool[Deps]{entry: toolEntry[Deps]{def: definition, call: call}}
+	return Tool[Deps]{entry: toolEntry[Deps]{
+		def: definition,
+		validate: func(_ context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+			return slices.Clone(rawArgs), nil
+		},
+		execute: func(ctx context.Context, rc *RunContext[Deps], validated any) (any, error) {
+			rawArgs, ok := validated.(json.RawMessage)
+			if !ok {
+				return nil, fmt.Errorf("validated tool search arguments have type %T, expected json.RawMessage", validated)
+			}
+			return call(ctx, rc, rawArgs)
+		},
+	}}
 }
 
 func hasNonBlankQuery(queries []string) bool {

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"slices"
 	"time"
 )
 
@@ -457,14 +456,18 @@ func (t approvalRequiredToolset[Deps]) Tools(
 			continue
 		}
 		tool := tools[index]
-		original := tool.entry.call
+		original := tool.entry.execute
 		definition := cloneToolDefinition(tool.entry.def)
 		tool.entry.def.DynamicApproval = true
-		tool.entry.call = func(
-			ctx context.Context, rc *RunContext[Deps], args json.RawMessage,
+		tool.entry.execute = func(
+			ctx context.Context, rc *RunContext[Deps], args any,
 		) (any, error) {
 			if !rc.ToolCallApproved {
-				request, err := t.check(ctx, rc, cloneToolDefinition(definition), slices.Clone(args))
+				rawArgs, err := json.Marshal(args)
+				if err != nil {
+					return nil, fmt.Errorf("marshal validated arguments: %w", err)
+				}
+				request, err := t.check(ctx, rc, cloneToolDefinition(definition), rawArgs)
 				if err != nil {
 					return nil, err
 				}
@@ -532,13 +535,21 @@ func cloneTool[Deps any](tool Tool[Deps]) Tool[Deps] {
 
 func routeToolName[Deps any](tool Tool[Deps], name string) Tool[Deps] {
 	originalName := tool.entry.def.Name
-	call := tool.entry.call
+	validate := tool.entry.validate
+	execute := tool.entry.execute
 	tool.entry.def = cloneToolDefinition(tool.entry.def)
 	tool.entry.def.Name = name
-	tool.entry.call = func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+	tool.entry.validate = func(
+		ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage,
+	) (any, error) {
 		routed := *rc
 		routed.ToolName = originalName
-		return call(ctx, &routed, rawArgs)
+		return validate(ctx, &routed, rawArgs)
+	}
+	tool.entry.execute = func(ctx context.Context, rc *RunContext[Deps], args any) (any, error) {
+		routed := *rc
+		routed.ToolName = originalName
+		return execute(ctx, &routed, args)
 	}
 	return tool
 }

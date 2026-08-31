@@ -171,9 +171,9 @@ Status:
 - [x] Run, model request, tool call, and dynamic instruction hooks.
 - [x] Ordered middleware composition; first capability is outermost.
 - [x] History processing can be expressed as model-request middleware.
-- [~] Prepared model requests have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Hooks can detach request snapshots, modify messages/settings/parameters, switch or resolve models with normal per-run lifecycle cleanup, recover request errors, and request budgeted retries that preserve rejected responses. Equivalent run, tool-validation/execution, and output-validation/processing lifecycle hooks remain.
+- [~] Prepared model requests and function-tool validation/execution have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Model hooks can detach snapshots, modify requests, switch models, recover errors, and request budgeted retries that preserve rejected responses. Tool hooks transform raw or typed values, recover ordinary errors, and preserve retry/failure control flow. Equivalent run and output-validation/processing lifecycle hooks remain.
 - [ ] Output validation/processing hooks.
-- [ ] Tool validation hook separate from tool execution.
+- [x] Function-tool schema validation, typed decoding, and semantic argument validation are separate from local execution, with dedicated wrappers and before/after/error hooks. Static approvals and external calls defer only after validation, wrapper-modified raw arguments are revalidated, and validated values retain their registered concrete Go type. After-validation and before/after-execution hooks can request durable approval or external execution without changing tool registration; validation-error hooks cannot defer invalid arguments.
 - [x] Event-stream wrapper and per-event processor with standard capability middleware ordering.
 - [ ] Capability ordering constraints and outermost/innermost tiers.
 - [ ] Combined and wrapper capabilities.

@@ -179,7 +179,9 @@ func NewExternalTool[Deps, Args, Result any](name string, opts ...ToolOption) To
 		def.ReturnSchema = reflectedToolReturnSchema(reflect.TypeFor[Result]())
 	}
 	def.ExternalExecution = true
-	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def)}}
+	return Tool[Deps]{entry: toolEntry[Deps]{
+		def: cloneToolDefinition(def), validate: reflectedArgsValidator[Deps, Args](name, nil),
+	}}
 }
 
 // NewSimpleTool creates a reusable tool that needs no run context or dependencies.
@@ -269,7 +271,20 @@ func newReflectedTool[Deps, Args, Result any](
 	if def.ReturnSchema == nil {
 		def.ReturnSchema = reflectedToolReturnSchema(reflect.TypeFor[Result]())
 	}
-	call := func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+	execute := func(ctx context.Context, rc *RunContext[Deps], validated any) (any, error) {
+		args, ok := validated.(Args)
+		if !ok {
+			return nil, fmt.Errorf("validated arguments for tool %q have type %T, expected %T", name, validated, args)
+		}
+		return fn(ctx, rc, args)
+	}
+	return Tool[Deps]{entry: toolEntry[Deps]{
+		def: cloneToolDefinition(def), validate: reflectedArgsValidator(name, validate), execute: execute, prepare: prepare,
+	}}
+}
+
+func reflectedArgsValidator[Deps, Args any](name string, validate ArgsValidator[Deps, Args]) toolValidateFunc[Deps] {
+	return func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
 		var args Args
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
 			return nil, Retryf("invalid arguments for tool %q: %v", name, err)
@@ -279,9 +294,8 @@ func newReflectedTool[Deps, Args, Result any](
 				return nil, err
 			}
 		}
-		return fn(ctx, rc, args)
+		return args, nil
 	}
-	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def), call: call, prepare: prepare}}
 }
 
 // AddExternalTool registers a typed externally executed tool.
@@ -334,15 +348,22 @@ func NewRawToolWithArgsValidator[Deps any](
 	for _, opt := range opts {
 		opt(&def)
 	}
-	call := func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+	validateArgs := func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
 		if validate != nil {
 			if err := validate(ctx, rc, rawArgs); err != nil {
 				return nil, err
 			}
 		}
+		return slices.Clone(rawArgs), nil
+	}
+	execute := func(ctx context.Context, _ *RunContext[Deps], validated any) (any, error) {
+		rawArgs, ok := validated.(json.RawMessage)
+		if !ok {
+			return nil, fmt.Errorf("validated arguments for tool %q have type %T, expected json.RawMessage", def.Name, validated)
+		}
 		return fn(ctx, rawArgs)
 	}
-	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def), call: call}}
+	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def), validate: validateArgs, execute: execute}}
 }
 
 // NewRawExternalTool creates an externally executed tool from an explicit definition.
@@ -351,7 +372,12 @@ func NewRawExternalTool[Deps any](def ToolDefinition, opts ...ToolOption) Tool[D
 		opt(&def)
 	}
 	def.ExternalExecution = true
-	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def)}}
+	return Tool[Deps]{entry: toolEntry[Deps]{
+		def: cloneToolDefinition(def),
+		validate: func(_ context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+			return slices.Clone(rawArgs), nil
+		},
+	}}
 }
 
 // AddRawTool registers a tool from an explicit definition, skipping schema reflection.

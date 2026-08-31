@@ -71,6 +71,7 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		webFetchEmitted := false
 		lastCodeCallID := ""
 		codeCallIndex := 0
+		fileIndex := 0
 		received := false
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -144,6 +145,21 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 			}
 			for index, part := range chunk.Candidates[0].Content.Parts {
 				switch {
+				case part.InlineData != nil:
+					if part.Thought {
+						continue
+					}
+					providerName, providerDetails := googlePartMetadata(part.ThoughtSignature, m.providerName)
+					file, err := googleInlineFilePart(*part.InlineData, providerName, providerDetails)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					partID := fmt.Sprintf("file:%d", fileIndex)
+					fileIndex++
+					if !yield(ai.FileEvent{PartID: partID, Part: file}, nil) {
+						return
+					}
 				case part.ExecutableCode != nil:
 					lastCodeCallID = fmt.Sprintf("%s:code_execution:%d", responseID, codeCallIndex)
 					if responseID == "" {
@@ -271,8 +287,8 @@ func emitPart(yield func(ai.ModelStreamEvent, error) bool, part part, index int,
 			PartID: fmt.Sprintf("text:%d", index), Delta: part.Text,
 			ProviderName: providerName, ProviderDetails: providerDetails,
 		}, nil)
-	case part.InlineData != nil || part.FileData != nil:
-		return yield(nil, fmt.Errorf("google: streamed binary output is not supported"))
+	case part.FileData != nil:
+		return yield(nil, fmt.Errorf("google: streamed file-data output is not supported"))
 	default:
 		return true
 	}

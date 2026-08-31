@@ -118,11 +118,11 @@ func main() {
 
 `UploadedFile` references bytes already stored by a provider. File IDs are not portable. `ProviderName` must match the selected provider or the request fails before transport.
 
-OpenAI Responses sends images as `input_image` and other files as `input_file`. Anthropic sends uploaded images and documents through file sources. Gemini Files API, Google Cloud Storage, OpenAI Chat Completions, Bedrock, and xAI mappings remain parity work.
+OpenAI Responses sends images as `input_image` and other files as `input_file`. Anthropic sends uploaded images and documents through file sources. Gemini accepts HTTPS references from the Google Files API. Vertex AI accepts `gs://` Google Cloud Storage references. OpenAI Chat Completions, Bedrock, xAI, and provider-specific file metadata remain parity work.
 
 ## Read generated files
 
-`FilePart` represents binary output from a model or provider-native tool. OpenAI code-interpreter images use this part in static and streamed responses. `FilePart.Content.Data`, provider details, histories, and stream events are detached before they reach consumers.
+`FilePart` represents binary output from a model or provider-native tool. OpenAI code interpreter and image generation use this part. Google image models return inline generated images as `FilePart` values and replay them as inline data in later Google requests. `FilePart.Content.Data`, provider details, histories, and stream events are detached before they reach consumers.
 
 ## Reuse multimodal history
 

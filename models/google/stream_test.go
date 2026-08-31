@@ -110,6 +110,57 @@ func TestGoogleStreamWebFetchURLContext(t *testing.T) {
 	}
 }
 
+func TestGoogleStreamGeneratedImages(t *testing.T) {
+	model := newNamedServer(t, "gemini-3-pro-image-preview", googleSSE(t, []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"thought":true,"inlineData":{"mimeType":"image/png","data":"dGhvdWdodA=="}},{"thoughtSignature":"signature","inlineData":{"mimeType":"image/webp","data":"aW1hZ2U="}},{"text":"done"}]}}]}`,
+	}))
+	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{
+		AllowText: true, NativeTools: []ai.NativeTool{ai.ImageGenerationTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := 0
+	for _, event := range events {
+		if fileEvent, ok := event.(ai.FileEvent); ok {
+			files++
+			file := fileEvent.Part
+			if string(file.Content.Data) != "image" || file.Content.MediaType != "image/webp" ||
+				file.ProviderName != "google" || file.ProviderDetails["thought_signature"] != "signature" {
+				t.Fatalf("unexpected streamed image: %+v", file)
+			}
+		}
+	}
+	if files != 1 {
+		t.Fatalf("streamed %d final images: %#v", files, events)
+	}
+}
+
+func TestGoogleStreamGeneratedImageErrorsAndStopping(t *testing.T) {
+	model := newNamedServer(t, "gemini-image", googleSSE(t, []string{
+		`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"!"}}]}}]}`,
+	}))
+	if _, err := collectGoogleStream(t, model, ai.ModelRequestParams{}); err == nil ||
+		!strings.Contains(err.Error(), "decode inline response data") {
+		t.Fatalf("unexpected streamed image error: %v", err)
+	}
+	model = newNamedServer(t, "gemini-image", googleSSE(t, []string{
+		`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"aQ=="}}]}}]}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := event.(ai.FileEvent); ok {
+			break
+		}
+	}
+}
+
 func TestGoogleStreamCodeExecution(t *testing.T) {
 	model := newServer(t, googleSSE(t, []string{
 		`{"responseId":"response","candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"print(1)"}}]}}]}`,
@@ -348,7 +399,7 @@ func TestStreamProtocolErrors(t *testing.T) {
 		want   string
 	}{
 		{name: "malformed", chunks: []string{`not json`}, want: "parse stream chunk"},
-		{name: "binary", chunks: []string{`{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"aGk="}}]}}]}`}, want: "binary output"},
+		{name: "file data", chunks: []string{`{"candidates":[{"content":{"parts":[{"fileData":{"mimeType":"image/png","fileUri":"gs://bucket/image.png"}}]}}]}`}, want: "file-data output"},
 		{name: "empty", want: "without a response"},
 	}
 	for _, test := range tests {

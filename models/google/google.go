@@ -10,7 +10,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"reflect"
 	"strings"
 	"time"
 
@@ -252,7 +251,7 @@ type fileData struct {
 	FileURI  string `json:"fileUri"`
 }
 
-func convertUserPrompt(p ai.UserPromptPart) ([]part, error) {
+func (model *Model) convertUserPrompt(p ai.UserPromptPart) ([]part, error) {
 	if len(p.Contents) == 0 {
 		return []part{{Text: p.Content}}, nil
 	}
@@ -268,6 +267,17 @@ func convertUserPrompt(p ai.UserPromptPart) ([]part, error) {
 			}})
 		case ai.ImageURL:
 			parts = append(parts, part{FileData: &fileData{FileURI: item.URL}})
+		case ai.UploadedFile:
+			if item.ProviderName != model.providerName {
+				return nil, fmt.Errorf("google: uploaded file %q belongs to provider %q", item.FileID, item.ProviderName)
+			}
+			if model.transport == TransportVertexAI && !strings.HasPrefix(item.FileID, "gs://") {
+				return nil, fmt.Errorf("google: Vertex AI uploaded file must use a gs:// URI, got %q", item.FileID)
+			}
+			if model.transport != TransportVertexAI && !strings.HasPrefix(item.FileID, "https://") {
+				return nil, fmt.Errorf("google: Gemini API uploaded file must use an https:// Files API URI, got %q", item.FileID)
+			}
+			parts = append(parts, part{FileData: &fileData{MimeType: item.MediaType, FileURI: item.FileID}})
 		default:
 			return nil, fmt.Errorf("google: unsupported user content type %T", c)
 		}
@@ -308,18 +318,27 @@ type toolConfig struct {
 }
 
 type generationConfig struct {
-	MaxOutputTokens  int             `json:"maxOutputTokens,omitempty"`
-	Temperature      *float64        `json:"temperature,omitempty"`
-	TopP             *float64        `json:"topP,omitempty"`
-	StopSequences    []string        `json:"stopSequences,omitempty"`
-	ResponseMimeType string          `json:"responseMimeType,omitempty"`
-	ResponseSchema   map[string]any  `json:"responseJsonSchema,omitempty"`
-	ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
-	PresencePenalty  *float64        `json:"presencePenalty,omitempty"`
-	FrequencyPenalty *float64        `json:"frequencyPenalty,omitempty"`
-	ResponseLogprobs *bool           `json:"responseLogprobs,omitempty"`
-	Logprobs         *int            `json:"logprobs,omitempty"`
-	ServiceTier      string          `json:"serviceTier,omitempty"`
+	MaxOutputTokens    int             `json:"maxOutputTokens,omitempty"`
+	Temperature        *float64        `json:"temperature,omitempty"`
+	TopP               *float64        `json:"topP,omitempty"`
+	StopSequences      []string        `json:"stopSequences,omitempty"`
+	ResponseMimeType   string          `json:"responseMimeType,omitempty"`
+	ResponseSchema     map[string]any  `json:"responseJsonSchema,omitempty"`
+	ThinkingConfig     *thinkingConfig `json:"thinkingConfig,omitempty"`
+	PresencePenalty    *float64        `json:"presencePenalty,omitempty"`
+	FrequencyPenalty   *float64        `json:"frequencyPenalty,omitempty"`
+	ResponseLogprobs   *bool           `json:"responseLogprobs,omitempty"`
+	Logprobs           *int            `json:"logprobs,omitempty"`
+	ServiceTier        string          `json:"serviceTier,omitempty"`
+	ResponseModalities []string        `json:"responseModalities,omitempty"`
+	ImageConfig        *imageConfig    `json:"imageConfig,omitempty"`
+}
+
+type imageConfig struct {
+	AspectRatio              ai.ImageAspectRatio    `json:"aspectRatio,omitempty"`
+	ImageSize                ai.ImageGenerationSize `json:"imageSize,omitempty"`
+	OutputMimeType           string                 `json:"outputMimeType,omitempty"`
+	OutputCompressionQuality *int                   `json:"outputCompressionQuality,omitempty"`
 }
 
 type thinkingConfig struct {
@@ -328,34 +347,95 @@ type thinkingConfig struct {
 	ThinkingLevel   string `json:"thinkingLevel,omitempty"`
 }
 
-func googleNativeTools(nativeTools []ai.NativeTool) ([]toolsParam, error) {
+func googleNativeTools(
+	nativeTools []ai.NativeTool, modelName string, transport Transport,
+) ([]toolsParam, *imageConfig, error) {
+	if err := ai.ValidateNativeTools(nativeTools); err != nil {
+		return nil, nil, fmt.Errorf("google: native tools: %w", err)
+	}
 	var tools []toolsParam
+	var generatedImageConfig *imageConfig
 	for _, nativeTool := range nativeTools {
-		if nativeTool == nil || (reflect.ValueOf(nativeTool).Kind() == reflect.Pointer && reflect.ValueOf(nativeTool).IsNil()) {
-			return nil, fmt.Errorf("google: native tool must not be nil")
-		}
-		switch nativeTool.(type) {
+		switch tool := nativeTool.(type) {
 		case ai.WebSearchTool, *ai.WebSearchTool:
 			tools = append(tools, toolsParam{GoogleSearch: &struct{}{}})
 		case ai.WebFetchTool, *ai.WebFetchTool:
 			tools = append(tools, toolsParam{URLContext: &struct{}{}})
 		case ai.CodeExecutionTool, *ai.CodeExecutionTool:
 			tools = append(tools, toolsParam{CodeExecution: &struct{}{}})
+		case ai.ImageGenerationTool:
+			config, err := googleImageGenerationConfig(tool, modelName, transport)
+			if err != nil {
+				if tool.Optional && !supportsImageOutput(modelName) {
+					continue
+				}
+				return nil, nil, err
+			}
+			generatedImageConfig = config
+		case *ai.ImageGenerationTool:
+			config, err := googleImageGenerationConfig(*tool, modelName, transport)
+			if err != nil {
+				if tool.Optional && !supportsImageOutput(modelName) {
+					continue
+				}
+				return nil, nil, err
+			}
+			generatedImageConfig = config
 		default:
 			if !nativeTool.IsOptional() {
-				return nil, fmt.Errorf("google: native tool %q is not implemented", nativeTool.Kind())
+				return nil, nil, fmt.Errorf("google: native tool %q is not implemented", nativeTool.Kind())
 			}
 		}
 	}
-	return tools, nil
+	return tools, generatedImageConfig, nil
+}
+
+func googleImageGenerationConfig(
+	tool ai.ImageGenerationTool, modelName string, transport Transport,
+) (*imageConfig, error) {
+	if !supportsImageOutput(modelName) {
+		return nil, fmt.Errorf("google: image generation requires a model with image output support")
+	}
+	config := &imageConfig{AspectRatio: tool.AspectRatio}
+	if tool.Size != "" {
+		switch tool.Size {
+		case ai.ImageGenerationSize512, ai.ImageGenerationSize1K,
+			ai.ImageGenerationSize2K, ai.ImageGenerationSize4K:
+			config.ImageSize = tool.Size
+		default:
+			return nil, fmt.Errorf("google: unsupported image generation size %q", tool.Size)
+		}
+	}
+	if transport != TransportVertexAI {
+		return config, nil
+	}
+	if tool.OutputFormat != "" {
+		config.OutputMimeType = "image/" + string(tool.OutputFormat)
+	}
+	if tool.OutputCompression != nil {
+		if tool.OutputFormat != "" && tool.OutputFormat != ai.ImageGenerationOutputJPEG {
+			return nil, fmt.Errorf("google: image generation output compression requires JPEG format")
+		}
+		compression := *tool.OutputCompression
+		config.OutputCompressionQuality = &compression
+		if config.OutputMimeType == "" {
+			config.OutputMimeType = "image/jpeg"
+		}
+	}
+	return config, nil
+}
+
+func supportsImageOutput(modelName string) bool {
+	return strings.Contains(strings.ToLower(modelName), "image")
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
-	nativeTools, err := googleNativeTools(params.NativeTools)
+	nativeTools, generatedImageConfig, err := googleNativeTools(params.NativeTools, m.name, m.transport)
 	if err != nil {
 		return nil, err
 	}
-	if len(nativeTools) > 0 && (len(params.Tools) > 0 || params.OutputTool != nil) &&
+	if (len(nativeTools) > 0 || generatedImageConfig != nil) &&
+		(len(params.Tools) > 0 || params.OutputTool != nil) &&
 		!strings.Contains(strings.ToLower(m.name), "gemini-3") {
 		return nil, fmt.Errorf("google: model %q does not support function and native tools together", m.name)
 	}
@@ -372,9 +452,10 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if err != nil {
 		return nil, err
 	}
+	imageOutput := supportsImageOutput(m.name)
 	if settings.MaxTokens != 0 || settings.Temperature != nil || settings.TopP != nil ||
 		settings.PresencePenalty != nil || settings.FrequencyPenalty != nil || settings.Logprobs != nil ||
-		settings.TopLogprobs != nil || serviceTier != "" || len(settings.StopSequences) > 0 || thinking != nil {
+		settings.TopLogprobs != nil || serviceTier != "" || len(settings.StopSequences) > 0 || thinking != nil || imageOutput {
 		req.GenerationConfig = &generationConfig{
 			MaxOutputTokens:  settings.MaxTokens,
 			Temperature:      settings.Temperature,
@@ -386,6 +467,13 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			ResponseLogprobs: settings.Logprobs,
 			Logprobs:         settings.TopLogprobs,
 			ServiceTier:      serviceTier,
+			ImageConfig:      generatedImageConfig,
+		}
+		if imageOutput {
+			req.GenerationConfig.ResponseModalities = []string{"TEXT", "IMAGE"}
+			if !params.AllowText {
+				req.GenerationConfig.ResponseModalities = []string{"IMAGE"}
+			}
 		}
 	}
 	for _, msg := range msgs {
@@ -511,7 +599,7 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 func (model *Model) convertMessage(msg ai.ModelMessage) ([]content, error) {
 	switch message := msg.(type) {
 	case ai.ModelRequest:
-		return convertRequest(message)
+		return model.convertRequest(message)
 	case ai.ModelResponse:
 		return model.convertResponse(message)
 	default:
@@ -519,14 +607,14 @@ func (model *Model) convertMessage(msg ai.ModelMessage) ([]content, error) {
 	}
 }
 
-func convertRequest(m ai.ModelRequest) ([]content, error) {
+func (model *Model) convertRequest(m ai.ModelRequest) ([]content, error) {
 	var parts []part
 	for _, p := range m.Parts {
 		switch rp := p.(type) {
 		case ai.SystemPromptPart:
 			parts = append(parts, part{Text: rp.Content})
 		case ai.UserPromptPart:
-			converted, err := convertUserPrompt(rp)
+			converted, err := model.convertUserPrompt(rp)
 			if err != nil {
 				return nil, err
 			}
@@ -569,6 +657,14 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 		case ai.ThinkingPart:
 			parts = append(parts, part{
 				Text: rp.Content, Thought: true,
+				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
+			})
+		case ai.FilePart:
+			parts = append(parts, part{
+				InlineData: &inlineData{
+					MimeType: rp.Content.MediaType,
+					Data:     base64.StdEncoding.EncodeToString(rp.Content.Data),
+				},
 				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
 			})
 		case ai.ToolCallPart:
@@ -942,6 +1038,15 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 				Timestamp: resp.Timestamp, ProviderName: providerName,
 			})
 			lastCodeCallID = ""
+		case p.InlineData != nil:
+			if p.Thought {
+				continue
+			}
+			file, err := googleInlineFilePart(*p.InlineData, partProviderName, providerDetails)
+			if err != nil {
+				return nil, err
+			}
+			resp.Parts = append(resp.Parts, file)
 		case p.FunctionCall != nil:
 			// args came from parsed JSON, so re-marshalling cannot fail
 			args, _ := json.Marshal(p.FunctionCall.Args)
@@ -960,4 +1065,20 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 		}
 	}
 	return resp, nil
+}
+
+func googleInlineFilePart(
+	data inlineData, providerName string, providerDetails map[string]any,
+) (ai.FilePart, error) {
+	if data.Data == "" || data.MimeType == "" {
+		return ai.FilePart{}, fmt.Errorf("google: inline response data requires data and MIME type")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(data.Data)
+	if err != nil {
+		return ai.FilePart{}, fmt.Errorf("google: decode inline response data: %w", err)
+	}
+	return ai.FilePart{
+		Content:      ai.BinaryContent{Data: decoded, MediaType: data.MimeType},
+		ProviderName: providerName, ProviderDetails: providerDetails,
+	}, nil
 }

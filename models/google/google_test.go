@@ -766,6 +766,191 @@ func TestGoogleCodeExecutionResponse(t *testing.T) {
 	}
 }
 
+func TestGoogleImageGeneration(t *testing.T) {
+	var body map[string]any
+	model := newNamedServer(t, "gemini-3-pro-image-preview", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"responseId":"response","modelVersion":"gemini-3-pro-image-preview","candidates":[{"content":{"parts":[
+			{"thought":true,"inlineData":{"mimeType":"image/png","data":"dGhvdWdodA=="}},
+			{"thoughtSignature":"signature","inlineData":{"mimeType":"image/webp","data":"aW1hZ2U="}},
+			{"text":"done"}
+		]},"finishReason":"STOP"}]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		AllowText: true,
+		NativeTools: []ai.NativeTool{ai.ImageGenerationTool{
+			AspectRatio: ai.ImageAspectRatio16x9, Size: ai.ImageGenerationSize2K,
+			OutputFormat: ai.ImageGenerationOutputPNG,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	generation := body["generationConfig"].(map[string]any)
+	image := generation["imageConfig"].(map[string]any)
+	modalities := generation["responseModalities"].([]any)
+	if body["tools"] != nil || image["aspectRatio"] != "16:9" || image["imageSize"] != "2K" ||
+		image["outputMimeType"] != nil || len(modalities) != 2 || modalities[0] != "TEXT" || modalities[1] != "IMAGE" {
+		t.Fatalf("unexpected Gemini image request: %#v", body)
+	}
+	if len(response.Parts) != 2 {
+		t.Fatalf("thinking image was not omitted: %#v", response.Parts)
+	}
+	file := response.Parts[0].(ai.FilePart)
+	if file.Content.MediaType != "image/webp" || string(file.Content.Data) != "image" ||
+		file.ProviderName != "google" || file.ProviderDetails["thought_signature"] != "signature" ||
+		response.Text() != "done" {
+		t.Fatalf("unexpected generated image response: %+v", response)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := body["contents"].([]any)[0].(map[string]any)["parts"].([]any)[0].(map[string]any)
+	inline := replayed["inlineData"].(map[string]any)
+	if inline["mimeType"] != "image/webp" || inline["data"] != "aW1hZ2U=" ||
+		replayed["thoughtSignature"] != "signature" {
+		t.Fatalf("unexpected generated image replay: %#v", replayed)
+	}
+}
+
+func TestGoogleVertexImageGenerationConfig(t *testing.T) {
+	compression := 85
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	}))
+	defer server.Close()
+	model := google.NewModel("gemini-3-pro-image-preview", google.WithProvider(google.ProviderConfig{
+		Transport: google.TransportVertexAI, Name: "google-cloud", BaseURL: server.URL,
+		APIKey: "key", HTTPClient: server.Client(),
+	}))
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		&ai.ImageGenerationTool{
+			OutputFormat: ai.ImageGenerationOutputJPEG, OutputCompression: &compression,
+			Size: ai.ImageGenerationSize4K, AspectRatio: ai.ImageAspectRatio3x2,
+		},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	image := body["generationConfig"].(map[string]any)["imageConfig"].(map[string]any)
+	if image["outputMimeType"] != "image/jpeg" || image["outputCompressionQuality"] != float64(85) ||
+		image["imageSize"] != "4K" || image["aspectRatio"] != "3:2" {
+		t.Fatalf("unexpected Vertex image config: %#v", image)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.ImageGenerationTool{OutputCompression: &compression},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	image = body["generationConfig"].(map[string]any)["imageConfig"].(map[string]any)
+	if image["outputMimeType"] != "image/jpeg" || image["outputCompressionQuality"] != float64(85) {
+		t.Fatalf("compression did not default Vertex output to JPEG: %#v", image)
+	}
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
+		Contents: []ai.UserContent{ai.UploadedFile{
+			FileID: "gs://bucket/report.pdf", ProviderName: "google-cloud", MediaType: "application/pdf",
+		}},
+	}}}}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	file := body["contents"].([]any)[0].(map[string]any)["parts"].([]any)[0].(map[string]any)["fileData"].(map[string]any)
+	if file["fileUri"] != "gs://bucket/report.pdf" || file["mimeType"] != "application/pdf" {
+		t.Fatalf("unexpected Vertex uploaded file: %#v", file)
+	}
+	messages[0] = ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.UploadedFile{FileID: "https://example.com/file", ProviderName: "google-cloud"},
+	}}}}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err == nil ||
+		!strings.Contains(err.Error(), "must use a gs:// URI") {
+		t.Fatalf("unexpected Vertex uploaded file error: %v", err)
+	}
+
+	for _, test := range []struct {
+		name string
+		tool ai.NativeTool
+		want string
+	}{
+		{name: "OpenAI size", tool: &ai.ImageGenerationTool{Size: ai.ImageGenerationSize1024x1024}, want: "unsupported image generation size"},
+		{name: "auto size", tool: ai.ImageGenerationTool{Size: ai.ImageGenerationSizeAuto}, want: "unsupported image generation size"},
+		{name: "compression format", tool: ai.ImageGenerationTool{
+			OutputFormat: ai.ImageGenerationOutputPNG, OutputCompression: &compression,
+		}, want: "requires JPEG format"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{test.tool}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected image generation error: %v", err)
+			}
+		})
+	}
+
+	gemini := newNamedServer(t, "gemini-2.5-flash-image", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	})
+	if _, err := gemini.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.ImageGenerationTool{OutputFormat: ai.ImageGenerationOutputWebP, OutputCompression: &compression},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if image := body["generationConfig"].(map[string]any)["imageConfig"].(map[string]any); len(image) != 0 {
+		t.Fatalf("Gemini API did not ignore output encoding settings: %#v", image)
+	}
+}
+
+func TestGoogleImageGenerationCompatibility(t *testing.T) {
+	handler := func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	}
+	model := newServer(t, handler)
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.ImageGenerationTool{}},
+	}); err == nil || !strings.Contains(err.Error(), "requires a model with image output support") {
+		t.Fatalf("unexpected unsupported image model error: %v", err)
+	}
+	for _, optional := range []ai.NativeTool{
+		ai.ImageGenerationTool{Optional: true}, &ai.ImageGenerationTool{Optional: true},
+	} {
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{optional},
+		}); err != nil {
+			t.Fatalf("optional image generation should be omitted: %v", err)
+		}
+	}
+	imageModel := newNamedServer(t, "gemini-2.5-flash-image", handler)
+	if _, err := imageModel.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.ImageGenerationTool{}},
+		Tools:       []ai.ToolDefinition{{Name: "work", Schema: map[string]any{"type": "object"}}},
+	}); err == nil || !strings.Contains(err.Error(), "does not support function and native tools together") {
+		t.Fatalf("unexpected image/function combination error: %v", err)
+	}
+}
+
+func TestGoogleImageResponseErrors(t *testing.T) {
+	for name, inline := range map[string]string{
+		"missing data":   `{"mimeType":"image/png"}`,
+		"missing MIME":   `{"data":"aQ=="}`,
+		"invalid base64": `{"mimeType":"image/png","data":"!"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newNamedServer(t, "gemini-image", func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"inlineData":` + inline + `}]}}]}`))
+			})
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil {
+				t.Fatal("expected inline image error")
+			}
+		})
+	}
+}
+
 func TestErrors(t *testing.T) {
 	t.Run("native tools", func(t *testing.T) {
 		var body map[string]any
@@ -981,6 +1166,10 @@ func TestMultimodalUserPrompt(t *testing.T) {
 		ai.TextContent{Text: "what is this?"},
 		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
 		ai.ImageURL{URL: "https://example.com/cat.png"},
+		ai.UploadedFile{
+			FileID:       "https://generativelanguage.googleapis.com/v1beta/files/report",
+			ProviderName: "google", MediaType: "application/pdf",
+		},
 	}}}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
 		t.Fatal(err)
@@ -994,13 +1183,32 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	if file["fileUri"] != "https://example.com/cat.png" {
 		t.Fatalf("unexpected file data %v", file)
 	}
+	uploaded := parts[3].(map[string]any)["fileData"].(map[string]any)
+	if uploaded["fileUri"] != "https://generativelanguage.googleapis.com/v1beta/files/report" ||
+		uploaded["mimeType"] != "application/pdf" {
+		t.Fatalf("unexpected uploaded file data %v", uploaded)
+	}
 }
 
 func TestMultimodalUnknownContent(t *testing.T) {
 	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
-	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{nil}}}}}
-	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err == nil {
-		t.Fatal("expected error")
+	for name, item := range map[string]ai.UserContent{
+		"unknown": nil,
+		"foreign upload": ai.UploadedFile{
+			FileID: "https://example.com/file", ProviderName: "openai", MediaType: "application/pdf",
+		},
+		"invalid Gemini upload": ai.UploadedFile{
+			FileID: "file", ProviderName: "google", MediaType: "application/pdf",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{item}},
+			}}}
+			if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err == nil {
+				t.Fatal("expected error")
+			}
+		})
 	}
 }
 

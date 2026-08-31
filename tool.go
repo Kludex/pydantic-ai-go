@@ -95,21 +95,94 @@ type ArgsValidator[Deps, Args any] func(
 	ctx context.Context, rc *RunContext[Deps], args Args,
 ) error
 
-// AddTool registers a tool on the agent. The argument schema is reflected
-// from the Args struct's `json` and `jsonschema` tags. Registration panics
-// after the agent's first run.
-//
-// If the model sends arguments that fail to unmarshal, the error is sent
-// back to the model as a retry prompt instead of failing the run. The same
-// happens when fn returns an error created with Retryf; any other error
-// aborts the run.
+// Tool is a reusable typed function tool. Create one with NewTool and add it
+// to an agent or one run. Tool values are safe to reuse concurrently when
+// their callbacks are safe to invoke concurrently.
+type Tool[Deps any] struct {
+	entry toolEntry[Deps]
+}
+
+// Definition returns a detached copy of the definition shown to models.
+func (t Tool[Deps]) Definition() ToolDefinition { return cloneToolDefinition(t.entry.def) }
+
+// NewTool creates a reusable function tool. The argument schema is reflected
+// from Args and validated before fn runs.
+func NewTool[Deps, Args, Result any](
+	name string,
+	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
+	opts ...ToolOption,
+) Tool[Deps] {
+	return newReflectedTool(name, fn, nil, nil, opts)
+}
+
+// NewToolWithArgsValidator creates a reusable function tool with a typed
+// semantic validator that runs after decoding and before execution.
+func NewToolWithArgsValidator[Deps, Args, Result any](
+	name string,
+	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
+	validate ArgsValidator[Deps, Args],
+	opts ...ToolOption,
+) Tool[Deps] {
+	return newReflectedTool(name, fn, validate, nil, opts)
+}
+
+// NewPreparedTool creates a reusable function tool with per-step preparation.
+func NewPreparedTool[Deps, Args, Result any](
+	name string,
+	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
+	prepare ToolPrepareFunc[Deps],
+	opts ...ToolOption,
+) Tool[Deps] {
+	return newReflectedTool(name, fn, nil, prepare, opts)
+}
+
+// NewPreparedToolWithArgsValidator combines typed argument validation with
+// per-step preparation on a reusable tool.
+func NewPreparedToolWithArgsValidator[Deps, Args, Result any](
+	name string,
+	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
+	validate ArgsValidator[Deps, Args],
+	prepare ToolPrepareFunc[Deps],
+	opts ...ToolOption,
+) Tool[Deps] {
+	return newReflectedTool(name, fn, validate, prepare, opts)
+}
+
+// NewSimpleTool creates a reusable tool that needs no run context or dependencies.
+func NewSimpleTool[Deps, Args, Result any](
+	name string,
+	fn func(ctx context.Context, args Args) (Result, error),
+	opts ...ToolOption,
+) Tool[Deps] {
+	return NewTool(name, func(ctx context.Context, _ *RunContext[Deps], args Args) (Result, error) {
+		return fn(ctx, args)
+	}, opts...)
+}
+
+// NewSimpleToolWithArgsValidator creates a reusable context-free tool with
+// a typed validator that can inspect the run context.
+func NewSimpleToolWithArgsValidator[Deps, Args, Result any](
+	name string,
+	fn func(ctx context.Context, args Args) (Result, error),
+	validate ArgsValidator[Deps, Args],
+	opts ...ToolOption,
+) Tool[Deps] {
+	return NewToolWithArgsValidator(name, func(
+		ctx context.Context, _ *RunContext[Deps], args Args,
+	) (Result, error) {
+		return fn(ctx, args)
+	}, validate, opts...)
+}
+
+// AddTool registers a tool on the agent. Registration panics after the
+// agent's first run. Invalid arguments and Retryf errors become retry prompts.
 func AddTool[Deps, Output, Args, Result any](
 	a *Agent[Deps, Output],
 	name string,
 	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
 	opts ...ToolOption,
 ) {
-	addReflectedTool(a, name, fn, nil, nil, opts)
+	a.AddTool(NewTool(name, fn, opts...))
 }
 
 // AddToolWithArgsValidator registers a tool with a typed semantic validator.
@@ -122,7 +195,7 @@ func AddToolWithArgsValidator[Deps, Output, Args, Result any](
 	validate ArgsValidator[Deps, Args],
 	opts ...ToolOption,
 ) {
-	addReflectedTool(a, name, fn, validate, nil, opts)
+	a.AddTool(NewToolWithArgsValidator(name, fn, validate, opts...))
 }
 
 // AddPreparedTool registers a tool with a per-step preparation callback.
@@ -135,7 +208,7 @@ func AddPreparedTool[Deps, Output, Args, Result any](
 	prepare ToolPrepareFunc[Deps],
 	opts ...ToolOption,
 ) {
-	addReflectedTool(a, name, fn, nil, prepare, opts)
+	a.AddTool(NewPreparedTool(name, fn, prepare, opts...))
 }
 
 // AddPreparedToolWithArgsValidator combines typed argument validation with
@@ -148,19 +221,18 @@ func AddPreparedToolWithArgsValidator[Deps, Output, Args, Result any](
 	prepare ToolPrepareFunc[Deps],
 	opts ...ToolOption,
 ) {
-	addReflectedTool(a, name, fn, validate, prepare, opts)
+	a.AddTool(NewPreparedToolWithArgsValidator(name, fn, validate, prepare, opts...))
 }
 
-func addReflectedTool[Deps, Output, Args, Result any](
-	a *Agent[Deps, Output],
+func newReflectedTool[Deps, Args, Result any](
 	name string,
 	fn func(ctx context.Context, rc *RunContext[Deps], args Args) (Result, error),
 	validate ArgsValidator[Deps, Args],
 	prepare ToolPrepareFunc[Deps],
 	opts []ToolOption,
-) {
+) Tool[Deps] {
 	def := toolDefinition[Args](name, opts)
-	a.addPreparedTool(def, func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+	call := func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
 		var args Args
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
 			return nil, Retryf("invalid arguments for tool %q: %v", name, err)
@@ -171,7 +243,8 @@ func addReflectedTool[Deps, Output, Args, Result any](
 			}
 		}
 		return fn(ctx, rc, args)
-	}, prepare)
+	}
+	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def), call: call, prepare: prepare}}
 }
 
 // AddSimpleTool registers a tool that needs no run context or deps.
@@ -181,9 +254,7 @@ func AddSimpleTool[Deps, Output, Args, Result any](
 	fn func(ctx context.Context, args Args) (Result, error),
 	opts ...ToolOption,
 ) {
-	AddTool(a, name, func(ctx context.Context, _ *RunContext[Deps], args Args) (Result, error) {
-		return fn(ctx, args)
-	}, opts...)
+	a.AddTool(NewSimpleTool[Deps](name, fn, opts...))
 }
 
 // AddSimpleToolWithArgsValidator registers a context-free tool with a typed
@@ -195,21 +266,48 @@ func AddSimpleToolWithArgsValidator[Deps, Output, Args, Result any](
 	validate ArgsValidator[Deps, Args],
 	opts ...ToolOption,
 ) {
-	AddToolWithArgsValidator(a, name, func(
-		ctx context.Context, _ *RunContext[Deps], args Args,
-	) (Result, error) {
-		return fn(ctx, args)
-	}, validate, opts...)
+	a.AddTool(NewSimpleToolWithArgsValidator[Deps](name, fn, validate, opts...))
 }
 
-// AddRawTool registers a tool from an explicit definition, skipping schema
-// reflection. It is the escape hatch for dynamic tools (MCP, config-driven).
+// NewRawTool creates a reusable tool from an explicit definition, skipping
+// schema reflection. It is the escape hatch for dynamic tools.
+func NewRawTool[Deps any](
+	def ToolDefinition,
+	fn func(ctx context.Context, rawArgs json.RawMessage) (any, error),
+	opts ...ToolOption,
+) Tool[Deps] {
+	return NewRawToolWithArgsValidator[Deps](def, fn, nil, opts...)
+}
+
+// NewRawToolWithArgsValidator creates a reusable raw-schema tool with a
+// validator that can inspect the run context and unmodified JSON arguments.
+func NewRawToolWithArgsValidator[Deps any](
+	def ToolDefinition,
+	fn func(ctx context.Context, rawArgs json.RawMessage) (any, error),
+	validate ArgsValidator[Deps, json.RawMessage],
+	opts ...ToolOption,
+) Tool[Deps] {
+	for _, opt := range opts {
+		opt(&def)
+	}
+	call := func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
+		if validate != nil {
+			if err := validate(ctx, rc, rawArgs); err != nil {
+				return nil, err
+			}
+		}
+		return fn(ctx, rawArgs)
+	}
+	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def), call: call}}
+}
+
+// AddRawTool registers a tool from an explicit definition, skipping schema reflection.
 func (a *Agent[Deps, Output]) AddRawTool(
 	def ToolDefinition,
 	fn func(ctx context.Context, rawArgs json.RawMessage) (any, error),
 	opts ...ToolOption,
 ) {
-	a.AddRawToolWithArgsValidator(def, fn, nil, opts...)
+	a.AddTool(NewRawTool[Deps](def, fn, opts...))
 }
 
 // AddRawToolWithArgsValidator registers a raw-schema tool with validation
@@ -220,17 +318,7 @@ func (a *Agent[Deps, Output]) AddRawToolWithArgsValidator(
 	validate ArgsValidator[Deps, json.RawMessage],
 	opts ...ToolOption,
 ) {
-	for _, opt := range opts {
-		opt(&def)
-	}
-	a.addTool(def, func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
-		if validate != nil {
-			if err := validate(ctx, rc, rawArgs); err != nil {
-				return nil, err
-			}
-		}
-		return fn(ctx, rawArgs)
-	})
+	a.AddTool(NewRawToolWithArgsValidator[Deps](def, fn, validate, opts...))
 }
 
 // ToolOption configures a tool at registration.

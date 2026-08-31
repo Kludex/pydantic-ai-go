@@ -114,6 +114,7 @@ func (a *Agent[Deps, Output]) newRun(
 	r := &run[Deps, Output]{
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int), runSettings: cfg.settings,
+		tools:            slices.Clone(a.tools),
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
 		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
@@ -121,6 +122,24 @@ func (a *Agent[Deps, Output]) newRun(
 	if cfg.retryLimits != nil {
 		validateRetryLimits(*cfg.retryLimits)
 		r.retryLimits = *cfg.retryLimits
+	}
+	toolNames := make(map[string]struct{}, len(r.tools)+len(cfg.tools))
+	for _, entry := range r.tools {
+		toolNames[entry.def.Name] = struct{}{}
+	}
+	for _, erased := range cfg.tools {
+		entry, ok := erased.entry.(toolEntry[Deps])
+		if !ok {
+			cancellation.finish()
+			return nil, fmt.Errorf("ai: run tool dependencies do not match agent")
+		}
+		if _, exists := toolNames[entry.def.Name]; exists {
+			cancellation.finish()
+			return nil, fmt.Errorf("ai: duplicate run tool name %q", entry.def.Name)
+		}
+		entry.def = cloneToolDefinition(entry.def)
+		r.tools = append(r.tools, entry)
+		toolNames[entry.def.Name] = struct{}{}
 	}
 	history, interruptedReturns := repairDanglingToolCalls(dropOrphanedToolResults(cfg.history))
 	runID := cfg.runID
@@ -160,7 +179,7 @@ func (a *Agent[Deps, Output]) newRun(
 	}
 	validateOutputMode(outputMode)
 	var err error
-	r.params, err = a.buildParams(r.staticInstructions, settings, outputMode)
+	r.params, err = a.buildParams(r.staticInstructions, settings, outputMode, r.tools)
 	if err != nil {
 		cancellation.finish()
 		return nil, err
@@ -409,6 +428,7 @@ type run[Deps, Output any] struct {
 	currentToolValidators  map[string]*schema.Validator
 	currentOutputTool      *ToolDefinition
 	currentOutputValidator *schema.Validator
+	tools                  []toolEntry[Deps]
 	staticInstructions     []InstructionPart
 	systemPromptsPrepared  bool
 	runSettings            *ModelSettings
@@ -728,7 +748,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	tools := make([]ToolDefinition, 0, len(params.Tools))
 	for _, def := range params.Tools {
 		prepared := cloneToolDefinition(def)
-		entry, _ := r.agent.findTool(def.Name)
+		entry, _ := r.findTool(def.Name)
 		if entry.prepare != nil {
 			result, err := entry.prepare(ctx, &rc, prepared)
 			if err != nil {
@@ -747,8 +767,8 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 			return ModelRequestParams{}, fmt.Errorf("ai: prepare tools: %w", err)
 		}
 	}
-	known := make(map[string]struct{}, len(r.agent.tools))
-	for _, entry := range r.agent.tools {
+	known := make(map[string]struct{}, len(r.tools))
+	for _, entry := range r.tools {
 		known[entry.def.Name] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(tools))
@@ -1027,7 +1047,7 @@ func (r *run[Deps, Output]) checkToolCallLimit(calls []ToolCallPart) error {
 	}
 	pending := 0
 	for _, call := range calls {
-		_, registered := r.agent.findTool(call.ToolName)
+		_, registered := r.findTool(call.ToolName)
 		_, available := r.currentTools[call.ToolName]
 		if !r.isOutputCall(call) && registered && available {
 			pending++
@@ -1200,7 +1220,7 @@ func (r *run[Deps, Output]) executeIndexBatch(
 
 func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) callOutcome[Output] {
 	part, output, err := r.executeCall(ctx, call)
-	_, registered := r.agent.findTool(call.ToolName)
+	_, registered := r.findTool(call.ToolName)
 	_, available := r.currentTools[call.ToolName]
 	outcome := callOutcome[Output]{
 		part: part, output: output, outputCall: r.isOutputCall(call), functionCall: registered && available, err: err,
@@ -1245,7 +1265,7 @@ func (r *run[Deps, Output]) callIsBarrier(call ToolCallPart, outputToolsConcurre
 	if r.isOutputCall(call) {
 		return r.currentOutputTool.Sequential || !outputToolsConcurrent
 	}
-	entry, ok := r.agent.findTool(call.ToolName)
+	entry, ok := r.findTool(call.ToolName)
 	return ok && entry.def.Sequential
 }
 
@@ -1328,7 +1348,7 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 	if r.isOutputCall(call) {
 		return r.finalizeOutputCall(ctx, call)
 	}
-	entry, registered := r.agent.findTool(call.ToolName)
+	entry, registered := r.findTool(call.ToolName)
 	_, available := r.currentTools[call.ToolName]
 	if !registered || !available {
 		if err := r.countToolRetry(call.ToolName); err != nil {
@@ -1598,7 +1618,7 @@ func (r *run[Deps, Output]) toolRetryInfo(name string) (int, int) {
 
 func (r *run[Deps, Output]) toolRetryInfoLocked(name string) (int, int) {
 	maxRetries := r.retryLimits.Tools
-	if entry, ok := r.agent.findTool(name); ok && entry.def.maxRetries != nil {
+	if entry, ok := r.findTool(name); ok && entry.def.maxRetries != nil {
 		maxRetries = *entry.def.maxRetries
 	}
 	return r.toolRetries[name], maxRetries
@@ -1626,8 +1646,8 @@ func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
 	return &RunResult[Output]{Output: out, usage: usage, messages: r.messages, newMessages: r.newMessages}
 }
 
-func (a *Agent[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
-	for _, entry := range a.tools {
+func (r *run[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
+	for _, entry := range r.tools {
 		if entry.def.Name == name {
 			return entry, true
 		}
@@ -1804,7 +1824,10 @@ func (r *run[Deps, Output]) prepareInstructions(
 }
 
 func (a *Agent[Deps, Output]) buildParams(
-	instructionParts []InstructionPart, settings ModelSettings, outputMode OutputMode,
+	instructionParts []InstructionPart,
+	settings ModelSettings,
+	outputMode OutputMode,
+	tools []toolEntry[Deps],
 ) (ModelRequestParams, error) {
 	instructions := make([]string, 0, len(instructionParts))
 	for _, part := range instructionParts {
@@ -1813,7 +1836,7 @@ func (a *Agent[Deps, Output]) buildParams(
 	params := ModelRequestParams{
 		Instructions: strings.Join(instructions, "\n\n"), InstructionParts: instructionParts, Settings: settings,
 	}
-	for _, entry := range a.tools {
+	for _, entry := range tools {
 		params.Tools = append(params.Tools, entry.def)
 	}
 	var out Output

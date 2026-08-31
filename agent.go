@@ -200,6 +200,11 @@ func (a *Agent[Deps, Output]) AddOutputValidator(fn func(ctx context.Context, rc
 	a.outputValidators = append(a.outputValidators, fn)
 }
 
+// AddTool registers a reusable tool on the agent.
+func (a *Agent[Deps, Output]) AddTool(tool Tool[Deps]) {
+	a.addPreparedTool(tool.entry.def, tool.entry.call, tool.entry.prepare)
+}
+
 func (a *Agent[Deps, Output]) addTool(def ToolDefinition, fn toolFunc[Deps]) {
 	a.addPreparedTool(def, fn, nil)
 }
@@ -337,6 +342,10 @@ type erasedModelSettingsFunc func(context.Context, any) (ModelSettings, error)
 type erasedInstructionsFunc func(context.Context, any) (string, error)
 type erasedModelSelectorFunc func(context.Context, any) (ModelSelection, error)
 
+type erasedTool struct {
+	entry any
+}
+
 type runConfig struct {
 	history           []ModelMessage
 	model             Model
@@ -351,6 +360,18 @@ type runConfig struct {
 	settingsFuncs     []erasedModelSettingsFunc
 	instructionsFuncs []erasedInstructionsFunc
 	modelSelectors    []erasedModelSelectorFunc
+	tools             []erasedTool
+}
+
+// WithRunTools adds reusable tools for one run without modifying the agent.
+// A run tool name must not duplicate an agent or another run tool name.
+func WithRunTools[Deps any](tools ...Tool[Deps]) RunOption {
+	entries := make([]erasedTool, len(tools))
+	for index, tool := range tools {
+		tool.entry.def = cloneToolDefinition(tool.entry.def)
+		entries[index] = erasedTool{entry: tool.entry}
+	}
+	return func(c *runConfig) { c.tools = append(c.tools, entries...) }
 }
 
 // WithMessageHistory prepends prior conversation messages to the run.

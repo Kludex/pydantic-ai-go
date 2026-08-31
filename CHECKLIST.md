@@ -28,7 +28,7 @@ Status:
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
-- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, and history. Typed output specialization, capabilities, tools, and toolsets remain.
+- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, history, and reusable tools. Typed output specialization, capabilities, and toolsets remain.
 - [x] Typed agent/run and untyped capability model selectors run before every logical request with step, completed-history, prior-model, model-ID, deps, and usage context.
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
@@ -62,7 +62,7 @@ Status:
 
 ### Tools and toolsets
 
-- [x] Typed function tools with reflected JSON Schema.
+- [x] Typed function tools with reflected JSON Schema, including reusable `Tool[Deps]` values that can be registered on agents or scoped to one run.
 - [x] Dependency-aware and simple tool signatures.
 - [x] Raw-schema dynamic tool registration.
 - [x] Tool and argument-unmarshal retries use independent per-tool counters; output retries use a separate counter.
@@ -80,7 +80,7 @@ Status:
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
-- [ ] Toolsets: function, combined, filtered, prefixed, renamed, prepared, and approval-required.
+- [~] Reusable function tools and per-run additive tools are implemented. Function, combined, filtered, prefixed, renamed, prepared, and approval-required toolset composition remains.
 - [ ] Deferred/lazy tool loading and tool search.
 - [ ] Native/builtin tools distinct from function tools.
 
@@ -216,7 +216,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run typed output specialization, capabilities, tools, and toolsets.
+2. Add per-run typed output specialization, capabilities, and composable toolsets.
 3. Add rich tool return values, extra content, and revealed tools.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.

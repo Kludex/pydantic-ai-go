@@ -177,6 +177,29 @@ ai.AddTool(agent, "book_table", bookTable, ai.WithStrict())
 
 Strict mode prevents malformed arguments before they reach your code. OpenAI enables it automatically when a schema is compatible, and rewrites incompatible constraints when you use `ai.WithStrict()`. Use `openai.WithStrictToolSupport(false)` for compatible endpoints that reject strict definitions. Anthropic uses explicit strict mode on supported Claude models; use `anthropic.WithStrictToolSupport` for aliases or newly released models. Set `anthropic.WithSchemaWarningHandler` to inspect lossy conversions, such as dynamic map schemas that Anthropic closes with `additionalProperties: false`. Gemini 2.5 and newer use request-wide `VALIDATED` mode by default. Use `ai.WithoutStrict()` to keep a Gemini request on `AUTO`, or `google.WithStrictToolSupport` for model aliases and compatible proxies.
 
+## Reusable and per-run tools
+
+Create a `Tool` when the same implementation belongs to several agents or only one run:
+
+```go
+weatherTool := ai.NewTool("get_weather", func(
+	_ context.Context,
+	rc *ai.RunContext[Deps],
+	args WeatherArgs,
+) (string, error) {
+	return fmt.Sprintf("sunny, 21 %s in %s", rc.Deps.DefaultUnit, args.City), nil
+})
+
+result, err := agent.Run(
+	ctx,
+	"What's the weather in Oslo?",
+	deps,
+	ai.WithRunTools(weatherTool),
+)
+```
+
+`WithRunTools` does not mutate the agent or leak tools into concurrent runs. A tool name cannot duplicate an agent tool or another per-run tool. Use `agent.AddTool(weatherTool)` to register the same value permanently. `Tool.Definition()` returns a detached copy for inspection.
+
 ## Dynamic tools
 
 Use `ai.AddPreparedTool` when one tool's availability or schema depends on the run:

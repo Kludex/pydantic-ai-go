@@ -169,6 +169,65 @@ func TestResponsesRefusal(t *testing.T) {
 	}
 }
 
+func TestResponsesPhaseReplayUsesModelProfileAndOverride(t *testing.T) {
+	tests := []struct {
+		name         string
+		modelName    string
+		options      []openai.Option
+		providerName string
+		phase        string
+		wantPhase    bool
+	}{
+		{name: "gpt 5.3 codex", modelName: "gpt-5.3-codex", phase: "commentary", wantPhase: true},
+		{name: "gpt 5.4", modelName: "gpt-5.4", phase: "final_answer", wantPhase: true},
+		{name: "gpt 5.5", modelName: "gpt-5.5-mini", phase: "commentary", wantPhase: true},
+		{name: "gpt 5.6", modelName: "gpt-5.6-terra", phase: "final_answer", wantPhase: true},
+		{name: "unsupported", modelName: "gpt-5", phase: "commentary"},
+		{name: "enabled override", modelName: "gpt-5", options: []openai.Option{
+			openai.WithResponsesPhaseSupport(true),
+		}, phase: "commentary", wantPhase: true},
+		{name: "disabled override", modelName: "gpt-5.4", options: []openai.Option{
+			openai.WithResponsesPhaseSupport(false),
+		}, phase: "commentary"},
+		{name: "foreign provider", modelName: "gpt-5.4", providerName: "other", phase: "commentary"},
+		{name: "unknown phase", modelName: "gpt-5.4", phase: "analysis"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var body map[string]any
+			options := append([]openai.Option(nil), test.options...)
+			options = append(options, openai.WithHTTPClient(&http.Client{Transport: compactionRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK, Header: http.Header{},
+					Body: io.NopCloser(strings.NewReader(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`)),
+				}, nil
+			})}))
+			model := openai.NewResponsesModel(test.modelName, options...)
+			providerName := test.providerName
+			if providerName == "" {
+				providerName = "openai"
+			}
+			history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{
+				Content: "earlier", ProviderName: providerName,
+				ProviderDetails: map[string]any{"phase": test.phase},
+			}}}}
+			if _, err := model.Request(t.Context(), append(history, ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Content: "continue"},
+			}}), ai.ModelRequestParams{}); err != nil {
+				t.Fatal(err)
+			}
+			input := body["input"].([]any)
+			_, hasPhase := input[0].(map[string]any)["phase"]
+			if hasPhase != test.wantPhase {
+				t.Fatalf("phase replay=%v, want %v: %#v", hasPhase, test.wantPhase, input[0])
+			}
+		})
+	}
+}
+
 func TestResponsesTextMetadataWithoutLogprobs(t *testing.T) {
 	model := newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
 		_, _ = response.Write([]byte(`{

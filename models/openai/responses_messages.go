@@ -76,6 +76,7 @@ type responsesMessageConverter struct {
 	deferred         map[string]ai.ToolDefinition
 	rendered         map[string]struct{}
 	strictSupport    bool
+	phaseSupport     bool
 }
 
 func (c *responsesMessageConverter) convert(msg ai.ModelMessage) ([]responsesInput, error) {
@@ -142,10 +143,17 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 		switch part := responsePart.(type) {
 		case ai.TextPart:
 			id := ""
+			phase := ""
 			if part.ProviderName == "" || part.ProviderName == c.providerName {
 				id = part.ID
+				if c.phaseSupport {
+					candidate, _ := part.ProviderDetails["phase"].(string)
+					if candidate == "commentary" || candidate == "final_answer" {
+						phase = candidate
+					}
+				}
 			}
-			out = append(out, responsesInput{Role: "assistant", Content: part.Content, ID: id})
+			out = append(out, responsesInput{Role: "assistant", Content: part.Content, ID: id, Phase: phase})
 		case ai.CompactionPart:
 			if part.ProviderName != c.providerName {
 				continue

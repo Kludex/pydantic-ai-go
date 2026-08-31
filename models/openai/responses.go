@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -30,12 +31,18 @@ type ResponsesModel struct {
 	defaultSettings        ai.ModelSettings
 	background             *bool
 	backgroundPollInterval time.Duration
+	phaseSupport           *bool
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
 // It accepts the same options as NewModel.
 func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 	m := NewModel(name, opts...)
+	var phaseSupport *bool
+	if m.responsesPhaseSupport != nil {
+		enabled := *m.responsesPhaseSupport
+		phaseSupport = &enabled
+	}
 	return &ResponsesModel{
 		name: m.name, providerName: m.providerName, apiKey: m.apiKey,
 		baseURL: m.baseURL, httpClient: m.httpClient,
@@ -43,6 +50,7 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 		prepareRequest: m.prepareRequest, strictToolSupport: m.strictToolSupport,
 		deferredToolSupport: m.deferredToolSupport, defaultSettings: m.defaultSettings,
 		background: m.background, backgroundPollInterval: m.backgroundPollInterval,
+		phaseSupport: phaseSupport,
 	}
 }
 
@@ -362,6 +370,7 @@ type responsesInput struct {
 	Output           string          `json:"output,omitempty"`
 	Execution        string          `json:"execution,omitempty"`
 	Status           string          `json:"status,omitempty"`
+	Phase            string          `json:"phase,omitempty"`
 	Tools            []responsesTool `json:"tools,omitempty"`
 	EncryptedContent string          `json:"encrypted_content,omitempty"`
 }
@@ -441,6 +450,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		deferred:         deferred,
 		rendered:         make(map[string]struct{}),
 		strictSupport:    m.strictToolSupport,
+		phaseSupport:     responsesPhaseSupported(m.name, m.phaseSupport),
 	}
 	for _, msg := range trimOpenAICompactionMessages(msgs, m.providerName) {
 		items, err := converter.convert(msg)
@@ -561,6 +571,14 @@ func (u responsesUsage) usage() ai.Usage {
 		ReasoningTokens: u.OutputTokensDetails.ReasoningTokens,
 		Details:         map[string]int{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens},
 	}
+}
+
+func responsesPhaseSupported(modelName string, override *bool) bool {
+	if override != nil {
+		return *override
+	}
+	return strings.HasPrefix(modelName, "gpt-5.3-codex") || strings.HasPrefix(modelName, "gpt-5.4") ||
+		strings.HasPrefix(modelName, "gpt-5.5") || strings.HasPrefix(modelName, "gpt-5.6")
 }
 
 func openAIResponsesFinishReason(reason string) ai.FinishReason {

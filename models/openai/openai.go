@@ -33,6 +33,7 @@ type Model struct {
 	defaultSettings        ai.ModelSettings
 	background             *bool
 	backgroundPollInterval time.Duration
+	responsesPhaseSupport  *bool
 	chatCompatibility      ChatCompatibility
 }
 
@@ -147,6 +148,12 @@ func WithStrictToolSupport(enabled bool) Option {
 // Responses API. Disable it for OpenAI-compatible endpoints without tool_search.
 func WithDeferredToolSupport(enabled bool) Option {
 	return func(m *Model) { m.deferredToolSupport = enabled }
+}
+
+// WithResponsesPhaseSupport overrides whether Responses API assistant-message
+// phases are replayed. By default, support follows the bundled model profile.
+func WithResponsesPhaseSupport(enabled bool) Option {
+	return func(m *Model) { m.responsesPhaseSupport = &enabled }
 }
 
 // WithBackgroundMode enables server-side execution for Responses API requests.

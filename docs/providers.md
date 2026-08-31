@@ -30,6 +30,8 @@ Set `OPENAI_API_KEY`. You can also set `OPENAI_BASE_URL` when a proxy preserves 
 
 Use `openai.NewResponsesModel` instead of `openai.NewModel` when you need the Responses API.
 
+Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, and `gpt-5.6` model families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
+
 ## OpenAI-compatible endpoints
 
 ```go

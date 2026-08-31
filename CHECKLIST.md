@@ -83,7 +83,7 @@ Status:
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
 - [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
-- [x] `RequireApprovalToolset` wraps all or selected original tool names while forwarding instructions and run/step/open/close lifecycle.
+- [x] `RequireApprovalToolset` wraps all or selected original names, and `RequireApprovalToolsetWhen` evaluates validated calls dynamically; both forward instructions and run/step/open/close lifecycle.
 - [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.
 - [x] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history.
 - [x] Local `search_tools` discovery through `WithToolSearch`, with typed results, configurable detached search callbacks, word-bounded relevance, undiscovered-first ranking, result limits, and independent retries.
@@ -93,13 +93,14 @@ Status:
 
 ### Deferred execution and approval
 
-- [~] Approval-required tools support static `WithApprovalRequired`, validated pending calls, explicit approval values, and local execution after resume. Dynamic per-call approval requests remain.
-- [x] External/deferred function tools through typed/raw constructors or `WithExternalExecution`, including validated calls and rich, failed, or retrying external results.
+- [x] Static and dynamic approval through `WithApprovalRequired`, `WithDynamicApproval`, and explicit `RequestToolApproval` return values, including validated pending calls and local execution after resume.
+- [x] Static and dynamic external execution through typed/raw constructors, `WithExternalExecution`, `WithDynamicExternalExecution`, and explicit `RequestExternalToolExecution` values, including rich, failed, or retrying results.
 - [x] Explicit `DeferredToolRequests` / `DeferredToolResults` values, detached pending results, preserved partial history, all-result validation, `WithDeferredToolResults` pause/resume, and ordered inline partial resolution.
 - [ ] Automatically continue provider responses in `suspended` state, including Anthropic `pause_turn` and OpenAI background responses.
 - [x] Ordered `DeferredToolCallHandler` capability hook plus `DeferredToolHandlerFunc`, with partial resolution and unresolved-call bubbling.
 - [x] Approved/denied results, validated argument overrides, and detached approval metadata through `RunContext.ToolCallApproved` and `ToolCallMetadata`.
 - [x] Preserve intended deferred gaps while repairing unrelated incomplete tool-call histories on ordinary resume; completed siblings are not re-executed.
+- [ ] Allow a resolved call to defer again and bubble its new pending kind/metadata instead of rejecting repeated approval.
 
 ### Streaming
 
@@ -227,6 +228,6 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add provider-managed tool search and native OpenAI Responses deferred-tool streaming; non-streaming client search and additions now use native wire items.
-3. Add dynamic per-call approval/defer decisions on top of the explicit pause/resume values; static approval and inline handlers are complete.
+3. Support re-deferral from resolved calls while preserving one request/result event batch per logical call.
 4. Add provider-managed search and native OpenAI Responses deferred streaming.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.

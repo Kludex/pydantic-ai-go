@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -53,6 +54,15 @@ type ToolsetInstructionsProvider[Deps any] interface {
 type ToolFilterFunc[Deps any] func(
 	ctx context.Context, rc *RunContext[Deps], definition ToolDefinition,
 ) (bool, error)
+
+// ToolsetApprovalFunc dynamically requests approval for one validated call.
+// Return nil to execute immediately.
+type ToolsetApprovalFunc[Deps any] func(
+	ctx context.Context,
+	rc *RunContext[Deps],
+	definition ToolDefinition,
+	args json.RawMessage,
+) (*ToolApprovalRequest, error)
 
 // NewFunctionToolset creates a toolset from reusable function tools.
 func NewFunctionToolset[Deps any](tools ...Tool[Deps]) Toolset[Deps] {
@@ -117,6 +127,16 @@ func RequireApprovalToolset[Deps any](toolset Toolset[Deps], names ...string) To
 		}
 	}
 	return approvalRequiredToolset[Deps]{toolset: toolset, names: selected}
+}
+
+// RequireApprovalToolsetWhen evaluates approval for each validated call.
+func RequireApprovalToolsetWhen[Deps any](
+	toolset Toolset[Deps], check ToolsetApprovalFunc[Deps],
+) Toolset[Deps] {
+	if check == nil {
+		panic("ai: toolset approval function must not be nil")
+	}
+	return approvalRequiredToolset[Deps]{toolset: toolset, check: check}
 }
 
 // SetToolsetMetadata merges metadata onto every tool. New values take precedence.
@@ -418,6 +438,7 @@ func (t deferredToolset[Deps]) ToolsetInstructions(
 type approvalRequiredToolset[Deps any] struct {
 	toolset Toolset[Deps]
 	names   map[string]struct{}
+	check   ToolsetApprovalFunc[Deps]
 }
 
 func (t approvalRequiredToolset[Deps]) Tools(
@@ -428,9 +449,32 @@ func (t approvalRequiredToolset[Deps]) Tools(
 		return nil, err
 	}
 	for index := range tools {
-		if _, selected := t.names[tools[index].entry.def.Name]; t.names == nil || selected {
-			tools[index].entry.def.RequiresApproval = true
+		if _, selected := t.names[tools[index].entry.def.Name]; t.names != nil && !selected {
+			continue
 		}
+		if t.check == nil {
+			tools[index].entry.def.RequiresApproval = true
+			continue
+		}
+		tool := tools[index]
+		original := tool.entry.call
+		definition := cloneToolDefinition(tool.entry.def)
+		tool.entry.def.DynamicApproval = true
+		tool.entry.call = func(
+			ctx context.Context, rc *RunContext[Deps], args json.RawMessage,
+		) (any, error) {
+			if !rc.ToolCallApproved {
+				request, err := t.check(ctx, rc, cloneToolDefinition(definition), slices.Clone(args))
+				if err != nil {
+					return nil, err
+				}
+				if request != nil {
+					return RequestToolApproval(request.Metadata), nil
+				}
+			}
+			return original(ctx, rc, args)
+		}
+		tools[index] = tool
 	}
 	return tools, nil
 }

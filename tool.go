@@ -426,10 +426,22 @@ func WithApprovalMetadata(metadata map[string]any) ToolOption {
 	return func(d *ToolDefinition) { d.ApprovalMetadata = cloneSchemaMap(metadata) }
 }
 
+// WithDynamicApproval allows a function to return RequestToolApproval based
+// on its validated arguments or run context.
+func WithDynamicApproval() ToolOption {
+	return func(d *ToolDefinition) { d.DynamicApproval = true }
+}
+
 // WithExternalExecution returns calls for execution outside the agent process.
 // Prefer NewExternalTool or NewRawExternalTool when no local function exists.
 func WithExternalExecution() ToolOption {
 	return func(d *ToolDefinition) { d.ExternalExecution = true }
+}
+
+// WithDynamicExternalExecution allows a function to return
+// RequestExternalToolExecution for selected calls.
+func WithDynamicExternalExecution() ToolOption {
+	return func(d *ToolDefinition) { d.DynamicExternalExecution = true }
 }
 
 // WithToolMaxRetries overrides the function-tool retry budget for this tool.

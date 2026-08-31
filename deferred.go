@@ -22,6 +22,28 @@ func (r DeferredToolRequests) Clone() DeferredToolRequests {
 	}
 }
 
+// ExternalToolRequest is an explicit tool return value that sends this call
+// to an external executor. Register with WithDynamicExternalExecution.
+type ExternalToolRequest struct {
+	Metadata map[string]any
+}
+
+// RequestExternalToolExecution creates a detached external execution request.
+func RequestExternalToolExecution(metadata map[string]any) ExternalToolRequest {
+	return ExternalToolRequest{Metadata: cloneSchemaMap(metadata)}
+}
+
+// ToolApprovalRequest is an explicit tool return value that pauses execution
+// for a dynamic approval decision. Register the tool with WithDynamicApproval.
+type ToolApprovalRequest struct {
+	Metadata map[string]any
+}
+
+// RequestToolApproval creates a detached dynamic approval request.
+func RequestToolApproval(metadata map[string]any) ToolApprovalRequest {
+	return ToolApprovalRequest{Metadata: cloneSchemaMap(metadata)}
+}
+
 // ToolApproval is a caller decision for a tool that requested approval.
 type ToolApproval interface {
 	ToolApprovalKind() string

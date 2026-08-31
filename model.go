@@ -209,8 +209,12 @@ type ToolDefinition struct {
 	RequiresApproval bool `json:"-"`
 	// ApprovalMetadata is returned with a pending approval request.
 	ApprovalMetadata map[string]any `json:"-"`
+	// DynamicApproval allows the tool function to return ToolApprovalRequest.
+	DynamicApproval bool `json:"-"`
 	// ExternalExecution returns the call for execution outside the agent.
 	ExternalExecution bool `json:"-"`
+	// DynamicExternalExecution allows a function to return ExternalToolRequest.
+	DynamicExternalExecution bool `json:"-"`
 	// ToolKind identifies framework-managed typed tool calls and returns.
 	ToolKind   ToolPartKind `json:"-"`
 	maxRetries *int

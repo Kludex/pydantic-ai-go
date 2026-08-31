@@ -942,7 +942,7 @@ func (r *run[Deps, Output]) applyDeferredToolResults(
 		}
 		metadata := cloneSchemaMap(results.Metadata[call.ToolCallID])
 		switch {
-		case entry.def.ExternalExecution:
+		case entry.def.ExternalExecution || entry.def.DynamicExternalExecution:
 			if _, wrongKind := results.Approvals[call.ToolCallID]; wrongKind {
 				return nil, nil, fmt.Errorf("ai: external tool call %q received an approval result", call.ToolCallID)
 			}
@@ -954,7 +954,7 @@ func (r *run[Deps, Output]) applyDeferredToolResults(
 				continue
 			}
 			r.resolvingDeferred[call.ToolCallID] = deferredResolution{result: result, metadata: metadata}
-		case entry.def.RequiresApproval:
+		case entry.def.RequiresApproval || entry.def.DynamicApproval:
 			if _, wrongKind := results.Calls[call.ToolCallID]; wrongKind {
 				return nil, nil, fmt.Errorf("ai: approval tool call %q received an external result", call.ToolCallID)
 			}
@@ -1223,9 +1223,33 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	}
 	seen := make(map[string]struct{}, len(tools))
 	for _, def := range tools {
-		if def.RequiresApproval && def.ExternalExecution {
+		approvalModes := 0
+		if def.RequiresApproval {
+			approvalModes++
+		}
+		if def.DynamicApproval {
+			approvalModes++
+		}
+		externalModes := 0
+		if def.ExternalExecution {
+			externalModes++
+		}
+		if def.DynamicExternalExecution {
+			externalModes++
+		}
+		if approvalModes > 0 && externalModes > 0 {
 			return ModelRequestParams{}, fmt.Errorf(
 				"ai: tool %q cannot require approval and external execution", def.Name,
+			)
+		}
+		if def.RequiresApproval && def.DynamicApproval {
+			return ModelRequestParams{}, fmt.Errorf(
+				"ai: tool %q cannot use static and dynamic approval", def.Name,
+			)
+		}
+		if def.ExternalExecution && def.DynamicExternalExecution {
+			return ModelRequestParams{}, fmt.Errorf(
+				"ai: tool %q cannot use static and dynamic external execution", def.Name,
 			)
 		}
 		if _, ok := known[def.Name]; !ok {
@@ -1568,7 +1592,9 @@ func (r *run[Deps, Output]) checkToolCallLimit(calls []ToolCallPart) error {
 	for _, call := range calls {
 		entry, registered := r.findTool(call.ToolName)
 		_, available := r.currentTools[call.ToolName]
-		if r.isOutputCall(call) || !registered || !available || entry.def.ExternalExecution {
+		_, resolving := r.resolvingDeferred[call.ToolCallID]
+		if r.isOutputCall(call) || !registered || !available || entry.def.ExternalExecution ||
+			entry.def.DynamicExternalExecution && resolving {
 			continue
 		}
 		if entry.def.RequiresApproval {
@@ -1766,7 +1792,9 @@ func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) c
 		outcome.output = nil
 		outcome.deferred = nil
 	}
-	if outcome.err == nil && outcome.part != nil && outcome.functionCall && !entry.def.ExternalExecution {
+	_, resolving := r.resolvingDeferred[call.ToolCallID]
+	if outcome.err == nil && outcome.part != nil && outcome.functionCall &&
+		!entry.def.ExternalExecution && (!entry.def.DynamicExternalExecution || !resolving) {
 		if part, ok := outcome.part.(ToolReturnPart); ok && part.Outcome == ToolReturnOutcomeSuccess {
 			r.toolCalls.Add(1)
 		}
@@ -1986,10 +2014,10 @@ func (r *run[Deps, Output]) executeCall(
 		}, nil, nil, nil
 	}
 	resolution, resolving := r.resolvingDeferred[call.ToolCallID]
-	if resolving && entry.def.ExternalExecution {
+	if resolving && (entry.def.ExternalExecution || entry.def.DynamicExternalExecution) {
 		return r.normalizeDeferredCallResult(call, resolution.result)
 	}
-	if resolving && entry.def.RequiresApproval {
+	if resolving && (entry.def.RequiresApproval || entry.def.DynamicApproval) {
 		switch approval := resolution.approval.(type) {
 		case ToolDenied:
 			message := approval.Message
@@ -2029,7 +2057,7 @@ func (r *run[Deps, Output]) executeCall(
 	toolRC := *r.rc
 	toolRC.ToolName = call.ToolName
 	toolRC.ToolCallID = call.ToolCallID
-	toolRC.ToolCallApproved = resolving && entry.def.RequiresApproval
+	toolRC.ToolCallApproved = resolving && resolution.approval != nil
 	toolRC.ToolCallMetadata = cloneSchemaMap(resolution.metadata)
 	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)
 	spanCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
@@ -2042,8 +2070,29 @@ func (r *run[Deps, Output]) executeCall(
 	if ctx.Err() == nil && errors.Is(toolCtx.Err(), context.DeadlineExceeded) {
 		err = Retryf("Timed out after %s.", entry.def.timeout)
 	}
-	if err == nil && containsNestedToolReturn(content) {
-		err = errors.New("return value contains nested ToolReturn; return ToolReturn directly")
+	var approvalRequest *ToolApprovalRequest
+	var externalRequest *ExternalToolRequest
+	if err == nil {
+		switch request := content.(type) {
+		case ToolApprovalRequest:
+			approvalRequest = &request
+		case *ToolApprovalRequest:
+			approvalRequest = request
+		case ExternalToolRequest:
+			externalRequest = &request
+		case *ExternalToolRequest:
+			externalRequest = request
+		}
+		switch {
+		case approvalRequest != nil && !entry.def.DynamicApproval:
+			err = fmt.Errorf("tool returned ToolApprovalRequest without WithDynamicApproval")
+		case approvalRequest != nil && toolRC.ToolCallApproved:
+			err = fmt.Errorf("approved tool requested approval again")
+		case externalRequest != nil && !entry.def.DynamicExternalExecution:
+			err = fmt.Errorf("tool returned ExternalToolRequest without WithDynamicExternalExecution")
+		case approvalRequest == nil && externalRequest == nil && containsNestedToolReturn(content):
+			err = errors.New("return value contains nested ToolReturn; return ToolReturn directly")
+		}
 	}
 	cancel()
 	endSpan(toolSpan, err)
@@ -2064,6 +2113,16 @@ func (r *run[Deps, Output]) executeCall(
 		}, nil, nil, nil
 	case err != nil:
 		return nil, nil, nil, fmt.Errorf("ai: tool %q: %w", call.ToolName, err)
+	}
+	if approvalRequest != nil {
+		return deferredRequestPart{
+			call: call, kind: deferredCallApproval, metadata: cloneSchemaMap(approvalRequest.Metadata),
+		}, nil, nil, nil
+	}
+	if externalRequest != nil {
+		return deferredRequestPart{
+			call: call, kind: deferredCallExternal, metadata: cloneSchemaMap(externalRequest.Metadata),
+		}, nil, nil, nil
 	}
 
 	part, extraParts := r.normalizeSuccessfulToolReturn(call, content)

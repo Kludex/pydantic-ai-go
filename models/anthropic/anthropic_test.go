@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -388,7 +389,10 @@ func TestNativeDeferredToolRendering(t *testing.T) {
 		}`))
 	})
 	schema := map[string]any{"type": "object", "properties": map[string]any{}}
-	search := ai.ToolDefinition{Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch}
+	search := ai.ToolDefinition{
+		Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch,
+		ToolSearchStrategy: ai.ToolSearchStrategyCustom,
+	}
 	first := ai.ToolDefinition{Name: "first", Schema: schema, DeferLoading: true}
 	second := ai.ToolDefinition{Name: "second", Schema: schema, DeferLoading: true}
 	messages := []ai.ModelMessage{
@@ -1012,5 +1016,269 @@ func TestAnthropicCompactionContextManagementOverride(t *testing.T) {
 	if len(edits) != 1 || edits[0].(map[string]any)["type"] != "custom" ||
 		beta != "custom-beta,compact-2026-01-12" {
 		t.Fatalf("compaction overrides were replaced: body=%+v beta=%q", body, beta)
+	}
+}
+
+func TestAnthropicServerManagedToolSearch(t *testing.T) {
+	request := 0
+	var bodies []map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		request++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if request == 1 {
+			_, _ = w.Write([]byte(`{
+				"id":"message-search","model":"claude-sonnet-4-6","stop_reason":"tool_use","content":[
+					{"type":"server_tool_use","id":"search-1","name":"tool_search_tool_bm25","input":{"query":"weather"},"caller":{"type":"code_execution_20250825"}},
+					{"type":"tool_search_tool_result","tool_use_id":"search-1","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"weather"}]}},
+					{"type":"tool_use","id":"weather-1","name":"weather","input":{"city":"Paris"}}
+				],"usage":{}
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"message-final","model":"claude-sonnet-4-6","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"sunny"}],"usage":{}
+		}`))
+	})
+	weather := ai.NewTool[struct{}, struct {
+		City string `json:"city"`
+	}, string]("weather", func(_ context.Context, _ *ai.RunContext[struct{}], args struct {
+		City string `json:"city"`
+	}) (string, error) {
+		return args.City + ": sunny", nil
+	}, ai.WithDeferredLoading())
+	agent := ai.NewAgent[struct{}, string](model)
+	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(weather), ai.ToolSearchConfig[struct{}]{}))
+	result, err := agent.Run(t.Context(), "weather", struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "sunny" || request != 2 {
+		t.Fatalf("unexpected native Anthropic run: output=%q requests=%d", result.Output, request)
+	}
+	messages := result.Messages()
+	response := messages[1].(ai.ModelResponse)
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if call.ToolCallID != "search-1" || string(call.Args) != `{"queries":["weather"]}` ||
+		call.ProviderDetails["strategy"] != "bm25" || call.ProviderDetails["anthropic_caller"] == nil ||
+		returned.ToolCallID != "search-1" ||
+		returned.Content.(ai.ToolSearchResult).DiscoveredTools[0].Name != "weather" {
+		t.Fatalf("unexpected normalized Anthropic search: %+v", response.Parts)
+	}
+	tools := bodies[0]["tools"].([]any)
+	if len(tools) != 2 || tools[0].(map[string]any)["name"] != "weather" ||
+		tools[0].(map[string]any)["defer_loading"] != true ||
+		tools[1].(map[string]any)["name"] != "tool_search_tool_bm25" ||
+		tools[1].(map[string]any)["type"] != "tool_search_tool_bm25_20251119" ||
+		tools[1].(map[string]any)["input_schema"] != nil {
+		t.Fatalf("unexpected Anthropic native tools: %+v", tools)
+	}
+	wireHistory := bodies[1]["messages"].([]any)
+	assistant := wireHistory[1].(map[string]any)["content"].([]any)
+	searchCall := assistant[0].(map[string]any)
+	searchResult := assistant[1].(map[string]any)
+	if searchCall["name"] != "tool_search_tool_bm25" ||
+		searchCall["input"].(map[string]any)["query"] != "weather" || searchCall["caller"] == nil ||
+		searchResult["type"] != "tool_search_tool_result" ||
+		searchResult["content"].(map[string]any)["type"] != "tool_search_tool_search_result" {
+		t.Fatalf("unexpected Anthropic native replay: %+v", assistant)
+	}
+}
+
+func TestAnthropicNativeToolSearchStrategies(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"claude-sonnet-4-6","stop_reason":"end_turn","content":[],"usage":{}}`))
+	})
+	if !model.SupportsToolSearchStrategy(ai.ToolSearchStrategyBM25) ||
+		!model.SupportsToolSearchStrategy(ai.ToolSearchStrategyRegex) ||
+		model.SupportsToolSearchStrategy(ai.ToolSearchStrategyKeywords) {
+		t.Fatal("unexpected Anthropic tool-search strategy support")
+	}
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{
+			Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch,
+			ToolSearchStrategy: ai.ToolSearchStrategyRegex,
+		}},
+		DeferredTools: []ai.ToolDefinition{{Name: "hidden", Schema: schema, DeferLoading: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tools := body["tools"].([]any)
+	if len(tools) != 2 || tools[1].(map[string]any)["type"] != "tool_search_tool_regex_20251119" {
+		t.Fatalf("regex search was not selected: %+v", tools)
+	}
+
+	disabled := newServerWithOptions(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"m","content":[],"usage":{}}`))
+	}, anthropic.WithDeferredToolSupport(false))
+	if disabled.SupportsToolSearchStrategy(ai.ToolSearchStrategyBM25) {
+		t.Fatal("disabled model advertised native search")
+	}
+	_, err := disabled.Request(t.Context(), nil, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{
+			Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch,
+			ToolSearchStrategy: ai.ToolSearchStrategyBM25,
+		}},
+		DeferredTools: []ai.ToolDefinition{{Name: "hidden", Schema: schema, DeferLoading: true}},
+	})
+	if err == nil || !strings.Contains(err.Error(), `tool search strategy "bm25" requires deferred-tool support`) {
+		t.Fatalf("unexpected disabled native search error: %v", err)
+	}
+}
+
+func TestAnthropicNativeToolSearchErrorReplay(t *testing.T) {
+	request := 0
+	var replay map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		request++
+		if request == 1 {
+			_, _ = w.Write([]byte(`{
+				"model":"claude-sonnet-4-6","stop_reason":"end_turn","content":[
+					{"type":"server_tool_use","id":"search-1","name":"tool_search_tool_regex","input":{"pattern":"weather"}},
+					{"type":"tool_search_tool_result","tool_use_id":"search-1","content":{"type":"tool_search_tool_result_error","error_code":"unavailable","error_message":"temporary"}}
+				],"usage":{}
+			}`))
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&replay); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"claude-sonnet-4-6","stop_reason":"end_turn","content":[],"usage":{}}`))
+	})
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	params := ai.ModelRequestParams{
+		Tools:         []ai.ToolDefinition{{Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch}},
+		DeferredTools: []ai.ToolDefinition{{Name: "weather", Schema: schema, DeferLoading: true}},
+	}
+	response, err := model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if returned.ProviderDetails["error_code"] != "unavailable" ||
+		returned.ProviderDetails["error_message"] != "temporary" {
+		t.Fatalf("native search error details were lost: %+v", returned)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, params); err != nil {
+		t.Fatal(err)
+	}
+	content := replay["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	errorContent := content[1].(map[string]any)["content"].(map[string]any)
+	if errorContent["error_code"] != "unavailable" || errorContent["error_message"] != nil {
+		t.Fatalf("unexpected native search error replay: %+v", errorContent)
+	}
+}
+
+func TestAnthropicNativeToolSearchReplayEdges(t *testing.T) {
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	params := ai.ModelRequestParams{
+		Tools:         []ai.ToolDefinition{{Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch}},
+		DeferredTools: []ai.ToolDefinition{{Name: "hidden", Schema: schema, DeferLoading: true}},
+	}
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"claude-sonnet-4-6","stop_reason":"end_turn","content":[],"usage":{}}`))
+	})
+	for name, part := range map[string]ai.ResponsePart{
+		"malformed call": ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "anthropic", Args: []byte(`{`),
+		},
+		"unencodable return": ai.NativeToolReturnPart{
+			ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "anthropic", Content: make(chan int),
+		},
+		"invalid return shape": ai.NativeToolReturnPart{
+			ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "anthropic", Content: "bad",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{part}}}, params)
+			if err == nil {
+				t.Fatal("expected native Anthropic replay error")
+			}
+		})
+	}
+
+	var body map[string]any
+	model = newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"claude-sonnet-4-6","stop_reason":"end_turn","content":[],"usage":{}}`))
+	})
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "empty", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "anthropic",
+		},
+		ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "raw", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "anthropic", Args: []byte(`{"pattern":"already"}`),
+			ProviderDetails: map[string]any{"strategy": "regex"},
+		},
+		ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch, ProviderName: "openai",
+		},
+		ai.NativeToolReturnPart{
+			ToolName: "capability", ToolKind: ai.ToolPartKindCapabilityLoad, ProviderName: "anthropic",
+		},
+	}}}
+	if _, err := model.Request(t.Context(), history, params); err != nil {
+		t.Fatal(err)
+	}
+	blocks := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(blocks) != 2 || blocks[0].(map[string]any)["input"] == nil ||
+		blocks[1].(map[string]any)["name"] != "tool_search_tool_regex" ||
+		blocks[1].(map[string]any)["input"].(map[string]any)["pattern"] != "already" {
+		t.Fatalf("unexpected replay edge blocks: %+v", blocks)
+	}
+
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAnthropicNativeToolSearchResponseErrors(t *testing.T) {
+	for name, block := range map[string]string{
+		"unsupported server tool": `{"type":"server_tool_use","id":"call","name":"future_tool","input":{}}`,
+		"malformed server input":  `{"type":"server_tool_use","id":"call","name":"tool_search_tool_bm25","input":"bad"}`,
+		"malformed result":        `{"type":"tool_search_tool_result","tool_use_id":"call","content":"bad"}`,
+		"unknown result":          `{"type":"tool_search_tool_result","tool_use_id":"call","content":{"type":"future"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `{"model":"claude-sonnet-4-6","content":[%s],"usage":{}}`, block)
+			})
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil {
+				t.Fatal("expected native Anthropic response error")
+			}
+		})
+	}
+
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"model":"claude-sonnet-4-6","content":[
+				{"type":"server_tool_use","id":"empty","name":"tool_search_tool_bm25","input":null,"caller":{"type":"direct"}}
+			],"usage":{}
+		}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	if string(call.Args) != `{"queries":[]}` || call.ProviderDetails["anthropic_caller"] != nil {
+		t.Fatalf("unexpected empty native search call: %+v", call)
 	}
 }

@@ -1789,6 +1789,9 @@ func cloneSchemaValue(value any) any {
 	switch value := value.(type) {
 	case map[string]any:
 		return cloneSchemaMap(value)
+	case ToolSearchResult:
+		value.DiscoveredTools = slices.Clone(value.DiscoveredTools)
+		return value
 	case []any:
 		cloned := make([]any, len(value))
 		for i, item := range value {

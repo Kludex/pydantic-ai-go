@@ -213,6 +213,7 @@ type contentBlock struct {
 	ToolUseID        string              `json:"tool_use_id,omitempty"`
 	Content          any                 `json:"content,omitempty"`
 	EncryptedContent string              `json:"encrypted_content,omitempty"`
+	Caller           map[string]any      `json:"caller,omitempty"`
 	IsError          bool                `json:"is_error,omitempty"`
 	Tool             *toolReferenceParam `json:"tool,omitempty"`
 }
@@ -228,9 +229,10 @@ type toolReferenceContent struct {
 }
 
 type toolParam struct {
+	Type         string         `json:"type,omitempty"`
 	Name         string         `json:"name"`
 	Description  string         `json:"description,omitempty"`
-	InputSchema  map[string]any `json:"input_schema"`
+	InputSchema  map[string]any `json:"input_schema,omitempty"`
 	Strict       *bool          `json:"strict,omitempty"`
 	DeferLoading bool           `json:"defer_loading,omitempty"`
 }
@@ -294,7 +296,27 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.MaxTokens = defaultMaxTokens
 	}
 	trimmedMessages, compaction := trimAnthropicCompactionMessages(msgs)
+	var searchTool *ai.ToolDefinition
+	for _, tool := range params.Tools {
+		if tool.Name == ai.ToolSearchName && tool.ToolKind == ai.ToolPartKindToolSearch {
+			definition := tool
+			searchTool = &definition
+			break
+		}
+	}
 	nativeDeferred := m.deferredToolSupport && len(params.DeferredTools) > 0 && hasStableAnthropicTool(params)
+	serverToolSearch := searchTool != nil && nativeDeferred &&
+		(searchTool.ToolSearchStrategy == ai.ToolSearchStrategyAuto ||
+			searchTool.ToolSearchStrategy == ai.ToolSearchStrategyBM25 ||
+			searchTool.ToolSearchStrategy == ai.ToolSearchStrategyRegex)
+	if searchTool != nil &&
+		(searchTool.ToolSearchStrategy == ai.ToolSearchStrategyBM25 ||
+			searchTool.ToolSearchStrategy == ai.ToolSearchStrategyRegex) && !serverToolSearch {
+		return nil, fmt.Errorf(
+			"anthropic: tool search strategy %q requires deferred-tool support",
+			searchTool.ToolSearchStrategy,
+		)
+	}
 	deferredNames := make(map[string]struct{}, len(params.DeferredTools))
 	if nativeDeferred {
 		for _, tool := range params.DeferredTools {
@@ -316,6 +338,9 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Messages = append(req.Messages, converted...)
 	}
 	for _, tool := range params.Tools {
+		if serverToolSearch && tool.Name == ai.ToolSearchName {
+			continue
+		}
 		if nativeDeferred && tool.DeferLoading {
 			continue
 		}
@@ -333,6 +358,17 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			}
 			converted.DeferLoading = true
 			req.Tools = append(req.Tools, converted)
+		}
+	}
+	if serverToolSearch {
+		if searchTool.ToolSearchStrategy == ai.ToolSearchStrategyRegex {
+			req.Tools = append(req.Tools, toolParam{
+				Type: "tool_search_tool_regex_20251119", Name: "tool_search_tool_regex",
+			})
+		} else {
+			req.Tools = append(req.Tools, toolParam{
+				Type: "tool_search_tool_bm25_20251119", Name: "tool_search_tool_bm25",
+			})
 		}
 	}
 	if params.OutputTool != nil {
@@ -442,7 +478,7 @@ func convertMessage(msg ai.ModelMessage, deferredNames map[string]struct{}) ([]m
 	case ai.ModelRequest:
 		return convertRequest(m, deferredNames)
 	case ai.ModelResponse:
-		return convertResponse(m), nil
+		return convertResponse(m, deferredNames)
 	default:
 		return nil, fmt.Errorf("anthropic: unknown message type %T", msg)
 	}
@@ -569,7 +605,7 @@ func trimAnthropicCompactionMessages(messages []ai.ModelMessage) ([]ai.ModelMess
 	return messages, false
 }
 
-func convertResponse(m ai.ModelResponse) []messageParam {
+func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]messageParam, error) {
 	var blocks []contentBlock
 	for _, part := range m.Parts {
 		switch p := part.(type) {
@@ -588,9 +624,81 @@ func convertResponse(m ai.ModelResponse) []messageParam {
 			}
 		case ai.ToolCallPart:
 			blocks = append(blocks, contentBlock{Type: "tool_use", ID: p.ToolCallID, Name: p.ToolName, Input: p.Args})
+		case ai.NativeToolCallPart:
+			if p.ProviderName != "anthropic" || p.ToolKind != ai.ToolPartKindToolSearch || len(deferredNames) == 0 {
+				continue
+			}
+			strategy, _ := p.ProviderDetails["strategy"].(string)
+			wireName, wireKey := "tool_search_tool_bm25", "query"
+			if strategy == "regex" {
+				wireName, wireKey = "tool_search_tool_regex", "pattern"
+			}
+			input, err := anthropicToolSearchReplayInput(p.Args, wireKey)
+			if err != nil {
+				return nil, err
+			}
+			block := contentBlock{
+				Type: "server_tool_use", ID: p.ToolCallID, Name: wireName, Input: input,
+			}
+			if caller, ok := p.ProviderDetails["anthropic_caller"].(map[string]any); ok {
+				block.Caller = caller
+			}
+			blocks = append(blocks, block)
+		case ai.NativeToolReturnPart:
+			if p.ProviderName != "anthropic" || p.ToolKind != ai.ToolPartKindToolSearch || len(deferredNames) == 0 {
+				continue
+			}
+			content, err := anthropicToolSearchReplayResult(p, deferredNames)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, contentBlock{
+				Type: "tool_search_tool_result", ToolUseID: p.ToolCallID, Content: content,
+			})
 		}
 	}
-	return []messageParam{{Role: "assistant", Content: blocks}}
+	return []messageParam{{Role: "assistant", Content: blocks}}, nil
+}
+
+func anthropicToolSearchReplayInput(args json.RawMessage, wireKey string) (json.RawMessage, error) {
+	if len(args) == 0 {
+		return json.RawMessage(`{}`), nil
+	}
+	var value map[string]any
+	if err := json.Unmarshal(args, &value); err != nil {
+		return nil, fmt.Errorf("anthropic: parse native tool search arguments: %w", err)
+	}
+	rawQueries, exists := value["queries"]
+	if !exists {
+		return slices.Clone(args), nil
+	}
+	queries, _ := rawQueries.([]any)
+	stringsOnly := make([]string, 0, len(queries))
+	for _, query := range queries {
+		if query, ok := query.(string); ok {
+			stringsOnly = append(stringsOnly, query)
+		}
+	}
+	return json.Marshal(map[string]any{wireKey: strings.Join(stringsOnly, " ")})
+}
+
+func anthropicToolSearchReplayResult(
+	part ai.NativeToolReturnPart, deferredNames map[string]struct{},
+) (map[string]any, error) {
+	if errorCode, exists := part.ProviderDetails["error_code"]; exists {
+		return map[string]any{"type": "tool_search_tool_result_error", "error_code": errorCode}, nil
+	}
+	names, _, err := anthropicToolSearchResult(part.Content, deferredNames)
+	if err != nil {
+		return nil, err
+	}
+	references := make([]toolReferenceContent, len(names))
+	for index, name := range names {
+		references[index] = toolReferenceContent{Type: "tool_reference", ToolName: name}
+	}
+	return map[string]any{
+		"type": "tool_search_tool_search_result", "tool_references": references,
+	}, nil
 }
 
 func supportsDeferredTools(name string) bool {
@@ -619,22 +727,26 @@ func supportsStrictTools(name string) bool {
 }
 
 type messagesResponse struct {
-	ID          string `json:"id"`
-	Model       string `json:"model"`
-	StopReason  string `json:"stop_reason"`
-	ServiceTier string `json:"service_tier"`
-	Content     []struct {
-		Type              string          `json:"type"`
-		Text              string          `json:"text"`
-		Thinking          string          `json:"thinking"`
-		Signature         string          `json:"signature"`
-		ID                string          `json:"id"`
-		Name              string          `json:"name"`
-		Input             json.RawMessage `json:"input"`
-		CompactionContent string          `json:"content"`
-		EncryptedContent  string          `json:"encrypted_content"`
-	} `json:"content"`
-	Usage anthropicUsage `json:"usage"`
+	ID          string                 `json:"id"`
+	Model       string                 `json:"model"`
+	StopReason  string                 `json:"stop_reason"`
+	ServiceTier string                 `json:"service_tier"`
+	Content     []responseContentBlock `json:"content"`
+	Usage       anthropicUsage         `json:"usage"`
+}
+
+type responseContentBlock struct {
+	Type             string          `json:"type"`
+	Text             string          `json:"text"`
+	Thinking         string          `json:"thinking"`
+	Signature        string          `json:"signature"`
+	ID               string          `json:"id"`
+	Name             string          `json:"name"`
+	Input            json.RawMessage `json:"input"`
+	ToolUseID        string          `json:"tool_use_id"`
+	Content          json.RawMessage `json:"content"`
+	EncryptedContent string          `json:"encrypted_content"`
+	Caller           map[string]any  `json:"caller"`
 }
 
 type anthropicUsage struct {
@@ -692,7 +804,7 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 				details = map[string]any{"encrypted_content": block.EncryptedContent}
 			}
 			resp.Parts = append(resp.Parts, ai.CompactionPart{
-				Content: block.CompactionContent, ProviderName: "anthropic", ProviderDetails: details,
+				Content: rawJSONString(block.Content), ProviderName: "anthropic", ProviderDetails: details,
 			})
 		case "thinking":
 			resp.Parts = append(resp.Parts, ai.ThinkingPart{
@@ -700,11 +812,111 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 			})
 		case "tool_use":
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{ToolName: block.Name, Args: block.Input, ToolCallID: block.ID})
+		case "server_tool_use":
+			if block.Name != "tool_search_tool_bm25" && block.Name != "tool_search_tool_regex" {
+				return nil, fmt.Errorf("anthropic: unsupported server tool %q", block.Name)
+			}
+			strategy := "bm25"
+			if block.Name == "tool_search_tool_regex" {
+				strategy = "regex"
+			}
+			args, err := normalizeAnthropicToolSearchArguments(block.Input, strategy)
+			if err != nil {
+				return nil, err
+			}
+			details := map[string]any{"strategy": strategy}
+			if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
+				details["anthropic_caller"] = block.Caller
+			}
+			resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
+				ToolName: ai.ToolSearchName, Args: args, ToolCallID: block.ID,
+				ToolKind: ai.ToolPartKindToolSearch, ProviderName: "anthropic", ProviderDetails: details,
+			})
+		case "tool_search_tool_result":
+			part, err := parseAnthropicToolSearchResult(block)
+			if err != nil {
+				return nil, err
+			}
+			resp.Parts = append(resp.Parts, part)
 		default:
 			return nil, fmt.Errorf("anthropic: unknown content block type %q", block.Type)
 		}
 	}
 	return resp, nil
+}
+
+func rawJSONString(raw json.RawMessage) string {
+	var value string
+	_ = json.Unmarshal(raw, &value)
+	return value
+}
+
+func anthropicToolSearchStrategy(name string) (string, bool) {
+	switch name {
+	case "tool_search_tool_bm25":
+		return "bm25", true
+	case "tool_search_tool_regex":
+		return "regex", true
+	default:
+		return "", false
+	}
+}
+
+func normalizeAnthropicToolSearchArguments(raw json.RawMessage, strategy string) (json.RawMessage, error) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return json.RawMessage(`{"queries":[]}`), nil
+	}
+	var input map[string]any
+	if err := json.Unmarshal(raw, &input); err != nil {
+		return nil, fmt.Errorf("anthropic: parse tool search arguments: %w", err)
+	}
+	key := "query"
+	if strategy == "regex" {
+		key = "pattern"
+	}
+	query, _ := input[key].(string)
+	queries := make([]string, 0, 1)
+	if query != "" {
+		queries = append(queries, query)
+	}
+	return json.Marshal(map[string]any{"queries": queries})
+}
+
+func parseAnthropicToolSearchResult(block responseContentBlock) (ai.NativeToolReturnPart, error) {
+	var content struct {
+		Type           string `json:"type"`
+		ErrorCode      string `json:"error_code"`
+		ErrorMessage   string `json:"error_message"`
+		ToolReferences []struct {
+			ToolName string `json:"tool_name"`
+		} `json:"tool_references"`
+	}
+	if err := json.Unmarshal(block.Content, &content); err != nil {
+		return ai.NativeToolReturnPart{}, fmt.Errorf("anthropic: parse tool search result: %w", err)
+	}
+	var details map[string]any
+	switch content.Type {
+	case "tool_search_tool_search_result":
+	case "tool_search_tool_result_error":
+		details = map[string]any{"error_code": content.ErrorCode, "error_message": content.ErrorMessage}
+	default:
+		return ai.NativeToolReturnPart{}, fmt.Errorf("anthropic: unknown tool search result type %q", content.Type)
+	}
+	matches := make([]ai.ToolSearchMatch, len(content.ToolReferences))
+	for index, reference := range content.ToolReferences {
+		matches[index] = ai.ToolSearchMatch{Name: reference.ToolName}
+	}
+	return ai.NativeToolReturnPart{
+		ToolName: ai.ToolSearchName, ToolCallID: block.ToolUseID, ToolKind: ai.ToolPartKindToolSearch,
+		Content: ai.ToolSearchResult{DiscoveredTools: matches}, Outcome: ai.ToolReturnOutcomeSuccess,
+		ProviderName: "anthropic", ProviderDetails: details,
+	}, nil
+}
+
+// SupportsToolSearchStrategy reports Anthropic's named hosted search variants.
+func (m *Model) SupportsToolSearchStrategy(strategy ai.ToolSearchStrategy) bool {
+	return m.deferredToolSupport &&
+		(strategy == ai.ToolSearchStrategyBM25 || strategy == ai.ToolSearchStrategyRegex)
 }
 
 func anthropicFinishReason(reason string) ai.FinishReason {

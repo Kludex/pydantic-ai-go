@@ -335,3 +335,115 @@ func TestStreamEarlyBreak(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicStreamServerManagedToolSearch(t *testing.T) {
+	model := newServer(t, anthropicSSE(t, []string{
+		`{"type":"message_start","message":{"id":"message-1","model":"claude-sonnet-4-6","usage":{}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"search-1","name":"tool_search_tool_bm25","input":{},"caller":{"type":"direct"}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"weather\"}"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_search_tool_result","tool_use_id":"search-1","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"weather"}]}}}`,
+		`{"type":"content_block_stop","index":1}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}`,
+		`{"type":"message_stop"}`,
+	}))
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 4 {
+		t.Fatalf("unexpected native search events: %+v", events)
+	}
+	start := events[0].(ai.ToolCallStartEvent)
+	delta := events[1].(ai.ToolCallDeltaEvent)
+	returned := events[2].(ai.NativeToolReturnEvent)
+	if !start.Native || start.ToolCallID != "search-1" || start.ProviderName != "anthropic" ||
+		start.ProviderDetails["strategy"] != "bm25" || start.ProviderDetails["anthropic_caller"] != nil ||
+		delta.ArgsDelta != `{"queries":["weather"]}` ||
+		returned.Part.ToolCallID != "search-1" ||
+		returned.Part.Content.(ai.ToolSearchResult).DiscoveredTools[0].Name != "weather" {
+		t.Fatalf("unexpected native search lifecycle: %+v", events)
+	}
+}
+
+func TestAnthropicStreamNativeToolSearchEdges(t *testing.T) {
+	t.Run("regex without deltas", func(t *testing.T) {
+		model := newServer(t, anthropicSSE(t, []string{
+			`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"search","name":"tool_search_tool_regex","input":null,"caller":{"type":"code_execution_20250825"}}}`,
+			`{"type":"content_block_stop","index":0}`,
+			`{"type":"message_stop"}`,
+		}))
+		events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		start := events[0].(ai.ToolCallStartEvent)
+		delta := events[1].(ai.ToolCallDeltaEvent)
+		if start.ProviderDetails["strategy"] != "regex" || start.ProviderDetails["anthropic_caller"] == nil ||
+			delta.ArgsDelta != `{"queries":[]}` {
+			t.Fatalf("unexpected regex stream: %+v", events)
+		}
+	})
+
+	for name, events := range map[string][]string{
+		"malformed call": {
+			`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"search","name":"tool_search_tool_bm25","input":"bad"}}`,
+			`{"type":"content_block_stop","index":0}`,
+		},
+		"malformed result": {
+			`{"type":"content_block_start","index":0,"content_block":{"type":"tool_search_tool_result","tool_use_id":"search","content":"bad"}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newServer(t, anthropicSSE(t, events))
+			if _, err := collectAnthropicStream(t, model, ai.ModelRequestParams{}); err == nil {
+				t.Fatal("expected malformed native stream error")
+			}
+		})
+	}
+}
+
+func TestAnthropicStreamNativeToolSearchCanStop(t *testing.T) {
+	callEvents := []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"search","name":"tool_search_tool_bm25","input":{"query":"x"}}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"future"}`,
+	}
+	returnEvents := []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"tool_search_tool_result","tool_use_id":"search","content":{"type":"tool_search_tool_search_result","tool_references":[]}}}`,
+		`{"type":"future"}`,
+	}
+	for name, test := range map[string]struct {
+		events []string
+		stop   func(ai.ModelStreamEvent) bool
+	}{
+		"call": {events: callEvents, stop: func(event ai.ModelStreamEvent) bool {
+			_, ok := event.(ai.ToolCallStartEvent)
+			return ok
+		}},
+		"delta": {events: callEvents, stop: func(event ai.ModelStreamEvent) bool {
+			_, ok := event.(ai.ToolCallDeltaEvent)
+			return ok
+		}},
+		"return": {events: returnEvents, stop: func(event ai.ModelStreamEvent) bool {
+			_, ok := event.(ai.NativeToolReturnEvent)
+			return ok
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newServer(t, anthropicSSE(t, test.events))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if test.stop(event) {
+					break
+				}
+			}
+		})
+	}
+}

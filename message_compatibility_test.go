@@ -137,6 +137,18 @@ func TestUnmarshalUpstreamNativeToolFixture(t *testing.T) {
 		!strings.Contains(string(encoded), `"part_kind":"builtin-tool-return"`) {
 		t.Fatalf("native tool identity was not serialized: %s", encoded)
 	}
+
+	typed := ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "weather"}}}
+	typedMessages := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.NativeToolReturnPart{
+		ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch, Content: typed,
+	}}}}
+	typedClone := (ai.ModelRequestContext{Messages: typedMessages}).Clone()
+	clonedTyped := typedClone.Messages[0].(ai.ModelResponse).Parts[0].(ai.NativeToolReturnPart).Content.(ai.ToolSearchResult)
+	clonedTyped.DiscoveredTools[0].Name = "changed"
+	originalTyped := typedMessages[0].(ai.ModelResponse).Parts[0].(ai.NativeToolReturnPart).Content.(ai.ToolSearchResult)
+	if originalTyped.DiscoveredTools[0].Name != "weather" {
+		t.Fatalf("typed native search result clone aliases source: %+v", originalTyped)
+	}
 }
 
 func TestUnmarshalUpstreamToolAvailabilityFixture(t *testing.T) {

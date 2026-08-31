@@ -58,18 +58,8 @@ type streamEvent struct {
 		Model string         `json:"model"`
 		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
-	ContentBlock struct {
-		Type              string          `json:"type"`
-		Text              string          `json:"text"`
-		Thinking          string          `json:"thinking"`
-		Signature         string          `json:"signature"`
-		ID                string          `json:"id"`
-		Name              string          `json:"name"`
-		Input             json.RawMessage `json:"input"`
-		CompactionContent string          `json:"content"`
-		EncryptedContent  string          `json:"encrypted_content"`
-	} `json:"content_block"`
-	Delta struct {
+	ContentBlock responseContentBlock `json:"content_block"`
+	Delta        struct {
 		Type        string `json:"type"`
 		StopReason  string `json:"stop_reason"`
 		Text        string `json:"text"`
@@ -93,6 +83,8 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		stopReason := ""
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		searchCalls := make(map[int]responseContentBlock)
+		searchArgs := make(map[int]*strings.Builder)
 		for scanner.Scan() {
 			data, ok := strings.CutPrefix(scanner.Text(), "data:")
 			if !ok {
@@ -114,10 +106,30 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				}
 				usage = event.Message.Usage.usage()
 			case "content_block_start":
+				if _, ok := anthropicToolSearchStrategy(event.ContentBlock.Name); event.ContentBlock.Type == "server_tool_use" && ok {
+					searchCalls[event.Index] = event.ContentBlock
+					searchArgs[event.Index] = &strings.Builder{}
+					continue
+				}
+				if event.ContentBlock.Type == "tool_search_tool_result" {
+					part, err := parseAnthropicToolSearchResult(event.ContentBlock)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					if !yield(ai.NativeToolReturnEvent{PartID: strconv.Itoa(event.Index), Part: part}, nil) {
+						return
+					}
+					continue
+				}
 				if !m.emitContentBlockStart(yield, event) {
 					return
 				}
 			case "content_block_delta":
+				if arguments, ok := searchArgs[event.Index]; ok && event.Delta.Type == "input_json_delta" {
+					arguments.WriteString(event.Delta.PartialJSON)
+					continue
+				}
 				if !emitContentBlockDelta(yield, event) {
 					return
 				}
@@ -147,7 +159,39 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			case "error":
 				yield(nil, fmt.Errorf("anthropic: stream error %s: %s", event.Error.Type, event.Error.Message))
 				return
-			case "content_block_stop", "ping":
+			case "content_block_stop":
+				block, ok := searchCalls[event.Index]
+				if !ok {
+					continue
+				}
+				raw := block.Input
+				if arguments := searchArgs[event.Index].String(); arguments != "" {
+					raw = json.RawMessage(arguments)
+				}
+				strategy, _ := anthropicToolSearchStrategy(block.Name)
+				args, err := normalizeAnthropicToolSearchArguments(raw, strategy)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				details := map[string]any{"strategy": strategy}
+				if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
+					details["anthropic_caller"] = block.Caller
+				}
+				partID := strconv.Itoa(event.Index)
+				if !yield(ai.ToolCallStartEvent{
+					PartID: partID, ToolName: ai.ToolSearchName, ToolCallID: block.ID,
+					ToolKind: ai.ToolPartKindToolSearch, ProviderName: "anthropic",
+					ProviderDetails: details, Native: true,
+				}, nil) {
+					return
+				}
+				if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(args)}, nil) {
+					return
+				}
+				delete(searchCalls, event.Index)
+				delete(searchArgs, event.Index)
+			case "ping":
 			default:
 				yield(nil, fmt.Errorf("anthropic: unknown stream event type %q", event.Type))
 				return
@@ -172,7 +216,7 @@ func (m *Model) emitContentBlockStart(yield func(ai.ModelStreamEvent, error) boo
 			details = map[string]any{"encrypted_content": event.ContentBlock.EncryptedContent}
 		}
 		return yield(ai.CompactionEvent{
-			PartID: partID, Content: event.ContentBlock.CompactionContent,
+			PartID: partID, Content: rawJSONString(event.ContentBlock.Content),
 			ProviderName: "anthropic", ProviderDetails: details,
 		}, nil)
 	case "thinking":

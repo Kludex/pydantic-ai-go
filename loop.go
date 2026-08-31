@@ -189,9 +189,23 @@ func (a *Agent[Deps, Output]) newRun(
 	if cfg.usageLimits != nil {
 		limits = *cfg.usageLimits
 	}
-	nativeTools := append(CloneNativeTools(a.nativeTools), CloneNativeTools(cfg.nativeTools)...)
-	nativeTools = append(nativeTools, runCapabilityNativeTools...)
-	if err := validateNativeTools(nativeTools); err != nil {
+	nativeToolEntries := cloneNativeToolEntries(a.nativeToolEntries)
+	for _, entry := range cfg.nativeToolEntries {
+		if entry.fn == nil {
+			nativeToolEntries = append(nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(entry.tool)})
+			continue
+		}
+		fn := entry.fn
+		nativeToolEntries = append(nativeToolEntries, nativeToolEntry[Deps]{fn: func(
+			ctx context.Context, rc *RunContext[Deps],
+		) (NativeTool, error) {
+			return fn(ctx, rc)
+		}})
+	}
+	for _, tool := range runCapabilityNativeTools {
+		nativeToolEntries = append(nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
+	}
+	if err := validateNativeTools(staticNativeTools(nativeToolEntries)); err != nil {
 		cancellation.finish()
 		return nil, err
 	}
@@ -207,7 +221,7 @@ func (a *Agent[Deps, Output]) newRun(
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int), availabilityRefused: make(map[string]struct{}),
 		runSettings: cfg.settings, usageLimits: limits,
-		tools: slices.Clone(a.tools), nativeTools: nativeTools,
+		tools: slices.Clone(a.tools), nativeToolEntries: nativeToolEntries,
 		toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		runMetadata: cloneSchemaMap(cfg.metadata), runMetadataFuncs: slices.Clone(cfg.metadataFuncs),
@@ -647,7 +661,7 @@ type run[Deps, Output any] struct {
 	currentOutputTool          *ToolDefinition
 	currentOutputValidator     *schema.Validator
 	tools                      []toolEntry[Deps]
-	nativeTools                []NativeTool
+	nativeToolEntries          []nativeToolEntry[Deps]
 	toolsets                   []Toolset[Deps]
 	toolsetClosers             []ToolsetCloseFunc
 	currentToolEntries         map[string]toolEntry[Deps]
@@ -1687,10 +1701,23 @@ func toolSearchResultNames(content any) []string {
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
 	params := r.baseParams
-	params.NativeTools = CloneNativeTools(r.nativeTools)
 	rc := r.rc.clone()
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.outputMaxRetries
+	for _, entry := range r.nativeToolEntries {
+		if entry.fn == nil {
+			params.NativeTools = append(params.NativeTools, cloneNativeTool(entry.tool))
+			continue
+		}
+		tool, err := entry.fn(ctx, rc.clone())
+		if err != nil {
+			return ModelRequestParams{}, fmt.Errorf("ai: resolve native tool: %w", err)
+		}
+		params.NativeTools = append(params.NativeTools, cloneNativeTool(tool))
+	}
+	if err := validateNativeTools(params.NativeTools); err != nil {
+		return ModelRequestParams{}, err
+	}
 	settings, err := r.prepareModelSettings(ctx, rc)
 	if err != nil {
 		return ModelRequestParams{}, err

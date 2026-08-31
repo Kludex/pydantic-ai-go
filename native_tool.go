@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"fmt"
 	"reflect"
 	"slices"
@@ -13,6 +14,33 @@ type NativeTool interface {
 	UniqueID() string
 	IsOptional() bool
 	CloneNativeTool() NativeTool
+}
+
+// NativeToolFunc resolves one provider-native tool before each model request.
+// It may be called concurrently by concurrent runs.
+type NativeToolFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error)
+
+type nativeToolEntry[Deps any] struct {
+	tool NativeTool
+	fn   NativeToolFunc[Deps]
+}
+
+func cloneNativeToolEntries[Deps any](entries []nativeToolEntry[Deps]) []nativeToolEntry[Deps] {
+	cloned := make([]nativeToolEntry[Deps], len(entries))
+	for index, entry := range entries {
+		cloned[index] = nativeToolEntry[Deps]{tool: cloneNativeTool(entry.tool), fn: entry.fn}
+	}
+	return cloned
+}
+
+func staticNativeTools[Deps any](entries []nativeToolEntry[Deps]) []NativeTool {
+	var tools []NativeTool
+	for _, entry := range entries {
+		if entry.fn == nil {
+			tools = append(tools, cloneNativeTool(entry.tool))
+		}
+	}
+	return tools
 }
 
 // WebSearchContextSize controls how much search context a provider retrieves.

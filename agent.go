@@ -53,10 +53,10 @@ type Agent[Deps, Output any] struct {
 	capInstructionIDs  map[string]struct{}
 	outputValidators   []func(ctx context.Context, rc *RunContext[Deps], out Output) error
 
-	tools       []toolEntry[Deps]
-	nativeTools []NativeTool
-	toolsets    []Toolset[Deps]
-	started     atomic.Bool
+	tools             []toolEntry[Deps]
+	nativeToolEntries []nativeToolEntry[Deps]
+	toolsets          []Toolset[Deps]
+	started           atomic.Bool
 }
 
 type toolEntry[Deps any] struct {
@@ -120,8 +120,10 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		}
 	}
 	a.sequentialTools = cfg.sequentialTools
-	a.nativeTools = CloneNativeTools(cfg.nativeTools)
-	if err := validateNativeTools(a.nativeTools); err != nil {
+	for _, tool := range cfg.nativeTools {
+		a.nativeToolEntries = append(a.nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
+	}
+	if err := validateNativeTools(staticNativeTools(a.nativeToolEntries)); err != nil {
 		panic(err.Error())
 	}
 	var err error
@@ -173,12 +175,14 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 				},
 			})
 		}
-		a.nativeTools = append(a.nativeTools, CloneNativeTools(reg.nativeTools)...)
+		for _, tool := range reg.nativeTools {
+			a.nativeToolEntries = append(a.nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
+		}
 		a.capSettings = append(a.capSettings, capabilitySettingsLayer{
 			static: reg.modelSettings, provider: capabilityModelSettingsProvider(capability),
 		})
 	}
-	if err := validateNativeTools(a.nativeTools); err != nil {
+	if err := validateNativeTools(staticNativeTools(a.nativeToolEntries)); err != nil {
 		panic(err.Error())
 	}
 	return a
@@ -373,11 +377,21 @@ func (a *Agent[Deps, Output]) AddTool(tool Tool[Deps]) {
 // providers that do not support their kind; optional tools may be omitted.
 func (a *Agent[Deps, Output]) AddNativeTool(tool NativeTool) {
 	a.checkNotStarted()
-	tools := append(CloneNativeTools(a.nativeTools), cloneNativeTool(tool))
-	if err := validateNativeTools(tools); err != nil {
+	entries := append(cloneNativeToolEntries(a.nativeToolEntries), nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
+	if err := validateNativeTools(staticNativeTools(entries)); err != nil {
 		panic(err.Error())
 	}
-	a.nativeTools = tools
+	a.nativeToolEntries = entries
+}
+
+// AddNativeToolFunc registers a dependency-aware native tool resolved before
+// every model request.
+func (a *Agent[Deps, Output]) AddNativeToolFunc(fn NativeToolFunc[Deps]) {
+	a.checkNotStarted()
+	if fn == nil {
+		panic("ai: native tool function must not be nil")
+	}
+	a.nativeToolEntries = append(a.nativeToolEntries, nativeToolEntry[Deps]{fn: fn})
 }
 
 func (a *Agent[Deps, Output]) checkNotStarted() {
@@ -582,6 +596,12 @@ type erasedModelSettingsFunc func(context.Context, any) (ModelSettings, error)
 type erasedInstructionsFunc func(context.Context, any) (string, error)
 type erasedModelSelectorFunc func(context.Context, any) (ModelSelection, error)
 type erasedRunMetadataFunc func(context.Context, any) (map[string]any, error)
+type erasedNativeToolFunc func(context.Context, any) (NativeTool, error)
+
+type erasedNativeToolEntry struct {
+	tool NativeTool
+	fn   erasedNativeToolFunc
+}
 
 type erasedTool struct {
 	entry any
@@ -607,7 +627,7 @@ type runConfig struct {
 	instructionsFuncs []erasedInstructionsFunc
 	modelSelectors    []erasedModelSelectorFunc
 	tools             []erasedTool
-	nativeTools       []NativeTool
+	nativeToolEntries []erasedNativeToolEntry
 	toolsets          []any
 	capabilities      []Capability
 	deferredResults   *DeferredToolResults
@@ -617,7 +637,29 @@ type runConfig struct {
 // WithRunNativeTools adds provider-executed tools for one run without modifying the agent.
 func WithRunNativeTools(tools ...NativeTool) RunOption {
 	cloned := CloneNativeTools(tools)
-	return func(c *runConfig) { c.nativeTools = append(c.nativeTools, CloneNativeTools(cloned)...) }
+	return func(c *runConfig) {
+		for _, tool := range cloned {
+			c.nativeToolEntries = append(c.nativeToolEntries, erasedNativeToolEntry{tool: cloneNativeTool(tool)})
+		}
+	}
+}
+
+// WithRunNativeToolFunc adds a dependency-aware native tool for one run.
+func WithRunNativeToolFunc[Deps any](fn NativeToolFunc[Deps]) RunOption {
+	if fn == nil {
+		panic("ai: run native tool function must not be nil")
+	}
+	return func(c *runConfig) {
+		c.nativeToolEntries = append(c.nativeToolEntries, erasedNativeToolEntry{fn: func(
+			ctx context.Context, rc any,
+		) (NativeTool, error) {
+			typed, ok := rc.(*RunContext[Deps])
+			if !ok {
+				return nil, fmt.Errorf("ai: run native tool function dependencies do not match agent")
+			}
+			return fn(ctx, typed)
+		}})
+	}
 }
 
 // WithRunToolsets adds composable toolsets for one run without modifying the agent.

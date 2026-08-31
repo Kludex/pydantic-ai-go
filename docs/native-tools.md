@@ -83,3 +83,46 @@ func main() {
 `WithRunNativeTools` does not modify the shared agent. You can also call `Agent.AddNativeTool` before the first run. A capability can contribute a static native tool with `CapabilityRegistry.AddNativeTool`.
 
 Native tools with the same `UniqueID` cannot appear twice in one request. Native tool definitions, domain lists, locations, and pointer settings are cloned before providers and hooks receive them.
+
+## Resolve a tool from dependencies
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+type Deps struct {
+	DocumentationDomain string
+}
+
+func main() {
+	agent := ai.NewAgent[Deps, string](openai.NewResponsesModel("gpt-5"))
+	agent.AddNativeToolFunc(func(
+		_ context.Context,
+		runContext *ai.RunContext[Deps],
+	) (ai.NativeTool, error) {
+		return ai.WebSearchTool{
+			AllowedDomains: []string{runContext.Deps.DocumentationDomain},
+		}, nil
+	})
+
+	result, err := agent.Run(context.Background(), "Find the latest release notes.", Deps{
+		DocumentationDomain: "go.dev",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`AddNativeToolFunc` runs before every model request. This lets a tool follow dependencies, selected-model state, usage, or retry state. The callback can run concurrently across agent runs and must return detached state.
+
+Use `WithRunNativeToolFunc` for a callback scoped to one run. Static tools remain in registration order with dynamic tools. Every resolved request is cloned and revalidated, including tools changed by model-request hooks.

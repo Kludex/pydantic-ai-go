@@ -2,6 +2,7 @@ package ai_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -166,6 +167,136 @@ func TestNativeToolValidation(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
 				if value := recover(); value == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			operation()
+		})
+	}
+}
+
+type nativeDeps struct{ Domain string }
+
+func TestDynamicNativeToolsResolvePerStep(t *testing.T) {
+	steps := 0
+	resolved := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		steps++
+		if len(params.NativeTools) != 1 {
+			t.Fatalf("step %d received native tools %#v", steps, params.NativeTools)
+		}
+		web := params.NativeTools[0].(ai.WebSearchTool)
+		if web.AllowedDomains[0] != "go.dev" {
+			t.Fatalf("unexpected dynamic native tool: %+v", web)
+		}
+		if steps == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "work", ToolCallID: "work", Args: []byte(`{}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[nativeDeps, string](model)
+	ai.AddSimpleTool(agent, "work", func(context.Context, struct{}) (string, error) {
+		return "worked", nil
+	})
+	agent.AddNativeToolFunc(func(
+		_ context.Context, rc *ai.RunContext[nativeDeps],
+	) (ai.NativeTool, error) {
+		resolved++
+		if rc.Deps.Domain != "go.dev" {
+			t.Fatalf("unexpected dependencies: %+v", rc.Deps)
+		}
+		return ai.WebSearchTool{AllowedDomains: []string{rc.Deps.Domain}}, nil
+	})
+	if _, err := agent.Run(t.Context(), "go", nativeDeps{Domain: "go.dev"}); err != nil {
+		t.Fatal(err)
+	}
+	if steps != 2 || resolved != 2 {
+		t.Fatalf("steps=%d dynamic resolutions=%d", steps, resolved)
+	}
+}
+
+func TestRunDynamicNativeToolIsolationAndErrors(t *testing.T) {
+	t.Run("isolated", func(t *testing.T) {
+		seen := 0
+		model := fakes.NewFunctionModel(func(
+			_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			seen = len(params.NativeTools)
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+		})
+		agent := ai.NewAgent[nativeDeps, string](model)
+		if _, err := agent.Run(t.Context(), "go", nativeDeps{}, ai.WithRunNativeToolFunc(func(
+			context.Context, *ai.RunContext[nativeDeps],
+		) (ai.NativeTool, error) {
+			return ai.WebSearchTool{}, nil
+		})); err != nil {
+			t.Fatal(err)
+		}
+		if seen != 1 {
+			t.Fatalf("run callback produced %d tools", seen)
+		}
+		if _, err := agent.Run(t.Context(), "again", nativeDeps{}); err != nil {
+			t.Fatal(err)
+		}
+		if seen != 0 {
+			t.Fatal("run native tool callback mutated the agent")
+		}
+	})
+
+	t.Run("callback error", func(t *testing.T) {
+		target := errors.New("unavailable")
+		agent := ai.NewAgent[nativeDeps, string](fakes.NewTestModel())
+		agent.AddNativeToolFunc(func(context.Context, *ai.RunContext[nativeDeps]) (ai.NativeTool, error) {
+			return nil, target
+		})
+		if _, err := agent.Run(t.Context(), "go", nativeDeps{}); !errors.Is(err, target) ||
+			!strings.Contains(err.Error(), "resolve native tool") {
+			t.Fatalf("unexpected callback error: %v", err)
+		}
+	})
+
+	t.Run("nil result", func(t *testing.T) {
+		agent := ai.NewAgent[nativeDeps, string](fakes.NewTestModel())
+		agent.AddNativeToolFunc(func(context.Context, *ai.RunContext[nativeDeps]) (ai.NativeTool, error) {
+			return nil, nil
+		})
+		if _, err := agent.Run(t.Context(), "go", nativeDeps{}); err == nil ||
+			!strings.Contains(err.Error(), "native tool must not be nil") {
+			t.Fatalf("unexpected nil tool error: %v", err)
+		}
+	})
+
+	t.Run("dependency mismatch", func(t *testing.T) {
+		agent := ai.NewAgent[nativeDeps, string](fakes.NewTestModel())
+		_, err := agent.Run(t.Context(), "go", nativeDeps{}, ai.WithRunNativeToolFunc(func(
+			context.Context, *ai.RunContext[struct{}],
+		) (ai.NativeTool, error) {
+			return ai.WebSearchTool{}, nil
+		}))
+		if err == nil || !strings.Contains(err.Error(), "dependencies do not match agent") {
+			t.Fatalf("unexpected dependency error: %v", err)
+		}
+	})
+}
+
+func TestNilNativeToolFunctionsPanic(t *testing.T) {
+	for name, operation := range map[string]func(){
+		"agent": func() {
+			var fn ai.NativeToolFunc[nativeDeps]
+			ai.NewAgent[nativeDeps, string](fakes.NewTestModel()).AddNativeToolFunc(fn)
+		},
+		"run": func() {
+			var fn ai.NativeToolFunc[nativeDeps]
+			ai.WithRunNativeToolFunc(fn)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
 					t.Fatal("expected panic")
 				}
 			}()

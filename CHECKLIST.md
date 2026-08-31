@@ -217,8 +217,8 @@ Status:
 - [x] `gofmt`, `go vet`, `golangci-lint`, tests, and per-package 100% coverage in pre-commit.
 - [x] Recorded OpenAI and Anthropic traffic with credentials filtered.
 - [ ] Record Google Gemini cassettes when credentials are available.
-- [ ] Race-detector CI and concurrency stress tests.
-- [ ] CI workflow for supported Go versions and replay-only cassettes.
+- [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
+- [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
 - [ ] API examples for tools, streaming, multimodal input, capabilities, and each provider.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.

@@ -55,6 +55,7 @@ type RunInfo struct {
 	usage     *Usage
 	toolCalls *atomic.Int64
 	messages  *[]ModelMessage
+	model     func() Model
 }
 
 // Usage returns the usage accumulated so far in this run.
@@ -66,6 +67,14 @@ func (ri *RunInfo) Usage() Usage {
 
 // Messages returns a detached snapshot of the conversation so far.
 func (ri *RunInfo) Messages() []ModelMessage { return cloneModelMessages(*ri.messages) }
+
+// Model returns the model selected for the current request, or nil before selection.
+func (ri *RunInfo) Model() Model {
+	if ri.model == nil {
+		return nil
+	}
+	return ri.model()
+}
 
 // ModelRequestFunc continues the model-request chain.
 type ModelRequestFunc func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error)

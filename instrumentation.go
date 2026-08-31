@@ -22,6 +22,7 @@ type instrumentationConfig struct {
 	includeContent                bool
 	includeBinaryContent          bool
 	includeModelRequestParameters bool
+	agentName                     string
 }
 
 // WithInstrumentationTracerProvider selects a tracer provider instead of the global provider.
@@ -50,6 +51,11 @@ func WithInstrumentationModelRequestParameters(include bool) InstrumentationOpti
 	return func(config *instrumentationConfig) { config.includeModelRequestParameters = include }
 }
 
+// WithInstrumentationAgentName sets the agent name used by Instrumentation.
+func WithInstrumentationAgentName(name string) InstrumentationOption {
+	return func(config *instrumentationConfig) { config.agentName = name }
+}
+
 // InstrumentedModel emits OpenTelemetry spans and metrics around direct model requests.
 type InstrumentedModel struct {
 	*ModelWrapper
@@ -64,9 +70,16 @@ type InstrumentedModel struct {
 
 // NewInstrumentedModel creates a transparent model decorator. Content is included by default.
 func NewInstrumentedModel(model Model, options ...InstrumentationOption) *InstrumentedModel {
+	instrumented, _ := newInstrumentationRuntime(options)
+	instrumented.ModelWrapper = WrapModel(model)
+	return instrumented
+}
+
+func newInstrumentationRuntime(options []InstrumentationOption) (*InstrumentedModel, string) {
 	config := instrumentationConfig{
 		tracerProvider: otel.GetTracerProvider(), meterProvider: otel.GetMeterProvider(),
 		includeContent: true, includeBinaryContent: true, includeModelRequestParameters: true,
+		agentName: "agent",
 	}
 	for _, option := range options {
 		option(&config)
@@ -90,11 +103,11 @@ func NewInstrumentedModel(model Model, options ...InstrumentationOption) *Instru
 		metric.WithDescription("Time from issuing a streaming request to the first chunk"),
 	)
 	return &InstrumentedModel{
-		ModelWrapper: WrapModel(model), tracer: config.tracerProvider.Tracer(otelScope),
+		tracer:         config.tracerProvider.Tracer(otelScope),
 		tokenHistogram: tokens, costHistogram: cost, firstChunkHistogram: firstChunk,
 		includeContent: config.includeContent, includeBinaryContent: config.includeBinaryContent,
 		includeModelRequestParameters: config.includeModelRequestParameters,
-	}
+	}, config.agentName
 }
 
 // InstrumentModel wraps model unless it is already instrumented.

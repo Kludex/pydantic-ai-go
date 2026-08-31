@@ -82,7 +82,7 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 	if cfg.model != nil {
 		model = cfg.model
 	}
-	ctx, span := startRunSpan(ctx, modelName(model))
+	ctx, span := startRunSpan(ctx, modelName(model), !hasInstrumentationCapability(capabilities))
 	defer func() {
 		if result != nil {
 			recordUsage(span, result.usage)
@@ -301,6 +301,7 @@ func (a *Agent[Deps, Output]) newRun(
 	r.info = &RunInfo{
 		RunID: runID, ConversationID: conversationID,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
+		model: func() Model { return r.model },
 	}
 	r.staticInstructions = a.staticInstructions(cfg.instructions, runCapabilityInstructions)
 	outputMode := a.outputMode
@@ -939,7 +940,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
 		}
 		r.setCurrentTools(params)
-		if hasInstrumentedModel(r.model) {
+		if hasInstrumentedModel(r.model) || modelRequestSpanActive(ctx) {
 			return r.doModelRequest(ctx, msgs, params)
 		}
 		reqCtx, reqSpan := startRequestSpan(ctx, r.model.Name())
@@ -2766,7 +2767,9 @@ func (r *run[Deps, Output]) executeCall(
 			}, nil, nil, nil
 		}
 	}
-	spanCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
+	spanCtx, toolSpan := startToolSpan(
+		ctx, call.ToolName, call.ToolCallID, !hasInstrumentationCapability(r.capabilities),
+	)
 	toolCtx := spanCtx
 	var cancel context.CancelFunc = func() {}
 	if entry.def.timeout > 0 {

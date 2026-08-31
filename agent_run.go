@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 )
 
@@ -63,7 +64,8 @@ func (a *Agent[Deps, Output]) iterPrompt(
 	if cfg.model != nil {
 		model = cfg.model
 	}
-	ctx, span := startRunSpan(ctx, modelName(model))
+	capabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
+	ctx, span := startRunSpan(ctx, modelName(model), !hasInstrumentationCapability(capabilities))
 	r, err := a.newRun(ctx, prompt, deps, cfg)
 	if err != nil {
 		endSpan(span, err)

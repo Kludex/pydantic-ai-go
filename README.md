@@ -295,7 +295,36 @@ func main() {
 
 `InstrumentedModel` emits an OpenTelemetry client span, token and cost histograms, and time to first chunk for streams. It includes prompt, completion, and tool content by default. Use `WithInstrumentationContent(false)` to omit all content, `WithInstrumentationBinaryContent(false)` to keep media types without payloads, and `WithInstrumentationModelRequestParameters(false)` to omit the full parameter snapshot. Tool definitions remain available through `gen_ai.tool.definitions`.
 
-The wrapper delegates lifecycle, defaults, continuation, and tool-search capabilities. Nesting it with another transparent model wrapper keeps those capabilities available. Agent requests already have request spans and avoid creating a duplicate span when they reach an `InstrumentedModel`.
+The wrapper delegates lifecycle, defaults, continuation, and tool-search capabilities. Nesting it with another transparent model wrapper keeps those capabilities available. Agent requests avoid creating a duplicate span when they reach an `InstrumentedModel`.
+
+Use `NewInstrumentation` as an outermost capability when you want the complete agent hierarchy:
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewModel("gpt-5-mini"),
+		ai.WithCapabilities(ai.NewInstrumentation(
+			ai.WithInstrumentationAgentName("support"),
+			ai.WithInstrumentationBinaryContent(false),
+		)),
+	)
+	if _, err := agent.Run(context.Background(), "Hello", struct{}{}); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+The capability emits one run span, one span for each logical model request, and one span for each local function-tool execution. It propagates agent, run, and conversation baggage. Registering it twice does not duplicate spans. The same options control content on run, request, and tool spans.
 
 ## Suspended responses
 

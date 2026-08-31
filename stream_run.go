@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -228,7 +229,8 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 		if cfg.model != nil {
 			model = cfg.model
 		}
-		ctx, span := startRunSpan(ctx, modelName(model))
+		capabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
+		ctx, span := startRunSpan(ctx, modelName(model), !hasInstrumentationCapability(capabilities))
 		var runErr error
 		defer func() {
 			if streamedRun.result != nil {

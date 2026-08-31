@@ -199,7 +199,7 @@ Status:
 ### Integrations
 
 - [ ] First-class `pydantic-evals-go` task adapter.
-- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. A configurable outermost agent instrumentation capability, run/output/deferred metadata, all upstream event shapes, baggage, and legacy format versions remain.
+- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, aggregate usage, final output and full-history attributes, agent/run/conversation baggage, duplicate suppression, and the same privacy controls. Richer output/deferred metadata, all upstream event shapes, message-fragment caching/mutation diagnostics, and legacy format versions remain.
 - [ ] Logfire guidance and examples.
 - [ ] AG-UI adapter.
 - [ ] Vercel AI protocol adapter.
@@ -235,7 +235,7 @@ Status:
 
 ## Next work
 
-1. Complete the configurable outermost agent instrumentation capability, including run/output/deferred metadata, baggage, and remaining upstream event shapes.
+1. Complete remaining OpenTelemetry event shapes, output/deferred metadata, message-fragment caching/mutation diagnostics, and any required legacy instrumentation formats.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP with explicit shared sessions, prompts/resources, sampling, elicitation, task extension, and OAuth examples.
 4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.

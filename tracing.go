@@ -13,10 +13,22 @@ import (
 // so traces from both libraries look the same in Logfire.
 const otelScope = "pydantic-ai"
 
+type runSpanContextKey struct{}
 type modelRequestSpanContextKey struct{}
+type toolSpanContextKey struct{}
+
+func runSpanActive(ctx context.Context) bool {
+	active, _ := ctx.Value(runSpanContextKey{}).(bool)
+	return active
+}
 
 func modelRequestSpanActive(ctx context.Context) bool {
 	active, _ := ctx.Value(modelRequestSpanContextKey{}).(bool)
+	return active
+}
+
+func toolSpanActive(ctx context.Context) bool {
+	active, _ := ctx.Value(toolSpanContextKey{}).(bool)
 	return active
 }
 
@@ -27,17 +39,23 @@ func tracer() trace.Tracer {
 	return otel.GetTracerProvider().Tracer(otelScope)
 }
 
-func startRunSpan(ctx context.Context, modelName string) (context.Context, trace.Span) {
-	return tracer().Start(ctx, "agent run",
+func startRunSpan(ctx context.Context, modelName string, enabled ...bool) (context.Context, trace.Span) {
+	if len(enabled) > 0 && !enabled[0] {
+		return ctx, nil
+	}
+	ctx, span := tracer().Start(ctx, "agent run",
 		trace.WithAttributes(
 			attribute.String("gen_ai.operation.name", "invoke_agent"),
 			attribute.String("gen_ai.request.model", modelName),
 		),
 	)
+	return context.WithValue(ctx, runSpanContextKey{}, true), span
 }
 
 func recordRunModel(span trace.Span, modelName string) {
-	span.SetAttributes(attribute.String("gen_ai.request.model", modelName))
+	if span != nil {
+		span.SetAttributes(attribute.String("gen_ai.request.model", modelName))
+	}
 }
 
 func startRequestSpan(ctx context.Context, modelName string) (context.Context, trace.Span) {
@@ -50,17 +68,24 @@ func startRequestSpan(ctx context.Context, modelName string) (context.Context, t
 	return context.WithValue(ctx, modelRequestSpanContextKey{}, true), span
 }
 
-func startToolSpan(ctx context.Context, toolName, toolCallID string) (context.Context, trace.Span) {
-	return tracer().Start(ctx, "running tool: "+toolName,
+func startToolSpan(ctx context.Context, toolName, toolCallID string, enabled ...bool) (context.Context, trace.Span) {
+	if len(enabled) > 0 && !enabled[0] {
+		return ctx, nil
+	}
+	ctx, span := tracer().Start(ctx, "running tool: "+toolName,
 		trace.WithAttributes(
 			attribute.String("gen_ai.operation.name", "execute_tool"),
 			attribute.String("gen_ai.tool.name", toolName),
 			attribute.String("gen_ai.tool.call.id", toolCallID),
 		),
 	)
+	return context.WithValue(ctx, toolSpanContextKey{}, true), span
 }
 
 func endSpan(span trace.Span, err error) {
+	if span == nil {
+		return
+	}
 	if err != nil {
 		span.SetStatus(codes.Error, err.Error())
 		span.RecordError(err)
@@ -69,6 +94,9 @@ func endSpan(span trace.Span, err error) {
 }
 
 func recordUsage(span trace.Span, usage Usage) {
+	if span == nil {
+		return
+	}
 	attributes := []attribute.KeyValue{
 		attribute.Int("gen_ai.usage.input_tokens", usage.InputTokens),
 		attribute.Int("gen_ai.usage.output_tokens", usage.OutputTokens),

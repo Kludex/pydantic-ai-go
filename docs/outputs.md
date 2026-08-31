@@ -1,0 +1,181 @@
+# Structured output
+
+Use a Go struct when your agent has one result shape:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+type City struct {
+	Name    string `json:"name"`
+	Country string `json:"country"`
+}
+
+func main() {
+	agent := ai.NewAgent[struct{}, City](openai.NewModel("gpt-5-mini"))
+	result, err := agent.Run(context.Background(), "Return information about Paris.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s, %s\n", result.Output.Name, result.Output.Country)
+}
+```
+
+The agent reflects a Draft 2020-12 JSON Schema. It validates the raw response before decoding it into `City`.
+
+## Multiple output alternatives
+
+Use `UnionOutput` when the model can return one of several Go types:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+type Answer interface {
+	answer()
+}
+
+type City struct {
+	Name       string `json:"name"`
+	Population int    `json:"population"`
+}
+
+func (City) answer() {}
+
+type Refusal struct {
+	Reason string `json:"reason"`
+}
+
+func (Refusal) answer() {}
+
+func main() {
+	output := ai.NewUnionOutput(
+		ai.NewOutputAlternative("city", func(city City) Answer { return city }),
+		ai.NewOutputAlternative("refusal", func(refusal Refusal) Answer { return refusal }),
+	)
+	agent := ai.NewUnionAgent[struct{}](openai.NewModel("gpt-5-mini"), output)
+	result, err := agent.Run(context.Background(), "Return information about Paris.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	switch answer := result.Output.(type) {
+	case City:
+		fmt.Printf("%s: %d\n", answer.Name, answer.Population)
+	case Refusal:
+		fmt.Println(answer.Reason)
+	}
+}
+```
+
+The model returns one portable envelope:
+
+```json
+{
+  "result": {
+    "kind": "city",
+    "data": {
+      "name": "Paris",
+      "population": 2102650
+    }
+  }
+}
+```
+
+The envelope is the same for tool, native, and prompted output. This avoids provider-specific unions and gives the discriminator a stable meaning in persisted prompts.
+
+`NewUnionOutput` requires at least two unique kinds. Treat each kind as persisted API data. Do not rename it after you have stored message history or prompts that reference it.
+
+Use `NewRawOutputAlternative` when a type needs a hand-written schema or decoder. `UnionOutput.Schema` returns a detached schema for inspection. `UnionOutput.Decode` decodes an envelope outside an agent.
+
+## Output modes
+
+`OutputModeAuto` is the default for an agent. It asks the selected model's `ModelProfile` which structured-output mode to use. The standard profile selects tool output because it works across providers.
+
+Require a mode when your application depends on its wire behavior:
+
+```go
+package main
+
+import (
+	"fmt"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+type City struct {
+	Name string `json:"name"`
+}
+
+func main() {
+	agent := ai.NewAgent[struct{}, City](
+		openai.NewModel("gpt-5-mini"),
+		ai.WithOutputMode(ai.OutputModeNative),
+	)
+	fmt.Printf("%T\n", agent)
+}
+```
+
+- `OutputModeTool` asks the model to call a final-result tool.
+- `OutputModeNative` uses the provider's native JSON Schema feature.
+- `OutputModePrompted` puts the schema in the instructions and validates returned JSON.
+- `OutputModeAuto` resolves the mode after model selection.
+
+An explicit run mode overrides the agent and model profile. Use `WithRunOutputMode` for one run.
+
+## Validation and retries
+
+Add a semantic validator after schema validation and Go decoding:
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+type City struct {
+	Name       string `json:"name"`
+	Population int    `json:"population"`
+}
+
+func main() {
+	agent := ai.NewAgent[struct{}, City](openai.NewModel("gpt-5-mini"))
+	agent.AddOutputValidator(func(
+		ctx context.Context,
+		rc *ai.RunContext[struct{}],
+		city City,
+	) error {
+		if city.Population <= 0 {
+			return ai.Retryf("population must be positive")
+		}
+		return nil
+	})
+	if _, err := agent.Run(context.Background(), "Return information about Paris.", struct{}{}); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+A retry is sent back to the model and consumes the output retry budget. Configure that budget with `WithRetryLimits` or `WithRunRetryLimits`.

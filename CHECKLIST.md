@@ -68,7 +68,7 @@ Status:
 - [x] Dependency-aware and simple tool signatures.
 - [x] Raw-schema dynamic tool registration.
 - [x] Tool and argument-unmarshal retries use independent per-tool counters; output retries use a separate counter.
-- [~] Reflected JSON Schema supports common structs, arrays, maps, descriptions, and enums; schema generation is not yet full Pydantic parity.
+- [~] Reflected JSON Schema supports common structs, recursive structs with stable escaped local references, arrays, maps, descriptions, and enums; schema generation is not yet full Pydantic parity.
 - [x] Provider schema transforms for implemented providers: Gemini full JSON Schema wire fields, OpenAI compatibility inference/forced rewrites including recursive roots, and opt-in Anthropic strict-subset conversion.
 - [x] Provider-aware strict tool mode via `WithStrict()` / `WithoutStrict()`: OpenAI infers schema compatibility, Anthropic is explicit and model-gated, and Gemini 2.5+ defaults to request-wide `VALIDATED`; each provider supports alias/proxy overrides.
 - [x] Surface Anthropic's lossy strict transformation of dynamic-map schemas through `anthropic.WithSchemaWarningHandler`.
@@ -159,7 +159,7 @@ Status:
 - [~] Native output on supported providers.
 - [x] Native structured output alongside function calls obeys end strategies; plain text remains non-preemptive.
 - [x] Prompted JSON output fallback for reflected structured outputs, including default/custom schema instructions, validation retries, streaming, per-run overrides, and end-strategy handling.
-- [ ] Multiple output alternatives / union outputs.
+- [x] Multiple output alternatives through typed `UnionOutput` and `NewUnionAgent`, with stable discriminators, one provider-portable envelope across tool/native/prompted modes, raw-schema alternatives, recursive and merged-definition reference rewriting, semantic conversion, retries, output validators, streaming, detached schema inspection, standalone decoding, and explicit incompatibility with per-run output specialization.
 - [x] `OutputModeAuto` resolves the selected model's `ModelProfile` for each step, including adaptive selectors, model-request-hook switches, transparent wrappers, direct requests, streams, and each fallback candidate. Explicit agent/run modes and templates win; profiles can supply prompted templates and require schema instructions alongside native output.
 - [ ] Image and binary outputs.
 - [x] Output tool name, description, strict mode, sequential execution barrier, and independent retry configuration through `OutputToolConfig`, with per-run replacement.
@@ -225,8 +225,8 @@ Status:
 - [ ] Record Google Gemini cassettes when credentials are available.
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
-- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused provider, MCP, and OpenTelemetry guides cover OpenAI-compatible/Azure setup, shared-session lifecycle, direct protocol operations, privacy, format compatibility, and usage attribution. Dedicated multimodal and capability examples remain.
-- [~] Focused provider, MCP, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for capabilities, deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
+- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused output, provider, MCP, and OpenTelemetry guides cover union output, OpenAI-compatible/Azure setup, shared-session lifecycle, direct protocol operations, privacy, format compatibility, and usage attribution. Dedicated multimodal and capability examples remain.
+- [~] Focused output, provider, MCP, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for capabilities, deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
@@ -239,5 +239,5 @@ Status:
 1. Complete OpenTelemetry output-function spans, richer run metadata, remaining event shapes, and message-fragment caching/mutation diagnostics.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
-4. Add multiple/union output alternatives; automatic profile-selected modes and prompted templates are complete.
-5. Extend upstream message fixtures as remaining persisted part types land.
+4. Extend upstream message fixtures as remaining persisted part types land.
+5. Add the remaining provider-native tools, richer content parts, and provider metadata.

@@ -253,6 +253,13 @@ func (r *run[Deps, Output]) decodeOutput(rawOutput any, structured bool) (Output
 			return output, &outputSchemaValidationError{err: err, raw: append([]byte(nil), raw...)}
 		}
 	}
+	if r.agent.outputDecoder != nil {
+		decoded, err := r.agent.outputDecoder(raw)
+		if err != nil {
+			return output, &outputDecodeError{err: err}
+		}
+		return decoded, nil
+	}
 	if err := json.Unmarshal(raw, &output); err != nil {
 		return output, &outputDecodeError{err: err}
 	}

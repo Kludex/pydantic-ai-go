@@ -93,6 +93,9 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 	if len(agent.outputValidators) != 0 {
 		return nil, ErrOutputTypeOverrideWithValidators
 	}
+	if agent.outputDecoder != nil {
+		return nil, ErrOutputTypeOverrideWithUnion
+	}
 	tools := make([]toolEntry[Deps], len(agent.tools))
 	for index, tool := range agent.tools {
 		tool.def = cloneToolDefinition(tool.def)
@@ -122,6 +125,7 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 		retryLimits:        agent.retryLimits,
 		outputMode:         agent.outputMode,
 		outputTool:         cloneOutputToolConfig(agent.outputTool),
+		outputSchema:       cloneSchemaMap(agent.outputSchema),
 		promptedTemplate:   agent.promptedTemplate,
 		outputToolPrepare:  slices.Clone(agent.outputToolPrepare),
 		endStrategy:        agent.endStrategy,

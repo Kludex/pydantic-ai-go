@@ -9,7 +9,7 @@ import (
 
 // ForType returns a JSON Schema for any supported Go type.
 func ForType(t reflect.Type) (map[string]any, error) {
-	return forType(t)
+	return forType(t, "#", make(map[reflect.Type]string))
 }
 
 // For returns a JSON Schema (draft 2020-12 compatible object schema) for
@@ -21,6 +21,16 @@ func For(t reflect.Type) (map[string]any, error) {
 	if t.Kind() != reflect.Struct {
 		return nil, fmt.Errorf("schema: expected a struct type, got %s", t.Kind())
 	}
+	return forStruct(t, "#", make(map[reflect.Type]string))
+}
+
+func forStruct(t reflect.Type, path string, active map[reflect.Type]string) (map[string]any, error) {
+	if reference, recursive := active[t]; recursive {
+		return map[string]any{"$ref": reference}, nil
+	}
+	active[t] = path
+	defer delete(active, t)
+
 	properties := map[string]any{}
 	var required []string
 	for i := range t.NumField() {
@@ -32,7 +42,7 @@ func For(t reflect.Type) (map[string]any, error) {
 		if skip {
 			continue
 		}
-		fieldSchema, err := forType(f.Type)
+		fieldSchema, err := forType(f.Type, path+"/properties/"+escapeJSONPointer(name), active)
 		if err != nil {
 			return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
 		}
@@ -53,7 +63,7 @@ func For(t reflect.Type) (map[string]any, error) {
 	return s, nil
 }
 
-func forType(t reflect.Type) (map[string]any, error) {
+func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[string]any, error) {
 	switch t.Kind() {
 	case reflect.String:
 		return map[string]any{"type": "string"}, nil
@@ -65,7 +75,7 @@ func forType(t reflect.Type) (map[string]any, error) {
 	case reflect.Float32, reflect.Float64:
 		return map[string]any{"type": "number"}, nil
 	case reflect.Slice, reflect.Array:
-		items, err := forType(t.Elem())
+		items, err := forType(t.Elem(), path+"/items", active)
 		if err != nil {
 			return nil, err
 		}
@@ -74,15 +84,15 @@ func forType(t reflect.Type) (map[string]any, error) {
 		if t.Key().Kind() != reflect.String {
 			return nil, fmt.Errorf("unsupported map key type %s", t.Key())
 		}
-		values, err := forType(t.Elem())
+		values, err := forType(t.Elem(), path+"/additionalProperties", active)
 		if err != nil {
 			return nil, err
 		}
 		return map[string]any{"type": "object", "additionalProperties": values}, nil
 	case reflect.Struct:
-		return For(t)
+		return forStruct(t, path, active)
 	case reflect.Pointer:
-		return forType(t.Elem())
+		return forType(t.Elem(), path, active)
 	case reflect.Interface:
 		return map[string]any{}, nil
 	default:
@@ -125,4 +135,8 @@ func applyTag(s map[string]any, tag string) {
 	if len(enum) > 0 {
 		s["enum"] = enum
 	}
+}
+
+func escapeJSONPointer(value string) string {
+	return strings.ReplaceAll(strings.ReplaceAll(value, "~", "~0"), "/", "~1")
 }

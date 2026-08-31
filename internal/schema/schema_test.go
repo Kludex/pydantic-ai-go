@@ -82,6 +82,43 @@ func TestForTypeSupportsScalarRoots(t *testing.T) {
 	}
 }
 
+func TestForSupportsRecursiveStructs(t *testing.T) {
+	type node struct {
+		Name     string           `json:"name"`
+		Children []*node          `json:"children,omitempty"`
+		Lookup   map[string]*node `json:"lookup,omitempty"`
+	}
+	type tree struct {
+		Root *node `json:"root/node"`
+	}
+	value, err := schema.For(reflect.TypeFor[tree]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := value["properties"].(map[string]any)["root/node"].(map[string]any)
+	properties := root["properties"].(map[string]any)
+	children := properties["children"].(map[string]any)["items"].(map[string]any)
+	lookup := properties["lookup"].(map[string]any)["additionalProperties"].(map[string]any)
+	const reference = "#/properties/root~1node"
+	if children["$ref"] != reference || lookup["$ref"] != reference {
+		t.Fatalf("unexpected recursive references: children=%+v lookup=%+v", children, lookup)
+	}
+}
+
+func TestForTypeSupportsRecursiveRoot(t *testing.T) {
+	type node struct {
+		Next *node `json:"next,omitempty"`
+	}
+	value, err := schema.ForType(reflect.TypeFor[node]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	reference := value["properties"].(map[string]any)["next"].(map[string]any)["$ref"]
+	if reference != "#" {
+		t.Fatalf("unexpected root reference: %v", reference)
+	}
+}
+
 func TestForRejectsNonStructs(t *testing.T) {
 	if _, err := schema.For(reflect.TypeFor[string]()); err == nil {
 		t.Fatal("expected error for non-struct")

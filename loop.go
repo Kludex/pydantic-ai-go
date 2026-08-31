@@ -3526,9 +3526,13 @@ func (a *Agent[Deps, Output]) buildParams(
 		params.AllowText = true
 		return params, nil
 	}
-	s, err := schema.For(reflect.TypeFor[Output]())
-	if err != nil {
-		return params, fmt.Errorf("ai: output type: %w", err)
+	s := cloneSchemaMap(a.outputSchema)
+	if s == nil {
+		var err error
+		s, err = schema.For(reflect.TypeFor[Output]())
+		if err != nil {
+			return params, fmt.Errorf("ai: output type: %w", err)
+		}
 	}
 	params.OutputSchema = s
 	return params, nil

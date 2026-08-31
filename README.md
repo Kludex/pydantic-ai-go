@@ -115,7 +115,7 @@ func main() {
 
 The agent reflects a Draft 2020-12 JSON Schema from `City`. It validates the model response against that schema, decodes it into `City`, and retries invalid output.
 
-`OutputModeAuto` is the default. It reads the selected model's `ModelProfile`; the standard profile chooses tool output because it works across providers. Use `WithOutputMode(ai.OutputModeNative)` to require native JSON Schema output, or `OutputModePrompted` to require JSON in text.
+`OutputModeAuto` is the default. It reads the selected model's `ModelProfile`; the standard profile chooses tool output because it works across providers. Use `WithOutputMode(ai.OutputModeNative)` to require native JSON Schema output, or `OutputModePrompted` to require JSON in text. See [Structured output](docs/outputs.md) for validation and multiple output alternatives.
 
 ## Stream a response
 
@@ -260,6 +260,7 @@ func TestAgent(t *testing.T) {
 | You need to | Use |
 | --- | --- |
 | Change one run without mutating the agent | `WithRunModelSettings`, `WithRunInstructions`, and other `RunOption` values |
+| Return one of several typed outputs | [`NewUnionOutput` and `NewUnionAgent`](docs/outputs.md) |
 | Reuse or combine tools | `NewTool`, `NewFunctionToolset`, and the toolset wrappers |
 | Require approval | `WithApprovalRequired` and `DeferredToolResults` |
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |

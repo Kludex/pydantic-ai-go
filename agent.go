@@ -27,6 +27,8 @@ type Agent[Deps, Output any] struct {
 	retryLimits        RetryLimits
 	outputMode         OutputMode
 	outputTool         OutputToolConfig
+	outputSchema       map[string]any
+	outputDecoder      func([]byte) (Output, error)
 	promptedTemplate   string
 	outputToolPrepare  []OutputToolPrepareFunc[Deps]
 	endStrategy        EndStrategy

@@ -58,7 +58,7 @@ Status:
 - [x] Rich `ToolReturn` values separate the provider-facing return value, trailing multimodal user content, local metadata, and deferred-tool reveals while preserving provider-valid concurrent ordering.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, signature, provider-metadata, and tool-argument deltas across bundled providers and fallback replay.
 - [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, `FinalResultEvent`, and metadata-bearing `FinishEvent` with typed, applicable deltas.
-- [ ] Enqueued-message events.
+- [x] Concurrent-safe `RunContext.Enqueue`, `EnqueueWhenIdle`, and explicit priorities inject grouped user content, request parts, or complete messages; `asap` drains before the next request or redirects final output, `when_idle` redirects only at termination, and `EnqueuedMessagesEvent` carries stamped detached messages.
 
 ### Tools and toolsets
 
@@ -119,6 +119,7 @@ Status:
 - [x] Consumer-only stream transformation through `RunEventStreamWrapper` and `StreamEventProcessor`, including automatic streaming for `Run`.
 - [x] `FunctionToolCallEvent`, `FunctionToolResultEvent`, `OutputToolCallEvent`, and `OutputToolResultEvent`, with concurrent results emitted in completion order.
 - [x] `DeferredToolRequestsEvent` after individual call events and `DeferredToolResultsEvent` for each inline handler result batch, without duplicate call events.
+- [x] `EnqueuedMessagesEvent` is emitted once per delivered enqueue group and participates in ordinary event capability ordering and consumer cancellation.
 
 ## P1 - Providers and model behavior
 
@@ -200,6 +201,7 @@ Status:
 
 ## P2 - Broader PydanticAI surface
 
+- [ ] Iterative/manual agent run driver, including external `AgentRun.Enqueue`; run-context enqueue is complete.
 - [ ] Direct model API without an agent loop.
 - [ ] Embeddings API and provider implementations.
 - [ ] Realtime voice/audio API and providers.
@@ -230,4 +232,4 @@ Status:
 2. Add provider-managed tool search; OpenAI Responses client search now uses native wire items in streaming and non-streaming requests.
 3. Add provider-managed search for Anthropic and OpenAI Responses.
 4. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
-5. Add enqueued-message APIs and events for messages produced asynchronously during a run.
+5. Define pending-message preservation when a run pauses for deferred work, and add external enqueue when an iterative run driver exists.

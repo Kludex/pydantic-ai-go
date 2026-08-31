@@ -566,6 +566,32 @@ The last value is always the fully validated output, even when it equals the pre
 
 `RunStream` commits the first matching text, native, or output-tool result. The configured end strategy still controls co-emitted tools, but a tool retry cannot revoke that result. If an output validator requests a retry, the streamed run returns `UnexpectedModelBehaviorError` because output has already been committed. Use `Run` when validation should start another model round.
 
+## Inject messages during a run
+
+```go
+func newIncidentAgent(model ai.Model) *ai.Agent[struct{}, string] {
+	agent := ai.NewAgent[struct{}, string](model)
+	ai.AddTool(agent, "raise_alert", func(
+		_ context.Context,
+		rc *ai.RunContext[struct{}],
+		_ struct{},
+	) (string, error) {
+		_, err := rc.Enqueue(
+			ai.SystemPromptPart{Content: "Use concise incident language."},
+			ai.TextContent{Text: "Production is degraded. Prioritize triage."},
+		)
+		return "alert raised", err
+	})
+	return agent
+}
+```
+
+`RunContext.Enqueue` injects a group before the next model request. Use `EnqueueWhenIdle` for follow-up work that should wait until the run would otherwise finish. `EnqueueWithPriority` accepts an explicit `PendingMessagePriority`. Calls are safe from concurrently executing tools.
+
+You can enqueue user content, request parts, complete requests, and complete responses. Adjacent user content becomes one `UserPromptPart`. Complete messages preserve their boundaries. Every group must end in a `ModelRequest` or content that forms one.
+
+Each non-empty call returns an ID. Streams emit `EnqueuedMessagesEvent` with that ID and detached copies of the messages after run, conversation, and timestamp fields are filled. An `asap` message arriving during final validation redirects the run into another request instead of being dropped. A `when_idle` message redirects only after the current output candidate is complete.
+
 ## Multimodal input
 
 `RunParts` sends images and files alongside text:

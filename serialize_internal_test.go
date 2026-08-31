@@ -4,11 +4,13 @@ import "testing"
 
 type alienMessage struct{}
 
-func (alienMessage) messageKind() string { return "alien" }
+func (alienMessage) messageKind() string     { return "alien" }
+func (alienMessage) enqueueItemKind() string { return "alien" }
 
 type alienRequestPart struct{}
 
 func (alienRequestPart) requestPartKind() string { return "alien" }
+func (alienRequestPart) enqueueItemKind() string { return "alien" }
 
 type alienResponsePart struct{}
 
@@ -29,6 +31,7 @@ func TestMarshalUnknownTypes(t *testing.T) {
 type alienUserContent struct{}
 
 func (alienUserContent) userContentKind() string { return "alien" }
+func (alienUserContent) enqueueItemKind() string { return "alien" }
 
 func TestMarshalUnknownUserContent(t *testing.T) {
 	msgs := []ModelMessage{ModelRequest{Parts: []RequestPart{

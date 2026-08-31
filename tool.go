@@ -32,11 +32,12 @@ type RunContext[Deps any] struct {
 	ModelSettings    ModelSettings
 	UsageLimits      UsageLimits
 
-	usage         *Usage
-	toolCalls     *atomic.Int64
-	messages      *[]ModelMessage
-	revealedTools *map[string]struct{}
-	cancellation  *runCancellation
+	usage           *Usage
+	toolCalls       *atomic.Int64
+	messages        *[]ModelMessage
+	revealedTools   *map[string]struct{}
+	pendingMessages *pendingMessageQueue
+	cancellation    *runCancellation
 }
 
 // Usage returns the usage accumulated so far in this run.

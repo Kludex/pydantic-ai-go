@@ -12,6 +12,7 @@ import (
 // The JSON encoding matches PydanticAI's message format, so serialized
 // histories interoperate with PydanticAI, pydantic-evals-go, and Logfire.
 type ModelMessage interface {
+	EnqueueItem
 	messageKind() string
 }
 
@@ -36,7 +37,8 @@ type ModelRequest struct {
 	State          RequestState
 }
 
-func (ModelRequest) messageKind() string { return "request" }
+func (ModelRequest) messageKind() string     { return "request" }
+func (ModelRequest) enqueueItemKind() string { return "message" }
 
 // FinishReason is the normalized reason generation stopped.
 type FinishReason string
@@ -76,7 +78,8 @@ type ModelResponse struct {
 	State              ModelResponseState
 }
 
-func (ModelResponse) messageKind() string { return "response" }
+func (ModelResponse) messageKind() string     { return "response" }
+func (ModelResponse) enqueueItemKind() string { return "message" }
 
 // ToolCalls returns the tool calls in the response.
 func (r ModelResponse) ToolCalls() []ToolCallPart {
@@ -102,6 +105,7 @@ func (r ModelResponse) Text() string {
 
 // RequestPart is one part of a ModelRequest.
 type RequestPart interface {
+	EnqueueItem
 	requestPartKind() string
 }
 
@@ -115,6 +119,7 @@ type SystemPromptPart struct {
 }
 
 func (SystemPromptPart) requestPartKind() string { return "system-prompt" }
+func (SystemPromptPart) enqueueItemKind() string { return "request-part" }
 
 // UserPromptPart carries user input. Content holds plain text; Contents,
 // when non-empty, holds multimodal items instead and Content is ignored.
@@ -125,9 +130,11 @@ type UserPromptPart struct {
 }
 
 func (UserPromptPart) requestPartKind() string { return "user-prompt" }
+func (UserPromptPart) enqueueItemKind() string { return "request-part" }
 
 // UserContent is one multimodal item in a user prompt.
 type UserContent interface {
+	EnqueueItem
 	userContentKind() string
 }
 
@@ -137,6 +144,7 @@ type TextContent struct {
 }
 
 func (TextContent) userContentKind() string { return "text-content" }
+func (TextContent) enqueueItemKind() string { return "user-content" }
 
 // ImageURL references an image by URL.
 type ImageURL struct {
@@ -144,6 +152,7 @@ type ImageURL struct {
 }
 
 func (ImageURL) userContentKind() string { return "image-url" }
+func (ImageURL) enqueueItemKind() string { return "user-content" }
 
 // BinaryContent carries inline binary data, such as an image or document.
 type BinaryContent struct {
@@ -152,6 +161,7 @@ type BinaryContent struct {
 }
 
 func (BinaryContent) userContentKind() string { return "binary" }
+func (BinaryContent) enqueueItemKind() string { return "user-content" }
 
 // ToolReturnOutcome reports whether a tool completed successfully.
 type ToolReturnOutcome string
@@ -193,6 +203,7 @@ type ToolReturnPart struct {
 }
 
 func (ToolReturnPart) requestPartKind() string { return "tool-return" }
+func (ToolReturnPart) enqueueItemKind() string { return "request-part" }
 
 // ToolAvailabilityDeltaPart records deferred tools revealed at one point in
 // history. ToolsAdded contains model-facing tool names in reveal order.
@@ -202,6 +213,7 @@ type ToolAvailabilityDeltaPart struct {
 }
 
 func (ToolAvailabilityDeltaPart) requestPartKind() string { return "tool-availability-delta" }
+func (ToolAvailabilityDeltaPart) enqueueItemKind() string { return "request-part" }
 
 // ValidationError is one structured JSON Schema validation failure.
 type ValidationError struct {
@@ -224,6 +236,7 @@ type RetryPromptPart struct {
 }
 
 func (RetryPromptPart) requestPartKind() string { return "retry-prompt" }
+func (RetryPromptPart) enqueueItemKind() string { return "request-part" }
 
 // ModelResponse formats retry feedback for a model.
 func (p RetryPromptPart) ModelResponse() string {

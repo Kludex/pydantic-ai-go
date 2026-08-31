@@ -159,6 +159,14 @@ type FinalResultEvent struct {
 
 func (FinalResultEvent) streamEventKind() string { return "final-result" }
 
+// EnqueuedMessagesEvent announces one queued group when it enters history.
+type EnqueuedMessagesEvent struct {
+	EnqueueID string
+	Messages  []ModelMessage
+}
+
+func (EnqueuedMessagesEvent) streamEventKind() string { return "enqueued-messages" }
+
 // FunctionToolCallEvent announces a function tool call before execution.
 type FunctionToolCallEvent struct {
 	Part      ToolCallPart

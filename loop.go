@@ -147,6 +147,7 @@ func (a *Agent[Deps, Output]) newRun(
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
 		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
+		pendingMessages: &pendingMessageQueue{},
 	}
 	if cfg.deferredResults != nil {
 		results := cloneDeferredToolResults(*cfg.deferredResults)
@@ -233,7 +234,7 @@ func (a *Agent[Deps, Output]) newRun(
 		Deps: deps, MaxRetries: r.outputMaxRetries, RunID: runID, ConversationID: conversationID,
 		Model: model, ModelSettings: settings, UsageLimits: limits,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
-		revealedTools: &r.revealedTools, cancellation: cancellation,
+		revealedTools: &r.revealedTools, pendingMessages: r.pendingMessages, cancellation: cancellation,
 	}
 	r.info = &RunInfo{
 		RunID: runID, ConversationID: conversationID,
@@ -530,6 +531,7 @@ type run[Deps, Output any] struct {
 	deferredResults        *DeferredToolResults
 	resolvingDeferred      map[string]deferredResolution
 	pendingDeferred        *DeferredToolRequests
+	pendingMessages        *pendingMessageQueue
 	runStep                int
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
@@ -663,26 +665,42 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 		switch message := message.(type) {
 		case ModelRequest:
 			message.Parts = slices.Clone(message.Parts)
+			message.Metadata = cloneSchemaMap(message.Metadata)
 			for partIndex, part := range message.Parts {
 				switch part := part.(type) {
 				case UserPromptPart:
 					part.Contents = cloneUserContents(part.Contents)
 					message.Parts[partIndex] = part
 				case ToolReturnPart:
+					part.Content = cloneSchemaValue(part.Content)
 					part.Metadata = cloneSchemaMap(part.Metadata)
 					message.Parts[partIndex] = part
 				case ToolAvailabilityDeltaPart:
 					part.ToolsAdded = slices.Clone(part.ToolsAdded)
+					message.Parts[partIndex] = part
+				case RetryPromptPart:
+					part.Errors = cloneDeferredValidationErrors(part.Errors)
 					message.Parts[partIndex] = part
 				}
 			}
 			cloned[index] = message
 		case ModelResponse:
 			message.Parts = slices.Clone(message.Parts)
+			message.Metadata = cloneSchemaMap(message.Metadata)
+			message.ProviderDetails = cloneSchemaMap(message.ProviderDetails)
+			message.Usage = message.Usage.Clone()
 			for partIndex, part := range message.Parts {
-				if call, ok := part.(ToolCallPart); ok {
-					call.Args = slices.Clone(call.Args)
-					message.Parts[partIndex] = call
+				switch part := part.(type) {
+				case TextPart:
+					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
+					message.Parts[partIndex] = part
+				case ToolCallPart:
+					part.Args = slices.Clone(part.Args)
+					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
+					message.Parts[partIndex] = part
+				case ThinkingPart:
+					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
+					message.Parts[partIndex] = part
 				}
 			}
 			cloned[index] = message
@@ -783,6 +801,9 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 // modelRequest is the model-request interception point: tracing plus
 // capability middleware (ModelRequestWrapper), outermost first.
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
+	if err := r.deliverPendingMessages(PendingMessageASAP); err != nil {
+		return nil, err
+	}
 	if err := r.selectModel(ctx); err != nil {
 		return nil, err
 	}
@@ -1547,6 +1568,11 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 				if len(parts) > 0 {
 					r.appendRequest(parts, RequestStateComplete)
 				}
+				if redirected, err := r.redirectPendingMessages(); err != nil {
+					return nil, err
+				} else if redirected {
+					continue
+				}
 				return r.result(*output), nil
 			}
 		}
@@ -1557,6 +1583,11 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			}
 			if retry != nil {
 				r.recordRetry(*retry)
+				continue
+			}
+			if redirected, err := r.redirectPendingMessages(); err != nil {
+				return nil, err
+			} else if redirected {
 				continue
 			}
 			return result, nil
@@ -1580,6 +1611,11 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 				}
 			}
 			r.appendRequest(parts, RequestStateComplete)
+			if redirected, err := r.redirectPendingMessages(); err != nil {
+				return nil, err
+			} else if redirected {
+				continue
+			}
 			return r.result(*output), nil
 		}
 
@@ -1608,6 +1644,11 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			r.appendRequest(parts, RequestStateComplete)
 		}
 		if final != nil {
+			if redirected, err := r.redirectPendingMessages(); err != nil {
+				return nil, err
+			} else if redirected {
+				continue
+			}
 			return r.result(*final), nil
 		}
 		if r.pendingDeferred != nil {
@@ -1653,7 +1694,8 @@ type deferredRequestPart struct {
 	metadata map[string]any
 }
 
-func (deferredRequestPart) requestPartKind() string { return "deferred" }
+func (part deferredRequestPart) requestPartKind() string { return part.enqueueItemKind() }
+func (deferredRequestPart) enqueueItemKind() string      { return "deferred" }
 
 type deferredResolution struct {
 	kind     deferredCallKind

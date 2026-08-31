@@ -2,6 +2,7 @@ package openai_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -50,6 +51,26 @@ func normalizedText(event ai.StreamEvent) string {
 		}
 	}
 	return ""
+}
+
+func TestChatStreamRefusal(t *testing.T) {
+	model := newServer(t, sseHandler(t, []string{
+		`{"id":"response","model":"gpt-5","choices":[{"delta":{"refusal":"I cannot "}}]}`,
+		`{"choices":[{"delta":{"refusal":"help with that."},"finish_reason":"stop"}]}`,
+		`[DONE]`,
+	}))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "blocked", struct{}{})
+	var streamErr error
+	for _, err := range stream.Events() {
+		if err != nil {
+			streamErr = err
+		}
+	}
+	var filtered *ai.ContentFilterError
+	if !errors.As(streamErr, &filtered) || filtered.Response().FinishReason != ai.FinishReasonContentFilter ||
+		filtered.Response().ProviderDetails["refusal"] != "I cannot help with that." {
+		t.Fatalf("unexpected streamed refusal: %v response=%+v", streamErr, filtered)
+	}
 }
 
 func TestStreamTextDeltas(t *testing.T) {

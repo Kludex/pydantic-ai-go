@@ -151,6 +151,24 @@ func TestResponsesCountTokensErrors(t *testing.T) {
 	}
 }
 
+func TestResponsesRefusal(t *testing.T) {
+	model := newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5",
+			"output":[{"id":"message","type":"message","content":[{
+				"type":"refusal","refusal":"I cannot help with that request."
+			}]}]
+		}`))
+	})
+	_, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "blocked", struct{}{})
+	var filtered *ai.ContentFilterError
+	if !errors.As(err, &filtered) || filtered.Response().FinishReason != ai.FinishReasonContentFilter ||
+		filtered.Response().ProviderDetails["refusal"] != "I cannot help with that request." ||
+		filtered.Response().ProviderDetails["finish_reason"] != nil {
+		t.Fatalf("unexpected Responses refusal: %v response=%+v", err, filtered)
+	}
+}
+
 func TestResponsesTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotPath, gotCustom string

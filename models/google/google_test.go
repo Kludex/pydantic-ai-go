@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -313,6 +314,70 @@ func TestServiceTierMapping(t *testing.T) {
 	}})
 	if err == nil || err.Error() != `google: invalid service tier "expedited"` {
 		t.Fatalf("unexpected service tier error: %v", err)
+	}
+}
+
+func TestGooglePromptFeedbackBlock(t *testing.T) {
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{
+			"responseId":"blocked","modelVersion":"gemini",
+			"promptFeedback":{
+				"blockReason":"PROHIBITED_CONTENT","blockReasonMessage":"The prompt was blocked.",
+				"safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","blocked":true}]
+			}
+		}`))
+	})
+	_, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "blocked", struct{}{})
+	var filtered *ai.ContentFilterError
+	if !errors.As(err, &filtered) || filtered.Response().FinishReason != ai.FinishReasonContentFilter ||
+		filtered.Response().ProviderDetails["block_reason"] != "PROHIBITED_CONTENT" ||
+		filtered.Response().ProviderDetails["block_reason_message"] != "The prompt was blocked." {
+		t.Fatalf("unexpected prompt block: %v response=%+v", err, filtered)
+	}
+	ratings, ok := filtered.Response().ProviderDetails["safety_ratings"].([]map[string]any)
+	if !ok || len(ratings) != 1 {
+		t.Fatalf("unexpected prompt safety ratings: %#v", filtered.Response().ProviderDetails)
+	}
+	ratings[0]["blocked"] = false
+	fresh := filtered.Response().ProviderDetails["safety_ratings"].([]map[string]any)
+	if fresh[0]["blocked"] != true {
+		t.Fatal("prompt safety ratings were not detached")
+	}
+}
+
+func TestGoogleModelArmorAndSPIIFinishReasons(t *testing.T) {
+	for _, reason := range []string{"MODEL_ARMOR", "SPII"} {
+		t.Run(reason, func(t *testing.T) {
+			model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(response, `{
+					"candidates":[{"content":{"parts":[]},"finishReason":%q}]
+				}`, reason)
+			})
+			_, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "blocked", struct{}{})
+			var filtered *ai.ContentFilterError
+			if !errors.As(err, &filtered) || filtered.Response().FinishReason != ai.FinishReasonContentFilter ||
+				filtered.Response().ProviderDetails["finish_reason"] != reason {
+				t.Fatalf("unexpected %s block: %v response=%+v", reason, err, filtered)
+			}
+		})
+	}
+}
+
+func TestGoogleCandidateSafetyRatings(t *testing.T) {
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{
+			"candidates":[{
+				"content":{"parts":[{"text":"allowed"}]},"finishReason":"STOP",
+				"safetyRatings":[{"category":"HARM_CATEGORY_HATE_SPEECH","probability":"NEGLIGIBLE"}]
+			}]
+		}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ratings, ok := response.ProviderDetails["safety_ratings"].([]map[string]any); !ok || len(ratings) != 1 {
+		t.Fatalf("unexpected candidate ratings: %#v", response.ProviderDetails)
 	}
 }
 

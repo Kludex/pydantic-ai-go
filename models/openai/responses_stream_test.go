@@ -2,6 +2,7 @@ package openai_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,6 +11,45 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
+
+func TestResponsesStreamRefusal(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.refusal.delta","delta":"I cannot "}`,
+		`{"type":"response.refusal.delta","delta":"help."}`,
+		`{"type":"response.refusal.done","refusal":"I cannot help with that."}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","output":[{"id":"message","type":"message","content":[{"type":"refusal","refusal":"I cannot help with that."}]}]}}`,
+	}))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "blocked", struct{}{})
+	var streamErr error
+	for _, err := range stream.Events() {
+		if err != nil {
+			streamErr = err
+		}
+	}
+	var filtered *ai.ContentFilterError
+	if !errors.As(streamErr, &filtered) || filtered.Response().FinishReason != ai.FinishReasonContentFilter ||
+		filtered.Response().ProviderDetails["refusal"] != "I cannot help with that." ||
+		filtered.Response().ProviderDetails["finish_reason"] != nil {
+		t.Fatalf("unexpected streamed Responses refusal: %v response=%+v", streamErr, filtered)
+	}
+}
+
+func TestResponsesStreamRefusalFromSnapshot(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","status":"completed","output":[{"id":"message","type":"message","content":[{"type":"refusal","refusal":"Blocked by snapshot."}]}]}}`,
+	}))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "blocked", struct{}{})
+	var streamErr error
+	for _, err := range stream.Events() {
+		if err != nil {
+			streamErr = err
+		}
+	}
+	var filtered *ai.ContentFilterError
+	if !errors.As(streamErr, &filtered) || filtered.Response().ProviderDetails["refusal"] != "Blocked by snapshot." {
+		t.Fatalf("unexpected snapshot refusal: %v response=%+v", streamErr, filtered)
+	}
+}
 
 func TestResponsesStreamEvents(t *testing.T) {
 	var streamed bool

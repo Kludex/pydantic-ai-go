@@ -65,6 +65,7 @@ type chatChunk struct {
 	Choices           []struct {
 		Delta struct {
 			Content          string `json:"content"`
+			Refusal          string `json:"refusal"`
 			ReasoningContent string `json:"reasoning_content"`
 			ToolCalls        []struct {
 				Index    int    `json:"index"`
@@ -91,6 +92,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		responseID := ""
 		created := int64(0)
 		finishReason := ""
+		refusal := ""
 		providerDetails := map[string]any{}
 		startedTools := map[int]bool{}
 
@@ -108,7 +110,11 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 					timestamp = time.Unix(created, 0).UTC()
 					providerDetails["timestamp"] = timestamp
 				}
-				if finishReason != "" {
+				if refusal != "" {
+					delete(providerDetails, "finish_reason")
+					providerDetails["refusal"] = refusal
+					finishReason = "content_filter"
+				} else if finishReason != "" {
 					providerDetails["finish_reason"] = finishReason
 				}
 				if len(providerDetails) == 0 {
@@ -156,6 +162,10 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				providerDetails["logprobs"] = append(logprobs, chunk.Choices[0].Logprobs.Content...)
 			}
 			delta := chunk.Choices[0].Delta
+			if delta.Refusal != "" {
+				refusal += delta.Refusal
+				finishReason = "content_filter"
+			}
 			if m.chatCompatibility.ReasoningContent && delta.ReasoningContent != "" {
 				if !yield(ai.ThinkingDeltaEvent{
 					PartID: "thinking", Delta: delta.ReasoningContent, ProviderName: m.providerName,

@@ -625,10 +625,16 @@ type generateResponse struct {
 		Content struct {
 			Parts []part `json:"parts"`
 		} `json:"content"`
-		FinishReason   string         `json:"finishReason"`
-		LogprobsResult map[string]any `json:"logprobsResult"`
-		AvgLogprobs    *float64       `json:"avgLogprobs"`
+		FinishReason   string           `json:"finishReason"`
+		SafetyRatings  []map[string]any `json:"safetyRatings"`
+		LogprobsResult map[string]any   `json:"logprobsResult"`
+		AvgLogprobs    *float64         `json:"avgLogprobs"`
 	} `json:"candidates"`
+	PromptFeedback struct {
+		BlockReason        string           `json:"blockReason"`
+		BlockReasonMessage string           `json:"blockReasonMessage"`
+		SafetyRatings      []map[string]any `json:"safetyRatings"`
+	} `json:"promptFeedback"`
 	UsageMetadata googleUsage `json:"usageMetadata"`
 }
 
@@ -715,11 +721,28 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 		return nil, fmt.Errorf("google: parse response: %w", err)
 	}
 	if len(gr.Candidates) == 0 {
-		return nil, fmt.Errorf("google: response has no candidates")
+		if gr.PromptFeedback.BlockReason == "" {
+			return nil, fmt.Errorf("google: response has no candidates")
+		}
+		providerDetails := map[string]any{"block_reason": gr.PromptFeedback.BlockReason}
+		if gr.PromptFeedback.BlockReasonMessage != "" {
+			providerDetails["block_reason_message"] = gr.PromptFeedback.BlockReasonMessage
+		}
+		if gr.PromptFeedback.SafetyRatings != nil {
+			providerDetails["safety_ratings"] = gr.PromptFeedback.SafetyRatings
+		}
+		return &ai.ModelResponse{
+			ModelName: gr.ModelVersion, Usage: gr.UsageMetadata.usage(), ProviderDetails: providerDetails,
+			ProviderResponseID: gr.ResponseID, FinishReason: ai.FinishReasonContentFilter,
+			State: ai.ModelResponseStateComplete,
+		}, nil
 	}
 	providerDetails := map[string]any{}
 	if gr.Candidates[0].FinishReason != "" {
 		providerDetails["finish_reason"] = gr.Candidates[0].FinishReason
+	}
+	if gr.Candidates[0].SafetyRatings != nil {
+		providerDetails["safety_ratings"] = gr.Candidates[0].SafetyRatings
 	}
 	if gr.Candidates[0].LogprobsResult != nil {
 		providerDetails["logprobs"] = gr.Candidates[0].LogprobsResult

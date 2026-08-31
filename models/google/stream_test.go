@@ -1,6 +1,7 @@
 package google_test
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -53,6 +54,29 @@ func normalizedGoogleText(event ai.StreamEvent) string {
 	return ""
 }
 
+func TestGoogleStreamPromptFeedbackBlock(t *testing.T) {
+	model := newServer(t, googleSSE(t, []string{
+		`{"responseId":"empty"}`,
+		`{"responseId":"blocked","promptFeedback":{"blockReason":"PROHIBITED_CONTENT","blockReasonMessage":"The prompt was blocked.","safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","blocked":true}]}}`,
+	}))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "blocked", struct{}{})
+	var streamErr error
+	for _, err := range stream.Events() {
+		if err != nil {
+			streamErr = err
+		}
+	}
+	var filtered *ai.ContentFilterError
+	if !errors.As(streamErr, &filtered) || filtered.Response().FinishReason != ai.FinishReasonContentFilter ||
+		filtered.Response().ProviderDetails["block_reason"] != "PROHIBITED_CONTENT" ||
+		filtered.Response().ProviderDetails["block_reason_message"] != "The prompt was blocked." {
+		t.Fatalf("unexpected streamed prompt block: %v response=%+v", streamErr, filtered)
+	}
+	if ratings, ok := filtered.Response().ProviderDetails["safety_ratings"].([]map[string]any); !ok || len(ratings) != 1 {
+		t.Fatalf("unexpected streamed safety ratings: %#v", filtered.Response().ProviderDetails)
+	}
+}
+
 func TestStreamEvents(t *testing.T) {
 	var path, query, accept, custom string
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -63,7 +87,7 @@ func TestStreamEvents(t *testing.T) {
 			`{"responseId":"response-stream","modelVersion":"gemini-stream","candidates":[{"content":{"parts":[{"text":"Hel","thoughtSignature":"text-signature"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"thought":true,"text":"plan","thoughtSignature":"thinking-signature"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"c1","name":"work","args":{"x":1}},"thoughtSignature":"tool-signature"}]}}]}`,
-			`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP","avgLogprobs":-0.25,"logprobsResult":{"chosenCandidates":[{"token":"lo"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
+			`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP","safetyRatings":[{"category":"HARM_CATEGORY_HATE_SPEECH","probability":"NEGLIGIBLE"}],"avgLogprobs":-0.25,"logprobsResult":{"chosenCandidates":[{"token":"lo"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
 		})(w, r)
 	})
 	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{Settings: ai.ModelSettings{
@@ -116,7 +140,8 @@ func TestStreamEvents(t *testing.T) {
 		finish.Usage.OutputTokens != 3 || finish.ProviderName != "google" || finish.ProviderURL == "" ||
 		finish.ProviderResponseID != "response-stream" || finish.FinishReason != ai.FinishReasonStop ||
 		finish.ProviderDetails["finish_reason"] != "STOP" || finish.ProviderDetails["service_tier"] != "flex" ||
-		finish.ProviderDetails["avg_logprobs"] != -0.25 || finish.ProviderDetails["logprobs"] == nil {
+		finish.ProviderDetails["avg_logprobs"] != -0.25 || finish.ProviderDetails["logprobs"] == nil ||
+		len(finish.ProviderDetails["safety_ratings"].([]map[string]any)) != 1 {
 		t.Fatalf("unexpected finish %+v", finish)
 	}
 }

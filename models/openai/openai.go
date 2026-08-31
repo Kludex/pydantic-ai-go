@@ -521,6 +521,7 @@ type chatResponse struct {
 	Choices           []struct {
 		Message struct {
 			Content          string     `json:"content"`
+			Refusal          string     `json:"refusal"`
 			ReasoningContent string     `json:"reasoning_content"`
 			ToolCalls        []toolCall `json:"tool_calls"`
 		} `json:"message"`
@@ -589,6 +590,10 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 	if cr.Choices[0].Logprobs != nil {
 		providerDetails["logprobs"] = cr.Choices[0].Logprobs.Content
 	}
+	if cr.Choices[0].Message.Refusal != "" {
+		delete(providerDetails, "finish_reason")
+		providerDetails["refusal"] = cr.Choices[0].Message.Refusal
+	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil
 	}
@@ -598,6 +603,10 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		FinishReason: model.chatFinishReason(cr.Choices[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
 	msg := cr.Choices[0].Message
+	if msg.Refusal != "" {
+		resp.FinishReason = ai.FinishReasonContentFilter
+		return resp, nil
+	}
 	if model.chatCompatibility.ReasoningContent && msg.ReasoningContent != "" {
 		resp.Parts = append(resp.Parts, ai.ThinkingPart{
 			Content: msg.ReasoningContent, ProviderName: model.providerName,

@@ -117,6 +117,7 @@ type responsesStreamEvent struct {
 	Type           string              `json:"type"`
 	SequenceNumber *int                `json:"sequence_number"`
 	Delta          string              `json:"delta"`
+	Refusal        string              `json:"refusal"`
 	ItemID         string              `json:"item_id"`
 	OutputIndex    int                 `json:"output_index"`
 	ContentIndex   int                 `json:"content_index"`
@@ -142,6 +143,8 @@ func (m *ResponsesModel) responsesEventStream(
 		var latest *responsesStreamEvent
 		var lastSequence *int
 		emittedParts := false
+		refusal := ""
+		hasRefusal := false
 		var responseTimestamp time.Time
 		nullServerSearchCalls := make([]string, 0)
 		if seed != nil {
@@ -211,6 +214,14 @@ func (m *ResponsesModel) responsesEventStream(
 				}
 			}
 			switch event.Type {
+			case "response.refusal.delta":
+				hasRefusal = true
+				refusal += event.Delta
+			case "response.refusal.done":
+				hasRefusal = true
+				if event.Refusal != "" {
+					refusal = event.Refusal
+				}
 			case "response.output_text.delta":
 				emittedParts = true
 				partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
@@ -357,6 +368,10 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 					setResponsesProvider(response, m.providerName, m.baseURL)
 					snapshotParts = response.Parts
+					if value, ok := response.ProviderDetails["refusal"].(string); ok {
+						hasRefusal = true
+						refusal = value
+					}
 					compacted = providerBool(response.ProviderDetails, "compaction")
 					if !emittedParts && !yieldStaticResponsesParts(response, yield) {
 						return
@@ -370,6 +385,15 @@ func (m *ResponsesModel) responsesEventStream(
 					event.Response.Status, event.Response.IncompleteDetails,
 					event.Response.CreatedAt, event.Response.Background,
 				)
+				if hasRefusal {
+					if providerDetails == nil {
+						providerDetails = map[string]any{}
+					}
+					delete(providerDetails, "finish_reason")
+					providerDetails["refusal"] = refusal
+					rawFinishReason = "content_filter"
+					snapshotParts = nil
+				}
 				if lastSequence != nil || compacted {
 					if providerDetails == nil {
 						providerDetails = map[string]any{}

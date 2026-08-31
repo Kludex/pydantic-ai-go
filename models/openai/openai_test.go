@@ -109,6 +109,22 @@ func TestExtraBodyRejectsConflictsAndInvalidValues(t *testing.T) {
 	}
 }
 
+func TestChatRefusalResponse(t *testing.T) {
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5","created":1735689600,
+			"choices":[{"message":{"refusal":"I cannot help with that."},"finish_reason":"stop"}]
+		}`))
+	})
+	_, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "blocked", struct{}{})
+	var filtered *ai.ContentFilterError
+	if !errors.As(err, &filtered) || filtered.Response().FinishReason != ai.FinishReasonContentFilter ||
+		filtered.Response().ProviderDetails["refusal"] != "I cannot help with that." ||
+		filtered.Response().ProviderDetails["finish_reason"] != nil {
+		t.Fatalf("unexpected refusal error: %v response=%+v", err, filtered)
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotAuth, gotCustom string

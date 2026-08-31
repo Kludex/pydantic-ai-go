@@ -525,6 +525,7 @@ type responsesOutputItem struct {
 	Content []struct {
 		Type     string           `json:"type"`
 		Text     string           `json:"text"`
+		Refusal  string           `json:"refusal"`
 		Logprobs []map[string]any `json:"logprobs"`
 	} `json:"content"`
 	CallID           *string         `json:"call_id"`
@@ -629,17 +630,23 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 		ProviderResponseID: rr.ID, FinishReason: openAIResponsesFinishReason(rawFinishReason), State: state,
 	}
 	searchPairs, pairedOutputs := pairResponsesToolSearchItems(rr.Output)
+	refusal := ""
+	hasRefusal := false
 	for itemIndex, item := range rr.Output {
 		switch item.Type {
 		case "message":
-			for _, c := range item.Content {
-				if c.Type == "output_text" {
+			for _, content := range item.Content {
+				switch content.Type {
+				case "refusal":
+					hasRefusal = true
+					refusal = content.Refusal
+				case "output_text":
 					var details map[string]any
-					if c.Logprobs != nil {
-						details = map[string]any{"logprobs": c.Logprobs}
+					if content.Logprobs != nil {
+						details = map[string]any{"logprobs": content.Logprobs}
 					}
 					resp.Parts = append(resp.Parts, ai.TextPart{
-						Content: c.Text, ID: item.ID, ProviderName: "openai", ProviderDetails: details,
+						Content: content.Text, ID: item.ID, ProviderName: "openai", ProviderDetails: details,
 					})
 				}
 			}
@@ -715,6 +722,15 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 				})
 			}
 		}
+	}
+	if hasRefusal {
+		resp.Parts = nil
+		resp.FinishReason = ai.FinishReasonContentFilter
+		if resp.ProviderDetails == nil {
+			resp.ProviderDetails = map[string]any{}
+		}
+		delete(resp.ProviderDetails, "finish_reason")
+		resp.ProviderDetails["refusal"] = refusal
 	}
 	return resp, nil
 }

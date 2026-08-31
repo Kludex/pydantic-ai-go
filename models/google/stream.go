@@ -60,6 +60,9 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		finishReason := ""
 		var logprobs map[string]any
 		var avgLogprobs *float64
+		blockReason := ""
+		blockReasonMessage := ""
+		var safetyRatings []map[string]any
 		received := false
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -84,10 +87,18 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 				usage = chunk.UsageMetadata.usage()
 			}
 			if len(chunk.Candidates) == 0 {
+				if chunk.PromptFeedback.BlockReason != "" {
+					blockReason = chunk.PromptFeedback.BlockReason
+					blockReasonMessage = chunk.PromptFeedback.BlockReasonMessage
+					safetyRatings = chunk.PromptFeedback.SafetyRatings
+				}
 				continue
 			}
-			if chunk.Candidates[0].FinishReason != "" {
+			if chunk.Candidates[0].FinishReason != "" && blockReason == "" {
 				finishReason = chunk.Candidates[0].FinishReason
+			}
+			if chunk.Candidates[0].SafetyRatings != nil {
+				safetyRatings = chunk.Candidates[0].SafetyRatings
 			}
 			if chunk.Candidates[0].LogprobsResult != nil {
 				logprobs = chunk.Candidates[0].LogprobsResult
@@ -110,8 +121,18 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 			return
 		}
 		providerDetails := map[string]any{}
-		if finishReason != "" {
+		normalizedFinishReason := googleFinishReason(finishReason)
+		if blockReason != "" {
+			providerDetails["block_reason"] = blockReason
+			if blockReasonMessage != "" {
+				providerDetails["block_reason_message"] = blockReasonMessage
+			}
+			normalizedFinishReason = ai.FinishReasonContentFilter
+		} else if finishReason != "" {
 			providerDetails["finish_reason"] = finishReason
+		}
+		if safetyRatings != nil {
+			providerDetails["safety_ratings"] = safetyRatings
 		}
 		if logprobs != nil {
 			providerDetails["logprobs"] = logprobs
@@ -128,7 +149,7 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		yield(ai.FinishEvent{
 			Usage: usage, ModelName: modelName, ProviderName: m.providerName, ProviderURL: m.baseURL,
 			ProviderDetails: providerDetails, ProviderResponseID: responseID,
-			FinishReason: googleFinishReason(finishReason), State: ai.ModelResponseStateComplete,
+			FinishReason: normalizedFinishReason, State: ai.ModelResponseStateComplete,
 		}, nil)
 	}
 }

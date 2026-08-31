@@ -138,11 +138,17 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, fmt.Errorf("ai: run model, model ID, and model selector are mutually exclusive")
 	}
-	capabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
+	availableCapabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
+	runCapabilities, err := sortCapabilities(cfg.capabilities, availableCapabilities)
+	if err != nil {
+		cancellation.finish()
+		return nil, fmt.Errorf("ai: run capability ordering: %w", err)
+	}
+	capabilities := append(slices.Clone(a.capabilities), runCapabilities...)
 	runCapabilityInstructions := []string(nil)
 	capSettings := slices.Clone(a.capSettings)
 	var runCapabilityTools []capabilityTool
-	for _, capability := range cfg.capabilities {
+	for _, capability := range runCapabilities {
 		registry := &CapabilityRegistry{}
 		if err := capability.Setup(registry); err != nil {
 			cancellation.finish()

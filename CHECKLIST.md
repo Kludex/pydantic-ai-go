@@ -176,7 +176,7 @@ Status:
 - [x] Audited upstream user-prompt/model-request/call-tools/end node lifecycles against the plain loop. Focused request, tool validation/execution, output, run-outcome, retry, deferred, and enqueue hooks cover semantic interception; public internal-node replacement remains intentionally excluded with the graph API.
 - [x] Function-tool schema validation, typed decoding, and semantic argument validation are separate from local execution, with dedicated wrappers and before/after/error hooks. Static approvals and external calls defer only after validation, wrapper-modified raw arguments are revalidated, and validated values retain their registered concrete Go type. After-validation and before/after-execution hooks can request durable approval or external execution without changing tool registration; validation-error hooks cannot defer invalid arguments.
 - [x] Event-stream wrapper and per-event processor with standard capability middleware ordering.
-- [ ] Capability ordering constraints and outermost/innermost tiers.
+- [x] Stable capability ordering through outermost/default/innermost tiers, type/interface or pointer-instance `Wraps`/`WrappedBy` edges, dependency requirements, cycle detection, nested-group flattening, sorted setup contributions, and independently scoped run capabilities whose requirements can use agent capabilities.
 - [~] `CombineCapabilities` packages and recursively flattens ordered groups for agent-wide or per-run registration without changing setup or middleware order. Transparent wrapper-capability helpers remain.
 - [x] Capability-provided static/per-step model settings and adaptive model selection.
 - [x] Per-run capabilities are set up once per run, contribute static instructions/settings/raw tools, participate in every middleware hook, enable event processing for `Run`, and leave agent configuration unchanged.
@@ -232,7 +232,7 @@ Status:
 ## Next work
 
 1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
-2. Add capability ordering tiers and transparent wrapper-capability composition without exposing graph internals.
+2. Add transparent wrapper-capability composition without exposing graph internals; grouped composition and ordering constraints are complete.
 3. Add provider-managed search for Anthropic and OpenAI Responses; OpenAI Responses client search already uses native wire items in streaming and non-streaming requests.
 4. Add explicit compaction capabilities and provider-specific triggering settings; Anthropic/OpenAI Responses mapping, trimming, and visibility reset are complete.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.

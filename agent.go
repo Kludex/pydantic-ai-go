@@ -82,7 +82,11 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		}
 	}
 	a.sequentialTools = cfg.sequentialTools
-	a.capabilities = cfg.capabilities
+	var err error
+	a.capabilities, err = sortCapabilities(cfg.capabilities, cfg.capabilities)
+	if err != nil {
+		panic(fmt.Sprintf("ai: capability ordering: %v", err))
+	}
 	if cfg.retryLimits != nil {
 		validateRetryLimits(*cfg.retryLimits)
 		a.retryLimits = *cfg.retryLimits

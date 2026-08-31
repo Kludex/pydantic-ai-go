@@ -390,6 +390,21 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 				if !yield(ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(part.Args)}, nil) {
 					return
 				}
+			case NativeToolCallPart:
+				if !yield(ToolCallStartEvent{
+					PartID: partID, ToolName: part.ToolName, ToolCallID: part.ToolCallID,
+					ToolKind: part.ToolKind, ID: part.ID,
+					ProviderName: part.ProviderName, ProviderDetails: cloneSchemaMap(part.ProviderDetails), Native: true,
+				}, nil) {
+					return
+				}
+				if !yield(ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(part.Args)}, nil) {
+					return
+				}
+			case NativeToolReturnPart:
+				if !yield(NativeToolReturnEvent{PartID: partID, Part: cloneResponsePart(part).(NativeToolReturnPart)}, nil) {
+					return
+				}
 			}
 		}
 		state := response.State

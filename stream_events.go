@@ -14,10 +14,12 @@ type EventStream iter.Seq2[StreamEvent, error]
 type ResponsePartKind string
 
 const (
-	ResponsePartKindText       ResponsePartKind = "text"
-	ResponsePartKindThinking   ResponsePartKind = "thinking"
-	ResponsePartKindCompaction ResponsePartKind = "compaction"
-	ResponsePartKindToolCall   ResponsePartKind = "tool-call"
+	ResponsePartKindText             ResponsePartKind = "text"
+	ResponsePartKindThinking         ResponsePartKind = "thinking"
+	ResponsePartKindCompaction       ResponsePartKind = "compaction"
+	ResponsePartKindToolCall         ResponsePartKind = "tool-call"
+	ResponsePartKindNativeToolCall   ResponsePartKind = "builtin-tool-call"
+	ResponsePartKindNativeToolReturn ResponsePartKind = "builtin-tool-return"
 )
 
 // ResponsePartDelta updates one response part.
@@ -90,20 +92,60 @@ func (d ToolCallPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 	if !ok {
 		return nil, fmt.Errorf("ai: cannot apply ToolCallPartDelta to %T", part)
 	}
-	if d.ToolCallID != "" && call.ToolCallID != "" && d.ToolCallID != call.ToolCallID {
-		return nil, &UnexpectedModelBehaviorError{Message: fmt.Sprintf(
-			"tool call ID changed from %q to %q", call.ToolCallID, d.ToolCallID,
+	name, args, callID, providerName, err := applyToolCallDelta(
+		call.ToolName, call.Args, call.ToolCallID, call.ProviderName, d,
+	)
+	if err != nil {
+		return nil, err
+	}
+	call.ToolName, call.Args, call.ToolCallID, call.ProviderName = name, args, callID, providerName
+	return call, nil
+}
+
+// NativeToolCallPartDelta updates a NativeToolCallPart.
+type NativeToolCallPartDelta ToolCallPartDelta
+
+func (NativeToolCallPartDelta) responsePartDeltaKind() ResponsePartKind {
+	return ResponsePartKindNativeToolCall
+}
+
+// Apply applies the provider-native tool-call delta.
+func (d NativeToolCallPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
+	call, ok := part.(NativeToolCallPart)
+	if !ok {
+		return nil, fmt.Errorf("ai: cannot apply NativeToolCallPartDelta to %T", part)
+	}
+	name, args, callID, providerName, err := applyToolCallDelta(
+		call.ToolName, call.Args, call.ToolCallID, call.ProviderName, ToolCallPartDelta(d),
+	)
+	if err != nil {
+		return nil, err
+	}
+	call.ToolName, call.Args, call.ToolCallID, call.ProviderName = name, args, callID, providerName
+	return call, nil
+}
+
+func applyToolCallDelta(
+	name string,
+	args json.RawMessage,
+	callID string,
+	providerName string,
+	delta ToolCallPartDelta,
+) (string, json.RawMessage, string, string, error) {
+	if delta.ToolCallID != "" && callID != "" && delta.ToolCallID != callID {
+		return "", nil, "", "", &UnexpectedModelBehaviorError{Message: fmt.Sprintf(
+			"tool call ID changed from %q to %q", callID, delta.ToolCallID,
 		)}
 	}
-	call.ToolName += d.ToolNameDelta
-	call.Args = json.RawMessage(append(append([]byte(nil), call.Args...), d.ArgsDelta...))
-	if d.ToolCallID != "" {
-		call.ToolCallID = d.ToolCallID
+	name += delta.ToolNameDelta
+	args = json.RawMessage(append(append([]byte(nil), args...), delta.ArgsDelta...))
+	if delta.ToolCallID != "" {
+		callID = delta.ToolCallID
 	}
-	if d.ProviderName != "" {
-		call.ProviderName = d.ProviderName
+	if delta.ProviderName != "" {
+		providerName = delta.ProviderName
 	}
-	return call, nil
+	return name, args, callID, providerName, nil
 }
 
 func mergeProviderDetails(base, update map[string]any) map[string]any {

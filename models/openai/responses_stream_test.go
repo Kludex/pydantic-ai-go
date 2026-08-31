@@ -486,6 +486,7 @@ func TestResponsesStreamUsesNativeDeferredToolSearch(t *testing.T) {
 	_, err := collect(t, model, ai.ModelRequestParams{
 		Tools: []ai.ToolDefinition{{
 			Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch,
+			ToolSearchStrategy: ai.ToolSearchStrategyCustom,
 		}},
 		DeferredTools: []ai.ToolDefinition{{Name: "hidden", Schema: schema, DeferLoading: true}},
 	})
@@ -529,9 +530,6 @@ func TestResponsesStreamToolSearchEdgeCases(t *testing.T) {
 	for name, events := range map[string][]string{
 		"invalid function arguments": {
 			`{"type":"response.output_item.added","item":{"id":"call","type":"function_call","call_id":"call","name":"work","arguments":"bad"}}`,
-		},
-		"server search": {
-			`{"type":"response.output_item.added","item":{"id":"search","type":"tool_search_call","execution":"server"}}`,
 		},
 		"invalid search arguments": {
 			`{"type":"response.output_item.added","item":{"id":"search","type":"tool_search_call","execution":"client"}}`,
@@ -810,4 +808,130 @@ func TestStoppingResponsesCompactionStreams(t *testing.T) {
 			t.Fatal("static compaction was not emitted")
 		}
 	})
+}
+
+func TestResponsesStreamServerManagedToolSearch(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.created","sequence_number":0,"response":{"id":"response-1","model":"gpt-5.4","created_at":1735689600,"status":"in_progress","usage":{}}}`,
+		`{"type":"response.output_item.added","sequence_number":1,"output_index":0,"item":{"id":"ts-1","type":"tool_search_call","call_id":null,"execution":"server","status":"in_progress","arguments":{}}}`,
+		`{"type":"response.output_item.done","sequence_number":2,"output_index":0,"item":{"id":"ts-1","type":"tool_search_call","call_id":null,"execution":"server","status":"completed","arguments":{"paths":["weather"]}}}`,
+		`{"type":"response.output_item.added","sequence_number":3,"output_index":1,"item":{"id":"tso-1","type":"tool_search_output","call_id":null,"execution":"server","status":"in_progress","tools":[]}}`,
+		`{"type":"response.output_item.done","sequence_number":4,"output_index":1,"item":{"id":"tso-1","type":"tool_search_output","call_id":null,"execution":"server","status":"completed","tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}]}}`,
+		`{"type":"response.completed","sequence_number":5,"response":{"id":"response-1","model":"gpt-5.4","created_at":1735689600,"status":"completed","output":[{"id":"ts-1","type":"tool_search_call","call_id":null,"execution":"server","status":"completed","arguments":{"paths":["weather"]}},{"id":"tso-1","type":"tool_search_output","call_id":null,"execution":"server","status":"completed","tools":[{"type":"function","name":"weather","parameters":{"type":"object"}}]}],"usage":{}}}`,
+		`[DONE]`,
+	}))
+	events, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start *ai.ToolCallStartEvent
+	var delta *ai.ToolCallDeltaEvent
+	var returned *ai.NativeToolReturnEvent
+	var finish *ai.FinishEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			start = &event
+		case ai.ToolCallDeltaEvent:
+			delta = &event
+		case ai.NativeToolReturnEvent:
+			returned = &event
+		case ai.FinishEvent:
+			finish = &event
+		}
+	}
+	if start == nil || !start.Native || start.ToolCallID != "ts-1" ||
+		start.ToolKind != ai.ToolPartKindToolSearch || start.ProviderDetails["call_id"] != nil {
+		t.Fatalf("unexpected server search start: %+v", start)
+	}
+	if delta == nil || delta.ToolCallID != "ts-1" || delta.ArgsDelta != `{"queries":["weather"]}` {
+		t.Fatalf("unexpected server search delta: %+v", delta)
+	}
+	if returned == nil || returned.Part.ToolCallID != "ts-1" ||
+		returned.Part.Content.(ai.ToolSearchResult).DiscoveredTools[0].Name != "weather" ||
+		returned.Part.Timestamp.IsZero() {
+		t.Fatalf("unexpected server search return: %+v", returned)
+	}
+	if finish == nil || len(finish.Parts) != 2 {
+		t.Fatalf("missing authoritative server search snapshot: %+v", finish)
+	}
+	if _, ok := finish.Parts[0].(ai.NativeToolCallPart); !ok {
+		t.Fatalf("unexpected final call part %T", finish.Parts[0])
+	}
+	if _, ok := finish.Parts[1].(ai.NativeToolReturnPart); !ok {
+		t.Fatalf("unexpected final return part %T", finish.Parts[1])
+	}
+}
+
+func TestResponsesStaticServerSearchStreamLifecycle(t *testing.T) {
+	completed := `{"type":"response.completed","response":{"id":"response-1","model":"gpt-5.4","status":"completed","output":[{"id":"ts-1","type":"tool_search_call","call_id":"call-1","execution":"server","status":"completed","arguments":{"paths":["weather"]}},{"id":"tso-1","type":"tool_search_output","call_id":"call-1","execution":"server","status":"completed","tools":[{"type":"function","name":"weather"}]}],"usage":{}}}`
+	model := newResponsesServer(t, sseHandler(t, []string{completed, `[DONE]`}))
+	events, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var starts, deltas, returns int
+	for _, event := range events {
+		switch event.(type) {
+		case ai.ToolCallStartEvent:
+			starts++
+		case ai.ToolCallDeltaEvent:
+			deltas++
+		case ai.NativeToolReturnEvent:
+			returns++
+		}
+	}
+	if starts != 1 || deltas != 1 || returns != 1 {
+		t.Fatalf("unexpected static native events: %+v", events)
+	}
+
+	for name, stop := range map[string]func(ai.ModelStreamEvent) bool{
+		"call":   func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.ToolCallStartEvent); return ok },
+		"delta":  func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.ToolCallDeltaEvent); return ok },
+		"return": func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.NativeToolReturnEvent); return ok },
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, []string{completed, `[DONE]`}))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stop(event) {
+					break
+				}
+			}
+		})
+	}
+}
+
+func TestResponsesLiveServerSearchStreamCanStop(t *testing.T) {
+	events := []string{
+		`{"type":"response.output_item.added","item":{"id":"ts-1","type":"tool_search_call","execution":"server","status":"in_progress"}}`,
+		`{"type":"response.output_item.done","item":{"id":"ts-1","type":"tool_search_call","execution":"server","status":"completed","arguments":{"paths":[]}}}`,
+		`{"type":"response.output_item.done","item":{"id":"tso-1","type":"tool_search_output","execution":"server","status":"completed","tools":[]}}`,
+	}
+	for name, stop := range map[string]func(ai.ModelStreamEvent) bool{
+		"call":   func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.ToolCallStartEvent); return ok },
+		"return": func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.NativeToolReturnEvent); return ok },
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, events))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stop(event) {
+					break
+				}
+			}
+		})
+	}
 }

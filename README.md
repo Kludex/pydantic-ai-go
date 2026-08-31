@@ -319,7 +319,7 @@ The model sees `weather_get_weather`, while the function receives `get_weather` 
 
 Use `WithDeferredLoading()` on one tool or wrap a collection with `DeferLoadingToolset`. Deferred definitions remain hidden until `ToolReturn.Tools` reveals them. The first premature call to each hidden tool receives a free availability correction, so it does not consume the budget needed by a later valid call. Reveals are deduplicated in model-call order and persisted as `ToolAvailabilityDeltaPart`, so resumed histories retain the same visibility.
 
-Add local discovery when the model should search a large deferred catalog:
+Add provider-adaptive discovery when the model should search a large deferred catalog:
 
 ```go
 catalog := ai.WithToolSearch(
@@ -329,9 +329,11 @@ catalog := ai.WithToolSearch(
 agent.AddToolset(catalog)
 ```
 
-The wrapper exposes `search_tools`. Default search uses case-insensitive word overlap across tool names and descriptions, prioritizes undiscovered matches, and returns typed `ToolSearchResult` values. Set `ToolSearchConfig.Search` to use an external index. Custom search receives detached definitions and its unknown or duplicate names are ignored.
+The zero-value configuration prefers provider-managed search and falls back to local keyword overlap. Set `Strategy` to `ToolSearchStrategyKeywords` to always search locally. Set it to `ToolSearchStrategyBM25` or `ToolSearchStrategyRegex` to require that named provider strategy. Unsupported named strategies fail instead of silently changing behavior. Set `Search` to use a custom index. Custom search receives detached definitions, and unknown or duplicate names are ignored.
 
-Anthropic 4.5+ models advertise the hidden schemas with `defer_loading`, replay local search results as `tool_reference` blocks, and render other reveals as `tool_addition` blocks. Streaming and non-streaming OpenAI Responses requests use client-executed `tool_search`, `tool_search_output`, and `additional_tools` items, including final streamed call IDs. This keeps the stable visible-tool prefix small without changing local execution safety. Use each provider's `WithDeferredToolSupport(false)` option for compatible endpoints that do not implement its native wire protocol.
+OpenAI Responses runs the automatic strategy server-side. It normalizes hosted calls and results into `NativeToolCallPart` and `NativeToolReturnPart`, preserves nullable provider IDs for replay, and exposes the same lifecycle while streaming. Keyword and custom strategies use OpenAI's client-executed protocol. On providers without native search, automatic, keyword, and custom strategies use the local `search_tools` function. Required BM25 or regex strategies fail before the request.
+
+Anthropic models currently advertise hidden schemas with `defer_loading`, replay local search results as `tool_reference` blocks, and render other reveals as `tool_addition` blocks. Native Anthropic BM25 and regex routing remains planned. Use each provider's `WithDeferredToolSupport(false)` option for compatible endpoints that do not implement its native wire protocol.
 
 ### Pause for approval or external execution
 

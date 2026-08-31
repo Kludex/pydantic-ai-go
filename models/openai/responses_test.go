@@ -445,7 +445,7 @@ func TestResponsesNativeDeferredToolSearch(t *testing.T) {
 				"queries": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
 			},
 		},
-		ToolKind: ai.ToolPartKindToolSearch,
+		ToolKind: ai.ToolPartKindToolSearch, ToolSearchStrategy: ai.ToolSearchStrategyCustom,
 	}
 	first := ai.ToolDefinition{Name: "first", Schema: schema, DeferLoading: true}
 	second := ai.ToolDefinition{Name: "second", Schema: schema, DeferLoading: true}
@@ -543,6 +543,7 @@ func TestResponsesNativeDeferredErrors(t *testing.T) {
 	invalidSchema := map[string]any{"type": "string"}
 	search := ai.ToolDefinition{
 		Name: ai.ToolSearchName, Schema: validSchema, ToolKind: ai.ToolPartKindToolSearch,
+		ToolSearchStrategy: ai.ToolSearchStrategyCustom,
 	}
 	deferred := ai.ToolDefinition{Name: "hidden", Schema: validSchema, DeferLoading: true}
 	searchReturn := func(content any) []ai.ModelMessage {
@@ -633,7 +634,6 @@ func TestResponsesOutputToolAndRetries(t *testing.T) {
 func TestResponsesToolSearchResponseErrorsAndFallbacks(t *testing.T) {
 	for name, item := range map[string]string{
 		"invalid function arguments":      `{"type":"function_call","call_id":"call","name":"work","arguments":"{"}`,
-		"server search":                   `{"type":"tool_search_call","call_id":"search","execution":"server","arguments":{}}`,
 		"invalid client search arguments": `{"type":"tool_search_call","call_id":"search","execution":"client","arguments":"{"}`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1000,5 +1000,262 @@ func TestResponsesCompactionDoesNotDuplicatePlantedPrompt(t *testing.T) {
 	}
 	if len(input) != 1 || input[0]["type"] != "compaction" {
 		t.Fatalf("planted prompt was duplicated: %+v", input)
+	}
+}
+
+func TestResponsesServerManagedToolSearch(t *testing.T) {
+	request := 0
+	var bodies []map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		request++
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if request == 1 {
+			_, _ = w.Write([]byte(`{
+				"id":"response-search","model":"gpt-5.4","created_at":1735689600,"status":"completed",
+				"output":[
+					{"id":"tso-1","type":"tool_search_output","call_id":null,"execution":"server","status":"completed","tools":[{"type":"function","name":"weather","description":"","parameters":{"type":"object"}}]},
+					{"id":"ts-1","type":"tool_search_call","call_id":null,"execution":"server","status":"completed","arguments":{"paths":["weather"]}},
+					{"id":"fc-1","type":"function_call","call_id":"weather-1","name":"weather","namespace":"weather","arguments":{"city":"Paris"}}
+				],"usage":{}
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"response-final","model":"gpt-5.4","status":"completed",
+			"output":[{"type":"message","content":[{"type":"output_text","text":"sunny"}]}],"usage":{}
+		}`))
+	})
+	weather := ai.NewTool[struct{}, struct {
+		City string `json:"city"`
+	}, string]("weather", func(_ context.Context, _ *ai.RunContext[struct{}], args struct {
+		City string `json:"city"`
+	}) (string, error) {
+		return args.City + ": sunny", nil
+	}, ai.WithDeferredLoading())
+	agent := ai.NewAgent[struct{}, string](model)
+	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(weather), ai.ToolSearchConfig[struct{}]{}))
+	result, err := agent.Run(t.Context(), "weather", struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Output != "sunny" || request != 2 {
+		t.Fatalf("unexpected server-search run: output=%q requests=%d", result.Output, request)
+	}
+	messages := result.Messages()
+	searchResponse := messages[1].(ai.ModelResponse)
+	call := searchResponse.Parts[0].(ai.NativeToolCallPart)
+	returned := searchResponse.Parts[1].(ai.NativeToolReturnPart)
+	function := searchResponse.Parts[2].(ai.ToolCallPart)
+	if call.ToolCallID != "ts-1" || string(call.Args) != `{"queries":["weather"]}` ||
+		returned.ToolCallID != "ts-1" || returned.Timestamp.IsZero() ||
+		returned.Content.(ai.ToolSearchResult).DiscoveredTools[0].Name != "weather" ||
+		function.ToolName != "weather" {
+		t.Fatalf("unexpected normalized server search: %+v", searchResponse.Parts)
+	}
+	tools := bodies[0]["tools"].([]any)
+	if len(tools) != 2 || tools[0].(map[string]any)["name"] != "weather" ||
+		tools[0].(map[string]any)["defer_loading"] != true ||
+		tools[1].(map[string]any)["type"] != "tool_search" ||
+		tools[1].(map[string]any)["execution"] != nil {
+		t.Fatalf("unexpected server search tools: %+v", tools)
+	}
+	input := bodies[1]["input"].([]any)
+	var replayCall, replayOutput map[string]any
+	for _, raw := range input {
+		item := raw.(map[string]any)
+		switch item["type"] {
+		case "tool_search_call":
+			replayCall = item
+		case "tool_search_output":
+			replayOutput = item
+		}
+	}
+	if replayCall == nil || replayOutput == nil || replayCall["call_id"] != nil || replayOutput["call_id"] != nil ||
+		replayCall["execution"] != "server" || replayOutput["execution"] != "server" ||
+		replayCall["id"] != "ts-1" || replayOutput["id"] != "tso-1" ||
+		len(replayOutput["tools"].([]any)) != 1 {
+		t.Fatalf("unexpected server search replay: call=%+v output=%+v", replayCall, replayOutput)
+	}
+}
+
+func TestResponsesRejectsNamedToolSearchStrategies(t *testing.T) {
+	model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"gpt-5.4","status":"completed","output":[],"usage":{}}`))
+	})
+	if !model.SupportsToolSearchStrategy(ai.ToolSearchStrategyAuto) ||
+		model.SupportsToolSearchStrategy(ai.ToolSearchStrategyBM25) ||
+		model.SupportsToolSearchStrategy(ai.ToolSearchStrategyRegex) {
+		t.Fatal("unexpected OpenAI tool-search strategy support")
+	}
+	for _, strategy := range []ai.ToolSearchStrategy{ai.ToolSearchStrategyBM25, ai.ToolSearchStrategyRegex} {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			Tools: []ai.ToolDefinition{{
+				Name: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch, ToolSearchStrategy: strategy,
+			}},
+			DeferredTools: []ai.ToolDefinition{{Name: "hidden", DeferLoading: true}},
+		})
+		if err == nil || !strings.Contains(err.Error(), `tool search strategy "`+string(strategy)+`" is not supported`) {
+			t.Fatalf("unexpected %s strategy error: %v", strategy, err)
+		}
+	}
+}
+
+func TestResponsesServerManagedToolSearchPairingEdges(t *testing.T) {
+	t.Run("ambiguous null IDs", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"model":"gpt-5.4","status":"completed","output":[
+					{"id":"ts-a","type":"tool_search_call","call_id":null,"execution":"server","status":"completed","arguments":{"paths":["a"]}},
+					{"id":"tso-a","type":"tool_search_output","call_id":null,"execution":"server","status":"completed","tools":[{"type":"function","name":"a"}]},
+					{"id":"ts-b","type":"tool_search_call","call_id":null,"execution":"server","status":"completed","arguments":{"paths":["b"]}},
+					{"id":"tso-b","type":"tool_search_output","call_id":null,"execution":"server","status":"completed","tools":[{"type":"function","name":"b"}]}
+				],"usage":{}
+			}`))
+		})
+		response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Parts) != 4 ||
+			response.Parts[0].(ai.NativeToolCallPart).ToolCallID != "ts-a" ||
+			response.Parts[1].(ai.NativeToolReturnPart).ToolCallID != "tso-a" ||
+			response.Parts[2].(ai.NativeToolCallPart).ToolCallID != "ts-b" ||
+			response.Parts[3].(ai.NativeToolReturnPart).ToolCallID != "tso-b" {
+			t.Fatalf("ambiguous null IDs were guessed: %+v", response.Parts)
+		}
+	})
+	t.Run("explicit output first", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"model":"gpt-5.4","status":"completed","output":[
+					{"id":"tso","type":"tool_search_output","call_id":"call","execution":"server","status":"in_progress","tools":[{"type":"function","name":"real"},{"type":"file_search"}]},
+					{"id":"ts","type":"tool_search_call","call_id":"call","execution":"server","status":"incomplete","arguments":{}}
+				],"usage":{}
+			}`))
+		})
+		response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		call := response.Parts[0].(ai.NativeToolCallPart)
+		returned := response.Parts[1].(ai.NativeToolReturnPart)
+		matches := returned.Content.(ai.ToolSearchResult).DiscoveredTools
+		if call.ToolCallID != "call" || returned.ToolCallID != "call" || len(matches) != 1 ||
+			matches[0].Name != "real" || call.ProviderDetails["status"] != "incomplete" ||
+			returned.ProviderDetails["status"] != "in_progress" {
+			t.Fatalf("unexpected explicit pairing: %+v", response.Parts)
+		}
+	})
+	t.Run("unknown execution and non-object arguments", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"model":"gpt-5.4","status":"completed","output":[
+					{"id":"server","type":"tool_search_call","execution":"server","arguments":[]},
+					{"id":"future","type":"tool_search_call","execution":"future","arguments":{}}
+				],"usage":{}
+			}`))
+		})
+		response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Parts) != 1 || string(response.Parts[0].(ai.NativeToolCallPart).Args) != `[]` {
+			t.Fatalf("unexpected search execution normalization: %+v", response.Parts)
+		}
+	})
+	t.Run("unmatched and client output", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"model":"gpt-5.4","status":"completed","output":[
+					{"id":"client","type":"tool_search_output","execution":"client","status":"completed","tools":[]},
+					{"id":"server","type":"tool_search_output","execution":"server","status":"completed","tools":[]}
+				],"usage":{}
+			}`))
+		})
+		response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Parts) != 1 || response.Parts[0].(ai.NativeToolReturnPart).ToolCallID != "server" {
+			t.Fatalf("unexpected unmatched outputs: %+v", response.Parts)
+		}
+	})
+}
+
+func TestResponsesServerToolSearchReplayEdges(t *testing.T) {
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	params := ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{
+			Name: ai.ToolSearchName, Schema: schema, ToolKind: ai.ToolPartKindToolSearch,
+		}},
+		DeferredTools: []ai.ToolDefinition{{Name: "hidden", Schema: schema, DeferLoading: true}},
+	}
+	model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"model":"gpt-5.4","status":"completed","output":[],"usage":{}}`))
+	})
+	for name, part := range map[string]ai.ResponsePart{
+		"malformed call": ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "openai", Args: []byte(`{`),
+		},
+		"malformed return": ai.NativeToolReturnPart{
+			ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch, ProviderName: "openai",
+			Content: make(chan int), ProviderDetails: map[string]any{"id": "output"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{part}}}, params)
+			if err == nil {
+				t.Fatal("expected native replay error")
+			}
+		})
+	}
+
+	var body map[string]any
+	model = newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5.4","status":"completed","output":[],"usage":{}}`))
+	})
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "fallback", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "openai", ProviderDetails: map[string]any{"call_id": 42, "status": "future"},
+		},
+		ai.NativeToolReturnPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "ignored", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "openai", Content: ai.ToolSearchResult{},
+		},
+		ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch, ProviderName: "anthropic",
+		},
+		ai.NativeToolReturnPart{
+			ToolName: "capability", ToolKind: ai.ToolPartKindCapabilityLoad, ProviderName: "openai",
+		},
+		ai.NativeToolReturnPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "explicit", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "openai", Content: ai.ToolSearchResult{},
+			ProviderDetails: map[string]any{
+				"id": "output", "call_id": "explicit", "status": "in_progress",
+			},
+		},
+	}}}
+	if _, err := model.Request(t.Context(), history, params); err != nil {
+		t.Fatal(err)
+	}
+	input := body["input"].([]any)
+	if len(input) != 2 {
+		t.Fatalf("unexpected replay items: %+v", input)
+	}
+	call := input[0].(map[string]any)
+	output := input[1].(map[string]any)
+	if call["call_id"] != "fallback" || call["status"] != "completed" ||
+		output["call_id"] != "explicit" || output["status"] != "in_progress" {
+		t.Fatalf("unexpected replay defaults: call=%+v output=%+v", call, output)
 	}
 }

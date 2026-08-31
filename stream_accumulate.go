@@ -20,9 +20,13 @@ type accumulatedPart struct {
 	toolArgs        string
 	providerName    string
 	providerDetails map[string]any
+	complete        ResponsePart
 }
 
 func (p *accumulatedPart) responsePart() ResponsePart {
+	if p.complete != nil {
+		return cloneResponsePart(p.complete)
+	}
 	if p.kind == ResponsePartKindText {
 		return TextPart{
 			Content: p.text, ID: p.responseID,
@@ -38,6 +42,13 @@ func (p *accumulatedPart) responsePart() ResponsePart {
 	if p.kind == ResponsePartKindCompaction {
 		return CompactionPart{
 			Content: p.text, ID: p.responseID,
+			ProviderName: p.providerName, ProviderDetails: cloneSchemaMap(p.providerDetails),
+		}
+	}
+	if p.kind == ResponsePartKindNativeToolCall {
+		return NativeToolCallPart{
+			ToolName: p.toolName, Args: json.RawMessage(p.toolArgs), ToolCallID: p.toolCallID,
+			ToolKind: p.toolKind, ID: p.responseID,
 			ProviderName: p.providerName, ProviderDetails: cloneSchemaMap(p.providerDetails),
 		}
 	}
@@ -143,7 +154,8 @@ func accumulate(
 					part.providerName != "" || len(part.providerDetails) > 0 {
 					response.Parts = append(response.Parts, part.responsePart())
 				}
-			case ResponsePartKindCompaction, ResponsePartKindToolCall:
+			case ResponsePartKindCompaction, ResponsePartKindToolCall,
+				ResponsePartKindNativeToolCall, ResponsePartKindNativeToolReturn:
 				response.Parts = append(response.Parts, part.responsePart())
 			}
 		}
@@ -251,7 +263,11 @@ func accumulate(
 					}
 				}
 			}
-			part := newPart(event.PartID, ResponsePartKindToolCall)
+			kind := ResponsePartKindToolCall
+			if event.Native {
+				kind = ResponsePartKindNativeToolCall
+			}
+			part := newPart(event.PartID, kind)
 			part.toolName = event.ToolName
 			part.toolCallID = event.ToolCallID
 			part.toolKind = event.ToolKind
@@ -265,10 +281,12 @@ func accumulate(
 			var part *accumulatedPart
 			if event.PartID != "" {
 				part = partsByID[event.PartID]
-			} else if current != nil && current.kind == ResponsePartKindToolCall {
+			} else if current != nil &&
+				(current.kind == ResponsePartKindToolCall || current.kind == ResponsePartKindNativeToolCall) {
 				part = current
 			}
-			if part == nil || part.kind != ResponsePartKindToolCall {
+			if part == nil ||
+				(part.kind != ResponsePartKindToolCall && part.kind != ResponsePartKindNativeToolCall) {
 				return nil, &UnexpectedModelBehaviorError{Message: "tool call delta before tool call start"}
 			}
 			current = part
@@ -281,11 +299,28 @@ func accumulate(
 				part.toolCallID = event.ToolCallID
 			}
 			part.toolArgs += event.ArgsDelta
-			if err := emitEvent(PartDeltaEvent{
-				Index: part.index, PartID: part.id, Delta: ToolCallPartDelta{
+			var delta ResponsePartDelta = ToolCallPartDelta{
+				ArgsDelta: event.ArgsDelta, ToolCallID: event.ToolCallID,
+			}
+			if part.kind == ResponsePartKindNativeToolCall {
+				delta = NativeToolCallPartDelta{
 					ArgsDelta: event.ArgsDelta, ToolCallID: event.ToolCallID,
-				},
-			}); err != nil {
+				}
+			}
+			if err := emitEvent(PartDeltaEvent{Index: part.index, PartID: part.id, Delta: delta}); err != nil {
+				return partialResponse(), err
+			}
+		case NativeToolReturnEvent:
+			if event.PartID != "" {
+				if _, exists := partsByID[event.PartID]; exists {
+					return nil, &UnexpectedModelBehaviorError{
+						Message: fmt.Sprintf("duplicate native tool return stream part %q", event.PartID),
+					}
+				}
+			}
+			part := newPart(event.PartID, ResponsePartKindNativeToolReturn)
+			part.complete = cloneResponsePart(event.Part)
+			if err := startPart(part); err != nil {
 				return partialResponse(), err
 			}
 		case FinishEvent:

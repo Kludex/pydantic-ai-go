@@ -560,55 +560,56 @@ func toolResultIdentity(part RequestPart) (toolName, toolCallID string, ok bool)
 }
 
 type run[Deps, Output any] struct {
-	agent                  *Agent[Deps, Output]
-	model                  Model
-	capabilities           []Capability
-	ctx                    context.Context
-	cancellation           *runCancellation
-	rc                     *RunContext[Deps]
-	info                   *RunInfo
-	params                 ModelRequestParams
-	messages               []ModelMessage
-	newMessages            int
-	usage                  Usage
-	toolCalls              atomic.Int64
-	retryLimits            RetryLimits
-	outputTool             OutputToolConfig
-	outputMaxRetries       int
-	toolRetries            map[string]int
-	availabilityRefused    map[string]struct{}
-	outputRetry            int
-	retriesMu              sync.Mutex
-	currentTools           map[string]struct{}
-	currentDeferredTools   map[string]struct{}
-	revealedTools          map[string]struct{}
-	currentToolValidators  map[string]*schema.Validator
-	currentOutputTool      *ToolDefinition
-	currentOutputValidator *schema.Validator
-	tools                  []toolEntry[Deps]
-	toolsets               []Toolset[Deps]
-	toolsetClosers         []ToolsetCloseFunc
-	currentToolEntries     map[string]toolEntry[Deps]
-	staticInstructions     []InstructionPart
-	systemPromptsPrepared  bool
-	capSettings            []capabilitySettingsLayer
-	runSettings            *ModelSettings
-	usageLimits            UsageLimits
-	runSettingsFuncs       []erasedModelSettingsFunc
-	runInstructionsFuncs   []erasedInstructionsFunc
-	explicitRunModel       bool
-	staticModelID          string
-	runModelSelectors      []erasedModelSelectorFunc
-	resolvedModels         map[string]Model
-	resumeSeed             *ModelResponse
-	detachedResponse       *ModelResponse
-	enteredModels          []Model
-	modelClosers           []ModelCloseFunc
-	deferredResults        *DeferredToolResults
-	resolvingDeferred      map[string]deferredResolution
-	pendingDeferred        *DeferredToolRequests
-	pendingMessages        *pendingMessageQueue
-	runStep                int
+	agent                      *Agent[Deps, Output]
+	model                      Model
+	capabilities               []Capability
+	ctx                        context.Context
+	cancellation               *runCancellation
+	rc                         *RunContext[Deps]
+	info                       *RunInfo
+	params                     ModelRequestParams
+	messages                   []ModelMessage
+	newMessages                int
+	usage                      Usage
+	toolCalls                  atomic.Int64
+	retryLimits                RetryLimits
+	outputTool                 OutputToolConfig
+	outputMaxRetries           int
+	toolRetries                map[string]int
+	availabilityRefused        map[string]struct{}
+	outputRetry                int
+	retriesMu                  sync.Mutex
+	currentTools               map[string]struct{}
+	currentDeferredTools       map[string]struct{}
+	currentDeferredDefinitions map[string]ToolDefinition
+	revealedTools              map[string]struct{}
+	currentToolValidators      map[string]*schema.Validator
+	currentOutputTool          *ToolDefinition
+	currentOutputValidator     *schema.Validator
+	tools                      []toolEntry[Deps]
+	toolsets                   []Toolset[Deps]
+	toolsetClosers             []ToolsetCloseFunc
+	currentToolEntries         map[string]toolEntry[Deps]
+	staticInstructions         []InstructionPart
+	systemPromptsPrepared      bool
+	capSettings                []capabilitySettingsLayer
+	runSettings                *ModelSettings
+	usageLimits                UsageLimits
+	runSettingsFuncs           []erasedModelSettingsFunc
+	runInstructionsFuncs       []erasedInstructionsFunc
+	explicitRunModel           bool
+	staticModelID              string
+	runModelSelectors          []erasedModelSelectorFunc
+	resolvedModels             map[string]Model
+	resumeSeed                 *ModelResponse
+	detachedResponse           *ModelResponse
+	enteredModels              []Model
+	modelClosers               []ModelCloseFunc
+	deferredResults            *DeferredToolResults
+	resolvingDeferred          map[string]deferredResolution
+	pendingDeferred            *DeferredToolRequests
+	pendingMessages            *pendingMessageQueue
+	runStep                    int
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
 	emitMu               sync.Mutex
@@ -824,8 +825,15 @@ func revealedToolNames(messages []ModelMessage) map[string]struct{} {
 			}
 		case ModelResponse:
 			for _, responsePart := range message.Parts {
-				if _, compacted := responsePart.(CompactionPart); compacted {
+				switch part := responsePart.(type) {
+				case CompactionPart:
 					clear(revealed)
+				case NativeToolReturnPart:
+					if part.ToolKind == ToolPartKindToolSearch {
+						for _, name := range toolSearchResultNames(part.Content) {
+							revealed[name] = struct{}{}
+						}
+					}
 				}
 			}
 		}
@@ -1499,21 +1507,67 @@ func unresolvedToolCalls(messages []ModelMessage) []ToolCallPart {
 	return pending
 }
 
-func (r *run[Deps, Output]) applyResponseToolKinds(response *ModelResponse) {
+func (r *run[Deps, Output]) applyResponseToolKinds(response *ModelResponse) error {
 	parts := slices.Clone(response.Parts)
 	for index, responsePart := range parts {
-		call, ok := responsePart.(ToolCallPart)
-		if !ok || call.ToolKind != "" {
-			continue
+		switch part := responsePart.(type) {
+		case ToolCallPart:
+			if part.ToolKind != "" {
+				continue
+			}
+			entry, ok := r.findTool(part.ToolName)
+			if !ok || entry.def.ToolKind == "" {
+				continue
+			}
+			part.ToolKind = entry.def.ToolKind
+			parts[index] = part
+		case NativeToolReturnPart:
+			if part.ToolKind != ToolPartKindToolSearch {
+				continue
+			}
+			for _, name := range toolSearchResultNames(part.Content) {
+				if _, deferred := r.currentDeferredTools[name]; !deferred {
+					continue
+				}
+				if err := r.activateDeferredTool(name); err != nil {
+					return err
+				}
+				r.revealedTools[name] = struct{}{}
+				r.currentTools[name] = struct{}{}
+			}
 		}
-		entry, ok := r.findTool(call.ToolName)
-		if !ok || entry.def.ToolKind == "" {
-			continue
-		}
-		call.ToolKind = entry.def.ToolKind
-		parts[index] = call
 	}
 	response.Parts = parts
+	return nil
+}
+
+func (r *run[Deps, Output]) activateDeferredTool(name string) error {
+	definition, ok := r.currentDeferredDefinitions[name]
+	if !ok || definition.Schema == nil {
+		return nil
+	}
+	validator, err := schema.Compile(definition.Schema)
+	if err != nil {
+		return fmt.Errorf("ai: tool %q schema: %w", name, err)
+	}
+	r.currentToolValidators[name] = validator
+	return nil
+}
+
+func toolSearchResultNames(content any) []string {
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return nil
+	}
+	var result ToolSearchResult
+	if json.Unmarshal(encoded, &result) != nil {
+		return nil
+	}
+	names := make([]string, len(result.DiscoveredTools))
+	for index, match := range result.DiscoveredTools {
+		names[index] = match.Name
+	}
+	return names
 }
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
@@ -1639,11 +1693,13 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		seen[def.Name] = struct{}{}
 	}
 	r.currentDeferredTools = make(map[string]struct{})
+	r.currentDeferredDefinitions = make(map[string]ToolDefinition)
 	visibleTools := make([]ToolDefinition, 0, len(tools))
 	deferredTools := make([]ToolDefinition, 0, len(tools))
 	for _, definition := range tools {
 		if definition.DeferLoading {
 			r.currentDeferredTools[definition.Name] = struct{}{}
+			r.currentDeferredDefinitions[definition.Name] = cloneToolDefinition(definition)
 			deferredTools = append(deferredTools, cloneToolDefinition(definition))
 			if _, revealed := r.revealedTools[definition.Name]; !revealed {
 				continue
@@ -1653,10 +1709,28 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	}
 	params.Tools = visibleTools
 	params.DeferredTools = deferredTools
+	if err := validateToolSearchStrategies(r.model, params.Tools); err != nil {
+		return ModelRequestParams{}, err
+	}
 	if err := r.compileCurrentSchemas(params); err != nil {
 		return ModelRequestParams{}, err
 	}
 	return params, nil
+}
+
+func validateToolSearchStrategies(model Model, tools []ToolDefinition) error {
+	for _, tool := range tools {
+		strategy := tool.ToolSearchStrategy
+		if tool.ToolKind != ToolPartKindToolSearch ||
+			(strategy != ToolSearchStrategyBM25 && strategy != ToolSearchStrategyRegex) {
+			continue
+		}
+		support, ok := model.(ToolSearchStrategyModel)
+		if !ok || !support.SupportsToolSearchStrategy(strategy) {
+			return fmt.Errorf("ai: selected model does not support tool search strategy %q", strategy)
+		}
+	}
+	return nil
 }
 
 func (r *run[Deps, Output]) compileCurrentSchemas(params ModelRequestParams) error {
@@ -1901,7 +1975,9 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			}
 			if resp != nil {
 				r.usage.Add(resp.Usage)
-				r.applyResponseToolKinds(resp)
+				if applyErr := r.applyResponseToolKinds(resp); applyErr != nil {
+					return nil, applyErr
+				}
 				r.messages = append(r.messages, *resp)
 			}
 			r.recordRetry(RetryPromptPart{Content: retry.Message})
@@ -1914,7 +1990,9 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return nil, &UnexpectedModelBehaviorError{Message: "model request returned no response"}
 		}
 		r.usage.Add(resp.Usage)
-		r.applyResponseToolKinds(resp)
+		if err := r.applyResponseToolKinds(resp); err != nil {
+			return nil, err
+		}
 		r.messages = append(r.messages, *resp)
 
 		calls := resp.ToolCalls()

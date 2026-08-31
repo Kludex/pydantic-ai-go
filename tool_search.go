@@ -9,8 +9,27 @@ import (
 	"strings"
 )
 
-// ToolSearchName is the reserved model-facing name of the local search tool.
+// ToolSearchName is the reserved model-facing name of the tool-search surface.
 const ToolSearchName = "search_tools"
+
+// ToolSearchStrategy selects where and how deferred-tool discovery runs.
+type ToolSearchStrategy string
+
+const (
+	// ToolSearchStrategyAuto prefers provider-managed search and falls back to
+	// local keyword matching when the selected model does not support it.
+	ToolSearchStrategyAuto ToolSearchStrategy = ""
+	// ToolSearchStrategyKeywords always runs local keyword matching. Providers
+	// may expose it through a client-executed native search protocol.
+	ToolSearchStrategyKeywords ToolSearchStrategy = "keywords"
+	// ToolSearchStrategyBM25 requires provider-managed BM25 search.
+	ToolSearchStrategyBM25 ToolSearchStrategy = "bm25"
+	// ToolSearchStrategyRegex requires provider-managed regular-expression search.
+	ToolSearchStrategyRegex ToolSearchStrategy = "regex"
+	// ToolSearchStrategyCustom is assigned when Search is set. Configure Search
+	// instead of selecting this value directly.
+	ToolSearchStrategyCustom ToolSearchStrategy = "custom"
+)
 
 const defaultToolSearchDescription = "Search for deferred tools by words from their names and descriptions."
 const defaultToolSearchQueryDescription = "Queries containing words likely to appear in tool names or descriptions."
@@ -25,9 +44,12 @@ type ToolSearchFunc[Deps any] func(
 	tools []ToolDefinition,
 ) ([]string, error)
 
-// ToolSearchConfig configures the local search_tools fallback. The zero value
-// uses keyword-overlap search and returns at most ten tools.
+// ToolSearchConfig configures deferred-tool discovery. The zero value prefers
+// provider-managed search, falls back to keyword overlap, and returns at most ten tools locally.
 type ToolSearchConfig[Deps any] struct {
+	// Strategy defaults to provider-managed search with a local keyword fallback.
+	// Set Search for a custom client-executed strategy.
+	Strategy         ToolSearchStrategy
 	Search           ToolSearchFunc[Deps]
 	MaxResults       int
 	MaxRetries       *int
@@ -49,6 +71,16 @@ type ToolSearchResult struct {
 // WithToolSearch adds a search_tools function to a toolset whenever the
 // wrapped collection contains deferred tools.
 func WithToolSearch[Deps any](toolset Toolset[Deps], config ToolSearchConfig[Deps]) Toolset[Deps] {
+	switch config.Strategy {
+	case ToolSearchStrategyAuto, ToolSearchStrategyKeywords, ToolSearchStrategyBM25, ToolSearchStrategyRegex:
+	case ToolSearchStrategyCustom:
+		panic("ai: configure custom tool search with ToolSearchConfig.Search")
+	default:
+		panic(fmt.Sprintf("ai: invalid tool search strategy %q", config.Strategy))
+	}
+	if config.Search != nil && config.Strategy != ToolSearchStrategyAuto {
+		panic("ai: tool search strategy and custom search cannot both be set")
+	}
 	if config.MaxResults < 0 {
 		panic(fmt.Sprintf("ai: tool search max results must be non-negative, got %d", config.MaxResults))
 	}
@@ -109,9 +141,14 @@ func (t toolSearchToolset[Deps]) searchTool(corpus []ToolDefinition) Tool[Deps] 
 	if queryDescription == "" {
 		queryDescription = defaultToolSearchQueryDescription
 	}
+	strategy := t.config.Strategy
+	if t.config.Search != nil {
+		strategy = ToolSearchStrategyCustom
+	}
 	definition := ToolDefinition{
 		Name: ToolSearchName, Description: description, ToolKind: ToolPartKindToolSearch,
-		ReturnSchema: reflectedToolReturnSchema(reflect.TypeFor[ToolSearchResult]()),
+		ToolSearchStrategy: strategy,
+		ReturnSchema:       reflectedToolReturnSchema(reflect.TypeFor[ToolSearchResult]()),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

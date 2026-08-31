@@ -251,7 +251,7 @@ type responsesInput struct {
 	// function_call and function_call_output items
 	Type             string          `json:"type,omitempty"`
 	ID               string          `json:"id,omitempty"`
-	CallID           string          `json:"call_id,omitempty"`
+	CallID           any             `json:"call_id,omitempty"`
 	Name             string          `json:"name,omitempty"`
 	Arguments        any             `json:"arguments,omitempty"`
 	Namespace        string          `json:"namespace,omitempty"`
@@ -304,23 +304,35 @@ func (m *ResponsesModel) buildResponsesPayload(
 		req.TopP = nil
 	}
 	var searchTool *ai.ToolDefinition
-	if nativeDeferred && m.deferredToolSupport && len(params.DeferredTools) > 0 {
-		for _, tool := range params.Tools {
-			if tool.ToolKind == ai.ToolPartKindToolSearch && tool.Name == ai.ToolSearchName {
-				definition := tool
-				searchTool = &definition
-				break
-			}
+	for _, tool := range params.Tools {
+		if tool.ToolKind == ai.ToolPartKindToolSearch && tool.Name == ai.ToolSearchName {
+			definition := tool
+			searchTool = &definition
+			break
 		}
 	}
+	if searchTool != nil &&
+		(searchTool.ToolSearchStrategy == ai.ToolSearchStrategyBM25 ||
+			searchTool.ToolSearchStrategy == ai.ToolSearchStrategyRegex) {
+		return nil, fmt.Errorf(
+			"openai: tool search strategy %q is not supported; use automatic, keywords, or custom search",
+			searchTool.ToolSearchStrategy,
+		)
+	}
+	activeToolSearch := searchTool != nil && nativeDeferred && m.deferredToolSupport && len(params.DeferredTools) > 0
+	clientToolSearch := activeToolSearch &&
+		(searchTool.ToolSearchStrategy == ai.ToolSearchStrategyKeywords ||
+			searchTool.ToolSearchStrategy == ai.ToolSearchStrategyCustom)
+	serverToolSearch := activeToolSearch && !clientToolSearch
 	deferred := make(map[string]ai.ToolDefinition, len(params.DeferredTools))
-	if searchTool != nil {
+	if activeToolSearch {
 		for _, tool := range params.DeferredTools {
 			deferred[tool.Name] = tool
 		}
 	}
 	converter := responsesMessageConverter{
-		clientToolSearch: searchTool != nil,
+		clientToolSearch: clientToolSearch,
+		serverToolSearch: serverToolSearch,
 		deferred:         deferred,
 		rendered:         make(map[string]struct{}),
 		strictSupport:    m.strictToolSupport,
@@ -333,7 +345,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		req.Input = append(req.Input, items...)
 	}
 	for _, tool := range params.Tools {
-		if searchTool != nil && (tool.Name == ai.ToolSearchName || tool.DeferLoading) {
+		if activeToolSearch && (tool.Name == ai.ToolSearchName || tool.DeferLoading) {
 			continue
 		}
 		converted, err := prepareResponsesFunctionTool(tool, m.strictToolSupport)
@@ -342,7 +354,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 		req.Tools = append(req.Tools, converted)
 	}
-	if searchTool != nil {
+	if activeToolSearch {
 		for _, tool := range params.DeferredTools {
 			converted, err := prepareResponsesFunctionTool(tool, m.strictToolSupport)
 			if err != nil {
@@ -362,7 +374,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 			req.ToolChoice = "required"
 		}
 	}
-	if searchTool != nil {
+	if clientToolSearch {
 		schema, _, err := prepareOpenAITool(*searchTool, m.strictToolSupport)
 		if err != nil {
 			return nil, err
@@ -370,6 +382,8 @@ func (m *ResponsesModel) buildResponsesPayload(
 		req.Tools = append(req.Tools, responsesTool{
 			Type: "tool_search", Description: searchTool.Description, Parameters: schema, Execution: "client",
 		})
+	} else if serverToolSearch {
+		req.Tools = append(req.Tools, responsesTool{Type: "tool_search"})
 	}
 	if len(req.Tools) > 0 {
 		req.ParallelToolCalls = params.Settings.ParallelToolCalls
@@ -396,26 +410,29 @@ type responsesResponse struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
-	Output []struct {
-		ID      string `json:"id"`
-		Type    string `json:"type"`
-		Content []struct {
-			Type     string           `json:"type"`
-			Text     string           `json:"text"`
-			Logprobs []map[string]any `json:"logprobs"`
-		} `json:"content"`
-		CallID           string          `json:"call_id"`
-		Name             string          `json:"name"`
-		Arguments        json.RawMessage `json:"arguments"`
-		Namespace        string          `json:"namespace"`
-		Execution        string          `json:"execution"`
-		Status           string          `json:"status"`
-		EncryptedContent string          `json:"encrypted_content"`
-		Summary          []struct {
-			Text string `json:"text"`
-		} `json:"summary"`
-	} `json:"output"`
-	Usage responsesUsage `json:"usage"`
+	Output []responsesOutputItem `json:"output"`
+	Usage  responsesUsage        `json:"usage"`
+}
+
+type responsesOutputItem struct {
+	ID      string `json:"id"`
+	Type    string `json:"type"`
+	Content []struct {
+		Type     string           `json:"type"`
+		Text     string           `json:"text"`
+		Logprobs []map[string]any `json:"logprobs"`
+	} `json:"content"`
+	CallID           *string         `json:"call_id"`
+	Name             string          `json:"name"`
+	Arguments        json.RawMessage `json:"arguments"`
+	Namespace        string          `json:"namespace"`
+	Execution        string          `json:"execution"`
+	Status           string          `json:"status"`
+	Tools            []responsesTool `json:"tools"`
+	EncryptedContent string          `json:"encrypted_content"`
+	Summary          []struct {
+		Text string `json:"text"`
+	} `json:"summary"`
 }
 
 type responsesUsage struct {
@@ -506,7 +523,8 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 		ModelName: rr.Model, Usage: rr.Usage.usage(), Timestamp: timestamp, ProviderDetails: providerDetails,
 		ProviderResponseID: rr.ID, FinishReason: openAIResponsesFinishReason(rawFinishReason), State: state,
 	}
-	for _, item := range rr.Output {
+	searchPairs, pairedOutputs := pairResponsesToolSearchItems(rr.Output)
+	for itemIndex, item := range rr.Output {
 		switch item.Type {
 		case "message":
 			for _, c := range item.Content {
@@ -541,26 +559,41 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 				providerDetails = map[string]any{"namespace": item.Namespace}
 			}
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{
-				ToolName: item.Name, Args: arguments, ToolCallID: item.CallID,
+				ToolName: item.Name, Args: arguments, ToolCallID: responsesCallID(item.CallID),
 				ID: item.ID, ProviderName: "openai", ProviderDetails: providerDetails,
 			})
 		case "tool_search_call":
-			if item.Execution != "client" {
-				return nil, fmt.Errorf("openai: server-executed tool search is not supported yet")
-			}
-			arguments, err := normalizeResponsesArguments(item.Arguments)
+			arguments, err := normalizeResponsesToolSearchArguments(item.Arguments, item.Execution)
 			if err != nil {
 				return nil, err
 			}
-			callID := item.CallID
-			if callID == "" {
-				callID = item.ID
+			callID := responsesEffectiveCallID(item)
+			if item.Execution == "client" {
+				resp.Parts = append(resp.Parts, ai.ToolCallPart{
+					ToolName: ai.ToolSearchName, Args: arguments, ToolCallID: callID,
+					ToolKind: ai.ToolPartKindToolSearch, ID: item.ID, ProviderName: "openai",
+					ProviderDetails: map[string]any{"execution": item.Execution, "status": item.Status},
+				})
+				continue
 			}
-			resp.Parts = append(resp.Parts, ai.ToolCallPart{
+			if item.Execution != "server" {
+				continue
+			}
+			resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
 				ToolName: ai.ToolSearchName, Args: arguments, ToolCallID: callID,
 				ToolKind: ai.ToolPartKindToolSearch, ID: item.ID, ProviderName: "openai",
-				ProviderDetails: map[string]any{"execution": item.Execution, "status": item.Status},
+				ProviderDetails: map[string]any{
+					"call_id": responsesNullableCallID(item.CallID), "execution": item.Execution, "status": item.Status,
+				},
 			})
+			if outputIndex, ok := searchPairs[itemIndex]; ok {
+				resp.Parts = append(resp.Parts, responsesToolSearchReturn(rr.Output[outputIndex], callID, timestamp))
+			}
+		case "tool_search_output":
+			if item.Execution != "server" || pairedOutputs[itemIndex] {
+				continue
+			}
+			resp.Parts = append(resp.Parts, responsesToolSearchReturn(item, responsesEffectiveCallID(item), timestamp))
 		case "reasoning":
 			if len(item.Summary) == 0 && item.EncryptedContent != "" {
 				resp.Parts = append(resp.Parts, ai.ThinkingPart{
@@ -581,6 +614,105 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 	return resp, nil
 }
 
+func pairResponsesToolSearchItems(items []responsesOutputItem) (map[int]int, map[int]bool) {
+	pairs := make(map[int]int)
+	pairedOutputs := make(map[int]bool)
+	outputsByCallID := make(map[string][]int)
+	var nullCalls, nullOutputs []int
+	for index, item := range items {
+		if item.Execution != "server" {
+			continue
+		}
+		switch item.Type {
+		case "tool_search_call":
+			if callID := responsesCallID(item.CallID); callID == "" {
+				nullCalls = append(nullCalls, index)
+			}
+		case "tool_search_output":
+			if callID := responsesCallID(item.CallID); callID != "" {
+				outputsByCallID[callID] = append(outputsByCallID[callID], index)
+			} else {
+				nullOutputs = append(nullOutputs, index)
+			}
+		}
+	}
+	for index, item := range items {
+		if item.Type != "tool_search_call" || item.Execution != "server" {
+			continue
+		}
+		callID := responsesCallID(item.CallID)
+		if len(outputsByCallID[callID]) == 0 || callID == "" {
+			continue
+		}
+		outputIndex := outputsByCallID[callID][0]
+		outputsByCallID[callID] = outputsByCallID[callID][1:]
+		pairs[index] = outputIndex
+		pairedOutputs[outputIndex] = true
+	}
+	if len(nullCalls) == 1 && len(nullOutputs) == 1 {
+		pairs[nullCalls[0]] = nullOutputs[0]
+		pairedOutputs[nullOutputs[0]] = true
+	}
+	return pairs, pairedOutputs
+}
+
+func responsesToolSearchReturn(item responsesOutputItem, callID string, timestamp time.Time) ai.NativeToolReturnPart {
+	matches := make([]ai.ToolSearchMatch, 0, len(item.Tools))
+	for _, tool := range item.Tools {
+		if tool.Type == "function" && tool.Name != "" {
+			matches = append(matches, ai.ToolSearchMatch{Name: tool.Name})
+		}
+	}
+	return ai.NativeToolReturnPart{
+		ToolName: ai.ToolSearchName, ToolCallID: callID, ToolKind: ai.ToolPartKindToolSearch,
+		Content: ai.ToolSearchResult{DiscoveredTools: matches}, Timestamp: timestamp, ProviderName: "openai",
+		ProviderDetails: map[string]any{
+			"id": item.ID, "call_id": responsesNullableCallID(item.CallID),
+			"execution": item.Execution, "status": item.Status,
+		},
+	}
+}
+
+func responsesCallID(callID *string) string {
+	if callID == nil {
+		return ""
+	}
+	return *callID
+}
+
+func responsesNullableCallID(callID *string) any {
+	if callID == nil {
+		return nil
+	}
+	return *callID
+}
+
+func responsesEffectiveCallID(item responsesOutputItem) string {
+	if callID := responsesCallID(item.CallID); callID != "" {
+		return callID
+	}
+	return item.ID
+}
+
+func normalizeResponsesToolSearchArguments(raw json.RawMessage, execution string) (json.RawMessage, error) {
+	arguments, err := normalizeResponsesArguments(raw)
+	if err != nil || execution != "server" {
+		return arguments, err
+	}
+	var value map[string]any
+	if json.Unmarshal(arguments, &value) != nil {
+		return arguments, nil
+	}
+	queries, ok := value["paths"]
+	if !ok {
+		queries, ok = value["queries"]
+	}
+	if !ok {
+		queries = []string{}
+	}
+	return json.Marshal(map[string]any{"queries": queries})
+}
+
 func normalizeResponsesArguments(raw json.RawMessage) (json.RawMessage, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return json.RawMessage(`{}`), nil
@@ -596,8 +728,15 @@ func normalizeResponsesArguments(raw json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(arguments), nil
 }
 
+// SupportsToolSearchStrategy reports the required named strategies available
+// through OpenAI Responses. OpenAI exposes hosted search without a named algorithm.
+func (m *ResponsesModel) SupportsToolSearchStrategy(strategy ai.ToolSearchStrategy) bool {
+	return strategy != ai.ToolSearchStrategyBM25 && strategy != ai.ToolSearchStrategyRegex
+}
+
 var (
 	_ ai.Model                     = (*ResponsesModel)(nil)
+	_ ai.ToolSearchStrategyModel   = (*ResponsesModel)(nil)
 	_ ai.ModelContinuationDelayer  = (*ResponsesModel)(nil)
 	_ ai.SuspendedResponseCanceler = (*ResponsesModel)(nil)
 )

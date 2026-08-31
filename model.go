@@ -22,6 +22,12 @@ type Model interface {
 	Name() string
 }
 
+// ToolSearchStrategyModel is implemented by models that support required
+// named provider-managed tool-search strategies.
+type ToolSearchStrategyModel interface {
+	SupportsToolSearchStrategy(strategy ToolSearchStrategy) bool
+}
+
 // ModelCloseFunc releases resources acquired for one agent run.
 type ModelCloseFunc func(ctx context.Context) error
 
@@ -351,7 +357,10 @@ type ToolDefinition struct {
 	// DynamicExternalExecution allows a function to return ExternalToolRequest.
 	DynamicExternalExecution bool `json:"-"`
 	// ToolKind identifies framework-managed typed tool calls and returns.
-	ToolKind   ToolPartKind `json:"-"`
-	maxRetries *int
-	timeout    time.Duration
+	ToolKind ToolPartKind `json:"-"`
+	// ToolSearchStrategy controls provider adaptation for the tool-search surface.
+	// It is local routing metadata and is not sent as a function-tool field.
+	ToolSearchStrategy ToolSearchStrategy `json:"-"`
+	maxRetries         *int
+	timeout            time.Duration
 }

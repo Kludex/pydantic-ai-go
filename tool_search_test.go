@@ -2,6 +2,7 @@ package ai_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
 	"strings"
@@ -165,8 +166,8 @@ func TestCustomToolSearchFiltersResultsAndDetachesDefinitions(t *testing.T) {
 					search = definition
 				}
 			}
-			if search.Name == "" {
-				t.Fatal("custom search tool missing")
+			if search.Name == "" || search.ToolSearchStrategy != ai.ToolSearchStrategyCustom {
+				t.Fatalf("custom search tool missing routing metadata: %+v", search)
 			}
 			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
 				ToolName: ai.ToolSearchName, ToolCallID: "search", Args: []byte(`{"queries":["tools"]}`),
@@ -227,6 +228,24 @@ func TestToolSearchConfigurationAndResolutionErrors(t *testing.T) {
 			retries := -1
 			ai.WithToolSearch[deps](failingSearchSource{}, ai.ToolSearchConfig[deps]{MaxRetries: &retries})
 		},
+		"invalid strategy": func() {
+			ai.WithToolSearch[deps](failingSearchSource{}, ai.ToolSearchConfig[deps]{Strategy: "semantic"})
+		},
+		"internal custom strategy": func() {
+			ai.WithToolSearch[deps](failingSearchSource{}, ai.ToolSearchConfig[deps]{
+				Strategy: ai.ToolSearchStrategyCustom,
+			})
+		},
+		"strategy and callback": func() {
+			ai.WithToolSearch[deps](failingSearchSource{}, ai.ToolSearchConfig[deps]{
+				Strategy: ai.ToolSearchStrategyKeywords,
+				Search: func(
+					context.Context, *ai.RunContext[deps], []string, []ai.ToolDefinition,
+				) ([]string, error) {
+					return nil, nil
+				},
+			})
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			defer func() {
@@ -286,5 +305,234 @@ func TestToolSearchConfigurationAndResolutionErrors(t *testing.T) {
 	}))
 	if _, err := searchFailed.Run(t.Context(), "go", deps{}); !errors.Is(err, searchErr) {
 		t.Fatalf("custom search error lost: %v", err)
+	}
+}
+
+func TestNativeToolSearchRevealHistoryIgnoresMalformedAndUnrelatedParts(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	for name, content := range map[string]any{"unencodable": make(chan int), "wrong shape": "bad"} {
+		t.Run(name, func(t *testing.T) {
+			history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.NativeToolReturnPart{
+					ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch, Content: content,
+				},
+				ai.NativeToolReturnPart{ToolName: "web_search", Content: map[string]any{"ignored": true}},
+			}}}
+			if _, err := ai.NewAgent[deps, string](model).Run(
+				t.Context(), "go", deps{}, ai.WithMessageHistory(history),
+			); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestNativeToolSearchIgnoresUndeclaredReveal(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.NativeToolReturnPart{
+				ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+				Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "unknown"}}},
+			},
+			ai.NativeToolReturnPart{ToolName: "web_search", Content: map[string]any{}},
+			ai.TextPart{Content: "done"},
+		}}, nil
+	})
+	if _, err := ai.NewAgent[deps, string](model).Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeToolSearchRevealsDeferredToolInSameResponse(t *testing.T) {
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		if request == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.NativeToolReturnPart{
+					ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+					Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "hidden"}}},
+				},
+				ai.ToolCallPart{ToolName: "hidden", ToolCallID: "hidden-1", Args: []byte(`{}`)},
+			}}, nil
+		}
+		returned := messages[len(messages)-1].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
+		if returned.ToolName != "hidden" || returned.Content != "revealed" {
+			t.Fatalf("deferred tool did not execute: %+v", returned)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	hidden := ai.NewSimpleTool[deps](
+		"hidden", func(context.Context, struct{}) (string, error) { return "revealed", nil },
+		ai.WithDeferredLoading(),
+	)
+	agent := ai.NewAgent[deps, string](model)
+	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(hidden), ai.ToolSearchConfig[deps]{}))
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.NativeToolReturnPart{
+		ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+		Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "historical"}}},
+	}}}}
+	if _, err := ai.NewAgent[deps, string](fakes.NewTestModel()).Run(
+		t.Context(), "go", deps{}, ai.WithMessageHistory(history),
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type strategyAwareModel struct {
+	ai.Model
+	supported bool
+}
+
+func (m strategyAwareModel) SupportsToolSearchStrategy(ai.ToolSearchStrategy) bool {
+	return m.supported
+}
+
+func TestNamedToolSearchRequiresModelSupport(t *testing.T) {
+	base := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	hidden := ai.NewSimpleTool[deps](
+		"hidden", func(context.Context, struct{}) (string, error) { return "hidden", nil },
+		ai.WithDeferredLoading(),
+	)
+	for name, model := range map[string]ai.Model{
+		"no support contract": base,
+		"rejected by model":   strategyAwareModel{Model: base},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent := ai.NewAgent[deps, string](model)
+			agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(hidden), ai.ToolSearchConfig[deps]{
+				Strategy: ai.ToolSearchStrategyBM25,
+			}))
+			_, err := agent.Run(t.Context(), "go", deps{})
+			if err == nil || !strings.Contains(err.Error(), `does not support tool search strategy "bm25"`) {
+				t.Fatalf("unexpected required strategy error: %v", err)
+			}
+		})
+	}
+	agent := ai.NewAgent[deps, string](strategyAwareModel{Model: base, supported: true})
+	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(hidden), ai.ToolSearchConfig[deps]{
+		Strategy: ai.ToolSearchStrategyRegex,
+	}))
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatalf("supported required strategy failed: %v", err)
+	}
+}
+
+func TestNativeToolSearchValidatesSameResponseDeferredArguments(t *testing.T) {
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		if request == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.NativeToolReturnPart{
+					ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+					Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "hidden"}}},
+				},
+				ai.ToolCallPart{ToolName: "hidden", ToolCallID: "hidden-1", Args: []byte(`{"value":"bad"}`)},
+			}}, nil
+		}
+		part := messages[len(messages)-1].(ai.ModelRequest).Parts[0]
+		if _, ok := part.(ai.RetryPromptPart); !ok {
+			t.Fatalf("invalid deferred arguments were not rejected: %+v", part)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	hidden := ai.NewRawTool[deps](ai.ToolDefinition{
+		Name: "hidden",
+		Schema: map[string]any{
+			"type": "object", "properties": map[string]any{"value": map[string]any{"type": "integer"}},
+			"required": []string{"value"}, "additionalProperties": false,
+		},
+	}, func(context.Context, json.RawMessage) (any, error) {
+		t.Fatal("invalid deferred tool executed")
+		return nil, nil
+	}, ai.WithDeferredLoading())
+	agent := ai.NewAgent[deps, string](model)
+	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(hidden), ai.ToolSearchConfig[deps]{}))
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestNativeToolSearchRevealSchemaErrors(t *testing.T) {
+	invalid := ai.NewRawTool[deps](ai.ToolDefinition{
+		Name: "invalid", Schema: map[string]any{"type": "not-a-json-schema-type"},
+	}, func(context.Context, json.RawMessage) (any, error) { return nil, nil }, ai.WithDeferredLoading())
+	response := &ai.ModelResponse{Parts: []ai.ResponsePart{ai.NativeToolReturnPart{
+		ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+		Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "invalid"}}},
+	}}}
+	for name, capability := range map[string]ai.Capability{
+		"ordinary response": nil,
+		"rejected response": ai.AfterModelRequestFunc(func(
+			context.Context, *ai.RunInfo, ai.ModelRequestContext, *ai.ModelResponse,
+		) (*ai.ModelResponse, error) {
+			return response, ai.Retryf("again")
+		}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := fakes.NewFunctionModel(func(
+				context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				return response, nil
+			})
+			var options []ai.Option
+			if capability != nil {
+				options = append(options, ai.WithCapabilities(capability))
+			}
+			agent := ai.NewAgent[deps, string](model, options...)
+			agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(invalid), ai.ToolSearchConfig[deps]{}))
+			_, err := agent.Run(t.Context(), "go", deps{})
+			if err == nil || !strings.Contains(err.Error(), `tool "invalid" schema`) {
+				t.Fatalf("unexpected reveal schema error: %v", err)
+			}
+		})
+	}
+}
+
+func TestNativeToolSearchRevealAllowsDeferredToolWithoutSchema(t *testing.T) {
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		if request == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.NativeToolReturnPart{
+					ToolName: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+					Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "schema_free"}}},
+				},
+				ai.ToolCallPart{ToolName: "schema_free", ToolCallID: "call", Args: []byte(`{}`)},
+			}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	tool := ai.NewRawTool[deps](ai.ToolDefinition{Name: "schema_free"}, func(
+		context.Context, json.RawMessage,
+	) (any, error) {
+		return "done", nil
+	}, ai.WithDeferredLoading())
+	agent := ai.NewAgent[deps, string](model)
+	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(tool), ai.ToolSearchConfig[deps]{}))
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
 	}
 }

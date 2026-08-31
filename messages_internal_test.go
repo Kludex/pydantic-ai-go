@@ -51,6 +51,7 @@ func TestStreamEventKinds(t *testing.T) {
 		{CompactionEvent{}, "compaction"},
 		{ToolCallStartEvent{}, "tool-call-start"},
 		{ToolCallDeltaEvent{}, "tool-call-delta"},
+		{NativeToolReturnEvent{}, "builtin-tool-return"},
 		{FinishEvent{}, "finish"},
 	}
 	for _, test := range modelKinds {
@@ -79,7 +80,8 @@ func TestStreamEventKinds(t *testing.T) {
 	}
 	for delta, want := range map[ResponsePartDelta]ResponsePartKind{
 		TextPartDelta{}: ResponsePartKindText, ThinkingPartDelta{}: ResponsePartKindThinking,
-		ToolCallPartDelta{}: ResponsePartKindToolCall,
+		ToolCallPartDelta{}:       ResponsePartKindToolCall,
+		NativeToolCallPartDelta{}: ResponsePartKindNativeToolCall,
 	} {
 		if delta.responsePartDeltaKind() != want {
 			t.Fatalf("expected %q, got %q", want, delta.responsePartDeltaKind())

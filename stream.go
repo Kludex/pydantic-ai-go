@@ -98,6 +98,8 @@ type ToolCallStartEvent struct {
 	ID              string
 	ProviderName    string
 	ProviderDetails map[string]any
+	// Native marks a provider-executed call that the local tool loop must not run.
+	Native bool
 }
 
 func (ToolCallStartEvent) modelStreamEventKind() string { return "tool-call-start" }
@@ -114,6 +116,14 @@ type ToolCallDeltaEvent struct {
 }
 
 func (ToolCallDeltaEvent) modelStreamEventKind() string { return "tool-call-delta" }
+
+// NativeToolReturnEvent emits one complete provider-executed tool result.
+type NativeToolReturnEvent struct {
+	PartID string
+	Part   NativeToolReturnPart
+}
+
+func (NativeToolReturnEvent) modelStreamEventKind() string { return "builtin-tool-return" }
 
 // FinishEvent ends one streamed model response and carries its usage. It is
 // both the provider completion marker and the final normalized response event.

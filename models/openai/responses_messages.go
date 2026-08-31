@@ -63,6 +63,7 @@ func prepareResponsesFunctionTool(definition ai.ToolDefinition, strictSupport bo
 
 type responsesMessageConverter struct {
 	clientToolSearch bool
+	serverToolSearch bool
 	deferred         map[string]ai.ToolDefinition
 	rendered         map[string]struct{}
 	strictSupport    bool
@@ -180,9 +181,62 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				Type: "function_call", ID: id, CallID: part.ToolCallID,
 				Name: part.ToolName, Arguments: string(part.Args), Namespace: namespace,
 			})
+		case ai.NativeToolCallPart:
+			if !c.serverToolSearch || part.ProviderName != "openai" ||
+				part.ToolKind != ai.ToolPartKindToolSearch {
+				continue
+			}
+			var arguments any = map[string]any{}
+			if len(part.Args) > 0 {
+				if err := json.Unmarshal(part.Args, &arguments); err != nil {
+					return nil, fmt.Errorf("openai: parse native tool search arguments: %w", err)
+				}
+			}
+			callID, status := openAIToolSearchReplayDetails(part.ToolCallID, part.ProviderDetails)
+			out = append(out, responsesInput{
+				Type: "tool_search_call", ID: part.ID, CallID: callID,
+				Arguments: arguments, Execution: "server", Status: status,
+			})
+		case ai.NativeToolReturnPart:
+			if !c.serverToolSearch || part.ProviderName != "openai" ||
+				part.ToolKind != ai.ToolPartKindToolSearch {
+				continue
+			}
+			outputID, _ := part.ProviderDetails["id"].(string)
+			if outputID == "" {
+				continue
+			}
+			tools, err := c.discoveredTools(part.Content)
+			if err != nil {
+				return nil, err
+			}
+			callID, status := openAIToolSearchReplayDetails(part.ToolCallID, part.ProviderDetails)
+			out = append(out, responsesInput{
+				Type: "tool_search_output", ID: outputID, CallID: callID,
+				Execution: "server", Status: status, Tools: tools,
+			})
 		}
 	}
 	return out, nil
+}
+
+func openAIToolSearchReplayDetails(fallback string, details map[string]any) (any, string) {
+	var callID any = fallback
+	if value, exists := details["call_id"]; exists {
+		switch value := value.(type) {
+		case nil:
+			callID = (*string)(nil)
+		case string:
+			callID = value
+		}
+	}
+	status, _ := details["status"].(string)
+	switch status {
+	case "in_progress", "completed", "incomplete":
+	default:
+		status = "completed"
+	}
+	return callID, status
 }
 
 func (c *responsesMessageConverter) discoveredTools(content any) ([]responsesTool, error) {

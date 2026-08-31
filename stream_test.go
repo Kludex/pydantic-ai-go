@@ -862,3 +862,155 @@ func TestRunStreamFallbackBreakOnToolCallEvents(t *testing.T) {
 		}
 	}
 }
+
+func TestRunStreamPreservesProviderNativeToolLifecycle(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ToolCallStartEvent{
+				PartID: "search", ToolName: ai.ToolSearchName, ToolCallID: "search-1",
+				ToolKind: ai.ToolPartKindToolSearch, ProviderName: "provider", Native: true,
+			},
+			ai.ToolCallDeltaEvent{PartID: "search", ArgsDelta: `{"queries":["weather"]}`},
+			ai.NativeToolReturnEvent{PartID: "search-result", Part: ai.NativeToolReturnPart{
+				ToolName: ai.ToolSearchName, ToolCallID: "search-1", ToolKind: ai.ToolPartKindToolSearch,
+				Content:      ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "weather"}}},
+				ProviderName: "provider",
+			}},
+			ai.TextDeltaEvent{PartID: "answer", Delta: "done"},
+			ai.FinishEvent{},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	var starts []ai.PartStartEvent
+	var deltas []ai.PartDeltaEvent
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case ai.PartStartEvent:
+			starts = append(starts, event)
+		case ai.PartDeltaEvent:
+			deltas = append(deltas, event)
+		}
+	}
+	result := stream.Result()
+	if result == nil || result.Output != "done" || len(starts) != 3 || len(deltas) != 1 {
+		t.Fatalf("unexpected native stream lifecycle: result=%+v starts=%+v deltas=%+v", result, starts, deltas)
+	}
+	messages := result.Messages()
+	response := messages[len(messages)-1].(ai.ModelResponse)
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if string(call.Args) != `{"queries":["weather"]}` || call.ToolCallID != returned.ToolCallID ||
+		returned.ProviderName != "provider" {
+		t.Fatalf("unexpected native stream parts: %+v", response.Parts)
+	}
+	if _, ok := deltas[0].Delta.(ai.NativeToolCallPartDelta); !ok {
+		t.Fatalf("unexpected native delta type %T", deltas[0].Delta)
+	}
+}
+
+func TestNativeToolCallPartDeltaApply(t *testing.T) {
+	delta := ai.NativeToolCallPartDelta{
+		ToolNameDelta: "_search", ArgsDelta: `{"queries":[]}`, ToolCallID: "call", ProviderName: "provider",
+	}
+	part, err := delta.Apply(ai.NativeToolCallPart{ToolName: "tool", ToolCallID: "call"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := part.(ai.NativeToolCallPart)
+	if call.ToolName != "tool_search" || string(call.Args) != `{"queries":[]}` || call.ProviderName != "provider" {
+		t.Fatalf("unexpected applied native delta: %+v", call)
+	}
+	if _, err := delta.Apply(ai.TextPart{}); err == nil {
+		t.Fatal("expected native delta type error")
+	}
+	if _, err := (ai.NativeToolCallPartDelta{ToolCallID: "changed"}).Apply(call); err == nil ||
+		!strings.Contains(err.Error(), `tool call ID changed from "call" to "changed"`) {
+		t.Fatalf("unexpected native call ID error: %v", err)
+	}
+}
+
+func TestRunStreamFallbackReplaysNativeToolParts(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.NativeToolCallPart{
+				ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+				Args: []byte(`{"queries":["x"]}`), ProviderName: "provider",
+			},
+			ai.NativeToolReturnPart{
+				ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+				Content: ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{}}, ProviderName: "provider",
+			},
+			ai.TextPart{Content: "done"},
+		}}, nil
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	messages := stream.Result().Messages()
+	parts := messages[len(messages)-1].(ai.ModelResponse).Parts
+	if len(parts) != 3 {
+		t.Fatalf("native fallback parts were lost: %+v", parts)
+	}
+	if _, ok := parts[0].(ai.NativeToolCallPart); !ok {
+		t.Fatalf("unexpected native fallback call %T", parts[0])
+	}
+	if _, ok := parts[1].(ai.NativeToolReturnPart); !ok {
+		t.Fatalf("unexpected native fallback return %T", parts[1])
+	}
+}
+
+func TestRunStreamRejectsDuplicateNativeToolReturnPartID(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		part := ai.NativeToolReturnPart{ToolName: "native", Content: map[string]any{}}
+		return []ai.ModelStreamEvent{
+			ai.NativeToolReturnEvent{PartID: "result", Part: part},
+			ai.NativeToolReturnEvent{PartID: "result", Part: part},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	for _, err := range stream.Events() {
+		if err == nil {
+			continue
+		}
+		if !strings.Contains(err.Error(), `duplicate native tool return stream part "result"`) {
+			t.Fatalf("unexpected duplicate native return error: %v", err)
+		}
+		return
+	}
+	t.Fatal("expected duplicate native return error")
+}
+
+func TestRunStreamCanStopNativeFallbackLifecycle(t *testing.T) {
+	for name, stopAfter := range map[string]int{"call start": 1, "call delta": 2, "return start": 4} {
+		t.Run(name, func(t *testing.T) {
+			model := fakes.NewFunctionModel(func(
+				context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{
+					ai.NativeToolCallPart{ToolName: "native", ToolCallID: "call", Args: []byte(`{}`)},
+					ai.NativeToolReturnPart{ToolName: "native", ToolCallID: "call", Content: "done"},
+					ai.TextPart{Content: "unused"},
+				}}, nil
+			})
+			stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+			seen := 0
+			for range stream.Events() {
+				seen++
+				if seen == stopAfter {
+					break
+				}
+			}
+			if stream.Result() != nil {
+				t.Fatalf("stopped native fallback unexpectedly completed: %+v", stream.Result())
+			}
+		})
+	}
+}

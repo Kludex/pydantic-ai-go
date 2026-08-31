@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -111,24 +112,15 @@ func suspendedResponsesSequence(messages []ai.ModelMessage) (int, bool) {
 }
 
 type responsesStreamEvent struct {
-	Type           string `json:"type"`
-	SequenceNumber *int   `json:"sequence_number"`
-	Delta          string `json:"delta"`
-	ItemID         string `json:"item_id"`
-	OutputIndex    int    `json:"output_index"`
-	ContentIndex   int    `json:"content_index"`
-	SummaryIndex   int    `json:"summary_index"`
-	Item           struct {
-		ID               string          `json:"id"`
-		Type             string          `json:"type"`
-		CallID           string          `json:"call_id"`
-		Name             string          `json:"name"`
-		Arguments        json.RawMessage `json:"arguments"`
-		Execution        string          `json:"execution"`
-		Namespace        string          `json:"namespace"`
-		EncryptedContent string          `json:"encrypted_content"`
-	} `json:"item"`
-	Part struct {
+	Type           string              `json:"type"`
+	SequenceNumber *int                `json:"sequence_number"`
+	Delta          string              `json:"delta"`
+	ItemID         string              `json:"item_id"`
+	OutputIndex    int                 `json:"output_index"`
+	ContentIndex   int                 `json:"content_index"`
+	SummaryIndex   int                 `json:"summary_index"`
+	Item           responsesOutputItem `json:"item"`
+	Part           struct {
 		Text string `json:"text"`
 	} `json:"part"`
 	Response responsesResponse `json:"response"`
@@ -148,6 +140,8 @@ func (m *ResponsesModel) responsesEventStream(
 		var latest *responsesStreamEvent
 		var lastSequence *int
 		emittedParts := false
+		var responseTimestamp time.Time
+		nullServerSearchCalls := make([]string, 0)
 		if seed != nil {
 			if sequence, ok := seed.ProviderDetails["sequence_number"].(int); ok {
 				lastSequence = &sequence
@@ -204,6 +198,7 @@ func (m *ResponsesModel) responsesEventStream(
 				if modelName == "" {
 					modelName = m.name
 				}
+				responseTimestamp = timestamp
 				if !yield(ai.ResponseMetadataEvent{
 					Usage: metadataResponse.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
 					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
@@ -264,7 +259,7 @@ func (m *ResponsesModel) responsesEventStream(
 						providerDetails = map[string]any{"namespace": event.Item.Namespace}
 					}
 					if !yield(ai.ToolCallStartEvent{
-						PartID: partID, ToolName: event.Item.Name, ToolCallID: event.Item.CallID,
+						PartID: partID, ToolName: event.Item.Name, ToolCallID: responsesCallID(event.Item.CallID),
 						ID: event.Item.ID, ProviderName: "openai", ProviderDetails: providerDetails,
 					}, nil) {
 						return
@@ -281,16 +276,30 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 				case "tool_search_call":
 					emittedParts = true
-					if event.Item.Execution != "client" {
-						yield(nil, fmt.Errorf("openai: server-executed tool search is not supported yet"))
-						return
-					}
-					if !yield(ai.ToolCallStartEvent{
-						PartID: responsesToolPartID(event), ToolName: ai.ToolSearchName,
-						ToolKind: ai.ToolPartKindToolSearch, ID: event.Item.ID,
-						ProviderName: "openai", ProviderDetails: map[string]any{"execution": "client"},
-					}, nil) {
-						return
+					switch event.Item.Execution {
+					case "client":
+						if !yield(ai.ToolCallStartEvent{
+							PartID: responsesToolPartID(event), ToolName: ai.ToolSearchName,
+							ToolKind: ai.ToolPartKindToolSearch, ID: event.Item.ID,
+							ProviderName: "openai", ProviderDetails: map[string]any{"execution": "client"},
+						}, nil) {
+							return
+						}
+					case "server":
+						callID := responsesEffectiveCallID(event.Item)
+						if responsesCallID(event.Item.CallID) == "" {
+							nullServerSearchCalls = append(nullServerSearchCalls, callID)
+						}
+						if !yield(ai.ToolCallStartEvent{
+							PartID: responsesToolPartID(event), ToolName: ai.ToolSearchName, ToolCallID: callID,
+							ToolKind: ai.ToolPartKindToolSearch, ID: event.Item.ID, ProviderName: "openai", Native: true,
+							ProviderDetails: map[string]any{
+								"call_id":   responsesNullableCallID(event.Item.CallID),
+								"execution": "server", "status": event.Item.Status,
+							},
+						}, nil) {
+							return
+						}
 					}
 				case "reasoning":
 					if event.Item.EncryptedContent != "" {
@@ -308,18 +317,29 @@ func (m *ResponsesModel) responsesEventStream(
 					return
 				}
 			case "response.output_item.done":
-				if event.Item.Type == "tool_search_call" && event.Item.Execution == "client" {
-					arguments, err := normalizeResponsesArguments(event.Item.Arguments)
+				if event.Item.Type == "tool_search_call" &&
+					(event.Item.Execution == "client" || event.Item.Execution == "server") {
+					arguments, err := normalizeResponsesToolSearchArguments(event.Item.Arguments, event.Item.Execution)
 					if err != nil {
 						yield(nil, err)
 						return
 					}
-					callID := event.Item.CallID
-					if callID == "" {
-						callID = event.Item.ID
-					}
 					if !yield(ai.ToolCallDeltaEvent{
-						PartID: responsesToolPartID(event), ToolCallID: callID, ArgsDelta: string(arguments),
+						PartID: responsesToolPartID(event), ToolCallID: responsesEffectiveCallID(event.Item),
+						ArgsDelta: string(arguments),
+					}, nil) {
+						return
+					}
+				} else if event.Item.Type == "tool_search_output" && event.Item.Execution == "server" {
+					emittedParts = true
+					callID := responsesEffectiveCallID(event.Item)
+					if responsesCallID(event.Item.CallID) == "" && len(nullServerSearchCalls) == 1 {
+						callID = nullServerSearchCalls[0]
+						nullServerSearchCalls = nil
+					}
+					if !yield(ai.NativeToolReturnEvent{
+						PartID: "item:" + event.Item.ID,
+						Part:   responsesToolSearchReturn(event.Item, callID, responseTimestamp),
 					}, nil) {
 						return
 					}
@@ -477,6 +497,21 @@ func yieldStaticResponsesParts(
 				return false
 			}
 			if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(part.Args)}, nil) {
+				return false
+			}
+		case ai.NativeToolCallPart:
+			if !yield(ai.ToolCallStartEvent{
+				PartID: partID, ToolName: part.ToolName, ToolCallID: part.ToolCallID,
+				ToolKind: part.ToolKind, ID: part.ID, ProviderName: part.ProviderName,
+				ProviderDetails: part.ProviderDetails, Native: true,
+			}, nil) {
+				return false
+			}
+			if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(part.Args)}, nil) {
+				return false
+			}
+		case ai.NativeToolReturnPart:
+			if !yield(ai.NativeToolReturnEvent{PartID: partID, Part: part}, nil) {
 				return false
 			}
 		}

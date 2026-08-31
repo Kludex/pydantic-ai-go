@@ -65,7 +65,7 @@ func (*Compaction) CapabilityOrdering() ai.CapabilityOrdering {
 func (compaction *Compaction) BeforeModelRequest(
 	_ context.Context, _ *ai.RunInfo, request ai.ModelRequestContext,
 ) (ai.ModelRequestContext, error) {
-	if _, ok := request.Model.(*Model); !ok {
+	if _, ok := ai.UnwrapModel(request.Model).(*Model); !ok {
 		return request, fmt.Errorf("anthropic: compaction requires Model, got %T", request.Model)
 	}
 	return request, nil

@@ -97,6 +97,11 @@ func TestCompactionCapabilityValidation(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "requires Model") {
 		t.Fatalf("unexpected model validation error: %v", err)
 	}
+	if _, err := valid.BeforeModelRequest(t.Context(), nil, ai.ModelRequestContext{
+		Model: ai.WrapModel(anthropic.NewModel("claude-sonnet-4-5")),
+	}); err != nil {
+		t.Fatalf("wrapped Anthropic model was rejected: %v", err)
+	}
 }
 
 func TestNonCompactionContextManagementDoesNotEnableBeta(t *testing.T) {

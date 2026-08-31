@@ -186,6 +186,11 @@ func TestResponsesCompactionValidation(t *testing.T) {
 	); err == nil || !strings.Contains(err.Error(), "requires ResponsesModel") {
 		t.Fatalf("unexpected model validation error: %v", err)
 	}
+	if _, err := valid.BeforeModelRequest(t.Context(), nil, ai.ModelRequestContext{
+		Model: ai.WrapModel(openai.NewResponsesModel("gpt-5")),
+	}); err != nil {
+		t.Fatalf("wrapped Responses model was rejected: %v", err)
+	}
 	settings, err := valid.ModelSettings(context.Background(), nil, ai.ModelSettings{})
 	if err != nil {
 		t.Fatal(err)

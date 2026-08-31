@@ -123,6 +123,10 @@ func TestRetryPromptModelResponseFormatting(t *testing.T) {
 	if plain != "retry\n\nFix the errors and try again." {
 		t.Fatalf("unexpected tool retry formatting: %q", plain)
 	}
+	plain = ai.RetryPromptPart{Content: "retry"}.ModelResponse()
+	if plain != "Validation feedback:\nretry\n\nFix the errors and try again." {
+		t.Fatalf("unexpected plain validation feedback: %q", plain)
+	}
 	structured := ai.RetryPromptPart{Errors: []ai.ValidationError{{
 		Type: "required", Message: "missing", Input: map[string]any{"other": true},
 		Context: map[string]any{"hidden": true},

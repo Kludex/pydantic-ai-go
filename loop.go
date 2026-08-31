@@ -130,7 +130,7 @@ func (a *Agent[Deps, Output]) newRun(
 	r := &run[Deps, Output]{
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int), runSettings: cfg.settings,
-		tools: slices.Clone(a.tools), capSettings: capSettings,
+		tools: slices.Clone(a.tools), toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
 		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
@@ -138,6 +138,14 @@ func (a *Agent[Deps, Output]) newRun(
 	if cfg.retryLimits != nil {
 		validateRetryLimits(*cfg.retryLimits)
 		r.retryLimits = *cfg.retryLimits
+	}
+	for _, erased := range cfg.toolsets {
+		toolset, ok := erased.(Toolset[Deps])
+		if !ok {
+			cancellation.finish()
+			return nil, fmt.Errorf("ai: run toolset dependencies do not match agent")
+		}
+		r.toolsets = append(r.toolsets, toolset)
 	}
 	toolNames := make(map[string]struct{}, len(r.tools)+len(cfg.tools))
 	for _, entry := range r.tools {
@@ -459,6 +467,8 @@ type run[Deps, Output any] struct {
 	currentOutputTool      *ToolDefinition
 	currentOutputValidator *schema.Validator
 	tools                  []toolEntry[Deps]
+	toolsets               []Toolset[Deps]
+	currentToolEntries     map[string]toolEntry[Deps]
 	staticInstructions     []InstructionPart
 	systemPromptsPrepared  bool
 	capSettings            []capabilitySettingsLayer
@@ -776,6 +786,29 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		}
 	}
 	r.currentOutputTool = params.OutputTool
+	stepEntries := make(map[string]toolEntry[Deps], len(r.tools))
+	for _, entry := range r.tools {
+		stepEntries[entry.def.Name] = entry
+	}
+	for _, toolset := range r.toolsets {
+		resolved, err := toolset.Tools(ctx, &rc)
+		if err != nil {
+			return ModelRequestParams{}, fmt.Errorf("ai: resolve toolset: %w", err)
+		}
+		for _, tool := range resolved {
+			entry := tool.entry
+			if entry.def.Name == "" {
+				return ModelRequestParams{}, fmt.Errorf("ai: toolset returned an empty tool name")
+			}
+			if _, exists := stepEntries[entry.def.Name]; exists {
+				return ModelRequestParams{}, fmt.Errorf("ai: duplicate tool name %q", entry.def.Name)
+			}
+			entry.def = cloneToolDefinition(entry.def)
+			stepEntries[entry.def.Name] = entry
+			params.Tools = append(params.Tools, entry.def)
+		}
+	}
+	r.currentToolEntries = stepEntries
 	tools := make([]ToolDefinition, 0, len(params.Tools))
 	for _, def := range params.Tools {
 		prepared := cloneToolDefinition(def)
@@ -798,9 +831,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 			return ModelRequestParams{}, fmt.Errorf("ai: prepare tools: %w", err)
 		}
 	}
-	known := make(map[string]struct{}, len(r.tools))
-	for _, entry := range r.tools {
-		known[entry.def.Name] = struct{}{}
+	known := make(map[string]struct{}, len(stepEntries))
+	for name := range stepEntries {
+		known[name] = struct{}{}
 	}
 	seen := make(map[string]struct{}, len(tools))
 	for _, def := range tools {
@@ -1398,6 +1431,7 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 		}
 	}
 	toolRC := *r.rc
+	toolRC.ToolName = call.ToolName
 	toolRC.ToolCallID = call.ToolCallID
 	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)
 	spanCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
@@ -1678,12 +1712,8 @@ func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
 }
 
 func (r *run[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
-	for _, entry := range r.tools {
-		if entry.def.Name == name {
-			return entry, true
-		}
-	}
-	return toolEntry[Deps]{}, false
+	entry, ok := r.currentToolEntries[name]
+	return entry, ok
 }
 
 func (a *Agent[Deps, Output]) staticInstructions(additional string, runCapabilityInstructions []string) []InstructionPart {
@@ -1823,6 +1853,13 @@ func (r *run[Deps, Output]) prepareInstructions(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]InstructionPart, error) {
 	parts := slices.Clone(r.staticInstructions)
+	for _, toolset := range r.toolsets {
+		instructions, err := resolveToolsetInstructions(ctx, rc, toolset)
+		if err != nil {
+			return nil, fmt.Errorf("ai: toolset instructions: %w", err)
+		}
+		parts = append(parts, instructions...)
+	}
 	for _, fn := range r.agent.instructionsFuncs {
 		instructions, err := fn(ctx, rc)
 		if err != nil {

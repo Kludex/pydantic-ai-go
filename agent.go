@@ -35,8 +35,9 @@ type Agent[Deps, Output any] struct {
 	capSettings        []capabilitySettingsLayer
 	outputValidators   []func(ctx context.Context, rc *RunContext[Deps], out Output) error
 
-	tools   []toolEntry[Deps]
-	started atomic.Bool
+	tools    []toolEntry[Deps]
+	toolsets []Toolset[Deps]
+	started  atomic.Bool
 }
 
 type toolEntry[Deps any] struct {
@@ -200,6 +201,12 @@ func (a *Agent[Deps, Output]) AddOutputValidator(fn func(ctx context.Context, rc
 	a.outputValidators = append(a.outputValidators, fn)
 }
 
+// AddToolset registers a composable toolset on the agent.
+func (a *Agent[Deps, Output]) AddToolset(toolset Toolset[Deps]) {
+	a.checkNotStarted()
+	a.toolsets = append(a.toolsets, toolset)
+}
+
 // AddTool registers a reusable tool on the agent.
 func (a *Agent[Deps, Output]) AddTool(tool Tool[Deps]) {
 	a.addPreparedTool(tool.entry.def, tool.entry.call, tool.entry.prepare)
@@ -361,7 +368,17 @@ type runConfig struct {
 	instructionsFuncs []erasedInstructionsFunc
 	modelSelectors    []erasedModelSelectorFunc
 	tools             []erasedTool
+	toolsets          []any
 	capabilities      []Capability
+}
+
+// WithRunToolsets adds composable toolsets for one run without modifying the agent.
+func WithRunToolsets[Deps any](toolsets ...Toolset[Deps]) RunOption {
+	erased := make([]any, len(toolsets))
+	for index, toolset := range toolsets {
+		erased[index] = toolset
+	}
+	return func(c *runConfig) { c.toolsets = append(c.toolsets, erased...) }
 }
 
 // WithRunCapabilities adds capabilities for one run without modifying the

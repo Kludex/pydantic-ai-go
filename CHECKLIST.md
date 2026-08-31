@@ -28,7 +28,7 @@ Status:
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
-- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, history, reusable tools, and additive capabilities with setup contributions. Typed output specialization and toolsets remain.
+- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode, usage limits, retry limits, history, reusable tools/toolsets, and additive capabilities with setup contributions. Typed output specialization remains.
 - [x] Typed agent/run and untyped capability model selectors run before every logical request with step, completed-history, prior-model, model-ID, deps, and usage context.
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
@@ -80,7 +80,9 @@ Status:
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
-- [~] Reusable function tools and per-run additive tools are implemented. Function, combined, filtered, prefixed, renamed, prepared, and approval-required toolset composition remains.
+- [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, and metadata wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
+- [ ] Approval-required toolset wrapper.
+- [ ] Toolset IDs plus per-run/per-step enter, exit, and replacement lifecycle for stateful remote toolsets.
 - [ ] Deferred/lazy tool loading and tool search.
 - [ ] Native/builtin tools distinct from function tools.
 
@@ -175,7 +177,7 @@ Status:
 - [ ] Thinking configuration.
 - [ ] Compaction and history processing helpers.
 - [ ] Tool search and deferred capability loading.
-- [ ] Prefix/prepare tools and set-tool-metadata helpers.
+- [x] Prefix, rename, filter, prepare, combine, and set-tool-metadata helpers through composable toolsets.
 - [ ] Reinjected system prompts and content-filter error handling.
 - [ ] Thread/concurrency executor configuration.
 
@@ -217,7 +219,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run typed output specialization and composable toolsets.
+2. Add per-run typed output specialization and stateful toolset lifecycle.
 3. Add rich tool return values, extra content, and revealed tools.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.

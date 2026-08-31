@@ -200,6 +200,22 @@ result, err := agent.Run(
 
 `WithRunTools` does not mutate the agent or leak tools into concurrent runs. A tool name cannot duplicate an agent tool or another per-run tool. Use `agent.AddTool(weatherTool)` to register the same value permanently. `Tool.Definition()` returns a detached copy for inspection.
 
+Compose larger collections with toolsets:
+
+```go
+weatherTools := ai.NewFunctionToolset(weatherTool)
+publicWeatherTools := ai.FilterToolset(weatherTools, func(
+	_ context.Context,
+	_ *ai.RunContext[Deps],
+	tool ai.ToolDefinition,
+) (bool, error) {
+	return tool.Metadata["internal"] != true, nil
+})
+agent.AddToolset(ai.PrefixToolset(publicWeatherTools, "weather"))
+```
+
+The model sees `weather_get_weather`, while the function receives `get_weather` through `RunContext.ToolName`. You can also use `CombineToolsets`, `RenameToolset`, `PrepareToolset`, and `SetToolsetMetadata`. Toolsets list tools and contribute optional instructions before each model step. Pass them through `WithRunToolsets` to scope them to one run.
+
 ## Dynamic tools
 
 Use `ai.AddPreparedTool` when one tool's availability or schema depends on the run:

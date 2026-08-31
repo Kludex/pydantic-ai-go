@@ -20,6 +20,7 @@ type RunContext[Deps any] struct {
 	MaxRetries     int
 	RunID          string
 	ConversationID string
+	ToolName       string
 	ToolCallID     string
 	PartialOutput  bool
 	Model          Model

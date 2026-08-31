@@ -302,15 +302,25 @@ func TestRunStreamPartLifecycle(t *testing.T) {
 }
 
 func TestResponsePartDeltasApply(t *testing.T) {
-	text, err := (ai.TextPartDelta{ContentDelta: "b", ProviderName: "provider"}).Apply(ai.TextPart{Content: "a"})
-	if err != nil || text.(ai.TextPart).Content != "ab" || text.(ai.TextPart).ProviderName != "provider" {
+	textDetails := map[string]any{"phase": "final_answer"}
+	text, err := (ai.TextPartDelta{
+		ContentDelta: "b", ProviderName: "provider", ProviderDetails: textDetails,
+	}).Apply(ai.TextPart{Content: "a", ProviderDetails: map[string]any{"old": true}})
+	textDetails["phase"] = "changed"
+	textPart := text.(ai.TextPart)
+	if err != nil || textPart.Content != "ab" || textPart.ProviderName != "provider" ||
+		textPart.ProviderDetails["old"] != true || textPart.ProviderDetails["phase"] != "final_answer" {
 		t.Fatalf("unexpected text delta result=%v err=%v", text, err)
 	}
+	thinkingDetails := map[string]any{"encrypted": true}
 	thinking, err := (ai.ThinkingPartDelta{
 		ContentDelta: "b", SignatureDelta: "signature", ProviderName: "provider",
+		ProviderDetails: thinkingDetails,
 	}).Apply(ai.ThinkingPart{Content: "a"})
-	if err != nil || thinking.(ai.ThinkingPart).Content != "ab" ||
-		thinking.(ai.ThinkingPart).Signature != "signature" || thinking.(ai.ThinkingPart).ProviderName != "provider" {
+	thinkingDetails["encrypted"] = false
+	thinkingPart := thinking.(ai.ThinkingPart)
+	if err != nil || thinkingPart.Content != "ab" || thinkingPart.Signature != "signature" ||
+		thinkingPart.ProviderName != "provider" || thinkingPart.ProviderDetails["encrypted"] != true {
 		t.Fatalf("unexpected thinking delta result=%v err=%v", thinking, err)
 	}
 	call, err := (ai.ToolCallPartDelta{

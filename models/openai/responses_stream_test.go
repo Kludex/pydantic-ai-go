@@ -64,8 +64,10 @@ func TestResponsesStreamEvents(t *testing.T) {
 		sseHandler(t, []string{
 			`{"type":"response.created","response":{"model":"gpt-5"}}`,
 			`{"type":"response.output_item.added","item":{"id":"cmp","type":"compaction","encrypted_content":"opaque"}}`,
-			`{"type":"response.output_item.added","item":{"id":"msg","type":"message"}}`,
+			`{"type":"response.output_item.added","item":{"id":"msg","type":"message","phase":"final_answer"}}`,
 			`{"type":"response.output_text.delta","item_id":"msg","delta":"Hi"}`,
+			`{"type":"response.output_text.annotation.added","item_id":"msg","annotation":{"type":"url_citation","url":"https://example.com"}}`,
+			`{"type":"response.output_text.done","item_id":"msg","logprobs":[{"token":"Hi","logprob":-0.1}]}`,
 			`{"type":"response.output_item.added","item":{"id":"reason","type":"reasoning","encrypted_content":"signature"}}`,
 			`{"type":"response.reasoning_summary_part.added","item_id":"reason","part":{"text":"A"}}`,
 			`{"type":"response.reasoning_summary_text.delta","item_id":"reason","delta":"B"}`,
@@ -86,7 +88,8 @@ func TestResponsesStreamEvents(t *testing.T) {
 		t.Fatal("Responses request did not enable streaming")
 	}
 	var text, thinking, args string
-	var textPartID, textID, thinkingPartID, thinkingID, thinkingSignature, argsPartID string
+	var textPartID, textID, textPhase, thinkingPartID, thinkingID, thinkingSignature, argsPartID string
+	var textAnnotations, textLogprobs int
 	var start ai.ToolCallStartEvent
 	var compaction ai.CompactionEvent
 	var finish ai.FinishEvent
@@ -96,6 +99,15 @@ func TestResponsesStreamEvents(t *testing.T) {
 			text += event.Delta
 			textPartID = event.PartID
 			textID = event.ID
+			if phase, ok := event.ProviderDetails["phase"].(string); ok {
+				textPhase = phase
+			}
+			if annotations, ok := event.ProviderDetails["annotations"].([]map[string]any); ok {
+				textAnnotations = len(annotations)
+			}
+			if logprobs, ok := event.ProviderDetails["logprobs"].([]map[string]any); ok {
+				textLogprobs = len(logprobs)
+			}
 		case ai.ThinkingDeltaEvent:
 			thinking += event.Delta
 			thinkingPartID = event.PartID
@@ -124,8 +136,8 @@ func TestResponsesStreamEvents(t *testing.T) {
 			text, thinking, compaction, start, args,
 		)
 	}
-	if textPartID != "output:0:content:0:text" || textID != "msg" ||
-		thinkingPartID != "item:reason:thinking:0" || thinkingID != "reason" || thinkingSignature != "signature" ||
+	if textPartID != "output:0:content:0:text" || textID != "msg" || textPhase != "final_answer" ||
+		textAnnotations != 1 || textLogprobs != 1 || thinkingPartID != "item:reason:thinking:0" || thinkingID != "reason" || thinkingSignature != "signature" ||
 		start.PartID != "item:fc" || start.ID != "fc" || start.ProviderDetails["namespace"] != "tools" ||
 		argsPartID != start.PartID {
 		t.Fatalf("unstable Responses part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
@@ -137,6 +149,84 @@ func TestResponsesStreamEvents(t *testing.T) {
 		finish.State != ai.ModelResponseStateComplete || finish.Timestamp.IsZero() ||
 		finish.ProviderDetails["finish_reason"] != "completed" || finish.ProviderDetails["timestamp"] == nil {
 		t.Fatalf("unexpected finish %+v", finish)
+	}
+}
+
+func TestResponsesStreamMetadataReachesNormalizedEventsAndHistory(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_item.added","item":{"id":"message","type":"message","phase":"commentary"}}`,
+		`{"type":"response.output_text.delta","item_id":"message","delta":"Hi"}`,
+		`{"type":"response.output_text.annotation.added","item_id":"message","annotation":{"type":"url_citation","url":"https://example.com"}}`,
+		`{"type":"response.output_text.done","item_id":"message","logprobs":[{"token":"Hi","logprob":-0.1}]}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","status":"completed"}}`,
+	}))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "go", struct{}{})
+	var started ai.TextPart
+	var metadataDelta ai.TextPartDelta
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case ai.PartStartEvent:
+			if text, ok := event.Part.(ai.TextPart); ok {
+				started = text
+			}
+		case ai.PartDeltaEvent:
+			if delta, ok := event.Delta.(ai.TextPartDelta); ok && len(delta.ProviderDetails) > 0 {
+				metadataDelta = delta
+			}
+		}
+	}
+	if started.ProviderDetails["phase"] != "commentary" ||
+		len(metadataDelta.ProviderDetails["annotations"].([]map[string]any)) != 1 ||
+		len(metadataDelta.ProviderDetails["logprobs"].([]map[string]any)) != 1 {
+		t.Fatalf("stream metadata was not normalized: start=%+v delta=%+v", started, metadataDelta)
+	}
+	metadataDelta.ProviderDetails["annotations"].([]map[string]any)[0]["url"] = "changed"
+	result := stream.Result()
+	response := result.Messages()[len(result.Messages())-1].(ai.ModelResponse)
+	text := response.Parts[0].(ai.TextPart)
+	if text.ProviderDetails["phase"] != "commentary" ||
+		len(text.ProviderDetails["annotations"].([]map[string]any)) != 1 ||
+		text.ProviderDetails["annotations"].([]map[string]any)[0]["url"] != "https://example.com" ||
+		len(text.ProviderDetails["logprobs"].([]map[string]any)) != 1 {
+		t.Fatalf("stream metadata was not retained in history: %+v", text)
+	}
+}
+
+func TestResponsesStreamMetadataConsumerStop(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_text.done","item_id":"message","logprobs":[{"token":"Hi"}]}`,
+		`{"type":"response.completed","response":{"status":"completed"}}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
+	}
+}
+
+func TestResponsesStreamPhaseWithoutTextDelta(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_item.added","item":{"id":"message","type":"message","phase":"final_answer"}}`,
+		`{"type":"response.output_text.done","item_id":"message"}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","status":"completed"}}`,
+	}))
+	events, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text ai.TextDeltaEvent
+	for _, event := range events {
+		if delta, ok := event.(ai.TextDeltaEvent); ok {
+			text = delta
+		}
+	}
+	if text.ID != "message" || text.ProviderDetails["phase"] != "final_answer" {
+		t.Fatalf("phase-only text event was lost: %+v", text)
 	}
 }
 

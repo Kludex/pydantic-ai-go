@@ -118,6 +118,8 @@ type responsesStreamEvent struct {
 	SequenceNumber *int                `json:"sequence_number"`
 	Delta          string              `json:"delta"`
 	Refusal        string              `json:"refusal"`
+	Logprobs       []map[string]any    `json:"logprobs"`
+	Annotation     map[string]any      `json:"annotation"`
 	ItemID         string              `json:"item_id"`
 	OutputIndex    int                 `json:"output_index"`
 	ContentIndex   int                 `json:"content_index"`
@@ -147,6 +149,8 @@ func (m *ResponsesModel) responsesEventStream(
 		hasRefusal := false
 		var responseTimestamp time.Time
 		nullServerSearchCalls := make([]string, 0)
+		textPhases := make(map[string]string)
+		textAnnotations := make(map[string][]map[string]any)
 		if seed != nil {
 			if sequence, ok := seed.ProviderDetails["sequence_number"].(int); ok {
 				lastSequence = &sequence
@@ -229,10 +233,40 @@ func (m *ResponsesModel) responsesEventStream(
 				if event.ItemID != "" {
 					providerName = m.providerName
 				}
+				var providerDetails map[string]any
+				if phase := textPhases[event.ItemID]; phase != "" {
+					providerDetails = map[string]any{"phase": phase}
+					delete(textPhases, event.ItemID)
+				}
 				if !yield(ai.TextDeltaEvent{
 					PartID: partID, Delta: event.Delta, ID: event.ItemID, ProviderName: providerName,
+					ProviderDetails: providerDetails,
 				}, nil) {
 					return
+				}
+			case "response.output_text.annotation.added":
+				textAnnotations[event.ItemID] = append(textAnnotations[event.ItemID], event.Annotation)
+			case "response.output_text.done":
+				providerDetails := map[string]any{}
+				if annotations := textAnnotations[event.ItemID]; len(annotations) > 0 {
+					providerDetails["annotations"] = annotations
+				}
+				if len(event.Logprobs) > 0 {
+					providerDetails["logprobs"] = event.Logprobs
+				}
+				if phase := textPhases[event.ItemID]; phase != "" {
+					providerDetails["phase"] = phase
+					delete(textPhases, event.ItemID)
+				}
+				if len(providerDetails) > 0 {
+					emittedParts = true
+					partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
+					if !yield(ai.TextDeltaEvent{
+						PartID: partID, ID: event.ItemID, ProviderName: m.providerName,
+						ProviderDetails: providerDetails,
+					}, nil) {
+						return
+					}
 				}
 			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 				emittedParts = true
@@ -313,6 +347,10 @@ func (m *ResponsesModel) responsesEventStream(
 						}, nil) {
 							return
 						}
+					}
+				case "message":
+					if event.Item.Phase != "" {
+						textPhases[event.Item.ID] = event.Item.Phase
 					}
 				case "reasoning":
 					if event.Item.EncryptedContent != "" {
@@ -424,7 +462,7 @@ func (m *ResponsesModel) responsesEventStream(
 				return
 			case "response.created", "response.in_progress", "response.queued",
 				"response.content_part.added", "response.content_part.done",
-				"response.output_text.done", "response.function_call_arguments.done",
+				"response.function_call_arguments.done",
 				"response.reasoning_summary_part.done", "response.reasoning_summary_text.done",
 				"response.reasoning_text.done":
 			default:

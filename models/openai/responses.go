@@ -523,10 +523,11 @@ type responsesOutputItem struct {
 	ID      string `json:"id"`
 	Type    string `json:"type"`
 	Content []struct {
-		Type     string           `json:"type"`
-		Text     string           `json:"text"`
-		Refusal  string           `json:"refusal"`
-		Logprobs []map[string]any `json:"logprobs"`
+		Type        string           `json:"type"`
+		Text        string           `json:"text"`
+		Refusal     string           `json:"refusal"`
+		Logprobs    []map[string]any `json:"logprobs"`
+		Annotations []map[string]any `json:"annotations"`
 	} `json:"content"`
 	CallID           *string         `json:"call_id"`
 	Name             string          `json:"name"`
@@ -534,6 +535,7 @@ type responsesOutputItem struct {
 	Namespace        string          `json:"namespace"`
 	Execution        string          `json:"execution"`
 	Status           string          `json:"status"`
+	Phase            string          `json:"phase"`
 	Tools            []responsesTool `json:"tools"`
 	EncryptedContent string          `json:"encrypted_content"`
 	Summary          []struct {
@@ -642,8 +644,20 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 					refusal = content.Refusal
 				case "output_text":
 					var details map[string]any
-					if content.Logprobs != nil {
+					if len(content.Logprobs) > 0 {
 						details = map[string]any{"logprobs": content.Logprobs}
+					}
+					if len(content.Annotations) > 0 {
+						if details == nil {
+							details = map[string]any{}
+						}
+						details["annotations"] = content.Annotations
+					}
+					if item.Phase != "" {
+						if details == nil {
+							details = map[string]any{}
+						}
+						details["phase"] = item.Phase
 					}
 					resp.Parts = append(resp.Parts, ai.TextPart{
 						Content: content.Text, ID: item.ID, ProviderName: "openai", ProviderDetails: details,

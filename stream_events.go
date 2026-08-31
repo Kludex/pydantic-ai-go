@@ -31,8 +31,9 @@ type ResponsePartDelta interface {
 
 // TextPartDelta appends content to a TextPart.
 type TextPartDelta struct {
-	ContentDelta string
-	ProviderName string
+	ContentDelta    string
+	ProviderName    string
+	ProviderDetails map[string]any
 }
 
 func (TextPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindText }
@@ -47,14 +48,16 @@ func (d TextPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 	if d.ProviderName != "" {
 		text.ProviderName = d.ProviderName
 	}
+	text.ProviderDetails = mergeProviderDetails(text.ProviderDetails, d.ProviderDetails)
 	return text, nil
 }
 
 // ThinkingPartDelta appends content to a ThinkingPart.
 type ThinkingPartDelta struct {
-	ContentDelta   string
-	SignatureDelta string
-	ProviderName   string
+	ContentDelta    string
+	SignatureDelta  string
+	ProviderName    string
+	ProviderDetails map[string]any
 }
 
 func (ThinkingPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindThinking }
@@ -72,6 +75,7 @@ func (d ThinkingPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 	if d.ProviderName != "" {
 		thinking.ProviderName = d.ProviderName
 	}
+	thinking.ProviderDetails = mergeProviderDetails(thinking.ProviderDetails, d.ProviderDetails)
 	return thinking, nil
 }
 

@@ -216,6 +216,7 @@ func accumulate(
 			} else if err := emitEvent(PartDeltaEvent{
 				Index: part.index, PartID: part.id, Delta: TextPartDelta{
 					ContentDelta: event.Delta, ProviderName: event.ProviderName,
+					ProviderDetails: cloneSchemaMap(event.ProviderDetails),
 				},
 			}); err != nil {
 				return partialResponse(), err
@@ -243,7 +244,8 @@ func accumulate(
 			} else if err := emitEvent(PartDeltaEvent{
 				Index: part.index, PartID: part.id, Delta: ThinkingPartDelta{
 					ContentDelta: event.Delta, SignatureDelta: event.SignatureDelta,
-					ProviderName: event.ProviderName,
+					ProviderName:    event.ProviderName,
+					ProviderDetails: cloneSchemaMap(event.ProviderDetails),
 				},
 			}); err != nil {
 				return partialResponse(), err

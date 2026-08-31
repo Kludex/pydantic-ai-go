@@ -78,13 +78,18 @@ func TestStreamEventKinds(t *testing.T) {
 			t.Fatalf("expected %q, got %q", test.want, test.event.streamEventKind())
 		}
 	}
-	for delta, want := range map[ResponsePartDelta]ResponsePartKind{
-		TextPartDelta{}: ResponsePartKindText, ThinkingPartDelta{}: ResponsePartKindThinking,
-		ToolCallPartDelta{}:       ResponsePartKindToolCall,
-		NativeToolCallPartDelta{}: ResponsePartKindNativeToolCall,
-	} {
-		if delta.responsePartDeltaKind() != want {
-			t.Fatalf("expected %q, got %q", want, delta.responsePartDeltaKind())
+	deltaKinds := []struct {
+		delta ResponsePartDelta
+		want  ResponsePartKind
+	}{
+		{TextPartDelta{}, ResponsePartKindText},
+		{ThinkingPartDelta{}, ResponsePartKindThinking},
+		{ToolCallPartDelta{}, ResponsePartKindToolCall},
+		{NativeToolCallPartDelta{}, ResponsePartKindNativeToolCall},
+	}
+	for _, test := range deltaKinds {
+		if test.delta.responsePartDeltaKind() != test.want {
+			t.Fatalf("expected %q, got %q", test.want, test.delta.responsePartDeltaKind())
 		}
 	}
 }

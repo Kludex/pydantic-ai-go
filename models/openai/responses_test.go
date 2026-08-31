@@ -169,6 +169,27 @@ func TestResponsesRefusal(t *testing.T) {
 	}
 }
 
+func TestResponsesTextMetadataWithoutLogprobs(t *testing.T) {
+	model := newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{
+			"status":"completed","output":[{"id":"message","type":"message","phase":"commentary","content":[
+				{"type":"output_text","text":"annotated","annotations":[{"type":"url_citation"}]},
+				{"type":"output_text","text":"phase only"}
+			]}]
+		}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := response.Parts[0].(ai.TextPart)
+	second := response.Parts[1].(ai.TextPart)
+	if len(first.ProviderDetails["annotations"].([]map[string]any)) != 1 ||
+		first.ProviderDetails["phase"] != "commentary" || second.ProviderDetails["phase"] != "commentary" {
+		t.Fatalf("unexpected text metadata: first=%+v second=%+v", first, second)
+	}
+}
+
 func TestResponsesTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotPath, gotCustom string
@@ -183,8 +204,9 @@ func TestResponsesTextResponse(t *testing.T) {
 			"status": "completed", "service_tier": "default",
 			"output": [
 				{"id": "reasoning-1", "type": "reasoning", "encrypted_content": "signature", "summary": [{"text": "thinking"}]},
-				{"id": "message-1", "type": "message", "content": [{
-					"type": "output_text", "text": "Hello!", "logprobs": [{"token": "Hello", "logprob": -0.1}]
+				{"id": "message-1", "type": "message", "phase": "final_answer", "content": [{
+					"type": "output_text", "text": "Hello!", "logprobs": [{"token": "Hello", "logprob": -0.1}],
+					"annotations": [{"type": "url_citation", "url": "https://example.com"}]
 				}]}
 			],
 			"usage": {
@@ -229,7 +251,9 @@ func TestResponsesTextResponse(t *testing.T) {
 	}
 	text := resp.Parts[1].(ai.TextPart)
 	if text.ID != "message-1" || text.ProviderName != "openai" ||
-		len(text.ProviderDetails["logprobs"].([]map[string]any)) != 1 {
+		len(text.ProviderDetails["logprobs"].([]map[string]any)) != 1 ||
+		len(text.ProviderDetails["annotations"].([]map[string]any)) != 1 ||
+		text.ProviderDetails["phase"] != "final_answer" {
 		t.Fatalf("text metadata lost: %+v", text)
 	}
 	if resp.ProviderName != "openai" || resp.ProviderURL == "" || resp.ProviderResponseID != "response-1" ||

@@ -228,6 +228,38 @@ The default policy advances only for `ModelAPIError` values, such as non-success
 
 Use `WrapModel` as the base for a transparent model decorator. It forwards streaming, lifecycle, settings, tool-search, native-history, and continuation behavior. `UnwrapModel` lets provider-specific capabilities recognize nested decorators without bypassing request behavior.
 
+### Limit concurrency
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	limiter := ai.NewConcurrencyLimiter(
+		5,
+		ai.WithMaxQueued(20),
+		ai.WithConcurrencyLimiterName("openai-pool"),
+	)
+	model := openai.NewModel("gpt-5-mini")
+	agent := ai.NewAgent[struct{}, string](
+		model,
+		ai.WithCapabilities(ai.NewConcurrencyCapability(limiter, "support-agent")),
+	)
+	if _, err := agent.Run(context.Background(), "Hello", struct{}{}); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+A run capability holds its slot for the complete agent run. Use `NewConcurrencyLimitedModel(model, limiter)` instead when only model requests should consume capacity; its slot remains held for the complete streamed response. Share one `ConcurrencyLimiter` across models or agents when they consume the same capacity pool. Do not apply the same limiter at nested run and model levels. A full bounded queue returns an error matching `ErrConcurrencyLimitExceeded`.
+
 ## Suspended responses
 
 Use OpenAI background mode for model requests that may take a long time:

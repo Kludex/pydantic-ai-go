@@ -140,7 +140,7 @@ Status:
 - [ ] Groq, Mistral, Cohere, Cerebras, xAI, OpenRouter, Ollama, Hugging Face, and other upstream providers.
 - [ ] Provider profiles/capability detection instead of model-name conditionals.
 - [ ] Provider HTTP retries and configurable retry policy.
-- [~] Transparent `ModelWrapper` delegation and wrapper-aware provider compaction are complete. `FallbackModel` supports ordered models, default provider-API-error fallback, composable error/response predicates, detached diagnostics, rejected-response cost accounting, streaming-open fallback, pinned suspended continuations with rewind, combined strategy/native-history behavior, and reverse lifecycle cleanup. Concurrency limiting and instrumentation wrappers remain.
+- [~] Transparent `ModelWrapper` delegation and wrapper-aware provider compaction are complete. `FallbackModel` supports ordered models, default provider-API-error fallback, composable error/response predicates, detached diagnostics, rejected-response cost accounting, streaming-open fallback, pinned suspended continuations with rewind, combined strategy/native-history behavior, and reverse lifecycle cleanup. Shared concurrency-limited model wrappers are complete; instrumentation wrappers remain.
 
 ### Model settings
 
@@ -194,7 +194,7 @@ Status:
 - [~] Local tool search is available as a composable toolset; deferred capability loading remains.
 - [x] Prefix, rename, filter, prepare, combine, and set-tool-metadata helpers through composable toolsets.
 - [ ] Reinjected system prompts and content-filter error handling.
-- [ ] Thread/concurrency executor configuration.
+- [x] Shared in-process concurrency gates support context-aware admission, running/waiting/available metrics, optional bounded-queue backpressure, model wrappers that hold slots through stream consumption, and whole-run capability limits.
 
 ### Integrations
 
@@ -235,7 +235,7 @@ Status:
 
 ## Next work
 
-1. Add model concurrency limiting and instrumentation wrappers on top of the transparent model-wrapper contract.
+1. Add instrumentation wrappers on top of the transparent model-wrapper contract.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP with explicit shared sessions, prompts/resources, sampling, elicitation, task extension, and OAuth examples.
 4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.

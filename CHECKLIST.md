@@ -187,7 +187,7 @@ Status:
 
 ### Built-in capabilities
 
-- [ ] MCP client capability and MCP toolset.
+- [~] The `mcp` package provides reusable run-isolated toolsets for custom, Streamable HTTP, SSE, and stdio transports through the official Go SDK. It imports tools, schemas, annotations, metadata, structured/text/binary results, server instructions, timeout policy, configurable tool-error handling, and composes with existing toolset wrappers. A higher-level MCP capability, shared explicit sessions, prompts/resources, sampling, elicitation, task extension, OAuth examples, and configuration-file loading remain.
 - [ ] Web search, web fetch, X search, and provider-native tools.
 - [x] Portable thinking configuration through common model settings, including per-run and dynamic setting layers.
 - [~] Provider-neutral compaction boundaries, composable message history processors, stateful OpenAI Responses/Anthropic compaction, OpenAI stateless message/custom triggers, direct compaction requests, durable history replacement, and usage-limit accounting are complete. Token-based trimming, model-wrapper unwrapping, dedicated compaction tracing, and provider-neutral summarization helpers remain.

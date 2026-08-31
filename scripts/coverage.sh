@@ -3,7 +3,7 @@
 set -euo pipefail
 
 fail=0
-for pkg in . ./internal/schema ./models/fakes ./models/openai ./models/anthropic ./models/google; do
+for pkg in . ./internal/schema ./models/fakes ./models/openai ./models/anthropic ./models/google ./mcp; do
     profile=$(mktemp)
     go test "$pkg" -coverprofile="$profile" > /dev/null
     total=$(go tool cover -func="$profile" | tail -1 | awk '{print $3}')

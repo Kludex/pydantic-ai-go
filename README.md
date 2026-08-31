@@ -726,6 +726,26 @@ fmt.Println(run.Result().Output)
 
 The driver exposes semantic events instead of internal graph nodes. Hooks remain the API for changing request, tool, output, and run behavior.
 
+## MCP tools
+
+Connect an MCP server as a normal run-scoped toolset:
+
+```go
+import aimcp "github.com/Kludex/pydantic-ai-go/mcp"
+
+toolset := aimcp.NewStreamableHTTPToolset[Deps](
+	"http://localhost:8000/mcp",
+	aimcp.WithID("calculator"),
+)
+agent.AddToolset(toolset)
+```
+
+The MCP `Toolset` creates an isolated MCP session for each agent run. It imports tool descriptions, input and output schemas, annotations, metadata, and server instructions. Connections close through the normal reverse-order toolset lifecycle, including cancellation and setup failure.
+
+Use `NewSSEToolset` for legacy SSE and `NewCommandToolset` for a stdio subprocess. Use `NewToolset` with a `TransportFactory` for custom transports or per-run credentials. MCP tool failures ask the model to retry by default. Select `ToolErrorFailed` or `ToolErrorAbort` with `WithToolErrorBehavior` when you need terminal failed results or immediate run errors.
+
+MCP structured results remain structured. Text containing a JSON object or array is decoded. Image and audio results become `ai.BinaryContent`. Wrap the toolset with `FilterToolset`, `PrefixToolset`, `RequireApprovalToolset`, or `DeferLoadingToolset` like any other toolset.
+
 ## Multimodal input
 
 `RunParts` sends images and files alongside text:

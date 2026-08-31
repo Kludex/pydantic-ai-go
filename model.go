@@ -19,6 +19,16 @@ type Model interface {
 	Name() string
 }
 
+// ModelCloseFunc releases resources acquired for one agent run.
+type ModelCloseFunc func(ctx context.Context) error
+
+// ModelOpener is an optional per-run lifecycle for models that acquire
+// resources. OpenModel runs once per distinct selected model. Close functions
+// run in reverse selection order after toolset resources are no longer used.
+type ModelOpener interface {
+	OpenModel(ctx context.Context) (ModelCloseFunc, error)
+}
+
 // ModelDefaultSettings is implemented by models with request-setting defaults.
 // Agent, capability, and run settings override these values field by field.
 type ModelDefaultSettings interface {
@@ -30,6 +40,16 @@ func modelName(model Model) string {
 		return ""
 	}
 	return model.Name()
+}
+
+func sameModelInstance(first, second Model) bool {
+	if modelIsNil(first) || modelIsNil(second) || reflect.TypeOf(first) != reflect.TypeOf(second) {
+		return false
+	}
+	if reflect.TypeOf(first).Comparable() {
+		return first == second
+	}
+	return false
 }
 
 func modelIsNil(model Model) bool {

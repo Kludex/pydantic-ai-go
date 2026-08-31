@@ -197,7 +197,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 				return nil
 			}
 			closed = true
-			closeErr := run.closeToolsets(context.WithoutCancel(ctx))
+			closeErr := run.closeRunResources(context.WithoutCancel(ctx))
 			run.cancellation.finish()
 			return closeErr
 		}

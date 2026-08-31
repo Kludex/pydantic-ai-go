@@ -73,7 +73,7 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 	}
 	r.recordSelectedModel = func(name string) { recordRunModel(span, name) }
 	defer func() {
-		closeErr := r.closeToolsets(context.WithoutCancel(ctx))
+		closeErr := r.closeRunResources(context.WithoutCancel(ctx))
 		r.cancellation.finish()
 		if closeErr != nil {
 			result = nil
@@ -528,6 +528,8 @@ type run[Deps, Output any] struct {
 	staticModelID          string
 	runModelSelectors      []erasedModelSelectorFunc
 	resolvedModels         map[string]Model
+	enteredModels          []Model
+	modelClosers           []ModelCloseFunc
 	deferredResults        *DeferredToolResults
 	resolvingDeferred      map[string]deferredResolution
 	pendingDeferred        *DeferredToolRequests
@@ -576,6 +578,47 @@ func (r *run[Deps, Output]) prepareToolsetsForStep(ctx context.Context, rc *RunC
 		r.toolsets[index] = resolved
 	}
 	return nil
+}
+
+func (r *run[Deps, Output]) openSelectedModel(ctx context.Context) error {
+	for _, entered := range r.enteredModels {
+		if sameModelInstance(entered, r.model) {
+			return nil
+		}
+	}
+	opener, ok := r.model.(ModelOpener)
+	if !ok {
+		r.enteredModels = append(r.enteredModels, r.model)
+		return nil
+	}
+	closeFunc, err := opener.OpenModel(ctx)
+	if err != nil {
+		return fmt.Errorf("ai: open model %q: %w", r.model.Name(), err)
+	}
+	r.enteredModels = append(r.enteredModels, r.model)
+	if closeFunc != nil {
+		r.modelClosers = append(r.modelClosers, closeFunc)
+	}
+	return nil
+}
+
+func (r *run[Deps, Output]) closeModels(ctx context.Context) error {
+	closers := r.modelClosers
+	r.modelClosers = nil
+	var errs []error
+	for index := len(closers) - 1; index >= 0; index-- {
+		if err := closers[index](ctx); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	if err := errors.Join(errs...); err != nil {
+		return fmt.Errorf("ai: close model: %w", err)
+	}
+	return nil
+}
+
+func (r *run[Deps, Output]) closeRunResources(ctx context.Context) error {
+	return errors.Join(r.closeModels(ctx), r.closeToolsets(ctx))
 }
 
 func (r *run[Deps, Output]) closeToolsets(ctx context.Context) error {
@@ -809,6 +852,9 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	}
 	if modelIsNil(r.model) {
 		return nil, ErrNoModel
+	}
+	if err := r.openSelectedModel(ctx); err != nil {
+		return nil, err
 	}
 	if r.recordSelectedModel != nil {
 		r.recordSelectedModel(r.model.Name())

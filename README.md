@@ -130,6 +130,8 @@ result, err := agent.Run(ctx, "hello", deps, ai.WithRunModelID("tenant-primary")
 
 Resolvers run in registration order, and each ID is resolved once per run. An unresolved ID returns `UnknownModelIDError` and matches `ErrUnknownModelID`. `WithRunModel` skips selectors. `WithRunModelSelector` replaces agent and capability selectors for one run.
 
+A model can implement `ModelOpener` when it owns run-scoped resources. `OpenModel` runs once for each distinct selected model. Its `ModelCloseFunc` runs with a non-canceled context in reverse selection order, including failed, canceled, deferred, and partially consumed streamed runs. Models close before toolsets because model selection happens after toolset acquisition.
+
 ## Concurrent tools
 
 Independent tool calls from one model response run concurrently. Results still go back to the model in the order it requested them.

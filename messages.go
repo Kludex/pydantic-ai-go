@@ -26,19 +26,53 @@ const (
 
 // ModelRequest is a message sent to the model.
 type ModelRequest struct {
-	Parts        []RequestPart
-	Instructions string
-	State        RequestState
+	Parts          []RequestPart
+	Timestamp      time.Time
+	Instructions   string
+	RunID          string
+	ConversationID string
+	Metadata       map[string]any
+	State          RequestState
 }
 
 func (ModelRequest) messageKind() string { return "request" }
 
+// FinishReason is the normalized reason generation stopped.
+type FinishReason string
+
+const (
+	FinishReasonStop          FinishReason = "stop"
+	FinishReasonLength        FinishReason = "length"
+	FinishReasonContentFilter FinishReason = "content_filter"
+	FinishReasonToolCall      FinishReason = "tool_call"
+	FinishReasonError         FinishReason = "error"
+)
+
+// ModelResponseState describes the lifecycle of a model response.
+type ModelResponseState string
+
+const (
+	ModelResponseStateComplete    ModelResponseState = "complete"
+	ModelResponseStateIncomplete  ModelResponseState = "incomplete"
+	ModelResponseStateSuspended   ModelResponseState = "suspended"
+	ModelResponseStateInterrupted ModelResponseState = "interrupted"
+)
+
 // ModelResponse is a message received from the model.
 type ModelResponse struct {
-	Parts     []ResponsePart
-	Usage     Usage
-	ModelName string
-	Timestamp time.Time
+	Parts              []ResponsePart
+	Usage              Usage
+	ModelName          string
+	Timestamp          time.Time
+	ProviderName       string
+	ProviderURL        string
+	ProviderDetails    map[string]any
+	ProviderResponseID string
+	FinishReason       FinishReason
+	RunID              string
+	ConversationID     string
+	Metadata           map[string]any
+	State              ModelResponseState
 }
 
 func (ModelResponse) messageKind() string { return "response" }

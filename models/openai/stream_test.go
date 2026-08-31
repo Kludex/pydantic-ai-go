@@ -53,8 +53,8 @@ func normalizedText(event ai.StreamEvent) string {
 
 func TestStreamTextDeltas(t *testing.T) {
 	model := newServer(t, sseHandler(t, []string{
-		`{"model":"gpt-5","choices":[{"delta":{"content":"Hel"}}]}`,
-		`{"model":"gpt-5","choices":[{"delta":{"content":"lo"}}]}`,
+		`{"id":"chat-stream","model":"gpt-5","created":1735689600,"service_tier":"default","system_fingerprint":"fp-1","choices":[{"delta":{"content":"Hel"}}]}`,
+		`{"model":"gpt-5","choices":[{"delta":{"content":"lo"},"finish_reason":"stop"}]}`,
 		`{"model":"gpt-5","choices":[],"usage":{"prompt_tokens":5,"completion_tokens":2}}`,
 		`[DONE]`,
 	}))
@@ -79,8 +79,11 @@ func TestStreamTextDeltas(t *testing.T) {
 	if finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 2 || finish.Usage.Requests != 1 {
 		t.Fatalf("unexpected usage %+v", finish.Usage)
 	}
-	if finish.ModelName != "gpt-5" {
-		t.Fatalf("unexpected model name %q", finish.ModelName)
+	if finish.ModelName != "gpt-5" || finish.ProviderName != "openai" || finish.ProviderURL == "" ||
+		finish.ProviderResponseID != "chat-stream" || finish.FinishReason != ai.FinishReasonStop ||
+		finish.Timestamp.IsZero() || finish.ProviderDetails["service_tier"] != "default" ||
+		finish.ProviderDetails["system_fingerprint"] != "fp-1" || finish.ProviderDetails["finish_reason"] != "stop" {
+		t.Fatalf("unexpected finish metadata %+v", finish)
 	}
 }
 

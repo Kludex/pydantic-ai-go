@@ -55,6 +55,8 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		defer func() { _ = body.Close() }()
 		usage := ai.Usage{Requests: 1}
 		modelName := m.name
+		responseID := ""
+		finishReason := ""
 		received := false
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -69,6 +71,9 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				return
 			}
 			received = true
+			if chunk.ResponseID != "" {
+				responseID = chunk.ResponseID
+			}
 			if chunk.ModelVersion != "" {
 				modelName = chunk.ModelVersion
 			}
@@ -77,6 +82,9 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			}
 			if len(chunk.Candidates) == 0 {
 				continue
+			}
+			if chunk.Candidates[0].FinishReason != "" {
+				finishReason = chunk.Candidates[0].FinishReason
 			}
 			for index, part := range chunk.Candidates[0].Content.Parts {
 				if !emitPart(yield, part, index) {
@@ -92,7 +100,18 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			yield(nil, fmt.Errorf("google: stream ended without a response"))
 			return
 		}
-		yield(ai.FinishEvent{Usage: usage, ModelName: modelName}, nil)
+		providerDetails := map[string]any{}
+		if finishReason != "" {
+			providerDetails["finish_reason"] = finishReason
+		}
+		if len(providerDetails) == 0 {
+			providerDetails = nil
+		}
+		yield(ai.FinishEvent{
+			Usage: usage, ModelName: modelName, ProviderName: "google", ProviderURL: m.baseURL,
+			ProviderDetails: providerDetails, ProviderResponseID: responseID,
+			FinishReason: googleFinishReason(finishReason), State: ai.ModelResponseStateComplete,
+		}, nil)
 	}
 }
 

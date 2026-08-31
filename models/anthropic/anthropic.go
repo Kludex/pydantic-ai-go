@@ -116,7 +116,12 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return parseResponse(data)
+	response, err := parseResponse(data)
+	if response != nil {
+		response.ProviderName = "anthropic"
+		response.ProviderURL = m.baseURL
+	}
+	return response, err
 }
 
 // APIError is a non-200 response from the Anthropic API.
@@ -329,8 +334,10 @@ func supportsStrictTools(name string) bool {
 }
 
 type messagesResponse struct {
-	Model   string `json:"model"`
-	Content []struct {
+	ID         string `json:"id"`
+	Model      string `json:"model"`
+	StopReason string `json:"stop_reason"`
+	Content    []struct {
 		Type     string          `json:"type"`
 		Text     string          `json:"text"`
 		Thinking string          `json:"thinking"`
@@ -368,9 +375,20 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	if err := json.Unmarshal(data, &mr); err != nil {
 		return nil, fmt.Errorf("anthropic: parse response: %w", err)
 	}
+	providerDetails := map[string]any{}
+	if mr.StopReason != "" {
+		providerDetails["finish_reason"] = mr.StopReason
+	}
+	if len(providerDetails) == 0 {
+		providerDetails = nil
+	}
+	state := ai.ModelResponseStateComplete
+	if mr.StopReason == "pause_turn" {
+		state = ai.ModelResponseStateSuspended
+	}
 	resp := &ai.ModelResponse{
-		ModelName: mr.Model,
-		Usage:     mr.Usage.usage(),
+		ModelName: mr.Model, Usage: mr.Usage.usage(), ProviderDetails: providerDetails,
+		ProviderResponseID: mr.ID, FinishReason: anthropicFinishReason(mr.StopReason), State: state,
 	}
 	for _, block := range mr.Content {
 		switch block.Type {
@@ -385,6 +403,15 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		}
 	}
 	return resp, nil
+}
+
+func anthropicFinishReason(reason string) ai.FinishReason {
+	return map[string]ai.FinishReason{
+		"compaction": ai.FinishReasonStop, "end_turn": ai.FinishReasonStop,
+		"stop_sequence": ai.FinishReasonStop, "max_tokens": ai.FinishReasonLength,
+		"model_context_window_exceeded": ai.FinishReasonLength, "tool_use": ai.FinishReasonToolCall,
+		"refusal": ai.FinishReasonContentFilter,
+	}[reason]
 }
 
 func contentString(content any) (string, error) {

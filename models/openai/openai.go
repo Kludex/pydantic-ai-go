@@ -99,7 +99,12 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return parseResponse(data)
+	response, err := parseResponse(data)
+	if response != nil {
+		response.ProviderName = "openai"
+		response.ProviderURL = m.baseURL
+	}
+	return response, err
 }
 
 // APIError is a non-200 response from the OpenAI API.
@@ -307,13 +312,17 @@ func convertTool(def ai.ToolDefinition, supportsStrict bool) (chatTool, error) {
 }
 
 type chatResponse struct {
-	Model   string `json:"model"`
-	Created int64  `json:"created"`
-	Choices []struct {
+	ID                string `json:"id"`
+	Model             string `json:"model"`
+	Created           int64  `json:"created"`
+	ServiceTier       string `json:"service_tier"`
+	SystemFingerprint string `json:"system_fingerprint"`
+	Choices           []struct {
 		Message struct {
 			Content   string     `json:"content"`
 			ToolCalls []toolCall `json:"tool_calls"`
 		} `json:"message"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage chatUsage `json:"usage"`
 }
@@ -359,10 +368,26 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	if len(cr.Choices) == 0 {
 		return nil, fmt.Errorf("openai: response has no choices")
 	}
+	providerDetails := map[string]any{}
+	if cr.Choices[0].FinishReason != "" {
+		providerDetails["finish_reason"] = cr.Choices[0].FinishReason
+	}
+	if cr.Created != 0 {
+		providerDetails["timestamp"] = time.Unix(cr.Created, 0).UTC()
+	}
+	if cr.ServiceTier != "" {
+		providerDetails["service_tier"] = cr.ServiceTier
+	}
+	if cr.SystemFingerprint != "" {
+		providerDetails["system_fingerprint"] = cr.SystemFingerprint
+	}
+	if len(providerDetails) == 0 {
+		providerDetails = nil
+	}
 	resp := &ai.ModelResponse{
-		ModelName: cr.Model,
-		Timestamp: time.Unix(cr.Created, 0).UTC(),
-		Usage:     cr.Usage.usage(),
+		ModelName: cr.Model, Timestamp: time.Unix(cr.Created, 0).UTC(), Usage: cr.Usage.usage(),
+		ProviderDetails: providerDetails, ProviderResponseID: cr.ID,
+		FinishReason: openAIChatFinishReason(cr.Choices[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
 	msg := cr.Choices[0].Message
 	if msg.Content != "" {
@@ -376,6 +401,14 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		})
 	}
 	return resp, nil
+}
+
+func openAIChatFinishReason(reason string) ai.FinishReason {
+	return map[string]ai.FinishReason{
+		"stop": ai.FinishReasonStop, "length": ai.FinishReasonLength,
+		"content_filter": ai.FinishReasonContentFilter,
+		"tool_calls":     ai.FinishReasonToolCall, "function_call": ai.FinishReasonToolCall,
+	}[reason]
 }
 
 func contentString(content any) (string, error) {

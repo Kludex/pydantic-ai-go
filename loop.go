@@ -122,16 +122,36 @@ func (a *Agent[Deps, Output]) newRun(
 		r.retryLimits = *cfg.retryLimits
 	}
 	history, interruptedReturns := repairDanglingToolCalls(dropOrphanedToolResults(cfg.history))
+	runID := cfg.runID
+	if runID == "" {
+		runID = newRunID()
+	} else if historyContainsRunID(history, runID) {
+		cancellation.finish()
+		return nil, fmt.Errorf("ai: run ID %q already appears in message history", runID)
+	}
+	conversationID := latestConversationID(history)
+	if cfg.conversationID != nil {
+		conversationID = *cfg.conversationID
+		if conversationID == "new" {
+			conversationID = newRunID()
+		}
+	}
+	if conversationID == "" {
+		conversationID = newRunID()
+	}
 	history = mergeConsecutiveMessages(history)
 	r.messages = append(r.messages, history...)
 	r.newMessages = len(r.messages)
 	settings := mergeModelSettings(a.settings, cfg.settings)
 	r.rc = &RunContext[Deps]{
-		Deps: deps, MaxRetries: r.retryLimits.Output, RunID: newRunID(),
+		Deps: deps, MaxRetries: r.retryLimits.Output, RunID: runID, ConversationID: conversationID,
 		Model: model, ModelSettings: settings, UsageLimits: limits,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, cancellation: cancellation,
 	}
-	r.info = &RunInfo{RunID: r.rc.RunID, usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages}
+	r.info = &RunInfo{
+		RunID: runID, ConversationID: conversationID,
+		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
+	}
 	r.staticInstructions = a.staticInstructions(cfg.instructions)
 	outputMode := a.outputMode
 	if cfg.outputMode != nil {
@@ -146,8 +166,42 @@ func (a *Agent[Deps, Output]) newRun(
 	}
 	requestParts := slices.Clone(interruptedReturns)
 	requestParts = append(requestParts, prompt)
-	r.messages = append(r.messages, ModelRequest{Parts: requestParts})
+	r.messages = append(r.messages, ModelRequest{
+		Parts: requestParts, RunID: runID, ConversationID: conversationID,
+	})
 	return r, nil
+}
+
+func historyContainsRunID(messages []ModelMessage, runID string) bool {
+	for _, message := range messages {
+		switch message := message.(type) {
+		case ModelRequest:
+			if message.RunID == runID {
+				return true
+			}
+		case ModelResponse:
+			if message.RunID == runID {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func latestConversationID(messages []ModelMessage) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		switch message := messages[index].(type) {
+		case ModelRequest:
+			if message.ConversationID != "" {
+				return message.ConversationID
+			}
+		case ModelResponse:
+			if message.ConversationID != "" {
+				return message.ConversationID
+			}
+		}
+	}
+	return ""
 }
 
 func dropOrphanedToolResults(messages []ModelMessage) []ModelMessage {
@@ -211,10 +265,18 @@ func mergeConsecutiveMessages(messages []ModelMessage) []ModelMessage {
 			if instructions == "" {
 				instructions = message.Instructions
 			}
-			merged[len(merged)-1] = ModelRequest{Parts: parts, Instructions: instructions}
+			timestamp := message.Timestamp
+			if timestamp.IsZero() {
+				timestamp = previous.Timestamp
+			}
+			merged[len(merged)-1] = ModelRequest{
+				Parts: parts, Timestamp: timestamp, Instructions: instructions,
+			}
 		case ModelResponse:
 			previous, ok := merged[len(merged)-1].(ModelResponse)
-			if !ok || previous.ModelName != "" || message.ModelName != "" {
+			if !ok || previous.ModelName != "" || message.ModelName != "" ||
+				previous.ProviderName != "" || message.ProviderName != "" ||
+				previous.ProviderResponseID != "" || message.ProviderResponseID != "" {
 				merged = append(merged, message)
 				continue
 			}
@@ -541,8 +603,8 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		r.recordSelectedModel(r.model.Name())
 	}
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
-		setLatestRequestInstructions(msgs, params.Instructions)
-		setLatestRequestInstructions(r.messages, params.Instructions)
+		setLatestRequestContext(msgs, params.Instructions, r.rc.RunID, r.rc.ConversationID)
+		setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
 		r.setCurrentTools(params)
 		reqCtx, reqSpan := startRequestSpan(ctx, r.model.Name())
 		resp, err := r.doModelRequest(reqCtx, msgs, params)
@@ -555,6 +617,15 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		if resp.Timestamp.IsZero() {
 			resp.Timestamp = time.Now().UTC()
 		}
+		if resp.RunID == "" {
+			resp.RunID = r.rc.RunID
+		}
+		if resp.ConversationID == "" {
+			resp.ConversationID = r.rc.ConversationID
+		}
+		if resp.State == "" {
+			resp.State = ModelResponseStateComplete
+		}
 		if resp.ModelName == "" {
 			resp.ModelName = r.model.Name()
 		}
@@ -564,7 +635,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	if err != nil {
 		return nil, err
 	}
-	setLatestRequestInstructions(r.messages, params.Instructions)
+	setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
 	next := inner
 	for i := len(r.capabilities) - 1; i >= 0; i-- {
 		if wrapper, ok := r.capabilities[i].(ModelRequestWrapper); ok {
@@ -578,13 +649,25 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	return next(ctx, r.messages, params)
 }
 
-func setLatestRequestInstructions(messages []ModelMessage, instructions string) {
+func setLatestRequestContext(messages []ModelMessage, instructions, runID, conversationID string) {
 	for index := len(messages) - 1; index >= 0; index-- {
 		request, ok := messages[index].(ModelRequest)
 		if !ok {
 			continue
 		}
 		request.Instructions = instructions
+		if request.Timestamp.IsZero() {
+			request.Timestamp = time.Now().UTC()
+		}
+		if request.RunID == "" {
+			request.RunID = runID
+		}
+		if request.ConversationID == "" {
+			request.ConversationID = conversationID
+		}
+		if request.State == "" {
+			request.State = RequestStateComplete
+		}
 		messages[index] = request
 		return
 	}
@@ -789,7 +872,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 				parts, err := r.executeCallsWithCommittedOutput(ctx, calls, winningCall)
 				if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
 					if len(parts) > 0 {
-						r.messages = append(r.messages, ModelRequest{Parts: parts, State: RequestStateInterrupted})
+						r.appendRequest(parts, RequestStateInterrupted)
 					}
 					return nil, ErrRunCancelled
 				}
@@ -797,7 +880,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 					return nil, err
 				}
 				if len(parts) > 0 {
-					r.messages = append(r.messages, ModelRequest{Parts: parts})
+					r.appendRequest(parts, RequestStateComplete)
 				}
 				return r.result(*output), nil
 			}
@@ -831,21 +914,21 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 					return nil, context.Canceled
 				}
 			}
-			r.messages = append(r.messages, ModelRequest{Parts: parts})
+			r.appendRequest(parts, RequestStateComplete)
 			return r.result(*output), nil
 		}
 
 		parts, final, err := r.executeCalls(ctx, calls)
 		if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
 			if len(parts) > 0 {
-				r.messages = append(r.messages, ModelRequest{Parts: parts, State: RequestStateInterrupted})
+				r.appendRequest(parts, RequestStateInterrupted)
 			}
 			return nil, ErrRunCancelled
 		}
 		if err != nil {
 			return nil, err
 		}
-		r.messages = append(r.messages, ModelRequest{Parts: parts})
+		r.appendRequest(parts, RequestStateComplete)
 		if final != nil {
 			return r.result(*final), nil
 		}
@@ -1410,8 +1493,15 @@ func (r *run[Deps, Output]) validate(
 	return nil, nil
 }
 
+func (r *run[Deps, Output]) appendRequest(parts []RequestPart, state RequestState) {
+	r.messages = append(r.messages, ModelRequest{
+		Parts: parts, Timestamp: time.Now().UTC(), RunID: r.rc.RunID,
+		ConversationID: r.rc.ConversationID, State: state,
+	})
+}
+
 func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) {
-	r.messages = append(r.messages, ModelRequest{Parts: []RequestPart{part}})
+	r.appendRequest([]RequestPart{part}, RequestStateComplete)
 }
 
 func (r *run[Deps, Output]) outputRunContext(toolCallID string) *RunContext[Deps] {

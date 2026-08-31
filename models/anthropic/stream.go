@@ -56,6 +56,7 @@ type streamEvent struct {
 	Type    string `json:"type"`
 	Index   int    `json:"index"`
 	Message struct {
+		ID    string         `json:"id"`
 		Model string         `json:"model"`
 		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
@@ -69,6 +70,7 @@ type streamEvent struct {
 	} `json:"content_block"`
 	Delta struct {
 		Type        string `json:"type"`
+		StopReason  string `json:"stop_reason"`
 		Text        string `json:"text"`
 		Thinking    string `json:"thinking"`
 		PartialJSON string `json:"partial_json"`
@@ -85,6 +87,8 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		defer func() { _ = body.Close() }()
 		usage := ai.Usage{Requests: 1}
 		modelName := m.name
+		responseID := ""
+		stopReason := ""
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		for scanner.Scan() {
@@ -100,6 +104,9 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			}
 			switch event.Type {
 			case "message_start":
+				if event.Message.ID != "" {
+					responseID = event.Message.ID
+				}
 				if event.Message.Model != "" {
 					modelName = event.Message.Model
 				}
@@ -114,8 +121,26 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				}
 			case "message_delta":
 				usage.OutputTokens = event.Usage.OutputTokens
+				if event.Delta.StopReason != "" {
+					stopReason = event.Delta.StopReason
+				}
 			case "message_stop":
-				yield(ai.FinishEvent{Usage: usage, ModelName: modelName}, nil)
+				providerDetails := map[string]any{}
+				if stopReason != "" {
+					providerDetails["finish_reason"] = stopReason
+				}
+				if len(providerDetails) == 0 {
+					providerDetails = nil
+				}
+				state := ai.ModelResponseStateComplete
+				if stopReason == "pause_turn" {
+					state = ai.ModelResponseStateSuspended
+				}
+				yield(ai.FinishEvent{
+					Usage: usage, ModelName: modelName, ProviderName: "anthropic", ProviderURL: m.baseURL,
+					ProviderDetails: providerDetails, ProviderResponseID: responseID,
+					FinishReason: anthropicFinishReason(stopReason), State: state,
+				}, nil)
 				return
 			case "error":
 				yield(nil, fmt.Errorf("anthropic: stream error %s: %s", event.Error.Type, event.Error.Message))

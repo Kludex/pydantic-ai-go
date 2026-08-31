@@ -56,8 +56,8 @@ func TestRequestTextResponse(t *testing.T) {
 			t.Error(err)
 		}
 		_, _ = w.Write([]byte(`{
-			"modelVersion": "gemini-2.5-flash",
-			"candidates": [{"content": {"parts": [{"text": "Hello!"}]}}],
+			"responseId": "response-1", "modelVersion": "gemini-2.5-flash",
+			"candidates": [{"content": {"parts": [{"text": "Hello!"}]}, "finishReason": "STOP"}],
 			"usageMetadata": {
 				"promptTokenCount": 12, "candidatesTokenCount": 3,
 				"cachedContentTokenCount": 4, "thoughtsTokenCount": 2,
@@ -111,8 +111,10 @@ func TestRequestTextResponse(t *testing.T) {
 		resp.Usage.Details["text_tool_use_prompt_tokens"] != 7 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
-	if resp.ModelName != "gemini-2.5-flash" {
-		t.Fatalf("unexpected model name %q", resp.ModelName)
+	if resp.ModelName != "gemini-2.5-flash" || resp.ProviderName != "google" || resp.ProviderURL == "" ||
+		resp.ProviderResponseID != "response-1" || resp.FinishReason != ai.FinishReasonStop ||
+		resp.ProviderDetails["finish_reason"] != "STOP" {
+		t.Fatalf("unexpected response metadata %+v", resp)
 	}
 }
 

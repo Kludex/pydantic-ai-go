@@ -49,7 +49,8 @@ func (r *CapabilityRegistry) AddModelSettings(settings ModelSettings) {
 // RunInfo is the untyped view of a run that capabilities receive. It is the
 // erased counterpart of RunContext.
 type RunInfo struct {
-	RunID string
+	RunID          string
+	ConversationID string
 
 	usage     *Usage
 	toolCalls *atomic.Int64

@@ -199,6 +199,13 @@ func accumulate(
 			materialize()
 			response.Usage = event.Usage
 			response.ModelName = event.ModelName
+			response.Timestamp = event.Timestamp
+			response.ProviderName = event.ProviderName
+			response.ProviderURL = event.ProviderURL
+			response.ProviderDetails = cloneSchemaMap(event.ProviderDetails)
+			response.ProviderResponseID = event.ProviderResponseID
+			response.FinishReason = event.FinishReason
+			response.State = event.State
 			if err := emitEvent(event); err != nil {
 				return nil, err
 			}

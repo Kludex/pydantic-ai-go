@@ -52,8 +52,9 @@ func TestRequestTextResponse(t *testing.T) {
 			t.Error(err)
 		}
 		_, _ = w.Write([]byte(`{
-			"model": "gpt-5", "created": 1735689600,
-			"choices": [{"message": {"role": "assistant", "content": "Hello!"}}],
+			"id": "chat-1", "model": "gpt-5", "created": 1735689600,
+			"service_tier": "default", "system_fingerprint": "fp-1",
+			"choices": [{"message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop"}],
 			"usage": {
 				"prompt_tokens": 12, "completion_tokens": 9,
 				"prompt_tokens_details": {"cached_tokens": 4, "audio_tokens": 2},
@@ -99,8 +100,11 @@ func TestRequestTextResponse(t *testing.T) {
 		resp.Usage.Details["rejected_prediction_tokens"] != 1 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
-	if resp.ModelName != "gpt-5" {
-		t.Fatalf("unexpected model name %q", resp.ModelName)
+	if resp.ModelName != "gpt-5" || resp.ProviderName != "openai" ||
+		resp.ProviderURL == "" || resp.ProviderResponseID != "chat-1" ||
+		resp.FinishReason != ai.FinishReasonStop || resp.ProviderDetails["finish_reason"] != "stop" ||
+		resp.ProviderDetails["service_tier"] != "default" || resp.ProviderDetails["system_fingerprint"] != "fp-1" {
+		t.Fatalf("unexpected response metadata %+v", resp)
 	}
 }
 

@@ -3,6 +3,7 @@ package openai_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -35,7 +36,8 @@ func TestResponsesTextResponse(t *testing.T) {
 			t.Error(err)
 		}
 		_, _ = w.Write([]byte(`{
-			"model": "gpt-5",
+			"id": "response-1", "model": "gpt-5", "created_at": 1735689600.25,
+			"status": "completed",
 			"output": [
 				{"type": "reasoning", "summary": [{"text": "thinking"}]},
 				{"type": "message", "content": [{"type": "output_text", "text": "Hello!"}]}
@@ -64,10 +66,58 @@ func TestResponsesTextResponse(t *testing.T) {
 	if _, ok := resp.Parts[0].(ai.ThinkingPart); !ok {
 		t.Fatalf("reasoning summary lost: %+v", resp.Parts)
 	}
+	if resp.ProviderName != "openai" || resp.ProviderURL == "" || resp.ProviderResponseID != "response-1" ||
+		resp.FinishReason != ai.FinishReasonStop || resp.State != ai.ModelResponseStateComplete ||
+		resp.ProviderDetails["finish_reason"] != "completed" || resp.ProviderDetails["timestamp"] == nil {
+		t.Fatalf("unexpected response metadata %+v", resp)
+	}
 	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 ||
 		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 ||
 		resp.Usage.Details["reasoning_tokens"] != 2 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
+	}
+}
+
+func TestResponsesPendingStateMetadata(t *testing.T) {
+	for name, test := range map[string]struct {
+		status     string
+		reason     string
+		background bool
+		want       ai.ModelResponseState
+		wantFinish ai.FinishReason
+	}{
+		"foreground": {status: "queued", want: ai.ModelResponseStateIncomplete},
+		"background": {status: "queued", background: true, want: ai.ModelResponseStateSuspended},
+		"incomplete reason": {
+			status: "incomplete", reason: "max_output_tokens",
+			want: ai.ModelResponseStateComplete, wantFinish: ai.FinishReasonLength,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				details := ""
+				if test.reason != "" {
+					details = fmt.Sprintf(`,"incomplete_details":{"reason":%q}`, test.reason)
+				}
+				_, _ = fmt.Fprintf(w,
+					`{"id":"pending","model":"gpt-5","status":%q,"background":%t%s}`,
+					test.status, test.background, details,
+				)
+			})
+			response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantRawReason := test.status
+			if test.reason != "" {
+				wantRawReason = test.reason
+			}
+			if response.State != test.want || response.FinishReason != test.wantFinish ||
+				response.ProviderDetails["finish_reason"] != wantRawReason ||
+				response.ProviderDetails["background"] != test.background && test.background {
+				t.Fatalf("unexpected pending metadata: %+v", response)
+			}
+		})
 	}
 }
 

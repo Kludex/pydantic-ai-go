@@ -55,13 +55,15 @@ The tool's argument schema is reflected from `WeatherArgs` - the model sees the 
 
 ## Per-run configuration
 
-Run options change one invocation without mutating the agent. You can safely use different options in concurrent runs:
+Run options change one invocation without mutating the agent. You can safely use different options in concurrent runs. Every run creates a run ID and a conversation ID. Use `WithRunID` for an application ID and `WithConversationID` to join related runs. A conversation ID is inherited from message history; pass `WithConversationID("new")` to start another conversation:
 
 ```go
 result, err := agent.Run(
 	ctx,
 	"What's the weather in Oslo?",
 	deps,
+	ai.WithRunID("weather-run-42"),
+	ai.WithConversationID("customer-session-7"),
 	ai.WithRunModel(fasterModel),
 	ai.WithRunInstructions("Prefer concise answers."),
 	ai.WithRunModelSettings(ai.ModelSettings{MaxTokens: 200}),
@@ -407,7 +409,7 @@ agent := ai.NewAgent[Deps, string](fakes.NewTestModel())
 
 ## Interoperability
 
-Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. OpenTelemetry spans follow the GenAI semantic conventions and are free unless you set a global tracer provider.
+Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. OpenTelemetry spans follow the GenAI semantic conventions and are free unless you set a global tracer provider.
 
 ## Status
 

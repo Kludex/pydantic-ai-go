@@ -1,0 +1,58 @@
+[
+  {
+    "parts": [
+      {
+        "content": "hello",
+        "timestamp": "2026-01-01T00:00:00Z",
+        "part_kind": "user-prompt"
+      }
+    ],
+    "timestamp": "2026-01-01T00:00:00Z",
+    "instructions": "Be concise.",
+    "kind": "request",
+    "run_id": "run-1",
+    "conversation_id": "conversation-1",
+    "metadata": {
+      "request": true
+    },
+    "state": "complete"
+  },
+  {
+    "parts": [
+      {
+        "content": "done",
+        "id": null,
+        "provider_name": null,
+        "provider_details": null,
+        "part_kind": "text"
+      }
+    ],
+    "usage": {
+      "input_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "input_audio_tokens": 0,
+      "cache_audio_read_tokens": 0,
+      "output_audio_tokens": 0,
+      "details": {},
+      "cost": null
+    },
+    "model_name": "fixture-model",
+    "timestamp": "2026-01-01T00:00:00Z",
+    "kind": "response",
+    "provider_name": "fixture-provider",
+    "provider_url": "https://provider.example",
+    "provider_details": {
+      "tier": "fast"
+    },
+    "provider_response_id": "response-1",
+    "finish_reason": "stop",
+    "run_id": "run-1",
+    "conversation_id": "conversation-1",
+    "metadata": {
+      "response": true
+    },
+    "state": "complete"
+  }
+]

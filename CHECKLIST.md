@@ -33,6 +33,7 @@ Status:
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
 - [ ] Lifecycle entry/exit hooks for models selected during a run.
+- [x] Fresh run and conversation IDs populate all generated requests/responses; explicit run IDs reject history collisions, while conversation IDs inherit from history or reset through `WithConversationID("new")`.
 - [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, arbitrary integer detail keys, and optional USD cost, with projected tool-call and known-cost limits. Automatic pricing remains.
 
 ### Messages and persisted history
@@ -40,20 +41,20 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, response-metadata, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [~] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging. Legacy dynamic system-prompt IDs and history reevaluation remain.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
 - [ ] Compaction and builtin-tool return parts.
 - [ ] Tool availability delta parts.
-- [ ] Provider details, metadata, run ID, conversation ID, finish reason, and response IDs.
+- [~] Requests and responses preserve timestamps, local metadata, run/conversation IDs, normalized finish reasons, provider details/URLs/names, response IDs, and lifecycle state, including deprecated `vendor_*` aliases. Response-part provider metadata remains.
 - [ ] Retry prompt structured validation errors.
 - [x] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
 - [x] Synthesized-return metadata markers and deterministic, idempotent repair of trailing, interior, shadowed-ID, malformed-order, and empty-ID dangling calls.
 - [x] Orphaned tool results are removed while plain validation feedback is preserved; consecutive requests and synthetic responses are merged with tool results hoisted before user-facing content.
 - [~] `ToolReturn` metadata is preserved; separate return value, extra content, and revealed tools remain.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, and tool-argument deltas across bundled providers and fallback replay.
-- [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, and `FinalResultEvent` with typed, applicable deltas.
+- [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, `FinalResultEvent`, and metadata-bearing `FinishEvent` with typed, applicable deltas.
 - [ ] Enqueued-message events.
 
 ### Tools and toolsets
@@ -85,6 +86,7 @@ Status:
 - [ ] Approval-required tools and dynamic approval requests.
 - [ ] External/deferred tool calls.
 - [ ] Deferred request/result message types and pause/resume flow.
+- [ ] Automatically continue provider responses in `suspended` state, including Anthropic `pause_turn` and OpenAI background responses.
 - [ ] Inline deferred-call handling capability.
 - [ ] Approved/denied results, argument overrides, and approval metadata.
 - [ ] Repair incomplete tool-call histories when resumed.
@@ -112,9 +114,9 @@ Status:
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: text/reasoning/function-call streaming; native output, multimodal content, builtin tools, and background responses remain.
-- [~] Anthropic Messages: text/thinking/function-tool streaming and multimodal input; advanced thinking, citations, and native tools remain.
-- [~] Google Gemini: text/thinking/function-tool streaming, native output, multimodal input, function-call IDs, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
+- [~] OpenAI Responses: text/reasoning/function-call streaming plus response IDs, status, timestamps, and background metadata; native output, multimodal content, builtin tools, and background continuation remain.
+- [~] Anthropic Messages: text/thinking/function-tool streaming, multimodal input, response IDs, stop reasons, and suspended `pause_turn` state; automatic pause continuation, advanced thinking, citations, and native tools remain.
+- [~] Google Gemini: text/thinking/function-tool streaming, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.
 - [ ] AWS Bedrock.

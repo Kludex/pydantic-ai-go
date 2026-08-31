@@ -37,18 +37,33 @@ func UnmarshalMessages(data []byte) ([]ModelMessage, error) {
 }
 
 type wireRequest struct {
-	Kind         string       `json:"kind"`
-	Parts        []wirePart   `json:"parts"`
-	Instructions string       `json:"instructions,omitempty"`
-	State        RequestState `json:"state,omitempty"`
+	Kind           string         `json:"kind"`
+	Parts          []wirePart     `json:"parts"`
+	Timestamp      *time.Time     `json:"timestamp,omitempty"`
+	Instructions   string         `json:"instructions,omitempty"`
+	RunID          string         `json:"run_id,omitempty"`
+	ConversationID string         `json:"conversation_id,omitempty"`
+	Metadata       map[string]any `json:"metadata,omitempty"`
+	State          RequestState   `json:"state,omitempty"`
 }
 
 type wireResponse struct {
-	Kind      string     `json:"kind"`
-	Parts     []wirePart `json:"parts"`
-	Usage     *Usage     `json:"usage,omitempty"`
-	ModelName string     `json:"model_name,omitempty"`
-	Timestamp *time.Time `json:"timestamp,omitempty"`
+	Kind               string             `json:"kind"`
+	Parts              []wirePart         `json:"parts"`
+	Usage              *Usage             `json:"usage,omitempty"`
+	ModelName          string             `json:"model_name,omitempty"`
+	Timestamp          *time.Time         `json:"timestamp,omitempty"`
+	ProviderName       string             `json:"provider_name,omitempty"`
+	ProviderURL        string             `json:"provider_url,omitempty"`
+	ProviderDetails    map[string]any     `json:"provider_details,omitempty"`
+	VendorDetails      map[string]any     `json:"vendor_details,omitempty"`
+	ProviderResponseID string             `json:"provider_response_id,omitempty"`
+	VendorID           string             `json:"vendor_id,omitempty"`
+	FinishReason       FinishReason       `json:"finish_reason,omitempty"`
+	RunID              string             `json:"run_id,omitempty"`
+	ConversationID     string             `json:"conversation_id,omitempty"`
+	Metadata           map[string]any     `json:"metadata,omitempty"`
+	State              ModelResponseState `json:"state,omitempty"`
 }
 
 type wirePart struct {
@@ -64,7 +79,14 @@ type wirePart struct {
 func marshalMessage(m ModelMessage) ([]byte, error) {
 	switch msg := m.(type) {
 	case ModelRequest:
-		w := wireRequest{Kind: "request", Instructions: msg.Instructions, State: msg.State}
+		w := wireRequest{
+			Kind: "request", Instructions: msg.Instructions, RunID: msg.RunID,
+			ConversationID: msg.ConversationID, Metadata: msg.Metadata, State: msg.State,
+		}
+		if !msg.Timestamp.IsZero() {
+			timestamp := msg.Timestamp
+			w.Timestamp = &timestamp
+		}
 		for _, p := range msg.Parts {
 			wp, err := marshalRequestPart(p)
 			if err != nil {
@@ -74,7 +96,12 @@ func marshalMessage(m ModelMessage) ([]byte, error) {
 		}
 		return json.Marshal(w)
 	case ModelResponse:
-		w := wireResponse{Kind: "response", ModelName: msg.ModelName}
+		w := wireResponse{
+			Kind: "response", ModelName: msg.ModelName, ProviderName: msg.ProviderName,
+			ProviderURL: msg.ProviderURL, ProviderDetails: msg.ProviderDetails,
+			ProviderResponseID: msg.ProviderResponseID, FinishReason: msg.FinishReason,
+			RunID: msg.RunID, ConversationID: msg.ConversationID, Metadata: msg.Metadata, State: msg.State,
+		}
 		if !msg.Usage.IsZero() {
 			u := msg.Usage
 			w.Usage = &u
@@ -148,7 +175,13 @@ func unmarshalMessage(data []byte) (ModelMessage, error) {
 		if err := json.Unmarshal(data, &w); err != nil {
 			return nil, err
 		}
-		msg := ModelRequest{Instructions: w.Instructions, State: w.State}
+		msg := ModelRequest{
+			Instructions: w.Instructions, RunID: w.RunID, ConversationID: w.ConversationID,
+			Metadata: w.Metadata, State: w.State,
+		}
+		if w.Timestamp != nil {
+			msg.Timestamp = *w.Timestamp
+		}
 		for _, wp := range w.Parts {
 			p, err := unmarshalRequestPart(wp)
 			if err != nil {
@@ -162,7 +195,20 @@ func unmarshalMessage(data []byte) (ModelMessage, error) {
 		if err := json.Unmarshal(data, &w); err != nil {
 			return nil, err
 		}
-		msg := ModelResponse{ModelName: w.ModelName}
+		providerDetails := w.ProviderDetails
+		if providerDetails == nil {
+			providerDetails = w.VendorDetails
+		}
+		providerResponseID := w.ProviderResponseID
+		if providerResponseID == "" {
+			providerResponseID = w.VendorID
+		}
+		msg := ModelResponse{
+			ModelName: w.ModelName, ProviderName: w.ProviderName, ProviderURL: w.ProviderURL,
+			ProviderDetails: providerDetails, ProviderResponseID: providerResponseID,
+			FinishReason: w.FinishReason, RunID: w.RunID, ConversationID: w.ConversationID,
+			Metadata: w.Metadata, State: w.State,
+		}
 		if w.Usage != nil {
 			msg.Usage = *w.Usage
 		}

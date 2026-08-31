@@ -15,17 +15,18 @@ import (
 // RunContext carries run-scoped data into tools and dynamic hooks. The
 // context.Context argument remains the cancellation signal carrier.
 type RunContext[Deps any] struct {
-	Deps          Deps
-	Retry         int
-	MaxRetries    int
-	RunID         string
-	ToolCallID    string
-	PartialOutput bool
-	Model         Model
-	ModelID       string
-	RunStep       int
-	ModelSettings ModelSettings
-	UsageLimits   UsageLimits
+	Deps           Deps
+	Retry          int
+	MaxRetries     int
+	RunID          string
+	ConversationID string
+	ToolCallID     string
+	PartialOutput  bool
+	Model          Model
+	ModelID        string
+	RunStep        int
+	ModelSettings  ModelSettings
+	UsageLimits    UsageLimits
 
 	usage        *Usage
 	toolCalls    *atomic.Int64

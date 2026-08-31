@@ -68,9 +68,13 @@ type responsesStreamEvent struct {
 		Text string `json:"text"`
 	} `json:"part"`
 	Response struct {
-		Model  string `json:"model"`
-		Status string `json:"status"`
-		Error  *struct {
+		ID                string             `json:"id"`
+		Model             string             `json:"model"`
+		CreatedAt         float64            `json:"created_at"`
+		Status            string             `json:"status"`
+		Background        bool               `json:"background"`
+		IncompleteDetails *incompleteDetails `json:"incomplete_details"`
+		Error             *struct {
 			Code    string `json:"code"`
 			Message string `json:"message"`
 		} `json:"error"`
@@ -140,7 +144,16 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 				if modelName == "" {
 					modelName = m.name
 				}
-				yield(ai.FinishEvent{Usage: event.Response.Usage.usage(), ModelName: modelName}, nil)
+				rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
+					event.Response.Status, event.Response.IncompleteDetails,
+					event.Response.CreatedAt, event.Response.Background,
+				)
+				yield(ai.FinishEvent{
+					Usage: event.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderResponseID: event.Response.ID,
+					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
+				}, nil)
 				return
 			case "response.failed", "response.incomplete":
 				message := event.Response.Status

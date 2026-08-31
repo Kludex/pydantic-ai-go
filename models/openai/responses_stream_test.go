@@ -32,7 +32,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 			`{"type":"response.function_call_arguments.delta","item_id":"fc","delta":"{\"x\":"}`,
 			`{"type":"response.function_call_arguments.delta","item_id":"fc","delta":"1}"}`,
 			`{"type":"response.output_text.done"}`,
-			`{"type":"response.completed","response":{"model":"gpt-5","status":"completed","usage":{"input_tokens":5,"output_tokens":3}}}`,
+			`{"type":"response.completed","response":{"id":"response-stream","model":"gpt-5","created_at":1735689600.25,"status":"completed","usage":{"input_tokens":5,"output_tokens":3}}}`,
 			`[DONE]`,
 		})(w, r)
 	})
@@ -71,7 +71,11 @@ func TestResponsesStreamEvents(t *testing.T) {
 		start.PartID != "item:fc" || argsPartID != start.PartID {
 		t.Fatalf("unstable Responses part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
-	if finish.ModelName != "gpt-5" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 3 {
+	if finish.ModelName != "gpt-5" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 ||
+		finish.Usage.OutputTokens != 3 || finish.ProviderName != "openai" || finish.ProviderURL == "" ||
+		finish.ProviderResponseID != "response-stream" || finish.FinishReason != ai.FinishReasonStop ||
+		finish.State != ai.ModelResponseStateComplete || finish.Timestamp.IsZero() ||
+		finish.ProviderDetails["finish_reason"] != "completed" || finish.ProviderDetails["timestamp"] == nil {
 		t.Fatalf("unexpected finish %+v", finish)
 	}
 }

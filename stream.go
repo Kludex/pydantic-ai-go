@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"iter"
+	"time"
 )
 
 // StreamingModel is implemented by providers that support streaming
@@ -75,8 +76,15 @@ func (ToolCallDeltaEvent) modelStreamEventKind() string { return "tool-call-delt
 // FinishEvent ends one streamed model response and carries its usage. It is
 // both the provider completion marker and the final normalized response event.
 type FinishEvent struct {
-	Usage     Usage
-	ModelName string
+	Usage              Usage
+	ModelName          string
+	Timestamp          time.Time
+	ProviderName       string
+	ProviderURL        string
+	ProviderDetails    map[string]any
+	ProviderResponseID string
+	FinishReason       FinishReason
+	State              ModelResponseState
 }
 
 func (FinishEvent) modelStreamEventKind() string { return "finish" }

@@ -53,7 +53,7 @@ func TestRequestTextResponse(t *testing.T) {
 			t.Error(err)
 		}
 		_, _ = w.Write([]byte(`{
-			"model": "claude-sonnet-4-5",
+			"id": "message-1", "model": "claude-sonnet-4-5", "stop_reason": "end_turn",
 			"content": [{"type": "text", "text": "Hello!"}],
 			"usage": {
 				"input_tokens": 12, "output_tokens": 3,
@@ -81,12 +81,34 @@ func TestRequestTextResponse(t *testing.T) {
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
 	}
+	if resp.ProviderName != "anthropic" || resp.ProviderURL == "" || resp.ProviderResponseID != "message-1" ||
+		resp.FinishReason != ai.FinishReasonStop || resp.ProviderDetails["finish_reason"] != "end_turn" ||
+		resp.State != ai.ModelResponseStateComplete {
+		t.Fatalf("unexpected response metadata %+v", resp)
+	}
 	if resp.Usage.InputTokens != 19 || resp.Usage.OutputTokens != 3 ||
 		resp.Usage.CacheWriteTokens != 3 || resp.Usage.CacheReadTokens != 4 ||
 		resp.Usage.Details["input_tokens"] != 12 || resp.Usage.Details["output_tokens"] != 3 ||
 		resp.Usage.Details["cache_creation_input_tokens"] != 3 ||
 		resp.Usage.Details["cache_read_input_tokens"] != 4 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
+	}
+}
+
+func TestPauseTurnResponseIsSuspended(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"id":"paused","model":"claude","stop_reason":"pause_turn","content":[],
+			"usage":{"input_tokens":1,"output_tokens":1}
+		}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.State != ai.ModelResponseStateSuspended || response.FinishReason != "" ||
+		response.ProviderDetails["finish_reason"] != "pause_turn" {
+		t.Fatalf("unexpected paused response: %+v", response)
 	}
 }
 

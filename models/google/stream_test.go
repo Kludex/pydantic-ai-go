@@ -58,10 +58,10 @@ func TestStreamEvents(t *testing.T) {
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		path, query, accept = r.URL.Path, r.URL.RawQuery, r.Header.Get("Accept")
 		googleSSE(t, []string{
-			`{"modelVersion":"gemini-stream","candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}`,
+			`{"responseId":"response-stream","modelVersion":"gemini-stream","candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"thought":true,"text":"plan"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"c1","name":"work","args":{"x":1}}}]}}]}`,
-			`{"candidates":[{"content":{"parts":[{"text":"lo"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
+			`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
 		})(w, r)
 	})
 	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{})
@@ -98,7 +98,10 @@ func TestStreamEvents(t *testing.T) {
 	if textPartID != "text:0" || thinkingPartID != "thinking:0" || start.PartID != "tool:0" || argsPartID != "tool:0" {
 		t.Fatalf("unstable Gemini part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
-	if finish.ModelName != "gemini-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 3 {
+	if finish.ModelName != "gemini-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 ||
+		finish.Usage.OutputTokens != 3 || finish.ProviderName != "google" || finish.ProviderURL == "" ||
+		finish.ProviderResponseID != "response-stream" || finish.FinishReason != ai.FinishReasonStop ||
+		finish.ProviderDetails["finish_reason"] != "STOP" {
 		t.Fatalf("unexpected finish %+v", finish)
 	}
 }

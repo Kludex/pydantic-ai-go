@@ -10,6 +10,7 @@ import (
 	"iter"
 	"net/http"
 	"strings"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -54,8 +55,12 @@ type streamOptions struct {
 }
 
 type chatChunk struct {
-	Model   string `json:"model"`
-	Choices []struct {
+	ID                string `json:"id"`
+	Model             string `json:"model"`
+	Created           int64  `json:"created"`
+	ServiceTier       string `json:"service_tier"`
+	SystemFingerprint string `json:"system_fingerprint"`
+	Choices           []struct {
 		Delta struct {
 			Content   string `json:"content"`
 			ToolCalls []struct {
@@ -67,6 +72,7 @@ type chatChunk struct {
 				} `json:"function"`
 			} `json:"tool_calls"`
 		} `json:"delta"`
+		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 	Usage *chatUsage `json:"usage"`
 }
@@ -76,6 +82,10 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		defer func() { _ = body.Close() }()
 		var usage ai.Usage
 		modelName := m.name
+		responseID := ""
+		created := int64(0)
+		finishReason := ""
+		providerDetails := map[string]any{}
 		startedTools := map[int]bool{}
 
 		scanner := bufio.NewScanner(body)
@@ -87,7 +97,23 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				continue
 			}
 			if data == "[DONE]" {
-				yield(ai.FinishEvent{Usage: usage, ModelName: modelName}, nil)
+				var timestamp time.Time
+				if created != 0 {
+					timestamp = time.Unix(created, 0).UTC()
+					providerDetails["timestamp"] = timestamp
+				}
+				if finishReason != "" {
+					providerDetails["finish_reason"] = finishReason
+				}
+				if len(providerDetails) == 0 {
+					providerDetails = nil
+				}
+				yield(ai.FinishEvent{
+					Usage: usage, ModelName: modelName, Timestamp: timestamp,
+					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderResponseID: responseID, FinishReason: openAIChatFinishReason(finishReason),
+					State: ai.ModelResponseStateComplete,
+				}, nil)
 				return
 			}
 			var chunk chatChunk
@@ -95,14 +121,29 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				yield(nil, fmt.Errorf("openai: parse stream chunk: %w", err))
 				return
 			}
+			if chunk.ID != "" {
+				responseID = chunk.ID
+			}
 			if chunk.Model != "" {
 				modelName = chunk.Model
+			}
+			if chunk.Created != 0 {
+				created = chunk.Created
+			}
+			if chunk.ServiceTier != "" {
+				providerDetails["service_tier"] = chunk.ServiceTier
+			}
+			if chunk.SystemFingerprint != "" {
+				providerDetails["system_fingerprint"] = chunk.SystemFingerprint
 			}
 			if chunk.Usage != nil {
 				usage = chunk.Usage.usage()
 			}
 			if len(chunk.Choices) == 0 {
 				continue
+			}
+			if chunk.Choices[0].FinishReason != "" {
+				finishReason = chunk.Choices[0].FinishReason
 			}
 			delta := chunk.Choices[0].Delta
 			if delta.Content != "" {

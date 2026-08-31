@@ -99,6 +99,27 @@ func TestUnmarshalUpstreamSynthesizedReturnFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamResponseMetadataFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_response_metadata.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := messages[0].(ai.ModelRequest)
+	response := messages[1].(ai.ModelResponse)
+	if request.RunID != "run-1" || request.ConversationID != "conversation-1" ||
+		request.Metadata["request"] != true || response.ProviderName != "fixture-provider" ||
+		response.ProviderURL != "https://provider.example" || response.ProviderDetails["tier"] != "fast" ||
+		response.ProviderResponseID != "response-1" || response.FinishReason != ai.FinishReasonStop ||
+		response.RunID != "run-1" || response.ConversationID != "conversation-1" ||
+		response.Metadata["response"] != true || response.State != ai.ModelResponseStateComplete {
+		t.Fatalf("unexpected response metadata fixture: %+v", messages)
+	}
+}
+
 func TestUnmarshalUpstreamInstructionsFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/messages/upstream_instructions.json")
 	if err != nil {

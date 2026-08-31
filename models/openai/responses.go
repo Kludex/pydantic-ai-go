@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -67,7 +69,12 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return parseResponsesResponse(data)
+	response, err := parseResponsesResponse(data)
+	if response != nil {
+		response.ProviderName = "openai"
+		response.ProviderURL = m.baseURL
+	}
+	return response, err
 }
 
 type responsesRequest struct {
@@ -200,9 +207,18 @@ func convertResponsesResponse(m ai.ModelResponse) []responsesInput {
 	return out
 }
 
+type incompleteDetails struct {
+	Reason string `json:"reason"`
+}
+
 type responsesResponse struct {
-	Model  string `json:"model"`
-	Output []struct {
+	ID                string             `json:"id"`
+	Model             string             `json:"model"`
+	CreatedAt         float64            `json:"created_at"`
+	Status            string             `json:"status"`
+	Background        bool               `json:"background"`
+	IncompleteDetails *incompleteDetails `json:"incomplete_details"`
+	Output            []struct {
 		Type    string `json:"type"`
 		Content []struct {
 			Type string `json:"type"`
@@ -238,14 +254,63 @@ func (u responsesUsage) usage() ai.Usage {
 	}
 }
 
+func openAIResponsesFinishReason(reason string) ai.FinishReason {
+	return map[string]ai.FinishReason{
+		"completed": ai.FinishReasonStop, "max_output_tokens": ai.FinishReasonLength,
+		"content_filter": ai.FinishReasonContentFilter, "cancelled": ai.FinishReasonError,
+		"failed": ai.FinishReasonError,
+	}[reason]
+}
+
+func openAIResponsesState(status string, background bool) ai.ModelResponseState {
+	switch status {
+	case "queued", "in_progress":
+		if background {
+			return ai.ModelResponseStateSuspended
+		}
+		return ai.ModelResponseStateIncomplete
+	default:
+		return ai.ModelResponseStateComplete
+	}
+}
+
+func responsesMetadata(
+	status string, details *incompleteDetails, createdAt float64, background bool,
+) (string, map[string]any, time.Time, ai.ModelResponseState) {
+	rawFinishReason := status
+	if details != nil {
+		rawFinishReason = details.Reason
+	}
+	providerDetails := map[string]any{}
+	if rawFinishReason != "" {
+		providerDetails["finish_reason"] = rawFinishReason
+	}
+	var timestamp time.Time
+	if createdAt != 0 {
+		seconds, fraction := math.Modf(createdAt)
+		timestamp = time.Unix(int64(seconds), int64(fraction*float64(time.Second))).UTC()
+		providerDetails["timestamp"] = timestamp
+	}
+	if background {
+		providerDetails["background"] = true
+	}
+	if len(providerDetails) == 0 {
+		providerDetails = nil
+	}
+	return rawFinishReason, providerDetails, timestamp, openAIResponsesState(status, background)
+}
+
 func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
 	var rr responsesResponse
 	if err := json.Unmarshal(data, &rr); err != nil {
 		return nil, fmt.Errorf("openai: parse response: %w", err)
 	}
+	rawFinishReason, providerDetails, _, state := responsesMetadata(
+		rr.Status, rr.IncompleteDetails, rr.CreatedAt, rr.Background,
+	)
 	resp := &ai.ModelResponse{
-		ModelName: rr.Model,
-		Usage:     rr.Usage.usage(),
+		ModelName: rr.Model, Usage: rr.Usage.usage(), ProviderDetails: providerDetails,
+		ProviderResponseID: rr.ID, FinishReason: openAIResponsesFinishReason(rawFinishReason), State: state,
 	}
 	for _, item := range rr.Output {
 		switch item.Type {

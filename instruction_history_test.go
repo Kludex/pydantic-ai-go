@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
@@ -71,6 +72,11 @@ func (appendSyntheticResponseCapability) WrapModelRequest(
 	params ai.ModelRequestParams,
 	next ai.ModelRequestFunc,
 ) (*ai.ModelResponse, error) {
+	request := messages[len(messages)-1].(ai.ModelRequest)
+	request.Timestamp = time.Time{}
+	request.RunID = ""
+	request.ConversationID = ""
+	messages[len(messages)-1] = request
 	messages = append(messages, ai.ModelResponse{})
 	return next(ctx, messages, params)
 }

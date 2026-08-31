@@ -67,7 +67,7 @@ func TestStreamEvents(t *testing.T) {
 		}
 		gotStream = body.Stream
 		anthropicSSE(t, []string{
-			`{"type":"message_start","message":{"model":"claude-stream","usage":{"input_tokens":5,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}}`,
+			`{"type":"message_start","message":{"id":"message-stream","model":"claude-stream","usage":{"input_tokens":5,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}}`,
 			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"H"}}`,
 			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"i"}}`,
 			`{"type":"content_block_stop","index":0}`,
@@ -117,8 +117,28 @@ func TestStreamEvents(t *testing.T) {
 		t.Fatalf("unstable Anthropic part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
 	if finish.ModelName != "claude-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 12 ||
-		finish.Usage.OutputTokens != 8 || finish.Usage.CacheWriteTokens != 3 || finish.Usage.CacheReadTokens != 4 {
+		finish.Usage.OutputTokens != 8 || finish.Usage.CacheWriteTokens != 3 || finish.Usage.CacheReadTokens != 4 ||
+		finish.ProviderName != "anthropic" || finish.ProviderURL == "" ||
+		finish.ProviderResponseID != "message-stream" || finish.FinishReason != ai.FinishReasonToolCall ||
+		finish.ProviderDetails["finish_reason"] != "tool_use" || finish.State != ai.ModelResponseStateComplete {
 		t.Fatalf("unexpected finish %+v", finish)
+	}
+}
+
+func TestPauseTurnStreamIsSuspended(t *testing.T) {
+	model := newServer(t, anthropicSSE(t, []string{
+		`{"type":"message_start","message":{"id":"paused","model":"claude","usage":{"input_tokens":1}}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":1}}`,
+		`{"type":"message_stop"}`,
+	}))
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	finish := events[len(events)-1].(ai.FinishEvent)
+	if finish.State != ai.ModelResponseStateSuspended || finish.FinishReason != "" ||
+		finish.ProviderDetails["finish_reason"] != "pause_turn" {
+		t.Fatalf("unexpected paused stream: %+v", finish)
 	}
 }
 

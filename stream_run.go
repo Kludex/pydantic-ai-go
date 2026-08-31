@@ -304,6 +304,15 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 				}
 			}
 		}
-		yield(FinishEvent{Usage: response.Usage, ModelName: response.ModelName}, nil)
+		state := response.State
+		if state == "" {
+			state = ModelResponseStateComplete
+		}
+		yield(FinishEvent{
+			Usage: response.Usage, ModelName: response.ModelName, Timestamp: response.Timestamp,
+			ProviderName: response.ProviderName, ProviderURL: response.ProviderURL,
+			ProviderDetails: cloneSchemaMap(response.ProviderDetails), ProviderResponseID: response.ProviderResponseID,
+			FinishReason: response.FinishReason, State: state,
+		}, nil)
 	}
 }

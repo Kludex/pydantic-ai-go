@@ -101,7 +101,12 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return parseResponse(data)
+	response, err := parseResponse(data)
+	if response != nil {
+		response.ProviderName = "google"
+		response.ProviderURL = m.baseURL
+	}
+	return response, err
 }
 
 // APIError is a non-200 response from the Gemini API.
@@ -378,11 +383,13 @@ func transformSchema(source map[string]any) map[string]any {
 }
 
 type generateResponse struct {
+	ResponseID   string `json:"responseId"`
 	ModelVersion string `json:"modelVersion"`
 	Candidates   []struct {
 		Content struct {
 			Parts []part `json:"parts"`
 		} `json:"content"`
+		FinishReason string `json:"finishReason"`
 	} `json:"candidates"`
 	UsageMetadata googleUsage `json:"usageMetadata"`
 }
@@ -452,6 +459,18 @@ func (u googleUsage) usage() ai.Usage {
 	return usage
 }
 
+func googleFinishReason(reason string) ai.FinishReason {
+	return map[string]ai.FinishReason{
+		"STOP": ai.FinishReasonStop, "MAX_TOKENS": ai.FinishReasonLength,
+		"SAFETY": ai.FinishReasonContentFilter, "RECITATION": ai.FinishReasonContentFilter,
+		"BLOCKLIST": ai.FinishReasonContentFilter, "PROHIBITED_CONTENT": ai.FinishReasonContentFilter,
+		"SPII": ai.FinishReasonContentFilter, "IMAGE_SAFETY": ai.FinishReasonContentFilter,
+		"IMAGE_PROHIBITED_CONTENT": ai.FinishReasonContentFilter, "MODEL_ARMOR": ai.FinishReasonContentFilter,
+		"LANGUAGE": ai.FinishReasonError, "MALFORMED_FUNCTION_CALL": ai.FinishReasonError,
+		"UNEXPECTED_TOOL_CALL": ai.FinishReasonError, "NO_IMAGE": ai.FinishReasonError,
+	}[reason]
+}
+
 func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	var gr generateResponse
 	if err := json.Unmarshal(data, &gr); err != nil {
@@ -460,9 +479,17 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	if len(gr.Candidates) == 0 {
 		return nil, fmt.Errorf("google: response has no candidates")
 	}
+	providerDetails := map[string]any{}
+	if gr.Candidates[0].FinishReason != "" {
+		providerDetails["finish_reason"] = gr.Candidates[0].FinishReason
+	}
+	if len(providerDetails) == 0 {
+		providerDetails = nil
+	}
 	resp := &ai.ModelResponse{
-		ModelName: gr.ModelVersion,
-		Usage:     gr.UsageMetadata.usage(),
+		ModelName: gr.ModelVersion, Usage: gr.UsageMetadata.usage(),
+		ProviderDetails: providerDetails, ProviderResponseID: gr.ResponseID,
+		FinishReason: googleFinishReason(gr.Candidates[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
 	for _, p := range gr.Candidates[0].Content.Parts {
 		switch {

@@ -306,6 +306,8 @@ type runConfig struct {
 	retryLimits       *RetryLimits
 	outputMode        *OutputMode
 	modelID           string
+	runID             string
+	conversationID    *string
 	settingsFuncs     []erasedModelSettingsFunc
 	instructionsFuncs []erasedInstructionsFunc
 	modelSelectors    []erasedModelSelectorFunc
@@ -351,6 +353,23 @@ func WithRunModelSelector[Deps any](fn ModelSelectorFunc[Deps]) RunOption {
 			return fn(ctx, selection)
 		})
 	}
+}
+
+// WithRunID sets the unique ID recorded on messages created by one run.
+func WithRunID(runID string) RunOption {
+	if runID == "" {
+		panic("ai: run ID must not be empty")
+	}
+	return func(c *runConfig) { c.runID = runID }
+}
+
+// WithConversationID sets the conversation shared by related runs. Use
+// "new" to ignore an ID inherited from message history.
+func WithConversationID(conversationID string) RunOption {
+	if conversationID == "" {
+		panic("ai: conversation ID must not be empty")
+	}
+	return func(c *runConfig) { c.conversationID = &conversationID }
 }
 
 // WithRunModelSettings merges settings over the agent defaults for one run.

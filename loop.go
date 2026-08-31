@@ -205,7 +205,7 @@ func (a *Agent[Deps, Output]) newRun(
 	for _, tool := range runCapabilityNativeTools {
 		nativeToolEntries = append(nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
 	}
-	if err := validateNativeTools(staticNativeTools(nativeToolEntries)); err != nil {
+	if err := ValidateNativeTools(staticNativeTools(nativeToolEntries)); err != nil {
 		cancellation.finish()
 		return nil, err
 	}
@@ -1104,7 +1104,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		reconcileHookInstructions(&request.Params, previousInstructions, previousParts)
 	}
 	request.Params.NativeTools = CloneNativeTools(request.Params.NativeTools)
-	if err := validateNativeTools(request.Params.NativeTools); err != nil {
+	if err := ValidateNativeTools(request.Params.NativeTools); err != nil {
 		return nil, err
 	}
 	if request.ReplaceHistory {
@@ -1719,7 +1719,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		}
 		params.NativeTools = append(params.NativeTools, cloneNativeTool(tool))
 	}
-	if err := validateNativeTools(params.NativeTools); err != nil {
+	if err := ValidateNativeTools(params.NativeTools); err != nil {
 		return ModelRequestParams{}, err
 	}
 	settings, err := r.prepareModelSettings(ctx, rc)

@@ -80,6 +80,21 @@ func (d ThinkingPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 	return thinking, nil
 }
 
+// FilePartDelta replaces a complete generated file with a newer snapshot.
+type FilePartDelta struct {
+	Part FilePart
+}
+
+func (FilePartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindFile }
+
+// Apply applies the file replacement.
+func (d FilePartDelta) Apply(part ResponsePart) (ResponsePart, error) {
+	if _, ok := part.(FilePart); !ok {
+		return nil, fmt.Errorf("ai: cannot apply FilePartDelta to %T", part)
+	}
+	return cloneResponsePart(d.Part), nil
+}
+
 // ToolCallPartDelta updates a ToolCallPart. Names and JSON arguments append;
 // a non-empty tool-call ID fills an empty ID and must otherwise match it.
 type ToolCallPartDelta struct {

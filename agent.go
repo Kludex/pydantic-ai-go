@@ -123,7 +123,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	for _, tool := range cfg.nativeTools {
 		a.nativeToolEntries = append(a.nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
 	}
-	if err := validateNativeTools(staticNativeTools(a.nativeToolEntries)); err != nil {
+	if err := ValidateNativeTools(staticNativeTools(a.nativeToolEntries)); err != nil {
 		panic(err.Error())
 	}
 	var err error
@@ -182,7 +182,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 			static: reg.modelSettings, provider: capabilityModelSettingsProvider(capability),
 		})
 	}
-	if err := validateNativeTools(staticNativeTools(a.nativeToolEntries)); err != nil {
+	if err := ValidateNativeTools(staticNativeTools(a.nativeToolEntries)); err != nil {
 		panic(err.Error())
 	}
 	return a
@@ -378,7 +378,7 @@ func (a *Agent[Deps, Output]) AddTool(tool Tool[Deps]) {
 func (a *Agent[Deps, Output]) AddNativeTool(tool NativeTool) {
 	a.checkNotStarted()
 	entries := append(cloneNativeToolEntries(a.nativeToolEntries), nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
-	if err := validateNativeTools(staticNativeTools(entries)); err != nil {
+	if err := ValidateNativeTools(staticNativeTools(entries)); err != nil {
 		panic(err.Error())
 	}
 	a.nativeToolEntries = entries

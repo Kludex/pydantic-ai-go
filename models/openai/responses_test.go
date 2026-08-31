@@ -346,6 +346,121 @@ func TestResponsesCodeExecutionOutputErrors(t *testing.T) {
 	}
 }
 
+func TestResponsesImageGenerationNativeTool(t *testing.T) {
+	compression := 75
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[
+				{"type":"image_generation_call","id":"image-1","status":"generating","background":"transparent",
+				 "quality":"high","size":"1024x1536","revised_prompt":"a better prompt","output_format":"webp",
+				 "result":"aW1hZ2U="},
+				{"type":"message","id":"message","content":[{"type":"output_text","text":"done"}]}
+			]
+		}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.ImageGenerationTool{
+			Action: ai.ImageGenerationActionEdit, Background: ai.ImageGenerationBackgroundTransparent,
+			InputFidelity: ai.ImageGenerationInputFidelityHigh, Moderation: ai.ImageGenerationModerationLow,
+			Model: "gpt-image-2", OutputCompression: &compression, OutputFormat: ai.ImageGenerationOutputWebP,
+			PartialImages: 2, Quality: ai.ImageGenerationQualityHigh, AspectRatio: ai.ImageAspectRatio2x3,
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	if tool["type"] != "image_generation" || tool["action"] != "edit" || tool["background"] != "transparent" ||
+		tool["input_fidelity"] != "high" || tool["moderation"] != "low" || tool["model"] != "gpt-image-2" ||
+		tool["output_compression"] != float64(75) || tool["output_format"] != "webp" ||
+		tool["partial_images"] != float64(2) || tool["quality"] != "high" || tool["size"] != "1024x1536" {
+		t.Fatalf("unexpected image generation request: %#v", tool)
+	}
+	if len(response.Parts) != 4 {
+		t.Fatalf("unexpected image generation response parts: %#v", response.Parts)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	file := response.Parts[1].(ai.FilePart)
+	returned := response.Parts[2].(ai.NativeToolReturnPart)
+	content := returned.Content.(map[string]any)
+	if call.ToolKind != ai.ToolPartKindImageGeneration || call.ToolCallID != "image-1" || len(call.Args) != 0 ||
+		file.ID != "image-1" || file.Content.MediaType != "image/webp" || string(file.Content.Data) != "image" ||
+		returned.ToolKind != ai.ToolPartKindImageGeneration || content["status"] != "completed" ||
+		content["background"] != "transparent" || content["quality"] != "high" ||
+		content["size"] != "1024x1536" || content["revised_prompt"] != "a better prompt" {
+		t.Fatalf("unexpected normalized image generation: call=%+v file=%+v return=%+v", call, file, returned)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := body["input"].([]any)[0].(map[string]any)
+	if replayed["type"] != "image_generation_call" || replayed["id"] != "image-1" {
+		t.Fatalf("unexpected image generation replay: %#v", replayed)
+	}
+}
+
+func TestResponsesImageGenerationDefaultsAndErrors(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"status":"completed","output":[
+			{"type":"image_generation_call","id":"image","status":"in_progress"}]}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{&ai.ImageGenerationTool{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	if tool["action"] != "auto" || tool["background"] != "auto" || tool["moderation"] != "auto" ||
+		tool["output_compression"] != float64(100) || tool["output_format"] != "png" ||
+		tool["partial_images"] != float64(0) || tool["quality"] != "auto" || tool["size"] != "auto" ||
+		tool["input_fidelity"] != nil || tool["model"] != nil {
+		t.Fatalf("unexpected image generation defaults: %#v", tool)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.ImageGenerationTool{Size: ai.ImageGenerationSize1024x1024},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if size := body["tools"].([]any)[0].(map[string]any)["size"]; size != "1024x1024" {
+		t.Fatalf("unexpected explicit image size: %v", size)
+	}
+	for _, test := range []struct {
+		name string
+		tool ai.ImageGenerationTool
+		want string
+	}{
+		{name: "Google size", tool: ai.ImageGenerationTool{Size: ai.ImageGenerationSize4K}, want: "unsupported image generation size"},
+		{name: "Google aspect", tool: ai.ImageGenerationTool{AspectRatio: ai.ImageAspectRatio16x9}, want: "unsupported image generation aspect ratio"},
+		{name: "conflict", tool: ai.ImageGenerationTool{
+			AspectRatio: ai.ImageAspectRatio1x1, Size: ai.ImageGenerationSize1024x1536,
+		}, want: "conflicts with size"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{test.tool}})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected image tool error: %v", err)
+			}
+		})
+	}
+
+	model = newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"status":"completed","output":[
+			{"type":"image_generation_call","id":"image","result":"!"}]}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
+		!strings.Contains(err.Error(), "decode generated image") {
+		t.Fatalf("unexpected generated image error: %v", err)
+	}
+}
+
 func TestResponsesNativeToolCompatibility(t *testing.T) {
 	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
 		var body map[string]any

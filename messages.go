@@ -305,11 +305,12 @@ func (FilePart) responsePartKind() string { return "file" }
 type ToolPartKind string
 
 const (
-	ToolPartKindToolSearch     ToolPartKind = "tool-search"
-	ToolPartKindCapabilityLoad ToolPartKind = "capability-load"
-	ToolPartKindWebSearch      ToolPartKind = "web-search"
-	ToolPartKindWebFetch       ToolPartKind = "web-fetch"
-	ToolPartKindCodeExecution  ToolPartKind = "code-execution"
+	ToolPartKindToolSearch      ToolPartKind = "tool-search"
+	ToolPartKindCapabilityLoad  ToolPartKind = "capability-load"
+	ToolPartKindWebSearch       ToolPartKind = "web-search"
+	ToolPartKindWebFetch        ToolPartKind = "web-fetch"
+	ToolPartKindCodeExecution   ToolPartKind = "code-execution"
+	ToolPartKindImageGeneration ToolPartKind = "image-generation"
 )
 
 // ToolCallPart is a tool call requested by the model.

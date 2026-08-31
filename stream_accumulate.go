@@ -323,10 +323,20 @@ func accumulate(
 			}
 		case FileEvent:
 			if event.PartID != "" {
-				if _, exists := partsByID[event.PartID]; exists {
-					return nil, &UnexpectedModelBehaviorError{
-						Message: fmt.Sprintf("duplicate file stream part %q", event.PartID),
+				if part, exists := partsByID[event.PartID]; exists {
+					if part.kind != ResponsePartKindFile || !event.Replace {
+						return nil, &UnexpectedModelBehaviorError{
+							Message: fmt.Sprintf("duplicate file stream part %q", event.PartID),
+						}
 					}
+					part.complete = cloneResponsePart(event.Part)
+					current = part
+					if err := emitEvent(PartDeltaEvent{
+						Index: part.index, PartID: part.id, Delta: FilePartDelta{Part: event.Part},
+					}); err != nil {
+						return partialResponse(), err
+					}
+					continue
 				}
 			}
 			part := newPart(event.PartID, ResponsePartKindFile)

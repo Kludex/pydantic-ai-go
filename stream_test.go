@@ -925,6 +925,48 @@ func TestRunStreamPreservesProviderNativeToolLifecycle(t *testing.T) {
 	}
 }
 
+func TestFilePartDeltaReplacesGeneratedFile(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.FileEvent{PartID: "file", Part: ai.FilePart{
+				Content: ai.BinaryContent{Data: []byte("partial"), MediaType: "image/png"},
+			}},
+			ai.FileEvent{PartID: "file", Replace: true, Part: ai.FilePart{
+				Content: ai.BinaryContent{Data: []byte("final"), MediaType: "image/webp"},
+			}},
+			ai.TextDeltaEvent{PartID: "answer", Delta: "done"},
+			ai.FinishEvent{},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	var delta ai.FilePartDelta
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if partDelta, ok := event.(ai.PartDeltaEvent); ok {
+			delta, _ = partDelta.Delta.(ai.FilePartDelta)
+		}
+	}
+	result := stream.Result()
+	file := result.Messages()[1].(ai.ModelResponse).Parts[0].(ai.FilePart)
+	if string(file.Content.Data) != "final" || file.Content.MediaType != "image/webp" ||
+		string(delta.Part.Content.Data) != "final" {
+		t.Fatalf("file was not replaced: file=%+v delta=%+v", file, delta)
+	}
+	applied, err := delta.Apply(ai.FilePart{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	delta.Part.Content.Data[0] = 'X'
+	if string(applied.(ai.FilePart).Content.Data) != "final" {
+		t.Fatal("applied file delta was not detached")
+	}
+	if _, err := delta.Apply(ai.TextPart{}); err == nil {
+		t.Fatal("expected file delta type error")
+	}
+}
+
 func TestNativeToolCallPartDeltaApply(t *testing.T) {
 	delta := ai.NativeToolCallPartDelta{
 		ToolNameDelta: "_search", ArgsDelta: `{"queries":[]}`, ToolCallID: "call", ProviderName: "provider",
@@ -1000,6 +1042,29 @@ func TestRunStreamCanStopFilePart(t *testing.T) {
 	}
 	if stream.Result() != nil {
 		t.Fatal("stopped file stream produced a result")
+	}
+}
+
+func TestRunStreamCanStopFileReplacement(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		part := ai.FilePart{Content: ai.BinaryContent{Data: []byte("file"), MediaType: "text/plain"}}
+		return []ai.ModelStreamEvent{
+			ai.FileEvent{PartID: "file", Part: part},
+			ai.FileEvent{PartID: "file", Part: part, Replace: true},
+			ai.FinishEvent{},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := event.(ai.PartDeltaEvent); ok {
+			break
+		}
+	}
+	if stream.Result() != nil {
+		t.Fatal("stopped file replacement stream produced a result")
 	}
 }
 

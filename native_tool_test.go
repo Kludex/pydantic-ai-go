@@ -81,6 +81,20 @@ func TestNativeToolsAreDetachedAndRunScoped(t *testing.T) {
 	}
 }
 
+func TestImageGenerationToolIsDetached(t *testing.T) {
+	compression := 80
+	tool := ai.ImageGenerationTool{OutputCompression: &compression, Optional: true}
+	cloned := tool.CloneNativeTool().(ai.ImageGenerationTool)
+	*cloned.OutputCompression = 20
+	if compression != 80 || *tool.OutputCompression != 80 {
+		t.Fatal("image generation compression pointer was not detached")
+	}
+	if !tool.IsOptional() || tool.Kind() != "image_generation" || tool.UniqueID() != "image_generation" {
+		t.Fatalf("unexpected image generation identity: %+v", tool)
+	}
+	ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{}))
+}
+
 func TestNativeToolsFromAgentRunAndCapability(t *testing.T) {
 	tests := map[string]func(*ai.Agent[struct{}, string]) []ai.RunOption{
 		"agent method": func(agent *ai.Agent[struct{}, string]) []ai.RunOption {
@@ -120,6 +134,23 @@ func TestNativeToolsFromAgentRunAndCapability(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateNativeToolPointers(t *testing.T) {
+	if err := ai.ValidateNativeTools([]ai.NativeTool{
+		&ai.WebSearchTool{}, &ai.WebFetchTool{}, &ai.ImageGenerationTool{},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range []ai.NativeTool{
+		&ai.WebSearchTool{SearchContextSize: "huge"},
+		&ai.WebFetchTool{MaxUses: -1},
+		&ai.ImageGenerationTool{Quality: "maximum"},
+	} {
+		if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err == nil {
+			t.Fatalf("expected pointer validation error for %T", tool)
+		}
 	}
 }
 
@@ -163,6 +194,68 @@ func TestNativeToolValidation(t *testing.T) {
 		"web fetch max content": func() {
 			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.WebFetchTool{
 				MaxContentTokens: -1,
+			}))
+		},
+		"image action": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				Action: "replace",
+			}))
+		},
+		"image background": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				Background: "blue",
+			}))
+		},
+		"image fidelity": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				InputFidelity: "exact",
+			}))
+		},
+		"image moderation": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				Moderation: "none",
+			}))
+		},
+		"image compression low": func() {
+			compression := -1
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				OutputCompression: &compression,
+			}))
+		},
+		"image compression high": func() {
+			compression := 101
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				OutputCompression: &compression,
+			}))
+		},
+		"image format": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				OutputFormat: "gif",
+			}))
+		},
+		"image partials low": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				PartialImages: -1,
+			}))
+		},
+		"image partials high": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				PartialImages: 4,
+			}))
+		},
+		"image quality": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				Quality: "maximum",
+			}))
+		},
+		"image size": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				Size: "800x600",
+			}))
+		},
+		"image aspect ratio": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
+				AspectRatio: "7:3",
 			}))
 		},
 		"agent method duplicate": func() {

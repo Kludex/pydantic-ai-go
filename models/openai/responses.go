@@ -407,18 +407,28 @@ type responsesInputContent struct {
 }
 
 type responsesTool struct {
-	Type              string                      `json:"type"`
-	Name              string                      `json:"name,omitempty"`
-	Description       string                      `json:"description,omitempty"`
-	Parameters        map[string]any              `json:"parameters,omitempty"`
-	Strict            *bool                       `json:"strict,omitempty"`
-	DeferLoading      bool                        `json:"defer_loading,omitempty"`
-	Execution         string                      `json:"execution,omitempty"`
-	SearchContextSize ai.WebSearchContextSize     `json:"search_context_size,omitempty"`
-	UserLocation      *responsesWebSearchLocation `json:"user_location,omitempty"`
-	Filters           *responsesWebSearchFilters  `json:"filters,omitempty"`
-	ExternalWebAccess *bool                       `json:"external_web_access,omitempty"`
-	Container         *responsesCodeContainer     `json:"container,omitempty"`
+	Type              string                          `json:"type"`
+	Name              string                          `json:"name,omitempty"`
+	Description       string                          `json:"description,omitempty"`
+	Parameters        map[string]any                  `json:"parameters,omitempty"`
+	Strict            *bool                           `json:"strict,omitempty"`
+	DeferLoading      bool                            `json:"defer_loading,omitempty"`
+	Execution         string                          `json:"execution,omitempty"`
+	SearchContextSize ai.WebSearchContextSize         `json:"search_context_size,omitempty"`
+	UserLocation      *responsesWebSearchLocation     `json:"user_location,omitempty"`
+	Filters           *responsesWebSearchFilters      `json:"filters,omitempty"`
+	ExternalWebAccess *bool                           `json:"external_web_access,omitempty"`
+	Container         *responsesCodeContainer         `json:"container,omitempty"`
+	Action            ai.ImageGenerationAction        `json:"action,omitempty"`
+	Background        ai.ImageGenerationBackground    `json:"background,omitempty"`
+	InputFidelity     ai.ImageGenerationInputFidelity `json:"input_fidelity,omitempty"`
+	Moderation        ai.ImageGenerationModeration    `json:"moderation,omitempty"`
+	Model             string                          `json:"model,omitempty"`
+	OutputCompression *int                            `json:"output_compression,omitempty"`
+	OutputFormat      ai.ImageGenerationOutputFormat  `json:"output_format,omitempty"`
+	PartialImages     int                             `json:"partial_images"`
+	Quality           ai.ImageGenerationQuality       `json:"quality,omitempty"`
+	Size              ai.ImageGenerationSize          `json:"size,omitempty"`
 }
 
 type responsesCodeContainer struct {
@@ -439,9 +449,6 @@ type responsesWebSearchFilters struct {
 }
 
 func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (responsesTool, bool, error) {
-	if nativeToolIsNil(nativeTool) {
-		return responsesTool{}, false, fmt.Errorf("openai: native tool must not be nil")
-	}
 	var webSearch ai.WebSearchTool
 	switch tool := nativeTool.(type) {
 	case ai.WebSearchTool:
@@ -452,6 +459,12 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 		return responsesCodeExecutionTool(tool, providerName), true, nil
 	case *ai.CodeExecutionTool:
 		return responsesCodeExecutionTool(*tool, providerName), true, nil
+	case ai.ImageGenerationTool:
+		prepared, err := responsesImageGenerationTool(tool)
+		return prepared, true, err
+	case *ai.ImageGenerationTool:
+		prepared, err := responsesImageGenerationTool(*tool)
+		return prepared, true, err
 	default:
 		if nativeTool.IsOptional() {
 			return responsesTool{}, false, nil
@@ -461,10 +474,6 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 	contextSize := webSearch.SearchContextSize
 	if contextSize == "" {
 		contextSize = ai.WebSearchContextMedium
-	}
-	if contextSize != ai.WebSearchContextLow && contextSize != ai.WebSearchContextMedium &&
-		contextSize != ai.WebSearchContextHigh {
-		return responsesTool{}, false, fmt.Errorf("openai: invalid web search context size %q", contextSize)
 	}
 	tool := responsesTool{Type: "web_search", SearchContextSize: contextSize}
 	if webSearch.UserLocation != nil {
@@ -493,9 +502,75 @@ func responsesCodeExecutionTool(tool ai.CodeExecutionTool, providerName string) 
 	return responsesTool{Type: "code_interpreter", Container: container}
 }
 
+func responsesImageGenerationTool(tool ai.ImageGenerationTool) (responsesTool, error) {
+	action := tool.Action
+	if action == "" {
+		action = ai.ImageGenerationActionAuto
+	}
+	background := tool.Background
+	if background == "" {
+		background = ai.ImageGenerationBackgroundAuto
+	}
+	moderation := tool.Moderation
+	if moderation == "" {
+		moderation = ai.ImageGenerationModerationAuto
+	}
+	compression := 100
+	if tool.OutputCompression != nil {
+		compression = *tool.OutputCompression
+	}
+	outputFormat := tool.OutputFormat
+	if outputFormat == "" {
+		outputFormat = ai.ImageGenerationOutputPNG
+	}
+	quality := tool.Quality
+	if quality == "" {
+		quality = ai.ImageGenerationQualityAuto
+	}
+	size, err := responsesImageGenerationSize(tool.Size, tool.AspectRatio)
+	if err != nil {
+		return responsesTool{}, err
+	}
+	return responsesTool{
+		Type: "image_generation", Action: action, Background: background, InputFidelity: tool.InputFidelity,
+		Moderation: moderation, Model: tool.Model, OutputCompression: &compression, OutputFormat: outputFormat,
+		PartialImages: tool.PartialImages, Quality: quality, Size: size,
+	}, nil
+}
+
+func responsesImageGenerationSize(size ai.ImageGenerationSize, aspectRatio ai.ImageAspectRatio) (ai.ImageGenerationSize, error) {
+	if aspectRatio == "" {
+		if size == "" {
+			return ai.ImageGenerationSizeAuto, nil
+		}
+		switch size {
+		case ai.ImageGenerationSizeAuto, ai.ImageGenerationSize1024x1024,
+			ai.ImageGenerationSize1024x1536, ai.ImageGenerationSize1536x1024:
+			return size, nil
+		default:
+			return "", fmt.Errorf("openai: unsupported image generation size %q", size)
+		}
+	}
+	mapped := map[ai.ImageAspectRatio]ai.ImageGenerationSize{
+		ai.ImageAspectRatio1x1: ai.ImageGenerationSize1024x1024,
+		ai.ImageAspectRatio2x3: ai.ImageGenerationSize1024x1536,
+		ai.ImageAspectRatio3x2: ai.ImageGenerationSize1536x1024,
+	}[aspectRatio]
+	if mapped == "" {
+		return "", fmt.Errorf("openai: unsupported image generation aspect ratio %q", aspectRatio)
+	}
+	if size != "" && size != ai.ImageGenerationSizeAuto && size != mapped {
+		return "", fmt.Errorf("openai: image generation aspect ratio %q conflicts with size %q", aspectRatio, size)
+	}
+	return mapped, nil
+}
+
 func (m *ResponsesModel) buildResponsesPayload(
 	msgs []ai.ModelMessage, params ai.ModelRequestParams, nativeDeferred bool,
 ) (*responsesRequest, error) {
+	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
+		return nil, fmt.Errorf("openai: native tools: %w", err)
+	}
 	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
 	if err != nil {
 		return nil, err
@@ -682,6 +757,12 @@ type responsesOutputItem struct {
 	EncryptedContent string          `json:"encrypted_content"`
 	ContainerID      string          `json:"container_id"`
 	Code             string          `json:"code"`
+	Background       string          `json:"background"`
+	Quality          string          `json:"quality"`
+	Size             string          `json:"size"`
+	RevisedPrompt    string          `json:"revised_prompt"`
+	OutputFormat     string          `json:"output_format"`
+	Result           string          `json:"result"`
 	Outputs          []struct {
 		Type string `json:"type"`
 		Logs string `json:"logs"`
@@ -812,6 +893,54 @@ func responsesCodeExecutionParts(
 		}, nil
 }
 
+func responsesImageGenerationParts(
+	item responsesOutputItem, timestamp time.Time,
+) (ai.NativeToolCallPart, *ai.FilePart, ai.NativeToolReturnPart, error) {
+	content := map[string]any{"status": item.Status}
+	if item.Background != "" {
+		content["background"] = item.Background
+	}
+	if item.Quality != "" {
+		content["quality"] = item.Quality
+	}
+	if item.Size != "" {
+		content["size"] = item.Size
+	}
+	if item.RevisedPrompt != "" {
+		content["revised_prompt"] = item.RevisedPrompt
+	}
+	var file *ai.FilePart
+	if item.Result != "" {
+		generated, err := responsesGeneratedImage(item.ID, item.Result, item.OutputFormat)
+		if err != nil {
+			return ai.NativeToolCallPart{}, nil, ai.NativeToolReturnPart{}, err
+		}
+		file = &generated
+		content["status"] = "completed"
+	}
+	return ai.NativeToolCallPart{
+			ToolName: "image_generation", ToolCallID: item.ID, ToolKind: ai.ToolPartKindImageGeneration,
+			ID: item.ID, ProviderName: "openai",
+		}, file, ai.NativeToolReturnPart{
+			ToolName: "image_generation", ToolCallID: item.ID, ToolKind: ai.ToolPartKindImageGeneration,
+			Content: content, Timestamp: timestamp, ProviderName: "openai",
+		}, nil
+}
+
+func responsesGeneratedImage(itemID, encoded, outputFormat string) (ai.FilePart, error) {
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return ai.FilePart{}, fmt.Errorf("openai: decode generated image: %w", err)
+	}
+	if outputFormat == "" {
+		outputFormat = "png"
+	}
+	return ai.FilePart{
+		Content: ai.BinaryContent{Data: data, MediaType: "image/" + outputFormat},
+		ID:      itemID, ProviderName: "openai",
+	}, nil
+}
+
 func responsesDataURI(value string) (ai.BinaryContent, error) {
 	header, encoded, ok := strings.Cut(value, ",")
 	if !ok || !strings.HasPrefix(header, "data:") || !strings.HasSuffix(header, ";base64") {
@@ -903,6 +1032,16 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 			resp.Parts = append(resp.Parts, call)
 			for _, file := range files {
 				resp.Parts = append(resp.Parts, file)
+			}
+			resp.Parts = append(resp.Parts, returned)
+		case "image_generation_call":
+			call, file, returned, err := responsesImageGenerationParts(item, timestamp)
+			if err != nil {
+				return nil, err
+			}
+			resp.Parts = append(resp.Parts, call)
+			if file != nil {
+				resp.Parts = append(resp.Parts, *file)
 			}
 			resp.Parts = append(resp.Parts, returned)
 		case "web_search_call":

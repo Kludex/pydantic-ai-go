@@ -144,6 +144,106 @@ func TestResponsesStaticCodeExecutionFileStream(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamImageGeneration(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.created","response":{"id":"response","model":"gpt-5","created_at":100,"status":"in_progress"}}`,
+		`{"type":"response.output_item.added","item":{"id":"image-1","type":"image_generation_call","status":"in_progress"}}`,
+		`{"type":"response.image_generation_call.generating","item_id":"image-1"}`,
+		`{"type":"response.image_generation_call.in_progress","item_id":"image-1"}`,
+		`{"type":"response.image_generation_call.partial_image","item_id":"image-1","partial_image_index":0,"partial_image_b64":"aQ=="}`,
+		`{"type":"response.image_generation_call.partial_image","item_id":"image-1","partial_image_index":1,"partial_image_b64":"aW0=","output_format":"webp"}`,
+		`{"type":"response.image_generation_call.completed","item_id":"image-1"}`,
+		`{"type":"response.output_item.done","item":{"id":"image-1","type":"image_generation_call","status":"generating","output_format":"jpeg","result":"aW1hZ2U="}}`,
+		`{"type":"response.output_text.delta","output_index":1,"content_index":0,"item_id":"message","delta":"done"}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[{"id":"image-1","type":"image_generation_call","status":"generating","output_format":"jpeg","result":"aW1hZ2U="},{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}],"usage":{}}}`,
+	}))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "draw", struct{}{})
+	fileStarts := 0
+	fileDeltas := 0
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case ai.PartStartEvent:
+			if file, ok := event.Part.(ai.FilePart); ok {
+				fileStarts++
+				if string(file.Content.Data) != "i" || file.Content.MediaType != "image/png" {
+					t.Fatalf("unexpected first partial image: %+v", file)
+				}
+			}
+		case ai.PartDeltaEvent:
+			if delta, ok := event.Delta.(ai.FilePartDelta); ok {
+				fileDeltas++
+				if fileDeltas == 2 && (string(delta.Part.Content.Data) != "image" ||
+					delta.Part.Content.MediaType != "image/jpeg") {
+					t.Fatalf("unexpected final image delta: %+v", delta.Part)
+				}
+			}
+		}
+	}
+	result := stream.Result()
+	if result == nil {
+		t.Fatal("image generation stream did not complete")
+	}
+	response := result.Messages()[1].(ai.ModelResponse)
+	file := response.Parts[1].(ai.FilePart)
+	if result.Output != "done" || fileStarts != 1 || fileDeltas != 2 ||
+		string(file.Content.Data) != "image" || file.Content.MediaType != "image/jpeg" {
+		t.Fatalf("unexpected image generation stream: result=%+v starts=%d deltas=%d", result, fileStarts, fileDeltas)
+	}
+}
+
+func TestResponsesStreamImageGenerationErrorsAndStopping(t *testing.T) {
+	for name, event := range map[string]string{
+		"partial": `{"type":"response.image_generation_call.partial_image","item_id":"image","partial_image_b64":"!"}`,
+		"done":    `{"type":"response.output_item.done","item":{"id":"image","type":"image_generation_call","result":"!"}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, []string{event}))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, err := range stream {
+				if err == nil || !strings.Contains(err.Error(), "decode generated image") {
+					t.Fatalf("unexpected generated image error: %v", err)
+				}
+				return
+			}
+			t.Fatal("expected generated image error")
+		})
+	}
+
+	events := []string{
+		`{"type":"response.output_item.added","item":{"id":"image","type":"image_generation_call"}}`,
+		`{"type":"response.image_generation_call.partial_image","item_id":"image","partial_image_b64":"aQ=="}`,
+		`{"type":"response.output_item.done","item":{"id":"image","type":"image_generation_call","result":"aQ=="}}`,
+	}
+	for breakAfter := 1; breakAfter <= 4; breakAfter++ {
+		t.Run(fmt.Sprintf("consumer break %d", breakAfter), func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, events))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen++
+				if seen == breakAfter {
+					break
+				}
+			}
+			if seen != breakAfter {
+				t.Fatalf("stream ended after %d events", seen)
+			}
+		})
+	}
+}
+
 func TestResponsesStreamRefusal(t *testing.T) {
 	model := newResponsesServer(t, sseHandler(t, []string{
 		`{"type":"response.refusal.delta","delta":"I cannot "}`,

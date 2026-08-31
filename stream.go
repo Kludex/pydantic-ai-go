@@ -126,10 +126,12 @@ type NativeToolReturnEvent struct {
 
 func (NativeToolReturnEvent) modelStreamEventKind() string { return "builtin-tool-return" }
 
-// FileEvent emits one complete model-generated file.
+// FileEvent emits one complete model-generated file. Replace updates an
+// earlier file with the same PartID, as used by partial image generation.
 type FileEvent struct {
-	PartID string
-	Part   FilePart
+	PartID  string
+	Part    FilePart
+	Replace bool
 }
 
 func (FileEvent) modelStreamEventKind() string { return "file" }

@@ -108,6 +108,124 @@ func (tool CodeExecutionTool) CloneNativeTool() NativeTool {
 	return tool
 }
 
+// ImageGenerationAction selects whether a provider generates or edits an image.
+type ImageGenerationAction string
+
+const (
+	ImageGenerationActionAuto     ImageGenerationAction = "auto"
+	ImageGenerationActionGenerate ImageGenerationAction = "generate"
+	ImageGenerationActionEdit     ImageGenerationAction = "edit"
+)
+
+// ImageGenerationBackground selects the generated image background.
+type ImageGenerationBackground string
+
+const (
+	ImageGenerationBackgroundAuto        ImageGenerationBackground = "auto"
+	ImageGenerationBackgroundOpaque      ImageGenerationBackground = "opaque"
+	ImageGenerationBackgroundTransparent ImageGenerationBackground = "transparent"
+)
+
+// ImageGenerationInputFidelity controls how closely edits preserve input features.
+type ImageGenerationInputFidelity string
+
+const (
+	ImageGenerationInputFidelityLow  ImageGenerationInputFidelity = "low"
+	ImageGenerationInputFidelityHigh ImageGenerationInputFidelity = "high"
+)
+
+// ImageGenerationModeration controls provider image moderation.
+type ImageGenerationModeration string
+
+const (
+	ImageGenerationModerationAuto ImageGenerationModeration = "auto"
+	ImageGenerationModerationLow  ImageGenerationModeration = "low"
+)
+
+// ImageGenerationOutputFormat identifies the generated image encoding.
+type ImageGenerationOutputFormat string
+
+const (
+	ImageGenerationOutputPNG  ImageGenerationOutputFormat = "png"
+	ImageGenerationOutputWebP ImageGenerationOutputFormat = "webp"
+	ImageGenerationOutputJPEG ImageGenerationOutputFormat = "jpeg"
+)
+
+// ImageGenerationQuality controls the provider's image generation effort.
+type ImageGenerationQuality string
+
+const (
+	ImageGenerationQualityAuto   ImageGenerationQuality = "auto"
+	ImageGenerationQualityLow    ImageGenerationQuality = "low"
+	ImageGenerationQualityMedium ImageGenerationQuality = "medium"
+	ImageGenerationQualityHigh   ImageGenerationQuality = "high"
+)
+
+// ImageGenerationSize is a provider-supported image dimension or quality tier.
+type ImageGenerationSize string
+
+const (
+	ImageGenerationSizeAuto      ImageGenerationSize = "auto"
+	ImageGenerationSize1024x1024 ImageGenerationSize = "1024x1024"
+	ImageGenerationSize1024x1536 ImageGenerationSize = "1024x1536"
+	ImageGenerationSize1536x1024 ImageGenerationSize = "1536x1024"
+	ImageGenerationSize512       ImageGenerationSize = "512"
+	ImageGenerationSize1K        ImageGenerationSize = "1K"
+	ImageGenerationSize2K        ImageGenerationSize = "2K"
+	ImageGenerationSize4K        ImageGenerationSize = "4K"
+)
+
+// ImageAspectRatio identifies a portable generated-image aspect ratio.
+type ImageAspectRatio string
+
+const (
+	ImageAspectRatio21x9 ImageAspectRatio = "21:9"
+	ImageAspectRatio16x9 ImageAspectRatio = "16:9"
+	ImageAspectRatio4x3  ImageAspectRatio = "4:3"
+	ImageAspectRatio3x2  ImageAspectRatio = "3:2"
+	ImageAspectRatio1x1  ImageAspectRatio = "1:1"
+	ImageAspectRatio9x16 ImageAspectRatio = "9:16"
+	ImageAspectRatio3x4  ImageAspectRatio = "3:4"
+	ImageAspectRatio2x3  ImageAspectRatio = "2:3"
+	ImageAspectRatio5x4  ImageAspectRatio = "5:4"
+	ImageAspectRatio4x5  ImageAspectRatio = "4:5"
+)
+
+// ImageGenerationTool asks a compatible provider to generate or edit images.
+// The zero value lets the provider choose portable defaults.
+type ImageGenerationTool struct {
+	Action            ImageGenerationAction
+	Background        ImageGenerationBackground
+	InputFidelity     ImageGenerationInputFidelity
+	Moderation        ImageGenerationModeration
+	Model             string
+	OutputCompression *int
+	OutputFormat      ImageGenerationOutputFormat
+	PartialImages     int
+	Quality           ImageGenerationQuality
+	Size              ImageGenerationSize
+	AspectRatio       ImageAspectRatio
+	Optional          bool
+}
+
+// Kind returns the stable native-tool discriminator.
+func (ImageGenerationTool) Kind() string { return "image_generation" }
+
+// UniqueID identifies this native tool within one model request.
+func (ImageGenerationTool) UniqueID() string { return "image_generation" }
+
+// IsOptional reports whether an unsupported model may omit the tool.
+func (tool ImageGenerationTool) IsOptional() bool { return tool.Optional }
+
+// CloneNativeTool returns a detached definition.
+func (tool ImageGenerationTool) CloneNativeTool() NativeTool {
+	if tool.OutputCompression != nil {
+		compression := *tool.OutputCompression
+		tool.OutputCompression = &compression
+	}
+	return tool
+}
+
 // WebFetchTool asks a compatible provider to retrieve content from URLs.
 type WebFetchTool struct {
 	MaxUses          int
@@ -171,7 +289,9 @@ func cloneWebSearchTool(tool WebSearchTool) WebSearchTool {
 	return tool
 }
 
-func validateNativeTools(tools []NativeTool) error {
+// ValidateNativeTools checks portable definitions and rejects duplicate identities.
+// Model implementations can call it before rendering direct requests.
+func ValidateNativeTools(tools []NativeTool) error {
 	ids := make(map[string]struct{}, len(tools))
 	for _, tool := range tools {
 		if tool == nil || (reflect.ValueOf(tool).Kind() == reflect.Pointer && reflect.ValueOf(tool).IsNil()) {
@@ -192,14 +312,89 @@ func validateNativeTools(tools []NativeTool) error {
 			if err := validateWebSearchTool(tool); err != nil {
 				return err
 			}
-		case WebFetchTool:
-			if tool.MaxUses < 0 {
-				return fmt.Errorf("ai: web fetch max uses must not be negative")
+		case *WebSearchTool:
+			if err := validateWebSearchTool(*tool); err != nil {
+				return err
 			}
-			if tool.MaxContentTokens < 0 {
-				return fmt.Errorf("ai: web fetch max content tokens must not be negative")
+		case WebFetchTool:
+			if err := validateWebFetchTool(tool); err != nil {
+				return err
+			}
+		case *WebFetchTool:
+			if err := validateWebFetchTool(*tool); err != nil {
+				return err
+			}
+		case ImageGenerationTool:
+			if err := validateImageGenerationTool(tool); err != nil {
+				return err
+			}
+		case *ImageGenerationTool:
+			if err := validateImageGenerationTool(*tool); err != nil {
+				return err
 			}
 		}
+	}
+	return nil
+}
+
+func validateWebFetchTool(tool WebFetchTool) error {
+	if tool.MaxUses < 0 {
+		return fmt.Errorf("ai: web fetch max uses must not be negative")
+	}
+	if tool.MaxContentTokens < 0 {
+		return fmt.Errorf("ai: web fetch max content tokens must not be negative")
+	}
+	return nil
+}
+
+func validateImageGenerationTool(tool ImageGenerationTool) error {
+	if tool.Action != "" && tool.Action != ImageGenerationActionAuto &&
+		tool.Action != ImageGenerationActionGenerate && tool.Action != ImageGenerationActionEdit {
+		return fmt.Errorf("ai: invalid image generation action %q", tool.Action)
+	}
+	if tool.Background != "" && tool.Background != ImageGenerationBackgroundAuto &&
+		tool.Background != ImageGenerationBackgroundOpaque &&
+		tool.Background != ImageGenerationBackgroundTransparent {
+		return fmt.Errorf("ai: invalid image generation background %q", tool.Background)
+	}
+	if tool.InputFidelity != "" && tool.InputFidelity != ImageGenerationInputFidelityLow &&
+		tool.InputFidelity != ImageGenerationInputFidelityHigh {
+		return fmt.Errorf("ai: invalid image generation input fidelity %q", tool.InputFidelity)
+	}
+	if tool.Moderation != "" && tool.Moderation != ImageGenerationModerationAuto &&
+		tool.Moderation != ImageGenerationModerationLow {
+		return fmt.Errorf("ai: invalid image generation moderation %q", tool.Moderation)
+	}
+	if tool.OutputCompression != nil && (*tool.OutputCompression < 0 || *tool.OutputCompression > 100) {
+		return fmt.Errorf("ai: image generation output compression must be between 0 and 100")
+	}
+	if tool.OutputFormat != "" && tool.OutputFormat != ImageGenerationOutputPNG &&
+		tool.OutputFormat != ImageGenerationOutputWebP && tool.OutputFormat != ImageGenerationOutputJPEG {
+		return fmt.Errorf("ai: invalid image generation output format %q", tool.OutputFormat)
+	}
+	if tool.PartialImages < 0 || tool.PartialImages > 3 {
+		return fmt.Errorf("ai: image generation partial images must be between 0 and 3")
+	}
+	if tool.Quality != "" && tool.Quality != ImageGenerationQualityAuto &&
+		tool.Quality != ImageGenerationQualityLow && tool.Quality != ImageGenerationQualityMedium &&
+		tool.Quality != ImageGenerationQualityHigh {
+		return fmt.Errorf("ai: invalid image generation quality %q", tool.Quality)
+	}
+	validSize := tool.Size == "" || tool.Size == ImageGenerationSizeAuto ||
+		tool.Size == ImageGenerationSize1024x1024 || tool.Size == ImageGenerationSize1024x1536 ||
+		tool.Size == ImageGenerationSize1536x1024 || tool.Size == ImageGenerationSize512 ||
+		tool.Size == ImageGenerationSize1K || tool.Size == ImageGenerationSize2K || tool.Size == ImageGenerationSize4K
+	if !validSize {
+		return fmt.Errorf("ai: invalid image generation size %q", tool.Size)
+	}
+	validAspectRatio := tool.AspectRatio == "" || tool.AspectRatio == ImageAspectRatio21x9 ||
+		tool.AspectRatio == ImageAspectRatio16x9 || tool.AspectRatio == ImageAspectRatio4x3 ||
+		tool.AspectRatio == ImageAspectRatio3x2 || tool.AspectRatio == ImageAspectRatio1x1 ||
+		tool.AspectRatio == ImageAspectRatio9x16 || tool.AspectRatio == ImageAspectRatio3x4 ||
+		tool.AspectRatio == ImageAspectRatio2x3 || tool.AspectRatio == ImageAspectRatio5x4 ||
+		tool.AspectRatio == ImageAspectRatio4x5
+	if !validAspectRatio {
+		return fmt.Errorf("ai: invalid image generation aspect ratio %q", tool.AspectRatio)
 	}
 	return nil
 }

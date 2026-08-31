@@ -115,18 +115,21 @@ func suspendedResponsesSequence(messages []ai.ModelMessage) (int, bool) {
 }
 
 type responsesStreamEvent struct {
-	Type           string              `json:"type"`
-	SequenceNumber *int                `json:"sequence_number"`
-	Delta          string              `json:"delta"`
-	Refusal        string              `json:"refusal"`
-	Logprobs       []map[string]any    `json:"logprobs"`
-	Annotation     map[string]any      `json:"annotation"`
-	ItemID         string              `json:"item_id"`
-	OutputIndex    int                 `json:"output_index"`
-	ContentIndex   int                 `json:"content_index"`
-	SummaryIndex   int                 `json:"summary_index"`
-	Item           responsesOutputItem `json:"item"`
-	Part           struct {
+	Type              string              `json:"type"`
+	SequenceNumber    *int                `json:"sequence_number"`
+	Delta             string              `json:"delta"`
+	Refusal           string              `json:"refusal"`
+	Logprobs          []map[string]any    `json:"logprobs"`
+	Annotation        map[string]any      `json:"annotation"`
+	ItemID            string              `json:"item_id"`
+	OutputIndex       int                 `json:"output_index"`
+	ContentIndex      int                 `json:"content_index"`
+	SummaryIndex      int                 `json:"summary_index"`
+	PartialImageB64   string              `json:"partial_image_b64"`
+	PartialImageIndex int                 `json:"partial_image_index"`
+	OutputFormat      string              `json:"output_format"`
+	Item              responsesOutputItem `json:"item"`
+	Part              struct {
 		Text string `json:"text"`
 	} `json:"part"`
 	Response responsesResponse `json:"response"`
@@ -152,6 +155,7 @@ func (m *ResponsesModel) responsesEventStream(
 		nullServerSearchCalls := make([]string, 0)
 		textPhases := make(map[string]string)
 		textAnnotations := make(map[string][]map[string]any)
+		imageFiles := make(map[string]bool)
 		if seed != nil {
 			if sequence, ok := seed.ProviderDetails["sequence_number"].(int); ok {
 				lastSequence = &sequence
@@ -334,6 +338,15 @@ func (m *ResponsesModel) responsesEventStream(
 					}, nil) {
 						return
 					}
+				case "image_generation_call":
+					emittedParts = true
+					if !yield(ai.ToolCallStartEvent{
+						PartID: responsesToolPartID(event), ToolName: "image_generation", ToolCallID: event.Item.ID,
+						ToolKind: ai.ToolPartKindImageGeneration, ID: event.Item.ID,
+						ProviderName: m.providerName, Native: true,
+					}, nil) {
+						return
+					}
 				case "web_search_call":
 					emittedParts = true
 					if !yield(ai.ToolCallStartEvent{
@@ -400,6 +413,20 @@ func (m *ResponsesModel) responsesEventStream(
 				if !yield(ai.ToolCallDeltaEvent{PartID: responsesToolPartID(event), ArgsDelta: `"}`}, nil) {
 					return
 				}
+			case "response.image_generation_call.partial_image":
+				emittedParts = true
+				file, err := responsesGeneratedImage(event.ItemID, event.PartialImageB64, event.OutputFormat)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				replace := imageFiles[event.ItemID]
+				imageFiles[event.ItemID] = true
+				if !yield(ai.FileEvent{
+					PartID: "item:" + event.ItemID + ":file", Part: file, Replace: replace,
+				}, nil) {
+					return
+				}
 			case "response.output_item.done":
 				if event.Item.Type == "code_interpreter_call" {
 					_, files, returned, err := responsesCodeExecutionParts(event.Item, responseTimestamp)
@@ -413,6 +440,24 @@ func (m *ResponsesModel) responsesEventStream(
 						}, nil) {
 							return
 						}
+					}
+					if !yield(ai.NativeToolReturnEvent{
+						PartID: "return:" + event.Item.ID, Part: returned,
+					}, nil) {
+						return
+					}
+					continue
+				}
+				if event.Item.Type == "image_generation_call" {
+					_, file, returned, err := responsesImageGenerationParts(event.Item, responseTimestamp)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					if file != nil && !yield(ai.FileEvent{
+						PartID: "item:" + event.Item.ID + ":file", Part: *file, Replace: imageFiles[event.Item.ID],
+					}, nil) {
+						return
 					}
 					if !yield(ai.NativeToolReturnEvent{
 						PartID: "return:" + event.Item.ID, Part: returned,
@@ -540,6 +585,8 @@ func (m *ResponsesModel) responsesEventStream(
 				"response.function_call_arguments.done",
 				"response.code_interpreter_call.in_progress", "response.code_interpreter_call.interpreting",
 				"response.code_interpreter_call.completed",
+				"response.image_generation_call.generating", "response.image_generation_call.in_progress",
+				"response.image_generation_call.completed",
 				"response.reasoning_summary_part.done", "response.reasoning_summary_text.done",
 				"response.reasoning_text.done":
 			default:

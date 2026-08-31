@@ -86,6 +86,7 @@ func TestStreamEventKinds(t *testing.T) {
 	}{
 		{TextPartDelta{}, ResponsePartKindText},
 		{ThinkingPartDelta{}, ResponsePartKindThinking},
+		{FilePartDelta{}, ResponsePartKindFile},
 		{ToolCallPartDelta{}, ResponsePartKindToolCall},
 		{NativeToolCallPartDelta{}, ResponsePartKindNativeToolCall},
 	}

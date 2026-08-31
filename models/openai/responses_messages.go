@@ -270,6 +270,10 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				})
 				continue
 			}
+			if part.ToolKind == ai.ToolPartKindImageGeneration && part.ToolCallID != "" {
+				out = append(out, responsesInput{Type: "image_generation_call", ID: part.ToolCallID})
+				continue
+			}
 			if !c.serverToolSearch || part.ToolKind != ai.ToolPartKindToolSearch {
 				continue
 			}

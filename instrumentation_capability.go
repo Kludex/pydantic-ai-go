@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
@@ -15,14 +16,15 @@ import (
 // Instrumentation adds configurable OpenTelemetry spans to agent runs,
 // model requests, and local tool execution.
 type Instrumentation struct {
-	runtime   *InstrumentedModel
-	agentName string
+	runtime      *InstrumentedModel
+	agentName    string
+	agentNameSet bool
 }
 
 // NewInstrumentation creates an outermost instrumentation capability.
 func NewInstrumentation(options ...InstrumentationOption) *Instrumentation {
-	runtime, agentName := newInstrumentationRuntime(options)
-	return &Instrumentation{runtime: runtime, agentName: agentName}
+	runtime, agentName, agentNameSet := newInstrumentationRuntime(options)
+	return &Instrumentation{runtime: runtime, agentName: agentName, agentNameSet: agentNameSet}
 }
 
 // Setup implements Capability.
@@ -34,6 +36,31 @@ func (*Instrumentation) CapabilityOrdering() CapabilityOrdering {
 }
 
 func (*Instrumentation) instrumentsAgent() bool { return true }
+
+type instrumentationRunStateKey struct{}
+
+type instrumentationRunState struct {
+	mu               sync.Mutex
+	lastInstructions string
+	observed         bool
+	variable         bool
+}
+
+func (state *instrumentationRunState) observe(instructions string) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.observed && state.lastInstructions != instructions {
+		state.variable = true
+	}
+	state.lastInstructions = instructions
+	state.observed = true
+}
+
+func (state *instrumentationRunState) snapshot() (instructions string, observed, variable bool) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.lastInstructions, state.observed, state.variable
+}
 
 func hasInstrumentationCapability(capabilities []Capability) bool {
 	for _, capability := range capabilities {
@@ -51,14 +78,17 @@ func (instrumentation *Instrumentation) WrapRun(
 	if runSpanActive(ctx) {
 		return next(ctx)
 	}
-	name := instrumentation.agentName
+	name := info.AgentName()
+	if instrumentation.agentNameSet {
+		name = instrumentation.agentName
+	}
 	if name == "" {
 		name = "agent"
 	}
 	modelName := modelName(info.Model())
 	names := namesForInstrumentationVersion(instrumentation.runtime.version)
 	newMessageIndex := info.newMessages
-	ctx, span := instrumentation.runtime.tracer.Start(ctx, names.runSpan(name), trace.WithAttributes(
+	attributes := []attribute.KeyValue{
 		attribute.String("model_name", modelName),
 		attribute.String("agent_name", name),
 		attribute.String("gen_ai.operation.name", "invoke_agent"),
@@ -66,8 +96,15 @@ func (instrumentation *Instrumentation) WrapRun(
 		attribute.String("gen_ai.agent.call.id", info.RunID),
 		attribute.String("gen_ai.conversation.id", info.ConversationID),
 		attribute.String("gen_ai.request.model", modelName),
-	))
+		attribute.String("logfire.msg", name+" run"),
+	}
+	if description := info.AgentDescription(); description != "" {
+		attributes = append(attributes, attribute.String("gen_ai.agent.description", description))
+	}
+	ctx, span := instrumentation.runtime.tracer.Start(ctx, names.runSpan(name), trace.WithAttributes(attributes...))
 	ctx = context.WithValue(ctx, runSpanContextKey{}, true)
+	runState := &instrumentationRunState{}
+	ctx = context.WithValue(ctx, instrumentationRunStateKey{}, runState)
 	ctx = instrumentationBaggage(ctx, name, info.RunID, info.ConversationID)
 	defer func() {
 		if err != nil {
@@ -98,11 +135,30 @@ func (instrumentation *Instrumentation) WrapRun(
 				"metadata", telemetryJSON(telemetryOutputValue(metadata, instrumentation.runtime.includeBinaryContent)),
 			))
 		}
+		properties := map[string]any{
+			"pydantic_ai.all_messages": map[string]any{"type": "array"},
+			"final_result":             map[string]any{"type": "object"},
+		}
+		instructions, observedInstructions, variableInstructions := runState.snapshot()
+		if !observedInstructions {
+			instructions = latestTelemetryInstructions(messages)
+		}
+		if variableInstructions {
+			span.SetAttributes(attribute.Bool("pydantic_ai.variable_instructions", true))
+			properties["pydantic_ai.variable_instructions"] = map[string]any{}
+		}
+		if newMessageIndex > 0 {
+			properties["pydantic_ai.new_message_index"] = map[string]any{}
+		}
+		if info.Metadata() != nil {
+			properties["metadata"] = map[string]any{"type": "array"}
+		}
 		if instrumentation.runtime.includeContent {
-			if instructions := latestTelemetryInstructions(messages); instructions != "" {
+			if instructions != "" {
 				span.SetAttributes(attribute.String("gen_ai.system_instructions", telemetryJSON([]map[string]any{{
 					"type": "text", "content": instructions,
 				}})))
+				properties["gen_ai.system_instructions"] = map[string]any{"type": "array"}
 			}
 			if err == nil {
 				final := outcome.Output
@@ -114,6 +170,9 @@ func (instrumentation *Instrumentation) WrapRun(
 				))
 			}
 		}
+		span.SetAttributes(attribute.String(
+			"logfire.json_schema", telemetryJSON(map[string]any{"type": "object", "properties": properties}),
+		))
 		span.End()
 	}()
 	return next(ctx)
@@ -127,6 +186,9 @@ func (instrumentation *Instrumentation) WrapModelRequest(
 	params ModelRequestParams,
 	next ModelRequestFunc,
 ) (*ModelResponse, error) {
+	if state, ok := ctx.Value(instrumentationRunStateKey{}).(*instrumentationRunState); ok {
+		state.observe(params.Instructions)
+	}
 	if modelRequestSpanActive(ctx) {
 		return next(ctx, messages, params)
 	}

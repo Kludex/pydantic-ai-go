@@ -32,10 +32,10 @@ func main() {
 
 	agent := ai.NewAgent[struct{}, string](
 		openai.NewModel("gpt-5-mini"),
+		ai.WithAgentName("support"),
+		ai.WithAgentDescription("Answers support questions"),
 		ai.WithMetadata(map[string]any{"service": "support"}),
-		ai.WithCapabilities(ai.NewInstrumentation(
-			ai.WithInstrumentationAgentName("support"),
-		)),
+		ai.WithCapabilities(ai.NewInstrumentation()),
 	)
 	result, err := agent.Run(context.Background(), "What is 2 + 2?", struct{}{})
 	if err != nil {
@@ -63,7 +63,9 @@ Use an OTLP exporter instead when you send traces to an observability service. T
 - One `execute_tool <name>` span for each user output function.
 - One failed `execute_tool <name>` span for a tool call rejected during argument validation.
 
-The run span records cumulative usage, cost, and application metadata from `WithMetadata` or `WithRunMetadata`. Request spans record provider, model, request settings, response details, tool definitions, messages, usage, cost, and streaming time to first chunk.
+Set the application identity with `WithAgentName` and `WithAgentDescription`. Use `WithAgentDescriptionFunc` when the description depends on typed run dependencies. `WithInstrumentationAgentName` remains available when one telemetry pipeline needs to override the application name.
+
+The run span records the agent description, cumulative usage, cost, application metadata from `WithMetadata` or `WithRunMetadata`, and whether formatted instructions changed between requests. Its `logfire.json_schema` describes the recorded run fields. Request spans record provider, model, request settings, response details, tool definitions, messages, usage, cost, and streaming time to first chunk.
 
 Output-function spans include the validated model value as their arguments and the converted final value as their result. They use the output-tool name in tool mode and the registered function name in native or prompted mode. Plain validation and output validators do not create output-function spans.
 

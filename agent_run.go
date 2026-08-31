@@ -219,6 +219,12 @@ func (r *AgentRun[Deps, Output]) Usage() Usage {
 	return r.usage.Clone()
 }
 
+// AgentName returns the configured application agent name.
+func (r *AgentRun[Deps, Output]) AgentName() string { return r.run.info.AgentName() }
+
+// AgentDescription returns the description resolved for this run.
+func (r *AgentRun[Deps, Output]) AgentDescription() string { return r.run.info.AgentDescription() }
+
 // RunID returns the immutable run identifier.
 func (r *AgentRun[Deps, Output]) RunID() string { return r.run.rc.RunID }
 

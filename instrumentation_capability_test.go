@@ -61,6 +61,7 @@ func TestInstrumentationCapabilityRecordsRunRequestsAndTools(t *testing.T) {
 		}, nil
 	})
 	agent := ai.NewAgent[struct{}, string](model,
+		ai.WithAgentName("application-support"),
 		ai.WithMetadata(map[string]any{
 			"tenant": "acme", "attachment": ai.BinaryContent{Data: []byte("secret"), MediaType: "image/png"},
 		}),

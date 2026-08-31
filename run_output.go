@@ -112,6 +112,10 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 	usageLimits.CostLimitUSD = clonePointer(usageLimits.CostLimitUSD)
 	specialized := &Agent[Deps, Output]{
 		model:              agent.model,
+		name:               agent.name,
+		description:        agent.description,
+		descriptionSet:     agent.descriptionSet,
+		descriptionFunc:    agent.descriptionFunc,
 		instructions:       agent.instructions,
 		instructionsFuncs:  slices.Clone(agent.instructionsFuncs),
 		systemPrompts:      slices.Clone(agent.systemPrompts),

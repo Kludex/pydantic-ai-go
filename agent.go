@@ -15,6 +15,10 @@ import (
 // an output tool whose schema is reflected from Output.
 type Agent[Deps, Output any] struct {
 	model              Model
+	name               string
+	description        string
+	descriptionSet     bool
+	descriptionFunc    AgentDescriptionFunc[Deps]
 	instructions       string
 	instructionsFuncs  []InstructionsFunc[Deps]
 	systemPrompts      []string
@@ -76,6 +80,16 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	for _, opt := range opts {
 		opt(&cfg)
 	}
+	a.name = cfg.name
+	a.description = cfg.description
+	a.descriptionSet = cfg.descriptionSet
+	if cfg.descriptionFunc != nil {
+		descriptionFunc, ok := cfg.descriptionFunc.(AgentDescriptionFunc[Deps])
+		if !ok {
+			panic("ai: agent description dependencies do not match agent")
+		}
+		a.descriptionFunc = descriptionFunc
+	}
 	a.instructions = cfg.instructions
 	a.systemPrompts = slices.Clone(cfg.systemPrompts)
 	a.settings = cfg.settings.Clone()
@@ -135,6 +149,38 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		})
 	}
 	return a
+}
+
+// AgentDescriptionFunc renders an agent description for one run.
+type AgentDescriptionFunc[Deps any] func(ctx context.Context, deps Deps) (string, error)
+
+// Name returns the application-defined agent name. Instrumentation uses
+// "agent" when no name is configured.
+func (a *Agent[Deps, Output]) Name() string { return a.name }
+
+// Description returns the static agent description. It returns an empty
+// string when the description is dynamic or absent.
+func (a *Agent[Deps, Output]) Description() string {
+	if !a.descriptionSet || a.descriptionFunc != nil {
+		return ""
+	}
+	return a.description
+}
+
+// RenderDescription resolves the description for the supplied dependencies.
+// Dynamic descriptions may be called concurrently by concurrent runs.
+func (a *Agent[Deps, Output]) RenderDescription(ctx context.Context, deps Deps) (string, error) {
+	if a.descriptionFunc != nil {
+		description, err := a.descriptionFunc(ctx, deps)
+		if err != nil {
+			return "", fmt.Errorf("ai: agent description: %w", err)
+		}
+		return description, nil
+	}
+	if a.descriptionSet {
+		return a.description, nil
+	}
+	return "", nil
 }
 
 // InstructionsFunc returns instructions for one model-request step.
@@ -271,6 +317,10 @@ func (a *Agent[Deps, Output]) checkNotStarted() {
 type Option func(*config)
 
 type config struct {
+	name             string
+	description      string
+	descriptionSet   bool
+	descriptionFunc  any
 	instructions     string
 	systemPrompts    []string
 	settings         ModelSettings
@@ -350,6 +400,34 @@ func WithEndStrategy(strategy EndStrategy) Option {
 // registered with WithSequential form barriers.
 func WithSequentialToolExecution() Option {
 	return func(c *config) { c.sequentialTools = true }
+}
+
+// WithAgentName sets the stable application name used by telemetry and
+// integrations. An empty name uses "agent" in telemetry.
+func WithAgentName(name string) Option {
+	return func(config *config) { config.name = name }
+}
+
+// WithAgentDescription sets a human-readable description for telemetry and
+// integrations. It is not sent to the model.
+func WithAgentDescription(description string) Option {
+	return func(config *config) {
+		config.description = description
+		config.descriptionSet = true
+		config.descriptionFunc = nil
+	}
+}
+
+// WithAgentDescriptionFunc renders a description from run dependencies.
+func WithAgentDescriptionFunc[Deps any](function AgentDescriptionFunc[Deps]) Option {
+	if function == nil {
+		panic("ai: agent description function must not be nil")
+	}
+	return func(config *config) {
+		config.description = ""
+		config.descriptionSet = false
+		config.descriptionFunc = function
+	}
 }
 
 // WithInstructions sets the static instructions sent with every model request.

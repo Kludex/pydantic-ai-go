@@ -25,6 +25,7 @@ type instrumentationConfig struct {
 	useAggregatedUsageAttributeNames bool
 	version                          int
 	agentName                        string
+	agentNameSet                     bool
 }
 
 type instrumentationNames struct {
@@ -80,7 +81,10 @@ func WithInstrumentationModelRequestParameters(include bool) InstrumentationOpti
 
 // WithInstrumentationAgentName sets the agent name used by Instrumentation.
 func WithInstrumentationAgentName(name string) InstrumentationOption {
-	return func(config *instrumentationConfig) { config.agentName = name }
+	return func(config *instrumentationConfig) {
+		config.agentName = name
+		config.agentNameSet = true
+	}
 }
 
 // WithInstrumentationVersion selects an upstream-compatible telemetry format version.
@@ -114,12 +118,12 @@ type InstrumentedModel struct {
 
 // NewInstrumentedModel creates a transparent model decorator. Content is included by default.
 func NewInstrumentedModel(model Model, options ...InstrumentationOption) *InstrumentedModel {
-	instrumented, _ := newInstrumentationRuntime(options)
+	instrumented, _, _ := newInstrumentationRuntime(options)
 	instrumented.ModelWrapper = WrapModel(model)
 	return instrumented
 }
 
-func newInstrumentationRuntime(options []InstrumentationOption) (*InstrumentedModel, string) {
+func newInstrumentationRuntime(options []InstrumentationOption) (*InstrumentedModel, string, bool) {
 	config := instrumentationConfig{
 		tracerProvider: otel.GetTracerProvider(), meterProvider: otel.GetMeterProvider(),
 		includeContent: true, includeBinaryContent: true, includeModelRequestParameters: true,
@@ -152,7 +156,7 @@ func newInstrumentationRuntime(options []InstrumentationOption) (*InstrumentedMo
 		includeContent: config.includeContent, includeBinaryContent: config.includeBinaryContent,
 		includeModelRequestParameters: config.includeModelRequestParameters,
 		useAggregatedUsage:            config.useAggregatedUsageAttributeNames, version: config.version,
-	}, config.agentName
+	}, config.agentName, config.agentNameSet
 }
 
 // InstrumentModel wraps model unless it is already instrumented.

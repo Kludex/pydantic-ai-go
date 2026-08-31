@@ -2,7 +2,9 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Upstream baseline: `pydantic/pydantic-ai@bf2fb0555cedeb86ef4376629b1317b0ea1a9b2f` (`v2.35.3-17`).
+Audited upstream baseline: `pydantic/pydantic-ai@bf2fb0555cedeb86ef4376629b1317b0ea1a9b2f` (`v2.35.3-17`).
+
+Current upstream checkout: `f711f5376` (22 commits ahead). The drift audit is active; newly discovered work is recorded below before the baseline is advanced.
 
 Status:
 
@@ -16,6 +18,7 @@ Status:
 ### Agent loop
 
 - [x] Typed `Agent[Deps, Output]` and `Run`.
+- [x] Stable application agent identity through `WithAgentName`, static or dependency-rendered descriptions, public agent/run context access, type-safe rendering failures, output-specialization preservation, and OpenTelemetry name/description attribution with explicit telemetry-only name overrides.
 - [x] Plain-text and tool-based structured output.
 - [x] Native structured output for OpenAI Chat Completions and Google Gemini.
 - [x] Output validators with model retries via `AddOutputValidator`.
@@ -46,6 +49,7 @@ Status:
 - [x] Text, image URL, and inline binary user content.
 - [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, compaction, tool-availability, local and native typed tool-search, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
+- [ ] Stable addressable instruction IDs and names across agent, capability, and identified-toolset sources, including replacement/removal semantics, serialization, wrapper qualification, duplicate validation, and history/telemetry rendering discovered in upstream `ebad0a022`.
 - [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
 - [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
 - [x] Provider-native call and return response parts with distinct non-executable types, portable tool kinds, provider identity/details, upstream serialization, and normalized streaming lifecycle.
@@ -134,7 +138,7 @@ Status:
 - [x] OpenAI Chat Completions.
 - [~] OpenAI Responses: text/reasoning/function-call/compaction streaming plus authoritative terminal snapshots, response/item IDs, encrypted reasoning and compaction round trips, latest-compaction history trimming with standing-prompt provenance, stateful context management and explicit stateless `/responses/compact` with message/custom triggers, durable history replacement, combined usage accounting, function namespaces, portable reasoning effort, logprob requests/static text metadata, service tiers, status, timestamps, configurable background create/poll/retrieve/cancel/detach continuation, and streaming/non-streaming server/client tool search with typed native history and identity-safe replay; streamed logprob metadata, native output, multimodal content, and other builtin tools remain.
 - [~] Anthropic Messages: text/thinking/function-tool/compaction streaming, portable effort-to-budget and explicit-budget thinking configuration, service-tier mapping and response metadata, signed-thinking and readable/encrypted compaction round trips, latest-compaction trimming, explicit token-triggered compaction capabilities with summary/pause options, required beta/default context management with extension overrides, multimodal input, response IDs, stop reasons, automatic ordinary/streamed `pause_turn` continuation, provider-native deferred-definition/reveal rendering, and hosted BM25/regex tool search; adaptive thinking profiles, citations, and other native tools remain.
-- [~] Google Gemini: text/thinking/function-tool streaming, generation-aware thinking levels/budgets and thought inclusion, portable penalties/logprobs/service tiers, returned static/streamed logprob and tier metadata, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
+- [~] Google Gemini: text/thinking/function-tool streaming, generation-aware thinking levels/budgets and thought inclusion, portable penalties/logprobs/service tiers, returned static/streamed logprob and tier metadata, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; transport-based Gemini API versus Vertex routing, native tools, and advanced metadata remain.
 - [x] OpenAI-compatible Chat Completions and Responses configuration through detached `ProviderConfig`: stable provider identity, base URL, optional bearer authentication, provider headers/query values, dynamic request preparation, custom HTTP clients, per-request header precedence, environment base URLs, streamed identity, and explicit strict/deferred feature switches.
 - [x] Azure OpenAI and Azure AI Foundry configuration through `models/azure`: current `/v1`, serverless `.models.ai.azure.com`, and legacy deployment routes; API-key and per-request Microsoft Entra token authentication; environment defaults; API-version validation; Chat Completions and Responses models; and Azure provider attribution.
 - [ ] AWS Bedrock, including the legacy InvokeModel tool-search profile that defaults to regex and rejects explicit BM25.
@@ -201,7 +205,7 @@ Status:
 ### Integrations
 
 - [ ] First-class `pydantic-evals-go` task adapter.
-- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, successful deferral metadata, application run metadata, and output-function spans with validated arguments, converted results, tool/function identity, privacy controls, errors, middleware nesting, and version 2 legacy naming. Agent descriptions, variable-instruction diagnostics, richer Logfire schemas/messages, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
+- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, successful deferral metadata, application run metadata, agent names and dependency-rendered descriptions, variable-instruction diagnostics based on final prepared request instructions, run messages/schemas, and output-function spans with validated arguments, converted results, tool/function identity, privacy controls, errors, middleware nesting, and version 2 legacy naming. Richer request/tool Logfire schemas/messages, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
 - [ ] Logfire guidance and examples.
 - [ ] AG-UI adapter.
 - [ ] Vercel AI protocol adapter.
@@ -232,14 +236,16 @@ Status:
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
-- [ ] Replace the `genai-prices` Go pseudo-version with its first tagged module release when available.
+- [ ] Replace the `genai-prices` Go pseudo-version with the now-available `v0.1.5` module release.
+- [ ] Audit the 22 upstream commits from `bf2fb0555` through current `f711f5376`, including stable instruction IDs, transport-based Google routing, AG-UI tool-call message starts, new durable-operation APIs, and CLI MCP/tool streaming; then advance the audited baseline.
 - [ ] Pin `.upstream-sync.json` to the audited upstream commit.
 - [ ] After parity, add the daily `gh-aw` upstream-sync workflow described in `PLAN.md`.
 
 ## Next work
 
-1. Complete OpenTelemetry agent descriptions, variable-instruction diagnostics, richer Logfire schemas/messages, remaining event shapes, and message-fragment caching/mutation diagnostics; run metadata and output-function spans are complete.
-2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
-3. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
-4. Extend upstream message fixtures as remaining persisted part types land.
-5. Add the remaining provider-native tools, richer content parts, and provider metadata.
+1. Complete the upstream drift audit through `f711f5376`; stable instruction IDs are the largest newly discovered core change.
+2. Complete richer OpenTelemetry request/tool Logfire schemas/messages, remaining event shapes, and message-fragment caching/mutation diagnostics; agent descriptions, variable instructions, run metadata/schemas, and output-function spans are complete.
+3. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
+4. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
+5. Extend upstream message fixtures as remaining persisted part types land.
+6. Add the remaining provider-native tools, richer content parts, and provider metadata.

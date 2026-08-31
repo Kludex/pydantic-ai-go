@@ -50,6 +50,8 @@ func TestRunAsSpecializesOneRunWithoutMutatingAgentOutput(t *testing.T) {
 	})
 	agent := ai.NewAgent[deps, string](
 		model,
+		ai.WithAgentName("specialized"),
+		ai.WithAgentDescription("Specialized output agent"),
 		ai.WithInstructions("agent"),
 		ai.WithModelSettings(ai.ModelSettings{MaxTokens: 42}),
 		ai.WithCapabilities(runOutputCapability{}),
@@ -58,8 +60,11 @@ func TestRunAsSpecializesOneRunWithoutMutatingAgentOutput(t *testing.T) {
 		return "unused", nil
 	}))
 	agent.AddOutputToolPrepareFunc(func(
-		_ context.Context, _ *ai.RunContext[deps], definition ai.ToolDefinition,
+		_ context.Context, rc *ai.RunContext[deps], definition ai.ToolDefinition,
 	) (*ai.ToolDefinition, error) {
+		if rc.AgentName != "specialized" || rc.AgentDescription != "Specialized output agent" {
+			t.Fatalf("specialized run lost agent identity: %+v", rc)
+		}
 		definition.Name = "run_report"
 		return &definition, nil
 	})

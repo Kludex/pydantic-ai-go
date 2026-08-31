@@ -70,14 +70,22 @@ type RunInfo struct {
 	RunID          string
 	ConversationID string
 
-	usage       *Usage
-	toolCalls   *atomic.Int64
-	messages    *[]ModelMessage
-	newMessages int
-	prompt      UserPromptPart
-	metadata    *runMetadataState
-	model       func() Model
+	agentName        string
+	agentDescription string
+	usage            *Usage
+	toolCalls        *atomic.Int64
+	messages         *[]ModelMessage
+	newMessages      int
+	prompt           UserPromptPart
+	metadata         *runMetadataState
+	model            func() Model
 }
+
+// AgentName returns the configured application agent name.
+func (ri *RunInfo) AgentName() string { return ri.agentName }
+
+// AgentDescription returns the description resolved for this run.
+func (ri *RunInfo) AgentDescription() string { return ri.agentDescription }
 
 // Usage returns the usage accumulated so far in this run.
 func (ri *RunInfo) Usage() Usage {

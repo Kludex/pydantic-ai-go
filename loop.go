@@ -293,15 +293,22 @@ func (a *Agent[Deps, Output]) newRun(
 	r.messages = append(r.messages, history...)
 	r.newMessages = len(r.messages)
 	settings := mergeModelSettings(a.settings, cfg.settings)
+	description, err := a.RenderDescription(runCtx, deps)
+	if err != nil {
+		cancellation.finish()
+		return nil, err
+	}
 	r.resumeSeed = resumeSeed
 	r.rc = &RunContext[Deps]{
-		Deps: deps, Prompt: cloneUserPromptPart(prompt), MaxRetries: r.outputMaxRetries,
+		Deps: deps, AgentName: a.name, AgentDescription: description,
+		Prompt: cloneUserPromptPart(prompt), MaxRetries: r.outputMaxRetries,
 		RunID: runID, ConversationID: conversationID, Model: model, ModelSettings: settings, UsageLimits: limits,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
 		revealedTools: &r.revealedTools, pendingMessages: r.pendingMessages, cancellation: cancellation,
 	}
 	r.info = &RunInfo{
 		RunID: runID, ConversationID: conversationID, prompt: cloneUserPromptPart(prompt),
+		agentName: a.name, agentDescription: description,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, newMessages: r.newMessages,
 		metadata: &r.metadata, model: func() Model { return r.model },
 	}

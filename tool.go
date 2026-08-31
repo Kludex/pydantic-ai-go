@@ -18,6 +18,8 @@ import (
 // context.Context argument remains the cancellation signal carrier.
 type RunContext[Deps any] struct {
 	Deps             Deps
+	AgentName        string
+	AgentDescription string
 	Prompt           UserPromptPart
 	Metadata         map[string]any
 	Retry            int

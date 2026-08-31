@@ -171,7 +171,7 @@ Status:
 - [x] Run, model request, tool call, and dynamic instruction hooks.
 - [x] Ordered middleware composition; first capability is outermost.
 - [x] History processing can be expressed as model-request middleware.
-- [ ] Before/after/error hooks in addition to wrappers.
+- [~] Prepared model requests have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Hooks can detach request snapshots, modify messages/settings/parameters, switch or resolve models with normal per-run lifecycle cleanup, recover request errors, and request budgeted retries that preserve rejected responses. Equivalent run, tool-validation/execution, and output-validation/processing lifecycle hooks remain.
 - [ ] Output validation/processing hooks.
 - [ ] Tool validation hook separate from tool execution.
 - [x] Event-stream wrapper and per-event processor with standard capability middleware ordering.

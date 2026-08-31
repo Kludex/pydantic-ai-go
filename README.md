@@ -700,9 +700,11 @@ func (Redactor) WrapToolCall(ctx context.Context, ri *ai.RunInfo, call ai.ToolCa
 agent := ai.NewAgent[Deps, string](model, ai.WithCapabilities(Redactor{}))
 ```
 
-Implement any of `RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, `RunEventStreamWrapper`, `StreamEventProcessor`, `InstructionsProvider`, `ModelSettingsProvider`, `ModelSelectionProvider`, or `ModelIDResolver` - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Slice order is middleware order: the first capability is outermost. Usage limits are implemented on this same surface internally.
+Implement any of `BeforeModelRequestHook`, `AfterModelRequestHook`, `ModelRequestErrorHook`, `RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, `RunEventStreamWrapper`, `StreamEventProcessor`, `InstructionsProvider`, `ModelSettingsProvider`, `ModelSelectionProvider`, or `ModelIDResolver` - the agent discovers them by type assertion, the same pattern as `http.Flusher`. Function adapters are available as `BeforeModelRequestFunc`, `AfterModelRequestFunc`, and `ModelRequestErrorFunc`.
 
-Pass `ai.WithRunCapabilities(...)` to scope setup contributions and middleware to one run. Agent capabilities remain outermost. A run capability is set up once for that run and may contribute instructions, settings, and raw tools without modifying the shared agent.
+Before hooks run in capability order. After and error hooks run in reverse order. This matches middleware nesting. An error hook may return a replacement response. Return `ai.Retryf(...)` from a before or after hook to consume the output retry budget and ask the model to respond again. A response rejected by an after hook remains in history. `ModelRequestContext.Clone` detaches mutable request data when a hook needs to retain or inspect a snapshot.
+
+Slice order is middleware order: the first capability is outermost. Usage limits are implemented on this same surface internally. Pass `ai.WithRunCapabilities(...)` to scope setup contributions and middleware to one run. Agent capabilities remain outermost. A run capability is set up once for that run and may contribute instructions, settings, and raw tools without modifying the shared agent.
 
 Stream wrappers only change events seen by the consumer. They do not change accumulated history, tool execution, or final output. Adding one also enables provider streaming for `Run`, so processors run whether you call `Run` or `RunStream`.
 

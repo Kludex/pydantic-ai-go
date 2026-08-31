@@ -913,22 +913,10 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		resp, err := r.doModelRequest(reqCtx, msgs, params)
 		if err != nil {
 			endSpan(reqSpan, err)
-			return nil, err
+			return resp, err
 		}
 		recordUsage(reqSpan, resp.Usage)
 		endSpan(reqSpan, nil)
-		if resp.Timestamp.IsZero() {
-			resp.Timestamp = time.Now().UTC()
-		}
-		if resp.RunID == "" {
-			resp.RunID = r.rc.RunID
-		}
-		if resp.ConversationID == "" {
-			resp.ConversationID = r.rc.ConversationID
-		}
-		if resp.ModelName == "" {
-			resp.ModelName = r.model.Name()
-		}
 		return resp, nil
 	}
 	params, err := r.prepareModelParams(ctx)
@@ -978,11 +966,104 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	if r.resumeSeed != nil {
 		requestMessages = append(slices.Clone(requestMessages), *cloneModelResponse(r.resumeSeed))
 	}
-	response, err := next(ctx, requestMessages, params)
-	if err == nil && response != nil {
-		r.resumeSeed = nil
+	request := ModelRequestContext{
+		Model: r.model, ModelID: r.rc.ModelID, Messages: requestMessages, Params: params, Streaming: r.emit != nil,
+	}.Clone()
+	for _, capability := range r.capabilities {
+		hook, ok := capability.(BeforeModelRequestHook)
+		if !ok {
+			continue
+		}
+		request, err = hook.BeforeModelRequest(ctx, r.info, request)
+		if err != nil {
+			return nil, err
+		}
 	}
-	return response, err
+	if request.Params.Settings.RequestTimeout < 0 {
+		return nil, fmt.Errorf(
+			"ai: request timeout must be non-negative, got %s", request.Params.Settings.RequestTimeout,
+		)
+	}
+	if err := validateModelSettings(request.Params.Settings); err != nil {
+		return nil, err
+	}
+	if modelIsNil(request.Model) {
+		if request.ModelID == "" {
+			return nil, ErrNoModel
+		}
+		request.Model, err = r.resolveModelID(ctx, request.ModelID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	modelChanged := !sameModelInstance(r.model, request.Model)
+	r.model = request.Model
+	r.rc.Model = request.Model
+	r.rc.ModelID = request.ModelID
+	if modelChanged {
+		if err := r.openSelectedModel(ctx); err != nil {
+			return nil, err
+		}
+		if r.recordSelectedModel != nil {
+			r.recordSelectedModel(r.model.Name())
+		}
+	}
+	r.setCurrentTools(request.Params)
+	response, err := next(ctx, request.Messages, request.Params)
+	var retry *RetryError
+	if err != nil && !errors.As(err, &retry) {
+		for index := len(r.capabilities) - 1; index >= 0; index-- {
+			hook, ok := r.capabilities[index].(ModelRequestErrorHook)
+			if !ok {
+				continue
+			}
+			response, err = hook.OnModelRequestError(ctx, r.info, request, err)
+			if err == nil {
+				if response == nil {
+					return nil, &UnexpectedModelBehaviorError{Message: "model request error hook returned no response"}
+				}
+				break
+			}
+		}
+	}
+	if err != nil {
+		return response, err
+	}
+	if response == nil {
+		return nil, nil
+	}
+	r.stampModelResponse(response)
+	for index := len(r.capabilities) - 1; index >= 0; index-- {
+		hook, ok := r.capabilities[index].(AfterModelRequestHook)
+		if !ok {
+			continue
+		}
+		response, err = hook.AfterModelRequest(ctx, r.info, request, response)
+		if err != nil {
+			return response, err
+		}
+		if response == nil {
+			return nil, &UnexpectedModelBehaviorError{Message: "after model request hook returned no response"}
+		}
+	}
+	r.stampModelResponse(response)
+	r.resumeSeed = nil
+	return response, nil
+}
+
+func (r *run[Deps, Output]) stampModelResponse(response *ModelResponse) {
+	if response.Timestamp.IsZero() {
+		response.Timestamp = time.Now().UTC()
+	}
+	if response.RunID == "" {
+		response.RunID = r.rc.RunID
+	}
+	if response.ConversationID == "" {
+		response.ConversationID = r.rc.ConversationID
+	}
+	if response.ModelName == "" {
+		response.ModelName = r.model.Name()
+	}
 }
 
 func setLatestRequestContext(messages []ModelMessage, instructions, runID, conversationID string) {
@@ -1767,7 +1848,20 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 	for {
 		resp, err := r.modelRequest(ctx)
 		if err != nil {
-			return nil, err
+			var retry *RetryError
+			if !errors.As(err, &retry) {
+				return nil, err
+			}
+			if err := r.countOutputRetry(); err != nil {
+				return nil, err
+			}
+			if resp != nil {
+				r.usage.Add(resp.Usage)
+				r.applyResponseToolKinds(resp)
+				r.messages = append(r.messages, *resp)
+			}
+			r.recordRetry(RetryPromptPart{Content: retry.Message})
+			continue
 		}
 		if resp == nil {
 			if r.pendingDeferred != nil {

@@ -91,3 +91,31 @@ func TestFailedRunRecordsError(t *testing.T) {
 	}
 	t.Fatal("agent run span did not record the error")
 }
+
+func TestRequestSpanRecordsCalculatedCost(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	previous := otel.GetTracerProvider()
+	otel.SetTracerProvider(provider)
+	t.Cleanup(func() { otel.SetTracerProvider(previous) })
+
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{
+			ModelName: "gpt-5", ProviderName: "openai", Usage: ai.Usage{InputTokens: 1},
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}},
+		}, nil
+	})
+	if _, err := ai.NewAgent[deps, string](model).Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, span := range exporter.GetSpans() {
+		for _, attr := range span.Attributes {
+			if string(attr.Key) == "operation.cost" && attr.Value.AsFloat64() > 0 {
+				return
+			}
+		}
+	}
+	t.Fatal("request span did not record the calculated cost")
+}

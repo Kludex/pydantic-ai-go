@@ -1,6 +1,9 @@
 package ai
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // Usage counts model requests and tokens across a run.
 // The zero value is an empty count.
@@ -18,7 +21,27 @@ type Usage struct {
 	AcceptedPredictionTokens int            `json:"accepted_prediction_tokens,omitempty"`
 	RejectedPredictionTokens int            `json:"rejected_prediction_tokens,omitempty"`
 	Details                  map[string]int `json:"details,omitempty"`
-	CostUSD                  *float64       `json:"cost_usd,omitempty"`
+	CostUSD                  *float64       `json:"cost,omitempty"`
+}
+
+// UnmarshalJSON accepts the upstream cost field and the legacy Go cost_usd alias.
+func (u *Usage) UnmarshalJSON(data []byte) error {
+	type usageAlias Usage
+	var decoded usageAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.CostUSD == nil {
+		var legacy struct {
+			CostUSD *float64 `json:"cost_usd"`
+		}
+		if err := json.Unmarshal(data, &legacy); err != nil {
+			return err
+		}
+		decoded.CostUSD = legacy.CostUSD
+	}
+	*u = Usage(decoded)
+	return nil
 }
 
 // Clone returns a detached usage value.

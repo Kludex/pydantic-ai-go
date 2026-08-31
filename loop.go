@@ -1813,6 +1813,7 @@ func (r *run[Deps, Output]) doModelRequest(
 	if historyEndsSuspended(baseMessages) {
 		seed := baseMessages[len(baseMessages)-1].(ModelResponse)
 		response = cloneModelResponse(&seed)
+		fillResponseCost(response)
 		baseMessages = baseMessages[:len(baseMessages)-1]
 	}
 	lastMode := continuationAccumulate
@@ -1927,20 +1928,26 @@ func (r *run[Deps, Output]) requestModelSegment(
 		defer cancel()
 	}
 	if r.emit == nil {
-		return r.model.Request(ctx, msgs, params)
+		response, err := r.model.Request(ctx, msgs, params)
+		fillResponseCost(response)
+		return response, err
 	}
 	if sm, ok := r.model.(StreamingModel); ok {
 		events, err := sm.StreamRequest(ctx, msgs, params)
 		if err != nil {
 			return nil, err
 		}
-		return accumulate(events, params, emit)
+		response, err := accumulate(events, params, emit)
+		fillResponseCost(response)
+		return response, err
 	}
 	resp, err := r.model.Request(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
-	return accumulate(replayAsEvents(resp), params, emit)
+	response, err := accumulate(replayAsEvents(resp), params, emit)
+	fillResponseCost(response)
+	return response, err
 }
 
 func (r *run[Deps, Output]) waitForContinuation(ctx context.Context, response *ModelResponse) error {
@@ -1982,6 +1989,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 				return nil, err
 			}
 			if resp != nil {
+				fillResponseCost(resp)
 				r.usage.Add(resp.Usage)
 				if applyErr := r.applyResponseToolKinds(resp); applyErr != nil {
 					return nil, applyErr
@@ -1997,6 +2005,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			}
 			return nil, &UnexpectedModelBehaviorError{Message: "model request returned no response"}
 		}
+		fillResponseCost(resp)
 		r.usage.Add(resp.Usage)
 		if err := r.applyResponseToolKinds(resp); err != nil {
 			return nil, err

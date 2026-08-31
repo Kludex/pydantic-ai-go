@@ -34,7 +34,9 @@ Status:
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
 - [x] Optional `ModelOpener` lifecycle runs once per distinct selected model, closes in reverse selection order before toolsets, uses a non-canceled cleanup context, and propagates open/close failures across ordinary and streamed runs.
 - [x] Fresh run and conversation IDs populate all generated requests/responses; explicit run IDs reject history collisions, while conversation IDs inherit from history or reset through `WithConversationID("new")`.
-- [~] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, arbitrary integer detail keys, and optional USD cost, with projected tool-call and known-cost limits. Automatic pricing remains.
+- [x] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, arbitrary integer details, and optional USD cost. `genai-prices` calculates each model request automatically, preserves provider costs, exposes explicit `ModelResponse.Price()` diagnostics, contributes to tracing and cost limits, and keeps unknown cost distinct from zero.
+- [ ] Add an optional automatic-pricing diagnostic sink for unexpected calculation failures and unavailable costs, as a Go equivalent to upstream warning categories.
+- [ ] Expose detached live usage and best-effort current-request cost from `StreamedRun` before terminal completion.
 
 ### Messages and persisted history
 
@@ -45,7 +47,7 @@ Status:
 - [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
 - [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
 - [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
-- [ ] Native tool call/return parts.
+- [x] Provider-native call and return response parts with distinct non-executable types, portable tool kinds, provider identity/details, upstream serialization, and normalized streaming lifecycle.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
 - [~] Compaction parts preserve readable summaries, opaque IDs/details, serialization, stream lifecycle, deferred-tool visibility boundaries, and same-provider Anthropic/OpenAI Responses round trips with latest-boundary history trimming. Explicit compaction capabilities/settings and builtin-tool return parts remain.
 - [x] Tool availability delta parts, including the legacy `added` decode alias and upstream-compatible serialization.
@@ -227,6 +229,7 @@ Status:
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
+- [ ] Replace the `genai-prices` Go pseudo-version with its first tagged module release when available.
 - [ ] Pin `.upstream-sync.json` to the audited upstream commit.
 - [ ] After parity, add the daily `gh-aw` upstream-sync workflow described in `PLAN.md`.
 

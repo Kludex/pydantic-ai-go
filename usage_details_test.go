@@ -2,6 +2,7 @@ package ai_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
 	"testing"
@@ -227,5 +228,32 @@ func TestCostUsageLimit(t *testing.T) {
 	agent = ai.NewAgent[deps, string](unknownCost, ai.WithUsageLimits(ai.UsageLimits{CostLimitUSD: &limit}))
 	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
 		t.Fatalf("unknown cost should not fail the run: %v", err)
+	}
+}
+
+func TestUsageCostSerializationCompatibility(t *testing.T) {
+	cost := 0.25
+	encoded, err := json.Marshal(ai.Usage{CostUSD: &cost})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(encoded) != `{"cost":0.25}` {
+		t.Fatalf("unexpected canonical cost field: %s", encoded)
+	}
+	for _, raw := range []string{`{"cost":0.25}`, `{"cost_usd":0.25}`} {
+		var usage ai.Usage
+		if err := json.Unmarshal([]byte(raw), &usage); err != nil {
+			t.Fatal(err)
+		}
+		if usage.CostUSD == nil || *usage.CostUSD != cost {
+			t.Fatalf("cost alias was not decoded: %+v", usage)
+		}
+	}
+	var usage ai.Usage
+	if err := json.Unmarshal([]byte(`{"cost_usd":"bad"}`), &usage); err == nil {
+		t.Fatal("expected invalid legacy cost error")
+	}
+	if err := json.Unmarshal([]byte(`not json`), &usage); err == nil {
+		t.Fatal("expected invalid usage JSON error")
 	}
 }

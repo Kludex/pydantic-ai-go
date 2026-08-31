@@ -61,8 +61,12 @@ func endSpan(span trace.Span, err error) {
 }
 
 func recordUsage(span trace.Span, usage Usage) {
-	span.SetAttributes(
+	attributes := []attribute.KeyValue{
 		attribute.Int("gen_ai.usage.input_tokens", usage.InputTokens),
 		attribute.Int("gen_ai.usage.output_tokens", usage.OutputTokens),
-	)
+	}
+	if usage.CostUSD != nil {
+		attributes = append(attributes, attribute.Float64("operation.cost", *usage.CostUSD))
+	}
+	span.SetAttributes(attributes...)
 }

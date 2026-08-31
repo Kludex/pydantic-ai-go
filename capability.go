@@ -192,6 +192,12 @@ func flattenCapabilities(capabilities []Capability) []Capability {
 			continue
 		}
 		flattened = append(flattened, capability)
+		if wrapper, ok := capability.(interface{ wrappedCapability() Capability }); ok {
+			wrapped := wrapper.wrappedCapability()
+			if !capabilityIsNil(wrapped) {
+				flattened = append(flattened, flattenCapabilities([]Capability{wrapped})...)
+			}
+		}
 	}
 	return flattened
 }

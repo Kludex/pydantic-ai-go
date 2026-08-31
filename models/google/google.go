@@ -19,9 +19,12 @@ import (
 // Model calls the Gemini generateContent API. Create one with NewModel.
 type Model struct {
 	name              string
+	transport         Transport
+	providerName      string
 	apiKey            string
 	baseURL           string
 	httpClient        *http.Client
+	prepareRequest    RequestPreparationFunc
 	strictToolSupport bool
 	defaultSettings   ai.ModelSettings
 }
@@ -52,11 +55,13 @@ func WithStrictToolSupport(enabled bool) Option {
 
 // NewModel creates a Model for the named Gemini model, e.g. "gemini-2.5-flash".
 func NewModel(name string, opts ...Option) *Model {
+	apiKey := os.Getenv("GOOGLE_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("GEMINI_API_KEY")
+	}
 	m := &Model{
-		name:              name,
-		apiKey:            os.Getenv("GEMINI_API_KEY"),
-		baseURL:           "https://generativelanguage.googleapis.com/v1beta",
-		httpClient:        http.DefaultClient,
+		name: name, transport: TransportGeminiAPI, providerName: "google", apiKey: apiKey,
+		baseURL: "https://generativelanguage.googleapis.com/v1beta", httpClient: http.DefaultClient,
 		strictToolSupport: supportsStrictTools(name),
 	}
 	for _, opt := range opts {
@@ -67,6 +72,9 @@ func NewModel(name string, opts ...Option) *Model {
 
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
+
+// Transport returns the configured Gemini Developer API or Vertex AI route.
+func (m *Model) Transport() Transport { return m.transport }
 
 // DefaultModelSettings returns this model's request defaults.
 func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
@@ -81,14 +89,14 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if err != nil {
 		return nil, fmt.Errorf("google: marshal request: %w", err)
 	}
-	url := fmt.Sprintf("%s/models/%s:generateContent", m.baseURL, m.name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	endpoint := fmt.Sprintf("%s/models/%s:generateContent", m.baseURL, m.name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-goog-api-key", m.apiKey)
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	if err := m.prepareHTTPRequest(req, params.Settings); err != nil {
+		return nil, err
+	}
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -102,9 +110,9 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	response, err := parseResponse(data)
+	response, err := parseResponse(data, m.providerName)
 	if response != nil {
-		response.ProviderName = "google"
+		response.ProviderName = m.providerName
 		response.ProviderURL = m.baseURL
 		if serviceTier := resp.Header.Get("x-gemini-service-tier"); serviceTier != "" {
 			if response.ProviderDetails == nil {
@@ -244,7 +252,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if err != nil {
 		return nil, err
 	}
-	serviceTier, err := googleServiceTier(settings.ServiceTier)
+	serviceTier, err := googleServiceTier(m.transport, settings.ServiceTier)
 	if err != nil {
 		return nil, err
 	}
@@ -265,7 +273,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		}
 	}
 	for _, msg := range msgs {
-		converted, err := convertMessage(msg)
+		converted, err := m.convertMessage(msg)
 		if err != nil {
 			return nil, err
 		}
@@ -307,7 +315,15 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	return req, nil
 }
 
-func googleServiceTier(tier ai.ServiceTier) (string, error) {
+func googleServiceTier(transport Transport, tier ai.ServiceTier) (string, error) {
+	if transport == TransportVertexAI {
+		switch tier {
+		case "", ai.ServiceTierAuto, ai.ServiceTierDefault, ai.ServiceTierFlex, ai.ServiceTierPriority:
+			return "", nil
+		default:
+			return "", fmt.Errorf("google: invalid service tier %q", tier)
+		}
+	}
 	switch tier {
 	case "", ai.ServiceTierAuto:
 		return "", nil
@@ -376,12 +392,12 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 	return config, nil
 }
 
-func convertMessage(msg ai.ModelMessage) ([]content, error) {
-	switch m := msg.(type) {
+func (model *Model) convertMessage(msg ai.ModelMessage) ([]content, error) {
+	switch message := msg.(type) {
 	case ai.ModelRequest:
-		return convertRequest(m)
+		return convertRequest(message)
 	case ai.ModelResponse:
-		return convertResponse(m)
+		return model.convertResponse(message)
 	default:
 		return nil, fmt.Errorf("google: unknown message type %T", msg)
 	}
@@ -426,18 +442,18 @@ func convertRequest(m ai.ModelRequest) ([]content, error) {
 	return []content{{Role: "user", Parts: parts}}, nil
 }
 
-func convertResponse(m ai.ModelResponse) ([]content, error) {
+func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 	var parts []part
 	for _, p := range m.Parts {
 		switch rp := p.(type) {
 		case ai.TextPart:
-			parts = append(parts, part{Text: rp.Content, ThoughtSignature: googleThoughtSignature(
+			parts = append(parts, part{Text: rp.Content, ThoughtSignature: model.googleThoughtSignature(
 				rp.ProviderName, rp.ProviderDetails,
 			)})
 		case ai.ThinkingPart:
 			parts = append(parts, part{
 				Text: rp.Content, Thought: true,
-				ThoughtSignature: googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
+				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
 			})
 		case ai.ToolCallPart:
 			var args map[string]any
@@ -448,23 +464,37 @@ func convertResponse(m ai.ModelResponse) ([]content, error) {
 			}
 			parts = append(parts, part{
 				FunctionCall:     &functionCall{ID: rp.ToolCallID, Name: rp.ToolName, Args: args},
-				ThoughtSignature: googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
+				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
 			})
 		}
 	}
 	return []content{{Role: "model", Parts: parts}}, nil
 }
 
-func googlePartMetadata(signature string) (string, map[string]any) {
+func googlePartMetadata(signature, providerName string) (string, map[string]any) {
 	if signature == "" {
 		return "", nil
 	}
-	return "google", map[string]any{"thought_signature": signature}
+	return providerName, map[string]any{"thought_signature": signature}
 }
 
-func googleThoughtSignature(providerName string, details map[string]any) string {
-	if providerName != "" && providerName != "google" {
-		return ""
+func (model *Model) googleThoughtSignature(providerName string, details map[string]any) string {
+	if providerName != "" && providerName != model.providerName {
+		knownProvider := false
+		switch model.providerName {
+		case "google", "google-cloud", "google-vertex", "google-gla":
+			knownProvider = true
+		}
+		if !knownProvider {
+			return ""
+		}
+		if model.transport == TransportVertexAI {
+			if providerName != "google-cloud" && providerName != "google-vertex" {
+				return ""
+			}
+		} else if providerName != "google" && providerName != "google-gla" {
+			return ""
+		}
 	}
 	signature, _ := details["thought_signature"].(string)
 	return signature
@@ -608,7 +638,7 @@ func googleFinishReason(reason string) ai.FinishReason {
 	}[reason]
 }
 
-func parseResponse(data []byte) (*ai.ModelResponse, error) {
+func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) {
 	var gr generateResponse
 	if err := json.Unmarshal(data, &gr); err != nil {
 		return nil, fmt.Errorf("google: parse response: %w", err)
@@ -635,22 +665,22 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		FinishReason: googleFinishReason(gr.Candidates[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
 	for _, p := range gr.Candidates[0].Content.Parts {
-		providerName, providerDetails := googlePartMetadata(p.ThoughtSignature)
+		partProviderName, providerDetails := googlePartMetadata(p.ThoughtSignature, providerName)
 		switch {
 		case p.FunctionCall != nil:
 			// args came from parsed JSON, so re-marshalling cannot fail
 			args, _ := json.Marshal(p.FunctionCall.Args)
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{
 				ToolName: p.FunctionCall.Name, Args: args, ToolCallID: p.FunctionCall.ID,
-				ProviderName: providerName, ProviderDetails: providerDetails,
+				ProviderName: partProviderName, ProviderDetails: providerDetails,
 			})
 		case p.Thought:
 			resp.Parts = append(resp.Parts, ai.ThinkingPart{
-				Content: p.Text, ProviderName: providerName, ProviderDetails: providerDetails,
+				Content: p.Text, ProviderName: partProviderName, ProviderDetails: providerDetails,
 			})
 		case p.Text != "" || providerDetails != nil:
 			resp.Parts = append(resp.Parts, ai.TextPart{
-				Content: p.Text, ProviderName: providerName, ProviderDetails: providerDetails,
+				Content: p.Text, ProviderName: partProviderName, ProviderDetails: providerDetails,
 			})
 		}
 	}

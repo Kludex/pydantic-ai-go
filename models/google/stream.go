@@ -26,15 +26,15 @@ func (m *Model) StreamRequest(
 	if err != nil {
 		return nil, fmt.Errorf("google: marshal request: %w", err)
 	}
-	url := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", m.baseURL, m.name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	endpoint := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", m.baseURL, m.name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-goog-api-key", m.apiKey)
+	if err := m.prepareHTTPRequest(req, params.Settings); err != nil {
+		return nil, err
+	}
 	req.Header.Set("Accept", "text/event-stream")
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -96,7 +96,7 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 				avgLogprobs = chunk.Candidates[0].AvgLogprobs
 			}
 			for index, part := range chunk.Candidates[0].Content.Parts {
-				if !emitPart(yield, part, index) {
+				if !emitPart(yield, part, index, m.providerName) {
 					return
 				}
 			}
@@ -126,15 +126,15 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 			providerDetails = nil
 		}
 		yield(ai.FinishEvent{
-			Usage: usage, ModelName: modelName, ProviderName: "google", ProviderURL: m.baseURL,
+			Usage: usage, ModelName: modelName, ProviderName: m.providerName, ProviderURL: m.baseURL,
 			ProviderDetails: providerDetails, ProviderResponseID: responseID,
 			FinishReason: googleFinishReason(finishReason), State: ai.ModelResponseStateComplete,
 		}, nil)
 	}
 }
 
-func emitPart(yield func(ai.ModelStreamEvent, error) bool, part part, index int) bool {
-	providerName, providerDetails := googlePartMetadata(part.ThoughtSignature)
+func emitPart(yield func(ai.ModelStreamEvent, error) bool, part part, index int, modelProviderName string) bool {
+	providerName, providerDetails := googlePartMetadata(part.ThoughtSignature, modelProviderName)
 	switch {
 	case part.FunctionCall != nil:
 		partID := fmt.Sprintf("tool:%d", index)

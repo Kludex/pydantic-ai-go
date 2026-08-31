@@ -197,7 +197,45 @@ func main() {
 }
 ```
 
-Set `GEMINI_API_KEY`. Use `google.WithBaseURL` and `google.WithHTTPClient` for a compatible gateway.
+Set `GOOGLE_API_KEY` or the legacy `GEMINI_API_KEY`. `GOOGLE_API_KEY` takes precedence. Use `google.WithBaseURL` and `google.WithHTTPClient` for a compatible Gemini Developer API gateway.
+
+## Google Cloud Vertex AI
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/google"
+)
+
+func main() {
+	model, err := google.NewVertexModel("gemini-2.5-flash", google.VertexConfig{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Say hello.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `GOOGLE_CLOUD_PROJECT`. The location defaults to `GOOGLE_CLOUD_LOCATION` or `global`. The model uses Application Default Credentials and the `cloud-platform` scope.
+
+Pass `VertexConfig.APIKey` for Vertex AI Express Mode. Pass `VertexConfig.TokenProvider` for workload identity or another application-owned credential flow. API keys and token providers are mutually exclusive.
+
+Routing follows the configured transport. `global` uses `aiplatform.googleapis.com`. The `us` and `eu` multi-regions use their data-residency endpoints. Regional locations use `<location>-aiplatform.googleapis.com`. Vertex responses keep the `google-cloud` identity in histories, pricing, and telemetry.
+
+Use `google.WithProvider` for a gateway or preconfigured transport. `ProviderConfig.Transport` controls Vertex-specific behavior. `ProviderConfig.Name` is independent persisted identity. This separation keeps history replay correct when a gateway's identity does not match its underlying transport.
+
+Portable `ServiceTierFlex` and `ServiceTierPriority` values become Vertex spillover headers. `ServiceTierDefault` explicitly selects shared on-demand capacity. Per-request `ExtraHeaders` are applied last.
 
 ## Request settings
 

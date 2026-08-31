@@ -384,6 +384,7 @@ type runConfig struct {
 	tools             []erasedTool
 	toolsets          []any
 	capabilities      []Capability
+	deferredResults   *DeferredToolResults
 }
 
 // WithRunToolsets adds composable toolsets for one run without modifying the agent.
@@ -415,6 +416,13 @@ func WithRunTools[Deps any](tools ...Tool[Deps]) RunOption {
 // WithMessageHistory prepends prior conversation messages to the run.
 func WithMessageHistory(msgs []ModelMessage) RunOption {
 	return func(c *runConfig) { c.history = msgs }
+}
+
+// WithDeferredToolResults resolves pending calls in message history before
+// the run's first model request.
+func WithDeferredToolResults(results DeferredToolResults) RunOption {
+	results = cloneDeferredToolResults(results)
+	return func(c *runConfig) { c.deferredResults = &results }
 }
 
 // WithRunRetryLimits overrides both retry budgets for one run. Explicit
@@ -563,6 +571,17 @@ type RunResult[Output any] struct {
 	usage       Usage
 	messages    []ModelMessage
 	newMessages int
+	deferred    *DeferredToolRequests
+}
+
+// Deferred returns pending external calls and approvals, or nil when Output
+// contains the completed result.
+func (r *RunResult[Output]) Deferred() *DeferredToolRequests {
+	if r.deferred == nil {
+		return nil
+	}
+	cloned := r.deferred.Clone()
+	return &cloned
 }
 
 // Usage returns the tokens and requests consumed by the run.

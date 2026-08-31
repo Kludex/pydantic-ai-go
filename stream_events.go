@@ -190,3 +190,11 @@ type OutputToolResultEvent struct {
 }
 
 func (OutputToolResultEvent) streamEventKind() string { return "output-tool-result" }
+
+// DeferredToolRequestsEvent announces the batch of external calls and
+// approvals that paused the run.
+type DeferredToolRequestsEvent struct {
+	Requests DeferredToolRequests
+}
+
+func (DeferredToolRequestsEvent) streamEventKind() string { return "deferred-tool-requests" }

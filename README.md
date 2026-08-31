@@ -253,6 +253,61 @@ The wrapper exposes `search_tools`. Default search uses case-insensitive word ov
 
 Anthropic 4.5+ models advertise the hidden schemas with `defer_loading`, replay local search results as `tool_reference` blocks, and render other reveals as `tool_addition` blocks. OpenAI Responses does the same for non-streaming requests with client-executed `tool_search`, `tool_search_output`, and `additional_tools` items. This keeps the stable visible-tool prefix small without changing local execution safety. Streaming OpenAI Responses requests currently use the portable local-search fallback. Use each provider's `WithDeferredToolSupport(false)` option for compatible endpoints that do not implement its native wire protocol.
 
+### Pause for approval or external execution
+
+```go
+func runWithApproval(ctx context.Context, model ai.Model) (string, error) {
+	type DeleteArgs struct {
+		Path string `json:"path"`
+	}
+
+	agent := ai.NewAgent[struct{}, string](model)
+	ai.AddSimpleTool(agent, "delete_file", func(
+		_ context.Context,
+		args DeleteArgs,
+	) (string, error) {
+		return "deleted " + args.Path, nil
+	}, ai.WithApprovalRequired())
+	ai.AddExternalTool[struct{}, string, DeleteArgs, string](agent, "archive_file")
+
+	paused, err := agent.Run(ctx, "Archive and delete old.log", struct{}{})
+	if err != nil {
+		return "", err
+	}
+	requests := paused.Deferred()
+	if requests == nil {
+		return paused.Output, nil
+	}
+
+	results := ai.DeferredToolResults{
+		Approvals: map[string]ai.ToolApproval{},
+		Calls:     map[string]any{},
+	}
+	for _, call := range requests.Approvals {
+		results.Approvals[call.ToolCallID] = ai.ApproveTool()
+	}
+	for _, call := range requests.Calls {
+		results.Calls[call.ToolCallID] = "archived by worker"
+	}
+
+	completed, err := agent.Run(
+		ctx,
+		"Continue after the approved work.",
+		struct{}{},
+		ai.WithMessageHistory(paused.Messages()),
+		ai.WithDeferredToolResults(results),
+	)
+	if err != nil {
+		return "", err
+	}
+	return completed.Output, nil
+}
+```
+
+`WithApprovalRequired` validates arguments and pauses before local execution. `NewExternalTool` and `NewRawExternalTool` return validated calls for another process to execute. A paused `RunResult` has a non-nil `Deferred()` value and a zero `Output`. Resume with its message history and results for every pending call. Use `ApproveToolWithArgs` to replace arguments, or `DenyTool` to return a denial without execution. Per-call result metadata is available through `RunContext.ToolCallMetadata`, and approved tools receive `ToolCallApproved == true`.
+
+Approval protects against the model acting without confirmation. It does not replace authentication or authorization for clients that can submit message history and approval results.
+
 Stateful toolsets can implement three small optional interfaces:
 
 ```go

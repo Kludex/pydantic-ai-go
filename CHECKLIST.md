@@ -93,13 +93,13 @@ Status:
 
 ### Deferred execution and approval
 
-- [ ] Approval-required tools and dynamic approval requests.
-- [ ] External/deferred tool calls.
-- [ ] Deferred request/result message types and pause/resume flow.
+- [~] Approval-required tools support static `WithApprovalRequired`, validated pending calls, explicit approval values, and local execution after resume. Dynamic per-call approval requests remain.
+- [x] External/deferred function tools through typed/raw constructors or `WithExternalExecution`, including validated calls and rich, failed, or retrying external results.
+- [~] Explicit `DeferredToolRequests` / `DeferredToolResults` values, detached pending results, preserved partial history, all-result validation, and `WithDeferredToolResults` pause/resume flow. Inline partial resolution remains.
 - [ ] Automatically continue provider responses in `suspended` state, including Anthropic `pause_turn` and OpenAI background responses.
 - [ ] Inline deferred-call handling capability.
-- [ ] Approved/denied results, argument overrides, and approval metadata.
-- [ ] Repair incomplete tool-call histories when resumed.
+- [x] Approved/denied results, validated argument overrides, and detached approval metadata through `RunContext.ToolCallApproved` and `ToolCallMetadata`.
+- [x] Preserve intended deferred gaps while repairing unrelated incomplete tool-call histories on ordinary resume; completed siblings are not re-executed.
 
 ### Streaming
 
@@ -117,7 +117,7 @@ Status:
 - [x] Streaming final-output commitment: `RunStream` locks the first matching text, native, or output-tool result. Configured end strategies still govern co-emitted tools, but retries cannot revoke the committed result.
 - [x] Consumer-only stream transformation through `RunEventStreamWrapper` and `StreamEventProcessor`, including automatic streaming for `Run`.
 - [x] `FunctionToolCallEvent`, `FunctionToolResultEvent`, `OutputToolCallEvent`, and `OutputToolResultEvent`, with concurrent results emitted in completion order.
-- [ ] Streamed deferred request and result events.
+- [~] `DeferredToolRequestsEvent` is emitted after individual call events. Inline `DeferredToolResultsEvent` awaits the handler lifecycle.
 
 ## P1 - Providers and model behavior
 
@@ -227,6 +227,6 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add provider-managed tool search and native OpenAI Responses deferred-tool streaming; non-streaming client search and additions now use native wire items.
-3. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
-4. Add streamed deferred request and result events with that lifecycle.
-5. Add MCP now that raw/dynamic toolsets have run and step lifecycle support, after deferred calls define the pause/resume boundary.
+3. Add dynamic per-call approval/defer decisions and an inline deferred-call handler on top of the explicit pause/resume values.
+4. Add the approval-required toolset wrapper and streamed inline result event.
+5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.

@@ -205,6 +205,10 @@ type ToolDefinition struct {
 	// DeferLoading hides the tool until a rich tool return reveals its name.
 	// Native providers may advertise its schema without making it executable.
 	DeferLoading bool `json:"-"`
+	// RequiresApproval pauses before local execution until a caller approves.
+	RequiresApproval bool `json:"-"`
+	// ExternalExecution returns the call for execution outside the agent.
+	ExternalExecution bool `json:"-"`
 	// ToolKind identifies framework-managed typed tool calls and returns.
 	ToolKind   ToolPartKind `json:"-"`
 	maxRetries *int

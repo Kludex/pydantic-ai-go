@@ -16,19 +16,21 @@ import (
 // RunContext carries run-scoped data into tools and dynamic hooks. The
 // context.Context argument remains the cancellation signal carrier.
 type RunContext[Deps any] struct {
-	Deps           Deps
-	Retry          int
-	MaxRetries     int
-	RunID          string
-	ConversationID string
-	ToolName       string
-	ToolCallID     string
-	PartialOutput  bool
-	Model          Model
-	ModelID        string
-	RunStep        int
-	ModelSettings  ModelSettings
-	UsageLimits    UsageLimits
+	Deps             Deps
+	Retry            int
+	MaxRetries       int
+	RunID            string
+	ConversationID   string
+	ToolName         string
+	ToolCallID       string
+	ToolCallApproved bool
+	ToolCallMetadata map[string]any
+	PartialOutput    bool
+	Model            Model
+	ModelID          string
+	RunStep          int
+	ModelSettings    ModelSettings
+	UsageLimits      UsageLimits
 
 	usage         *Usage
 	toolCalls     *atomic.Int64
@@ -165,6 +167,17 @@ func NewPreparedToolWithArgsValidator[Deps, Args, Result any](
 	return newReflectedTool(name, fn, validate, prepare, opts)
 }
 
+// NewExternalTool creates a typed tool whose calls are returned to the caller
+// instead of executed in the agent process.
+func NewExternalTool[Deps, Args, Result any](name string, opts ...ToolOption) Tool[Deps] {
+	def := toolDefinition[Args](name, opts)
+	if def.ReturnSchema == nil {
+		def.ReturnSchema = reflectedToolReturnSchema(reflect.TypeFor[Result]())
+	}
+	def.ExternalExecution = true
+	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def)}}
+}
+
 // NewSimpleTool creates a reusable tool that needs no run context or dependencies.
 func NewSimpleTool[Deps, Args, Result any](
 	name string,
@@ -267,6 +280,13 @@ func newReflectedTool[Deps, Args, Result any](
 	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def), call: call, prepare: prepare}}
 }
 
+// AddExternalTool registers a typed externally executed tool.
+func AddExternalTool[Deps, Output, Args, Result any](
+	a *Agent[Deps, Output], name string, opts ...ToolOption,
+) {
+	a.AddTool(NewExternalTool[Deps, Args, Result](name, opts...))
+}
+
 // AddSimpleTool registers a tool that needs no run context or deps.
 func AddSimpleTool[Deps, Output, Args, Result any](
 	a *Agent[Deps, Output],
@@ -319,6 +339,15 @@ func NewRawToolWithArgsValidator[Deps any](
 		return fn(ctx, rawArgs)
 	}
 	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def), call: call}}
+}
+
+// NewRawExternalTool creates an externally executed tool from an explicit definition.
+func NewRawExternalTool[Deps any](def ToolDefinition, opts ...ToolOption) Tool[Deps] {
+	for _, opt := range opts {
+		opt(&def)
+	}
+	def.ExternalExecution = true
+	return Tool[Deps]{entry: toolEntry[Deps]{def: cloneToolDefinition(def)}}
 }
 
 // AddRawTool registers a tool from an explicit definition, skipping schema reflection.
@@ -384,6 +413,17 @@ func WithoutStrict() ToolOption {
 // ToolReturn.Tools. Hidden calls are rejected as unavailable.
 func WithDeferredLoading() ToolOption {
 	return func(d *ToolDefinition) { d.DeferLoading = true }
+}
+
+// WithApprovalRequired pauses before local execution until a caller approves.
+func WithApprovalRequired() ToolOption {
+	return func(d *ToolDefinition) { d.RequiresApproval = true }
+}
+
+// WithExternalExecution returns calls for execution outside the agent process.
+// Prefer NewExternalTool or NewRawExternalTool when no local function exists.
+func WithExternalExecution() ToolOption {
+	return func(d *ToolDefinition) { d.ExternalExecution = true }
 }
 
 // WithToolMaxRetries overrides the function-tool retry budget for this tool.

@@ -146,6 +146,23 @@ func (m *Model) CountTokens(
 	if err != nil {
 		return ai.Usage{}, err
 	}
+	countTools := make([]toolParam, 0, len(payload.Tools))
+	for _, tool := range payload.Tools {
+		if tool.Type == "" || tool.Type == "memory_20250818" {
+			countTools = append(countTools, tool)
+		}
+	}
+	countMessages := make([]messageParam, len(payload.Messages))
+	for index, message := range payload.Messages {
+		countMessages[index] = message
+		countMessages[index].Content = make([]contentBlock, 0, len(message.Content))
+		for _, block := range message.Content {
+			if block.Type == "advisor_tool_result" || block.Type == "server_tool_use" && block.Name == "advisor" {
+				continue
+			}
+			countMessages[index].Content = append(countMessages[index].Content, block)
+		}
+	}
 	countPayload := struct {
 		Model             string           `json:"model"`
 		System            string           `json:"system,omitempty"`
@@ -155,7 +172,7 @@ func (m *Model) CountTokens(
 		Thinking          *thinkingParam   `json:"thinking,omitempty"`
 		ContextManagement map[string]any   `json:"context_management,omitempty"`
 	}{
-		Model: payload.Model, System: payload.System, Messages: payload.Messages, Tools: payload.Tools,
+		Model: payload.Model, System: payload.System, Messages: countMessages, Tools: countTools,
 		ToolChoice: payload.ToolChoice, Thinking: payload.Thinking, ContextManagement: payload.ContextManagement,
 	}
 	body, err := marshalRequest(countPayload, params.Settings.ExtraBody)
@@ -171,7 +188,7 @@ func (m *Model) CountTokens(
 	setExtraHeaders(req, params.Settings.ExtraHeaders)
 	headerPayload := *payload
 	headerPayload.Betas = slices.DeleteFunc(slices.Clone(payload.Betas), func(beta string) bool {
-		return beta == "mcp-client-2025-04-04"
+		return beta != "context-management-2025-06-27"
 	})
 	m.setRequestHeaders(req, &headerPayload, false)
 	resp, err := m.httpClient.Do(req)
@@ -327,12 +344,20 @@ type toolParam struct {
 	InputSchema      map[string]any              `json:"input_schema,omitempty"`
 	Strict           *bool                       `json:"strict,omitempty"`
 	DeferLoading     bool                        `json:"defer_loading,omitempty"`
-	MaxUses          int                         `json:"max_uses,omitempty"`
+	MaxUses          *int                        `json:"max_uses,omitempty"`
 	AllowedDomains   []string                    `json:"allowed_domains,omitempty"`
 	BlockedDomains   []string                    `json:"blocked_domains,omitempty"`
 	UserLocation     *anthropicWebSearchLocation `json:"user_location,omitempty"`
 	Citations        *anthropicCitations         `json:"citations,omitempty"`
 	MaxContentTokens int                         `json:"max_content_tokens,omitempty"`
+	Model            string                      `json:"model,omitempty"`
+	MaxTokens        *int                        `json:"max_tokens,omitempty"`
+	Caching          *anthropicCacheControl      `json:"caching,omitempty"`
+}
+
+type anthropicCacheControl struct {
+	Type string               `json:"type"`
+	TTL  ai.AdvisorCachingTTL `json:"ttl"`
 }
 
 type anthropicCitations struct {
@@ -423,6 +448,18 @@ func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]tool
 			tools = append(tools, toolParam{Type: version, Name: "code_execution"})
 		case ai.MemoryTool, *ai.MemoryTool:
 			tools = append(tools, toolParam{Type: "memory_20250818", Name: "memory"})
+		case ai.AdvisorTool:
+			if anthropicSupportsAdvisor(modelName) {
+				tools = append(tools, anthropicAdvisorTool(nativeTool))
+			} else if !nativeTool.Optional {
+				return nil, fmt.Errorf("anthropic: model %q does not support the advisor tool", modelName)
+			}
+		case *ai.AdvisorTool:
+			if anthropicSupportsAdvisor(modelName) {
+				tools = append(tools, anthropicAdvisorTool(*nativeTool))
+			} else if !nativeTool.Optional {
+				return nil, fmt.Errorf("anthropic: model %q does not support the advisor tool", modelName)
+			}
 		case ai.MCPServerTool, *ai.MCPServerTool:
 		default:
 			if nativeTool.IsOptional() {
@@ -434,15 +471,37 @@ func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]tool
 	return tools, nil
 }
 
+func anthropicAdvisorTool(advisor ai.AdvisorTool) toolParam {
+	tool := toolParam{
+		Type: "advisor_20260301", Name: "advisor", Model: advisor.Model,
+	}
+	if advisor.MaxUses != nil {
+		maximum := *advisor.MaxUses
+		tool.MaxUses = &maximum
+	}
+	if advisor.MaxTokens != nil {
+		maximum := *advisor.MaxTokens
+		tool.MaxTokens = &maximum
+	}
+	if advisor.Caching != "" {
+		tool.Caching = &anthropicCacheControl{Type: "ephemeral", TTL: advisor.Caching}
+	}
+	return tool
+}
+
 func anthropicWebSearchTool(modelName string, webSearch ai.WebSearchTool) toolParam {
 	version := "web_search_20250305"
 	if anthropicSupportsDynamicFiltering(modelName) {
 		version = "web_search_20260209"
 	}
 	tool := toolParam{
-		Type: version, Name: "web_search", MaxUses: webSearch.MaxUses,
+		Type: version, Name: "web_search",
 		AllowedDomains: slices.Clone(webSearch.AllowedDomains),
 		BlockedDomains: slices.Clone(webSearch.BlockedDomains),
+	}
+	if webSearch.MaxUses != 0 {
+		maximum := webSearch.MaxUses
+		tool.MaxUses = &maximum
 	}
 	if webSearch.UserLocation != nil {
 		tool.UserLocation = &anthropicWebSearchLocation{
@@ -459,14 +518,30 @@ func anthropicWebFetchTool(modelName string, webFetch ai.WebFetchTool) toolParam
 		version = "web_fetch_20260209"
 	}
 	tool := toolParam{
-		Type: version, Name: "web_fetch", MaxUses: webFetch.MaxUses,
+		Type: version, Name: "web_fetch",
 		AllowedDomains: slices.Clone(webFetch.AllowedDomains),
 		BlockedDomains: slices.Clone(webFetch.BlockedDomains), MaxContentTokens: webFetch.MaxContentTokens,
+	}
+	if webFetch.MaxUses != 0 {
+		maximum := webFetch.MaxUses
+		tool.MaxUses = &maximum
 	}
 	if webFetch.EnableCitations {
 		tool.Citations = &anthropicCitations{Enabled: true}
 	}
 	return tool
+}
+
+func anthropicSupportsAdvisor(modelName string) bool {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-opus-4-6", "claude-opus-4-7",
+		"claude-opus-4-8", "claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-haiku-4-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func anthropicSupportsLatestCodeExecution(modelName string) bool {
@@ -512,6 +587,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if err != nil {
 		return nil, err
 	}
+	advisorActive := slices.ContainsFunc(nativeTools, func(tool toolParam) bool { return tool.Type == "advisor_20260301" })
 	var mcpServers []anthropicMCPServer
 	var nativeBetas []string
 	for _, nativeTool := range params.NativeTools {
@@ -523,6 +599,10 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			mcpServer = &copy
 		case *ai.MCPServerTool:
 			mcpServer = tool
+		case ai.AdvisorTool, *ai.AdvisorTool:
+			if advisorActive && !slices.Contains(nativeBetas, "advisor-tool-2026-03-01") {
+				nativeBetas = append(nativeBetas, "advisor-tool-2026-03-01")
+			}
 		case ai.MemoryTool, *ai.MemoryTool:
 			if !slices.Contains(nativeBetas, "context-management-2025-06-27") {
 				nativeBetas = append(nativeBetas, "context-management-2025-06-27")
@@ -626,7 +706,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		}
 	}
 	for _, msg := range trimmedMessages {
-		converted, err := convertMessage(msg, deferredNames)
+		converted, err := convertMessage(msg, deferredNames, advisorActive)
 		if err != nil {
 			return nil, err
 		}
@@ -828,12 +908,14 @@ func hasStableAnthropicTool(params ai.ModelRequestParams) bool {
 	return false
 }
 
-func convertMessage(msg ai.ModelMessage, deferredNames map[string]struct{}) ([]messageParam, error) {
+func convertMessage(
+	msg ai.ModelMessage, deferredNames map[string]struct{}, advisorActive bool,
+) ([]messageParam, error) {
 	switch m := msg.(type) {
 	case ai.ModelRequest:
 		return convertRequest(m, deferredNames)
 	case ai.ModelResponse:
-		return convertResponse(m, deferredNames)
+		return convertResponse(m, deferredNames, advisorActive)
 	default:
 		return nil, fmt.Errorf("anthropic: unknown message type %T", msg)
 	}
@@ -960,7 +1042,9 @@ func trimAnthropicCompactionMessages(messages []ai.ModelMessage) ([]ai.ModelMess
 	return messages, false
 }
 
-func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]messageParam, error) {
+func convertResponse(
+	m ai.ModelResponse, deferredNames map[string]struct{}, advisorActive bool,
+) ([]messageParam, error) {
 	var blocks []contentBlock
 	for _, part := range m.Parts {
 		switch p := part.(type) {
@@ -981,6 +1065,21 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			blocks = append(blocks, contentBlock{Type: "tool_use", ID: p.ToolCallID, Name: p.ToolName, Input: p.Args})
 		case ai.NativeToolCallPart:
 			if p.ProviderName != "anthropic" {
+				continue
+			}
+			if p.ToolKind == ai.ToolPartKindAdvisor {
+				if !advisorActive {
+					continue
+				}
+				input := slices.Clone(p.Args)
+				if len(input) == 0 {
+					input = json.RawMessage(`{}`)
+				}
+				block := contentBlock{Type: "server_tool_use", ID: p.ToolCallID, Name: "advisor", Input: input}
+				if caller, ok := p.ProviderDetails["anthropic_caller"].(map[string]any); ok {
+					block.Caller = caller
+				}
+				blocks = append(blocks, block)
 				continue
 			}
 			if p.ToolKind == ai.ToolPartKindMCPServer {
@@ -1062,6 +1161,18 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			blocks = append(blocks, block)
 		case ai.NativeToolReturnPart:
 			if p.ProviderName != "anthropic" {
+				continue
+			}
+			if p.ToolKind == ai.ToolPartKindAdvisor {
+				if !advisorActive {
+					continue
+				}
+				if _, ok := p.Content.(map[string]any); !ok {
+					continue
+				}
+				blocks = append(blocks, contentBlock{
+					Type: "advisor_tool_result", ToolUseID: p.ToolCallID, Content: p.Content,
+				})
 				continue
 			}
 			if p.ToolKind == ai.ToolPartKindMCPServer {
@@ -1216,24 +1327,54 @@ type responseContentBlock struct {
 }
 
 type anthropicUsage struct {
-	InputTokens              int `json:"input_tokens"`
-	OutputTokens             int `json:"output_tokens"`
-	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	InputTokens              int                       `json:"input_tokens"`
+	OutputTokens             int                       `json:"output_tokens"`
+	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
+	Iterations               []anthropicIterationUsage `json:"iterations"`
+}
+
+type anthropicIterationUsage struct {
+	Type                     string `json:"type"`
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int    `json:"cache_read_input_tokens"`
 }
 
 func (u anthropicUsage) usage() ai.Usage {
+	details := map[string]int{
+		"input_tokens":                u.InputTokens,
+		"output_tokens":               u.OutputTokens,
+		"cache_creation_input_tokens": u.CacheCreationInputTokens,
+		"cache_read_input_tokens":     u.CacheReadInputTokens,
+	}
+	if len(u.Iterations) > 0 {
+		for _, iteration := range u.Iterations {
+			prefix := "message"
+			switch iteration.Type {
+			case "advisor_message":
+				prefix = "advisor"
+			case "compaction":
+				prefix = "compaction"
+			}
+			details[prefix+"_iterations"]++
+			for name, value := range map[string]int{
+				"input_tokens": iteration.InputTokens, "output_tokens": iteration.OutputTokens,
+				"cache_creation_input_tokens": iteration.CacheCreationInputTokens,
+				"cache_read_input_tokens":     iteration.CacheReadInputTokens,
+			} {
+				if value > 0 {
+					details[prefix+"_"+name] += value
+				}
+			}
+		}
+	}
 	return ai.Usage{
 		Requests:         1,
 		InputTokens:      u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
 		CacheWriteTokens: u.CacheCreationInputTokens, CacheReadTokens: u.CacheReadInputTokens,
-		OutputTokens: u.OutputTokens,
-		Details: map[string]int{
-			"input_tokens":                u.InputTokens,
-			"output_tokens":               u.OutputTokens,
-			"cache_creation_input_tokens": u.CacheCreationInputTokens,
-			"cache_read_input_tokens":     u.CacheReadInputTokens,
-		},
+		OutputTokens: u.OutputTokens, Details: details,
 	}
 }
 
@@ -1293,6 +1434,21 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		case "mcp_tool_result":
 			resp.Parts = append(resp.Parts, anthropicMCPResult(block, mcpToolNames[block.ToolUseID]))
 		case "server_tool_use":
+			if block.Name == "advisor" {
+				args := slices.Clone(block.Input)
+				if string(args) == "{}" || string(args) == "null" {
+					args = nil
+				}
+				var details map[string]any
+				if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
+					details = map[string]any{"anthropic_caller": block.Caller}
+				}
+				resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
+					ToolName: "advisor", Args: args, ToolCallID: block.ID,
+					ToolKind: ai.ToolPartKindAdvisor, ProviderName: "anthropic", ProviderDetails: details,
+				})
+				continue
+			}
 			if block.Name == "code_execution" || block.Name == "bash_code_execution" ||
 				block.Name == "text_editor_code_execution" {
 				args := slices.Clone(block.Input)
@@ -1359,6 +1515,15 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 			resp.Parts = append(resp.Parts, parseAnthropicWebResult(block, "web_fetch", ai.ToolPartKindWebFetch))
 		case "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result":
 			resp.Parts = append(resp.Parts, parseAnthropicCodeExecutionResult(block))
+		case "advisor_tool_result":
+			var content any
+			if len(block.Content) > 0 {
+				_ = json.Unmarshal(block.Content, &content)
+			}
+			resp.Parts = append(resp.Parts, ai.NativeToolReturnPart{
+				ToolName: "advisor", ToolCallID: block.ToolUseID, ToolKind: ai.ToolPartKindAdvisor,
+				Content: content, ProviderName: "anthropic",
+			})
 		case "tool_search_tool_result":
 			part, err := parseAnthropicToolSearchResult(block)
 			if err != nil {

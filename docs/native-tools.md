@@ -206,6 +206,45 @@ Google sends the same IDs as Gemini file-search store names. Older Gemini respon
 
 `MaxNumResults`, `Instructions`, and `RetrievalMode` are portable fields reserved for providers that expose those controls. OpenAI and Google ignore them. xAI collections-search rendering remains provider-parity work.
 
+## Consult an advisor model
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+func main() {
+	maxUses := 2
+	maxTokens := 2048
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-6"),
+		ai.WithNativeTools(ai.AdvisorTool{
+			Model:     "claude-opus-4-8",
+			MaxUses:   &maxUses,
+			MaxTokens: &maxTokens,
+			Caching:   ai.AdvisorCaching1Hour,
+		}),
+	)
+
+	result, err := agent.Run(context.Background(), "Review this migration plan for hidden risks.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`AdvisorTool` lets an eligible Anthropic executor consult a stronger model during generation. `MaxUses` resets for every model request. `MaxTokens` must be at least 1024. Advisor calls and plaintext, encrypted, or error results remain in normalized history while the advisor stays enabled. They are removed from requests that disable the advisor and from token-count requests because Anthropic rejects inactive advisor blocks.
+
+Advisor iteration tokens remain separate from executor totals. You can inspect `advisor_iterations`, `advisor_input_tokens`, `advisor_output_tokens`, and advisor cache-token fields in `Usage.Details`.
+
 ## Connect a provider-hosted MCP server
 
 ```go

@@ -313,6 +313,7 @@ const (
 	ToolPartKindImageGeneration ToolPartKind = "image-generation"
 	ToolPartKindFileSearch      ToolPartKind = "file-search"
 	ToolPartKindMCPServer       ToolPartKind = "mcp-server"
+	ToolPartKindAdvisor         ToolPartKind = "advisor"
 )
 
 // ToolCallPart is a tool call requested by the model.

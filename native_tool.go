@@ -263,6 +263,45 @@ func (tool FileSearchTool) CloneNativeTool() NativeTool {
 	return tool
 }
 
+// AdvisorCachingTTL controls ephemeral advisor-context caching.
+type AdvisorCachingTTL string
+
+const (
+	AdvisorCaching5Minutes AdvisorCachingTTL = "5m"
+	AdvisorCaching1Hour    AdvisorCachingTTL = "1h"
+)
+
+// AdvisorTool lets a compatible provider consult a stronger model during generation.
+type AdvisorTool struct {
+	Model     string
+	MaxUses   *int
+	MaxTokens *int
+	Caching   AdvisorCachingTTL
+	Optional  bool
+}
+
+// Kind returns the stable native-tool discriminator.
+func (AdvisorTool) Kind() string { return "advisor" }
+
+// UniqueID identifies this native tool within one model request.
+func (AdvisorTool) UniqueID() string { return "advisor" }
+
+// IsOptional reports whether an unsupported model may omit the tool.
+func (tool AdvisorTool) IsOptional() bool { return tool.Optional }
+
+// CloneNativeTool returns a detached definition.
+func (tool AdvisorTool) CloneNativeTool() NativeTool {
+	if tool.MaxUses != nil {
+		maximum := *tool.MaxUses
+		tool.MaxUses = &maximum
+	}
+	if tool.MaxTokens != nil {
+		maximum := *tool.MaxTokens
+		tool.MaxTokens = &maximum
+	}
+	return tool
+}
+
 // MCPServerTool asks a compatible provider to connect to a remote MCP server.
 // The authorization token and headers are sent by the provider, not by this process.
 type MCPServerTool struct {
@@ -429,6 +468,14 @@ func ValidateNativeTools(tools []NativeTool) error {
 			if err := validateFileSearchTool(*tool); err != nil {
 				return err
 			}
+		case AdvisorTool:
+			if err := validateAdvisorTool(tool); err != nil {
+				return err
+			}
+		case *AdvisorTool:
+			if err := validateAdvisorTool(*tool); err != nil {
+				return err
+			}
 		case MCPServerTool:
 			if err := validateMCPServerTool(tool); err != nil {
 				return err
@@ -438,6 +485,19 @@ func ValidateNativeTools(tools []NativeTool) error {
 				return err
 			}
 		}
+	}
+	return nil
+}
+
+func validateAdvisorTool(tool AdvisorTool) error {
+	if tool.Model == "" {
+		return fmt.Errorf("ai: advisor model must not be empty")
+	}
+	if tool.MaxTokens != nil && *tool.MaxTokens < 1024 {
+		return fmt.Errorf("ai: advisor maximum tokens must be at least 1024")
+	}
+	if tool.Caching != "" && tool.Caching != AdvisorCaching5Minutes && tool.Caching != AdvisorCaching1Hour {
+		return fmt.Errorf("ai: invalid advisor caching TTL %q", tool.Caching)
 	}
 	return nil
 }

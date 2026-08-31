@@ -440,6 +440,78 @@ func TestAnthropicStreamWebFetch(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamAdvisor(t *testing.T) {
+	model := newNamedServer(t, "claude-opus-4-8", anthropicSSE(t, []string{
+		`{"type":"message_start","message":{"id":"response","model":"claude-opus-4-8","usage":{"input_tokens":10,"iterations":[{"type":"advisor_message","input_tokens":50,"output_tokens":20}]}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"advisor","name":"advisor","input":{},"caller":{"type":"code_execution_20260120"}}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"advisor_tool_result","tool_use_id":"advisor","content":{"type":"advisor_redacted_result","encrypted_content":"secret"}}}`,
+		`{"type":"message_stop"}`,
+	}))
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.AdvisorTool{Model: "claude-opus-4-8"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := events[0].(ai.ToolCallStartEvent)
+	returned := events[1].(ai.NativeToolReturnEvent)
+	finish := events[2].(ai.FinishEvent)
+	if !start.Native || start.ToolName != "advisor" || start.ToolKind != ai.ToolPartKindAdvisor ||
+		start.ProviderDetails["anthropic_caller"] == nil || returned.Part.ToolKind != ai.ToolPartKindAdvisor ||
+		returned.Part.Content.(map[string]any)["encrypted_content"] != "secret" ||
+		finish.Usage.Details["advisor_iterations"] != 1 || finish.Usage.Details["advisor_output_tokens"] != 20 {
+		t.Fatalf("unexpected streamed advisor lifecycle: %#v", events)
+	}
+}
+
+func TestAnthropicStreamAdvisorCanStop(t *testing.T) {
+	for name, test := range map[string]struct {
+		events []string
+		stop   func(ai.ModelStreamEvent) bool
+	}{
+		"call": {
+			events: []string{
+				`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"advisor","name":"advisor","input":{"question":"why"}}}`,
+				`{"type":"content_block_stop","index":0}`,
+			},
+			stop: func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.ToolCallStartEvent); return ok },
+		},
+		"delta": {
+			events: []string{
+				`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"advisor","name":"advisor","input":{"question":"why"}}}`,
+				`{"type":"content_block_stop","index":0}`,
+			},
+			stop: func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.ToolCallDeltaEvent); return ok },
+		},
+		"return": {
+			events: []string{
+				`{"type":"content_block_start","index":0,"content_block":{"type":"advisor_tool_result","tool_use_id":"advisor","content":null}}`,
+			},
+			stop: func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.NativeToolReturnEvent); return ok },
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newNamedServer(t, "claude-opus-4-8", anthropicSSE(t, test.events))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+				ai.AdvisorTool{Model: "claude-opus-4-8"},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if test.stop(event) {
+					return
+				}
+			}
+			t.Fatal("target advisor event was not emitted")
+		})
+	}
+}
+
 func TestAnthropicStreamMCPServer(t *testing.T) {
 	model := newServer(t, anthropicSSE(t, []string{
 		`{"type":"content_block_start","index":0,"content_block":{"type":"mcp_tool_use","id":"call","server_name":"docs","name":"search","input":{}}}`,

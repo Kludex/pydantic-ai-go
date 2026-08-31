@@ -120,12 +120,27 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			case "content_block_start":
 				_, toolSearch := anthropicToolSearchStrategy(event.ContentBlock.Name)
 				if event.ContentBlock.Type == "mcp_tool_use" || event.ContentBlock.Type == "server_tool_use" &&
-					(event.ContentBlock.Name == "web_search" || event.ContentBlock.Name == "web_fetch" ||
+					(event.ContentBlock.Name == "advisor" || event.ContentBlock.Name == "web_search" ||
+						event.ContentBlock.Name == "web_fetch" ||
 						event.ContentBlock.Name == "code_execution" ||
 						event.ContentBlock.Name == "bash_code_execution" ||
 						event.ContentBlock.Name == "text_editor_code_execution" || toolSearch) {
 					searchCalls[event.Index] = event.ContentBlock
 					searchArgs[event.Index] = &strings.Builder{}
+					continue
+				}
+				if event.ContentBlock.Type == "advisor_tool_result" {
+					var content any
+					if len(event.ContentBlock.Content) > 0 {
+						_ = json.Unmarshal(event.ContentBlock.Content, &content)
+					}
+					part := ai.NativeToolReturnPart{
+						ToolName: "advisor", ToolCallID: event.ContentBlock.ToolUseID,
+						ToolKind: ai.ToolPartKindAdvisor, Content: content, ProviderName: "anthropic",
+					}
+					if !yield(ai.NativeToolReturnEvent{PartID: strconv.Itoa(event.Index), Part: part}, nil) {
+						return
+					}
 					continue
 				}
 				if event.ContentBlock.Type == "mcp_tool_result" {
@@ -227,6 +242,13 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				var details map[string]any
 				var args json.RawMessage
 				switch {
+				case block.Name == "advisor":
+					toolName = "advisor"
+					toolKind = ai.ToolPartKindAdvisor
+					args = slices.Clone(raw)
+					if string(args) == "{}" || string(args) == "null" {
+						args = nil
+					}
 				case block.Type == "mcp_tool_use":
 					toolName = "mcp_server:" + block.ServerName
 					toolKind = ai.ToolPartKindMCPServer
@@ -279,7 +301,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				}, nil) {
 					return
 				}
-				if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(args)}, nil) {
+				if len(args) > 0 && !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(args)}, nil) {
 					return
 				}
 				delete(searchCalls, event.Index)

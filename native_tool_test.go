@@ -110,6 +110,49 @@ func TestFileSearchToolIsDetached(t *testing.T) {
 	}
 }
 
+func TestAdvisorTool(t *testing.T) {
+	maxUses := 2
+	maxTokens := 2048
+	tool := ai.AdvisorTool{
+		Model: "claude-opus-4-8", MaxUses: &maxUses, MaxTokens: &maxTokens,
+		Caching: ai.AdvisorCaching1Hour, Optional: true,
+	}
+	if tool.Kind() != "advisor" || tool.UniqueID() != "advisor" || !tool.IsOptional() {
+		t.Fatalf("unexpected advisor identity: %+v", tool)
+	}
+	clone := tool.CloneNativeTool().(ai.AdvisorTool)
+	*clone.MaxUses = 3
+	*clone.MaxTokens = 4096
+	if *tool.MaxUses != 2 || *tool.MaxTokens != 2048 {
+		t.Fatal("advisor clone shares pointer state")
+	}
+	lowTokens := 512
+	for _, test := range []struct {
+		name string
+		tool ai.AdvisorTool
+		want string
+	}{
+		{name: "model", tool: ai.AdvisorTool{}, want: "model must not be empty"},
+		{name: "tokens", tool: ai.AdvisorTool{Model: "advisor", MaxTokens: &lowTokens}, want: "at least 1024"},
+		{name: "cache", tool: ai.AdvisorTool{Model: "advisor", Caching: "day"}, want: "caching TTL"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			err := ai.ValidateNativeTools([]ai.NativeTool{test.tool})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected advisor validation error: %v", err)
+			}
+		})
+	}
+	if err := ai.ValidateNativeTools([]ai.NativeTool{&tool}); err != nil {
+		t.Fatal(err)
+	}
+	invalidPointer := &ai.AdvisorTool{}
+	if err := ai.ValidateNativeTools([]ai.NativeTool{invalidPointer}); err == nil ||
+		!strings.Contains(err.Error(), "model must not be empty") {
+		t.Fatalf("unexpected advisor pointer error: %v", err)
+	}
+}
+
 func TestMCPServerTool(t *testing.T) {
 	tool := ai.MCPServerTool{
 		ID: "docs", URL: "https://example.com/mcp", AuthorizationToken: "secret",

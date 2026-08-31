@@ -30,6 +30,16 @@ func newServer(t *testing.T, handler http.HandlerFunc) *anthropic.Model {
 	return newServerWithOptions(t, handler)
 }
 
+func newNamedServer(t *testing.T, name string, handler http.HandlerFunc) *anthropic.Model {
+	t.Helper()
+	server := httptest.NewServer(handler)
+	t.Cleanup(server.Close)
+	return anthropic.NewModel(
+		name, anthropic.WithAPIKey("test-key"), anthropic.WithBaseURL(server.URL),
+		anthropic.WithHTTPClient(server.Client()),
+	)
+}
+
 func newServerWithOptions(
 	t *testing.T, handler http.HandlerFunc, opts ...anthropic.Option,
 ) *anthropic.Model {
@@ -80,9 +90,9 @@ func TestAnthropicCountTokens(t *testing.T) {
 		t.Fatalf("unexpected token count body: %v", body)
 	}
 	tools := body["tools"].([]any)
-	if len(tools) != 2 || tools[0].(map[string]any)["type"] != "web_search_20250305" ||
-		tools[1].(map[string]any)["name"] != "lookup" {
-		t.Fatalf("token count omitted native or function tools: %#v", tools)
+	if len(tools) != 1 || tools[0].(map[string]any)["name"] != "lookup" ||
+		tools[0].(map[string]any)["type"] != nil {
+		t.Fatalf("token count did not isolate function tools: %#v", tools)
 	}
 }
 
@@ -1556,6 +1566,155 @@ func TestAnthropicServerManagedToolSearch(t *testing.T) {
 	}
 }
 
+func TestAnthropicAdvisorTool(t *testing.T) {
+	var bodies []map[string]any
+	var betas []string
+	model := newNamedServer(t, "claude-opus-4-8", func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		betas = append(betas, request.Header.Get("anthropic-beta"))
+		_, _ = response.Write([]byte(`{
+			"id":"message","model":"claude-opus-4-8","stop_reason":"end_turn","content":[
+				{"type":"server_tool_use","id":"advisor-1","name":"advisor","input":{},"caller":{"type":"code_execution_20260120"}},
+				{"type":"advisor_tool_result","tool_use_id":"advisor-1","content":{"type":"advisor_result","text":"Use four.","stop_reason":"max_tokens"}},
+				{"type":"advisor_tool_result","tool_use_id":"advisor-2","content":{"type":"advisor_redacted_result","encrypted_content":"secret","stop_reason":"end_turn"}},
+				{"type":"advisor_tool_result","tool_use_id":"advisor-3","content":{"type":"advisor_tool_result_error","error_code":"max_uses_exceeded"}}
+			],"usage":{"input_tokens":100,"output_tokens":50,"iterations":[
+				{"type":"message","input_tokens":100,"output_tokens":50},
+				{"type":"advisor_message","input_tokens":500,"output_tokens":200,"cache_creation_input_tokens":10},
+				{"type":"compaction","input_tokens":20,"output_tokens":5}
+			]}
+		}`))
+	})
+	maxUses := 2
+	maxTokens := 2048
+	advisor := &ai.AdvisorTool{
+		Model: "claude-opus-4-8", MaxUses: &maxUses, MaxTokens: &maxTokens, Caching: ai.AdvisorCaching1Hour,
+	}
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{advisor}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := bodies[0]["tools"].([]any)[0].(map[string]any)
+	if tool["type"] != "advisor_20260301" || tool["name"] != "advisor" ||
+		tool["model"] != "claude-opus-4-8" || tool["max_uses"] != float64(2) ||
+		tool["max_tokens"] != float64(2048) || tool["caching"].(map[string]any)["type"] != "ephemeral" ||
+		tool["caching"].(map[string]any)["ttl"] != "1h" ||
+		!strings.Contains(betas[0], "advisor-tool-2026-03-01") {
+		t.Fatalf("unexpected advisor request: tool=%#v beta=%q", tool, betas[0])
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	result := response.Parts[1].(ai.NativeToolReturnPart)
+	redacted := response.Parts[2].(ai.NativeToolReturnPart)
+	failed := response.Parts[3].(ai.NativeToolReturnPart)
+	if call.ToolName != "advisor" || call.ToolKind != ai.ToolPartKindAdvisor || len(call.Args) != 0 ||
+		call.ProviderDetails["anthropic_caller"] == nil ||
+		result.Content.(map[string]any)["text"] != "Use four." ||
+		redacted.Content.(map[string]any)["encrypted_content"] != "secret" ||
+		failed.Content.(map[string]any)["error_code"] != "max_uses_exceeded" {
+		t.Fatalf("unexpected advisor parts: %#v", response.Parts)
+	}
+	usage := response.Usage
+	if usage.InputTokens != 100 || usage.OutputTokens != 50 || usage.Details["message_iterations"] != 1 ||
+		usage.Details["advisor_iterations"] != 1 || usage.Details["advisor_input_tokens"] != 500 ||
+		usage.Details["advisor_output_tokens"] != 200 || usage.Details["advisor_cache_creation_input_tokens"] != 10 ||
+		usage.Details["compaction_iterations"] != 1 || usage.Details["compaction_input_tokens"] != 20 {
+		t.Fatalf("unexpected advisor usage: %+v", usage)
+	}
+	response.Parts = append(response.Parts, ai.NativeToolReturnPart{
+		ToolName: "advisor", ToolCallID: "invalid", ToolKind: ai.ToolPartKindAdvisor,
+		Content: "invalid", ProviderName: "anthropic",
+	})
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.AdvisorTool{Model: "claude-opus-4-8"}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := bodies[1]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if replayed[0].(map[string]any)["name"] != "advisor" ||
+		replayed[0].(map[string]any)["caller"].(map[string]any)["type"] != "code_execution_20260120" ||
+		replayed[1].(map[string]any)["type"] != "advisor_tool_result" ||
+		replayed[1].(map[string]any)["content"].(map[string]any)["text"] != "Use four." {
+		t.Fatalf("unexpected advisor replay: %#v", replayed)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	inactiveBlocks, _ := bodies[2]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	for _, block := range inactiveBlocks {
+		block := block.(map[string]any)
+		if block["name"] == "advisor" || block["type"] == "advisor_tool_result" {
+			t.Fatalf("inactive advisor history was replayed: %#v", block)
+		}
+	}
+}
+
+func TestAnthropicAdvisorToolSupportAndCounting(t *testing.T) {
+	model := newServer(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("unsupported advisor reached transport")
+	})
+	for _, advisor := range []ai.NativeTool{
+		ai.AdvisorTool{Model: "claude-opus-4-8"},
+		&ai.AdvisorTool{Model: "claude-opus-4-8"},
+	} {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{advisor}})
+		if err == nil || !strings.Contains(err.Error(), "does not support the advisor tool") {
+			t.Fatalf("unexpected advisor support error: %v", err)
+		}
+	}
+
+	var body map[string]any
+	var beta string
+	model = newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		beta = request.Header.Get("anthropic-beta")
+		_, _ = response.Write([]byte(`{"model":"claude","content":[],"usage":{}}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		&ai.AdvisorTool{Model: "claude-opus-4-8", Optional: true},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if body["tools"] != nil || strings.Contains(beta, "advisor-tool-2026-03-01") {
+		t.Fatalf("optional advisor was not omitted: body=%#v beta=%q", body, beta)
+	}
+
+	var countBody map[string]any
+	model = newNamedServer(t, "claude-opus-4-8", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&countBody); err != nil {
+			t.Error(err)
+		}
+		beta = request.Header.Get("anthropic-beta")
+		_, _ = response.Write([]byte(`{"input_tokens":7}`))
+	})
+	history := []ai.ModelMessage{ai.ModelResponse{ProviderName: "anthropic", Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{ToolName: "advisor", ToolCallID: "advisor", ToolKind: ai.ToolPartKindAdvisor, ProviderName: "anthropic"},
+		ai.NativeToolReturnPart{
+			ToolName: "advisor", ToolCallID: "advisor", ToolKind: ai.ToolPartKindAdvisor,
+			Content: map[string]any{"type": "advisor_result", "text": "four"}, ProviderName: "anthropic",
+		},
+	}}}
+	if _, err := model.CountTokens(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.AdvisorTool{Model: "claude-opus-4-8"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if countBody["tools"] != nil || strings.Contains(beta, "advisor-tool-2026-03-01") {
+		t.Fatalf("advisor leaked into token count: body=%#v beta=%q", countBody, beta)
+	}
+	for _, block := range countBody["messages"].([]any)[0].(map[string]any)["content"].([]any) {
+		block := block.(map[string]any)
+		if block["name"] == "advisor" || block["type"] == "advisor_tool_result" {
+			t.Fatalf("advisor history leaked into token count: %#v", block)
+		}
+	}
+}
+
 func TestAnthropicMCPServerTool(t *testing.T) {
 	var bodies []map[string]any
 	var betas []string
@@ -1634,14 +1793,21 @@ func TestAnthropicMCPServerCountTokensOmission(t *testing.T) {
 	})
 	usage, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
 		ai.UserPromptPart{Content: "hello"},
-	}}}, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
-		ai.MCPServerTool{ID: "docs", URL: "https://example.com/mcp"},
-	}})
+	}}}, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{Name: "memory", Schema: map[string]any{"type": "object"}}},
+		NativeTools: []ai.NativeTool{
+			ai.MCPServerTool{ID: "docs", URL: "https://example.com/mcp"}, ai.MemoryTool{},
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if usage.InputTokens != 12 || body["mcp_servers"] != nil || strings.Contains(beta, "mcp-client-2025-04-04") {
-		t.Fatalf("MCP server leaked into token count: usage=%+v body=%#v beta=%q", usage, body, beta)
+	tools := body["tools"].([]any)
+	if usage.InputTokens != 12 || body["mcp_servers"] != nil || len(tools) != 1 ||
+		tools[0].(map[string]any)["type"] != "memory_20250818" ||
+		strings.Contains(beta, "mcp-client-2025-04-04") ||
+		!strings.Contains(beta, "context-management-2025-06-27") {
+		t.Fatalf("token count native isolation failed: usage=%+v body=%#v beta=%q", usage, body, beta)
 	}
 }
 

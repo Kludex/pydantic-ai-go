@@ -225,7 +225,8 @@ Status:
 - [ ] Record Google Gemini cassettes when credentials are available.
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
-- [ ] API examples for tools, streaming, multimodal input, capabilities, and each provider.
+- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Dedicated multimodal, capability, MCP, and per-provider examples remain.
+- [ ] Split focused advanced guides out of the README without turning it back into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.

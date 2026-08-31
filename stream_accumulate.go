@@ -129,6 +129,7 @@ func accumulate(
 		return nil
 	}
 	materialize := func() {
+		response.Parts = nil
 		for _, part := range parts {
 			switch part.kind {
 			case ResponsePartKindText, ResponsePartKindThinking:
@@ -141,12 +142,33 @@ func accumulate(
 			}
 		}
 	}
+	partialResponse := func() *ModelResponse {
+		materialize()
+		if len(response.Parts) == 0 && response.ProviderResponseID == "" && response.ProviderName == "" &&
+			response.ModelName == "" && response.State == "" && response.Usage.IsZero() {
+			return nil
+		}
+		if response.State == "" {
+			response.State = ModelResponseStateIncomplete
+		}
+		return response
+	}
 
 	for event, err := range events {
 		if err != nil {
-			return nil, err
+			return partialResponse(), err
 		}
 		switch event := event.(type) {
+		case ResponseMetadataEvent:
+			response.Usage = event.Usage.Clone()
+			response.ModelName = event.ModelName
+			response.Timestamp = event.Timestamp
+			response.ProviderName = event.ProviderName
+			response.ProviderURL = event.ProviderURL
+			response.ProviderDetails = cloneSchemaMap(event.ProviderDetails)
+			response.ProviderResponseID = event.ProviderResponseID
+			response.FinishReason = event.FinishReason
+			response.State = event.State
 		case TextDeltaEvent:
 			part, started, err := partForDelta(event.PartID, ResponsePartKindText)
 			if err != nil {
@@ -162,14 +184,14 @@ func accumulate(
 			part.providerDetails = mergeProviderDetails(part.providerDetails, event.ProviderDetails)
 			if started {
 				if err := startPart(part); err != nil {
-					return nil, err
+					return partialResponse(), err
 				}
 			} else if err := emitEvent(PartDeltaEvent{
 				Index: part.index, PartID: part.id, Delta: TextPartDelta{
 					ContentDelta: event.Delta, ProviderName: event.ProviderName,
 				},
 			}); err != nil {
-				return nil, err
+				return partialResponse(), err
 			}
 		case ThinkingDeltaEvent:
 			part, started, err := partForDelta(event.PartID, ResponsePartKindThinking)
@@ -189,7 +211,7 @@ func accumulate(
 			part.providerDetails = mergeProviderDetails(part.providerDetails, event.ProviderDetails)
 			if started {
 				if err := startPart(part); err != nil {
-					return nil, err
+					return partialResponse(), err
 				}
 			} else if err := emitEvent(PartDeltaEvent{
 				Index: part.index, PartID: part.id, Delta: ThinkingPartDelta{
@@ -197,7 +219,7 @@ func accumulate(
 					ProviderName: event.ProviderName,
 				},
 			}); err != nil {
-				return nil, err
+				return partialResponse(), err
 			}
 		case ToolCallStartEvent:
 			if event.PartID != "" {
@@ -215,7 +237,7 @@ func accumulate(
 			part.providerName = event.ProviderName
 			part.providerDetails = cloneSchemaMap(event.ProviderDetails)
 			if err := startPart(part); err != nil {
-				return nil, err
+				return partialResponse(), err
 			}
 		case ToolCallDeltaEvent:
 			var part *accumulatedPart
@@ -242,11 +264,11 @@ func accumulate(
 					ArgsDelta: event.ArgsDelta, ToolCallID: event.ToolCallID,
 				},
 			}); err != nil {
-				return nil, err
+				return partialResponse(), err
 			}
 		case FinishEvent:
 			if err := endLastPart(""); err != nil {
-				return nil, err
+				return partialResponse(), err
 			}
 			materialize()
 			if event.Parts != nil {
@@ -270,5 +292,5 @@ func accumulate(
 			return nil, fmt.Errorf("ai: unknown model stream event type %T", event)
 		}
 	}
-	return nil, &UnexpectedModelBehaviorError{Message: "stream ended without a finish event"}
+	return partialResponse(), &UnexpectedModelBehaviorError{Message: "stream ended without a finish event"}
 }

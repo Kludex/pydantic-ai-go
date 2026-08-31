@@ -571,6 +571,7 @@ type run[Deps, Output any] struct {
 	runModelSelectors      []erasedModelSelectorFunc
 	resolvedModels         map[string]Model
 	resumeSeed             *ModelResponse
+	detachedResponse       *ModelResponse
 	enteredModels          []Model
 	modelClosers           []ModelCloseFunc
 	deferredResults        *DeferredToolResults
@@ -1633,28 +1634,45 @@ func (r *run[Deps, Output]) doModelRequest(
 			segmentMessages = append(slices.Clone(baseMessages), *cloneModelResponse(response))
 		}
 
-		var buffered []StreamEvent
+		eventOffset := 0
 		emit := r.emitStreamEvent
 		if response != nil && r.emit != nil {
+			if background, _ := response.ProviderDetails["background"].(bool); background {
+				eventOffset = lastSegmentOffset
+			} else {
+				eventOffset = len(response.Parts)
+			}
 			emit = func(event StreamEvent) bool {
-				buffered = append(buffered, event)
-				return true
+				return r.emitStreamEvent(reindexContinuationEvent(event, eventOffset))
 			}
 		}
 		segment, err := r.requestModelSegment(ctx, segmentMessages, params, emit)
 		if err != nil {
-			suspended := response
+			prior := response
+			partial := response
 			if segment != nil {
 				if segment.State == "" {
 					segment.State = ModelResponseStateComplete
 				}
-				if suspended == nil {
-					suspended = segment
+				if partial == nil {
+					partial = segment
 				} else {
-					suspended, _ = mergeModelResponses(suspended, segment)
+					partial, _ = mergeModelResponses(partial, segment)
 				}
 			}
-			r.cancelSuspendedResponse(suspended)
+			if errors.Is(context.Cause(r.ctx), errStreamDetached) {
+				if partial != nil && partial.State == ModelResponseStateSuspended {
+					r.detachedResponse = cloneModelResponse(partial)
+				} else if prior != nil && prior.State == ModelResponseStateSuspended {
+					r.detachedResponse = cloneModelResponse(prior)
+				}
+				return nil, err
+			}
+			if partial != nil && partial.State == ModelResponseStateSuspended {
+				r.cancelSuspendedResponse(partial)
+			} else {
+				r.cancelSuspendedResponse(prior)
+			}
 			return nil, err
 		}
 		if segment == nil {
@@ -1672,21 +1690,15 @@ func (r *run[Deps, Output]) doModelRequest(
 		} else {
 			var mode continuationMergeMode
 			response, mode = mergeModelResponses(response, segment)
-			offset := 0
+			lastMode = mode
 			switch mode {
 			case continuationAccumulate:
-				offset = len(response.Parts) - len(segment.Parts)
+				lastSegmentOffset = eventOffset
 			case continuationReplaceSameID:
-				offset = lastSegmentOffset
+				lastSegmentOffset = eventOffset
+			default:
+				lastSegmentOffset = 0
 			}
-			for _, event := range buffered {
-				if !r.emitStreamEvent(reindexContinuationEvent(event, offset)) {
-					r.cancelSuspendedResponse(response)
-					return nil, context.Canceled
-				}
-			}
-			lastMode = mode
-			lastSegmentOffset = offset
 		}
 		if response.State == ModelResponseStateSuspended {
 			projected := r.usage.Clone()

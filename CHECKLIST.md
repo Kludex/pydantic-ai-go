@@ -120,14 +120,15 @@ Status:
 - [x] `FunctionToolCallEvent`, `FunctionToolResultEvent`, `OutputToolCallEvent`, and `OutputToolResultEvent`, with concurrent results emitted in completion order.
 - [x] `DeferredToolRequestsEvent` after individual call events and `DeferredToolResultsEvent` for each inline handler result batch, without duplicate call events.
 - [x] `EnqueuedMessagesEvent` is emitted once per delivered enqueue group and participates in ordinary event capability ordering and consumer cancellation.
-- [ ] Preserve a resumable suspended snapshot when a stream consumer deliberately detaches, distinct from explicit run cancellation that cancels the provider job.
+- [x] Stream consumer detachment preserves a detached `SuspendedRun` response/history/usage snapshot without canceling the server-side job; explicit context cancellation still performs best-effort provider cancellation. OpenAI Responses tracks response IDs and the latest consumed sequence cursor before terminal events, so detached jobs resume without replaying consumed events.
+- [x] Continuation-segment deltas stream live with append indexes for fresh generations and reused indexes for provider-marked background snapshots; mid-segment metadata preserves resumable detachment snapshots and the latest OpenAI sequence cursor.
 
 ## P1 - Providers and model behavior
 
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: text/reasoning/function-call streaming plus response/item IDs, encrypted reasoning, function namespaces, status, timestamps, configurable background create/poll/retrieve/cancel continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; provider-managed search, native output, multimodal content, and other builtin tools remain.
+- [~] OpenAI Responses: text/reasoning/function-call streaming plus authoritative terminal snapshots, response/item IDs, encrypted reasoning, function namespaces, status, timestamps, configurable background create/poll/retrieve/cancel/detach continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; provider-managed search, native output, multimodal content, and other builtin tools remain.
 - [~] Anthropic Messages: text/thinking/function-tool streaming, signed-thinking round trips, multimodal input, response IDs, stop reasons, automatic ordinary/streamed `pause_turn` continuation, and provider-native deferred-definition/reveal rendering; native server search, citations, and other native tools remain.
 - [~] Google Gemini: text/thinking/function-tool streaming, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.

@@ -17,8 +17,14 @@ import (
 // streamingModel wraps a FunctionModel and streams scripted events.
 type streamingModel struct {
 	ai.Model
-	script func(msgs []ai.ModelMessage) []ai.ModelStreamEvent
-	fail   error
+	script      func(msgs []ai.ModelMessage) []ai.ModelStreamEvent
+	fail        error
+	cancelCount int
+}
+
+func (m *streamingModel) CancelSuspendedResponse(context.Context, ai.ModelResponse) error {
+	m.cancelCount++
+	return nil
 }
 
 func (m *streamingModel) StreamRequest(_ context.Context, msgs []ai.ModelMessage, _ ai.ModelRequestParams) (iter.Seq2[ai.ModelStreamEvent, error], error) {
@@ -66,6 +72,53 @@ func TestRunStreamFillsToolCallIDFromDelta(t *testing.T) {
 	}
 	if stream.Result() == nil || stream.Result().Output != "done" || seenID != "final-id" {
 		t.Fatalf("delta tool call ID was not retained: result=%+v id=%q", stream.Result(), seenID)
+	}
+}
+
+func TestRunStreamDetachPreservesResumableSuspendedSnapshot(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ResponseMetadataEvent{
+				Usage: ai.Usage{Requests: 1, InputTokens: 3}, ModelName: "background",
+				ProviderName: "provider", ProviderResponseID: "job",
+				ProviderDetails: map[string]any{"background": true}, State: ai.ModelResponseStateSuspended,
+			},
+			ai.TextDeltaEvent{PartID: "message", Delta: "partial", ProviderName: "provider"},
+			ai.FinishEvent{State: ai.ModelResponseStateSuspended},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	if stream.Suspended() != nil {
+		t.Fatal("stream was suspended before it started")
+	}
+	for range stream.Events() {
+		break
+	}
+	if stream.Result() != nil || model.cancelCount != 0 {
+		t.Fatalf("detached stream completed or canceled its job: result=%+v cancels=%d", stream.Result(), model.cancelCount)
+	}
+	suspended := stream.Suspended()
+	if suspended == nil || suspended.Response().State != ai.ModelResponseStateSuspended ||
+		suspended.Response().ProviderResponseID != "job" || suspended.Response().Text() != "partial" ||
+		suspended.Usage().Requests != 1 || suspended.Usage().InputTokens != 3 {
+		t.Fatalf("unexpected suspended snapshot: %+v", suspended)
+	}
+	messages := suspended.Messages()
+	if len(messages) != 2 || messages[1].(ai.ModelResponse).State != ai.ModelResponseStateSuspended {
+		t.Fatalf("unexpected suspended history: %+v", messages)
+	}
+	messages[1] = ai.ModelRequest{}
+	if _, ok := stream.Suspended().Messages()[1].(ai.ModelResponse); !ok {
+		t.Fatal("suspended history was not detached")
+	}
+
+	resumeModel := &continuationModel{responses: []*ai.ModelResponse{{
+		Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}, Usage: ai.Usage{Requests: 1, OutputTokens: 1},
+		ModelName: "background", ProviderResponseID: "job", State: ai.ModelResponseStateComplete,
+	}}}
+	result, err := ai.NewAgent[deps, string](resumeModel).Resume(t.Context(), suspended.Messages(), deps{})
+	if err != nil || result.Output != "done" || len(result.NewMessages()) != 1 {
+		t.Fatalf("detached snapshot did not resume: result=%+v err=%v", result, err)
 	}
 }
 

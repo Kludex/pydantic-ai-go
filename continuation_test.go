@@ -145,6 +145,13 @@ func (m *continuationModel) CancelSuspendedResponse(ctx context.Context, respons
 
 func continuationResponseEvents(response *ai.ModelResponse) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
+		if !yield(ai.ResponseMetadataEvent{
+			Usage: response.Usage, ModelName: response.ModelName, ProviderName: response.ProviderName,
+			ProviderDetails: response.ProviderDetails, ProviderResponseID: response.ProviderResponseID,
+			State: response.State,
+		}, nil) {
+			return
+		}
 		for index, part := range response.Parts {
 			partID := string(rune('a' + index))
 			switch part := part.(type) {
@@ -352,7 +359,8 @@ func TestBackgroundContinuationReplacesCumulativeSnapshots(t *testing.T) {
 	model := &continuationModel{responses: []*ai.ModelResponse{
 		{
 			Parts: []ai.ResponsePart{ai.TextPart{Content: "partial"}}, Usage: ai.Usage{Requests: 1, InputTokens: 4},
-			ModelName: "model", ProviderResponseID: "job", State: ai.ModelResponseStateSuspended,
+			ModelName: "model", ProviderResponseID: "job", ProviderDetails: map[string]any{"background": true},
+			State: ai.ModelResponseStateSuspended,
 		},
 		{
 			Parts: []ai.ResponsePart{ai.TextPart{Content: "final"}}, Usage: ai.Usage{Requests: 1, InputTokens: 4, OutputTokens: 2},
@@ -558,7 +566,8 @@ func TestStreamedBackgroundContinuationReusesPartIndexes(t *testing.T) {
 	model := &continuationModel{responses: []*ai.ModelResponse{
 		{
 			Parts: []ai.ResponsePart{ai.TextPart{Content: "old"}}, ModelName: "model",
-			ProviderResponseID: "job", State: ai.ModelResponseStateSuspended,
+			ProviderResponseID: "job", ProviderDetails: map[string]any{"background": true},
+			State: ai.ModelResponseStateSuspended,
 		},
 		{
 			Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}, ModelName: "model",
@@ -580,7 +589,7 @@ func TestStreamedBackgroundContinuationReusesPartIndexes(t *testing.T) {
 	}
 }
 
-func TestStoppingAfterSuspendedFinishCancelsJob(t *testing.T) {
+func TestStoppingAfterSuspendedFinishDetachesJob(t *testing.T) {
 	model := &continuationModel{responses: []*ai.ModelResponse{{
 		ProviderResponseID: "one", State: ai.ModelResponseStateSuspended,
 	}}}
@@ -588,12 +597,13 @@ func TestStoppingAfterSuspendedFinishCancelsJob(t *testing.T) {
 	for range stream.Events() {
 		break
 	}
-	if stream.Result() != nil || len(model.canceled) != 1 || model.canceled[0].ProviderResponseID != "one" {
-		t.Fatalf("suspended finish was not canceled: result=%+v canceled=%+v", stream.Result(), model.canceled)
+	if stream.Result() != nil || len(model.canceled) != 0 || stream.Suspended() == nil ||
+		stream.Suspended().Response().ProviderResponseID != "one" {
+		t.Fatalf("suspended finish was not detached: result=%+v canceled=%+v snapshot=%+v", stream.Result(), model.canceled, stream.Suspended())
 	}
 }
 
-func TestStoppingDuringSuspendedContinuationCancelsJob(t *testing.T) {
+func TestStoppingDuringSuspendedContinuationDetachesJob(t *testing.T) {
 	model := &continuationModel{responses: []*ai.ModelResponse{
 		{ProviderResponseID: "one", State: ai.ModelResponseStateSuspended},
 		{
@@ -609,8 +619,9 @@ func TestStoppingDuringSuspendedContinuationCancelsJob(t *testing.T) {
 			break
 		}
 	}
-	if stream.Result() != nil || len(model.canceled) != 1 || model.canceled[0].ProviderResponseID != "two" {
-		t.Fatalf("stopped continuation was not canceled: result=%+v canceled=%+v", stream.Result(), model.canceled)
+	if stream.Result() != nil || len(model.canceled) != 0 || stream.Suspended() == nil ||
+		stream.Suspended().Response().ProviderResponseID != "two" {
+		t.Fatalf("stopped continuation was not detached: result=%+v canceled=%+v snapshot=%+v", stream.Result(), model.canceled, stream.Suspended())
 	}
 }
 

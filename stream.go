@@ -29,6 +29,23 @@ type StreamEvent interface {
 	streamEventKind() string
 }
 
+// ResponseMetadataEvent updates the in-flight response snapshot without
+// emitting a consumer StreamEvent. Providers use it to make interrupted or
+// detached streams resumable before their terminal event arrives.
+type ResponseMetadataEvent struct {
+	Usage              Usage
+	ModelName          string
+	Timestamp          time.Time
+	ProviderName       string
+	ProviderURL        string
+	ProviderDetails    map[string]any
+	ProviderResponseID string
+	FinishReason       FinishReason
+	State              ModelResponseState
+}
+
+func (ResponseMetadataEvent) modelStreamEventKind() string { return "response-metadata" }
+
 // TextDeltaEvent carries a provider chunk of text output.
 type TextDeltaEvent struct {
 	// PartID identifies the response part this delta updates. A stable,

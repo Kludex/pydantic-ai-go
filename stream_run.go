@@ -14,8 +14,26 @@ import (
 type StreamedRun[Output any] struct {
 	events        EventStream
 	result        *RunResult[Output]
+	suspended     *SuspendedRun
 	partialOutput func(raw, toolCallID string) (Output, bool, error)
 }
+
+// SuspendedRun is a resumable snapshot captured when a stream consumer
+// detaches from a provider-managed suspended response.
+type SuspendedRun struct {
+	response ModelResponse
+	messages []ModelMessage
+	usage    Usage
+}
+
+// Response returns the detached suspended response.
+func (s *SuspendedRun) Response() ModelResponse { return *cloneModelResponse(&s.response) }
+
+// Messages returns history suitable for Agent.Resume or Agent.ResumeStream.
+func (s *SuspendedRun) Messages() []ModelMessage { return cloneModelMessages(s.messages) }
+
+// Usage returns usage accumulated through the detached response.
+func (s *SuspendedRun) Usage() Usage { return s.usage.Clone() }
 
 // Events streams normalized part lifecycle, final-result, and finish events
 // across every model request in the run. The sequence can be ranged once.
@@ -138,6 +156,18 @@ func (s *StreamedRun[Output]) yieldPartialOutput(
 // been fully consumed without error.
 func (s *StreamedRun[Output]) Result() *RunResult[Output] { return s.result }
 
+// Suspended returns a resumable snapshot after the consumer stops a stream
+// whose provider response is suspended. It returns nil for completed,
+// failed, explicitly canceled, or non-resumable streams.
+func (s *StreamedRun[Output]) Suspended() *SuspendedRun {
+	if s.suspended == nil {
+		return nil
+	}
+	return &SuspendedRun{
+		response: s.suspended.Response(), messages: s.suspended.Messages(), usage: s.suspended.Usage(),
+	}
+}
+
 // RunStream executes the agent loop like Run, but yields events as the
 // model produces them. Models that do not implement StreamingModel are
 // driven with plain requests; each response is replayed as events.
@@ -230,6 +260,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 			}
 			result, err := run.wrappedLoop(run.ctx)
 			if stopped {
+				streamedRun.suspended = run.suspendedSnapshot()
 				return
 			}
 			if err != nil {
@@ -255,6 +286,27 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 		}
 	}
 	return streamedRun
+}
+
+func (r *run[Deps, Output]) suspendedSnapshot() *SuspendedRun {
+	if r.detachedResponse == nil || r.detachedResponse.State != ModelResponseStateSuspended {
+		return nil
+	}
+	response := cloneModelResponse(r.detachedResponse)
+	if response.Timestamp.IsZero() {
+		response.Timestamp = time.Now().UTC()
+	}
+	if response.RunID == "" {
+		response.RunID = r.rc.RunID
+	}
+	if response.ConversationID == "" {
+		response.ConversationID = r.rc.ConversationID
+	}
+	messages := cloneModelMessages(r.messages)
+	messages = append(messages, *cloneModelResponse(response))
+	usage := r.usage.Clone()
+	usage.Add(response.Usage)
+	return &SuspendedRun{response: *response, messages: messages, usage: usage}
 }
 
 func hasEventStreamCapability(capabilities []Capability) bool {

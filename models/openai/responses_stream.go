@@ -60,7 +60,7 @@ func (m *ResponsesModel) StreamRequest(
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return m.responsesEventStream(resp.Body), nil
+	return m.responsesEventStream(resp.Body, nil), nil
 }
 
 func (m *ResponsesModel) retrieveResponseStream(
@@ -88,7 +88,12 @@ func (m *ResponsesModel) retrieveResponseStream(
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return m.responsesEventStream(resp.Body), nil
+	return m.responsesEventStream(resp.Body, &ai.ResponseMetadataEvent{
+		ModelName: m.name, ProviderName: "openai", ProviderURL: m.baseURL,
+		ProviderResponseID: responseID,
+		ProviderDetails:    map[string]any{"background": true, "sequence_number": sequence},
+		State:              ai.ModelResponseStateSuspended,
+	}), nil
 }
 
 func suspendedResponsesSequence(messages []ai.ModelMessage) (int, bool) {
@@ -131,7 +136,9 @@ type responsesStreamEvent struct {
 	} `json:"error"`
 }
 
-func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
+func (m *ResponsesModel) responsesEventStream(
+	body io.ReadCloser, seed *ai.ResponseMetadataEvent,
+) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
 		scanner := bufio.NewScanner(body)
@@ -139,6 +146,18 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 		var latest *responsesStreamEvent
 		var lastSequence *int
 		emittedParts := false
+		if seed != nil {
+			if sequence, ok := seed.ProviderDetails["sequence_number"].(int); ok {
+				lastSequence = &sequence
+			}
+			latest = &responsesStreamEvent{Response: responsesResponse{
+				ID: seed.ProviderResponseID, Model: seed.ModelName, Status: "in_progress",
+				Background: providerBool(seed.ProviderDetails, "background"),
+			}}
+			if !yield(*seed, nil) {
+				return
+			}
+		}
 		for scanner.Scan() {
 			data, ok := strings.CutPrefix(scanner.Text(), "data:")
 			if !ok {
@@ -160,6 +179,37 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 			if event.Response.ID != "" {
 				snapshot := event
 				latest = &snapshot
+			}
+			var metadataResponse *responsesResponse
+			if event.Response.ID != "" {
+				metadataResponse = &event.Response
+			} else if event.SequenceNumber != nil && latest != nil {
+				metadataResponse = &latest.Response
+			}
+			if metadataResponse != nil && event.Type != "response.completed" &&
+				event.Type != "response.failed" && event.Type != "response.incomplete" {
+				rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
+					metadataResponse.Status, metadataResponse.IncompleteDetails,
+					metadataResponse.CreatedAt, metadataResponse.Background,
+				)
+				if lastSequence != nil {
+					if providerDetails == nil {
+						providerDetails = map[string]any{}
+					}
+					providerDetails["sequence_number"] = *lastSequence
+				}
+				modelName := metadataResponse.Model
+				if modelName == "" {
+					modelName = m.name
+				}
+				if !yield(ai.ResponseMetadataEvent{
+					Usage: metadataResponse.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderResponseID: metadataResponse.ID,
+					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
+				}, nil) {
+					return
+				}
 			}
 			switch event.Type {
 			case "response.output_text.delta":

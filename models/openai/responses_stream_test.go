@@ -107,6 +107,35 @@ func TestResponsesStreamUsesAuthoritativeCompletedSnapshot(t *testing.T) {
 }
 
 func TestResponsesCompletedSnapshotErrorsAndConsumerStop(t *testing.T) {
+	t.Run("sequence-only metadata", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.created","sequence_number":1,"response":{"id":"job"}}`,
+			`{"type":"response.completed","response":{"id":"job","status":"completed"}}`,
+		}))
+		events, err := collect(t, model, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		metadata, ok := events[0].(ai.ResponseMetadataEvent)
+		if !ok || metadata.ProviderDetails["sequence_number"] != 1 {
+			t.Fatalf("unexpected sequence metadata: %+v", events)
+		}
+	})
+
+	t.Run("metadata consumer stop", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.created","response":{"id":"job","status":"queued","background":true}}`,
+			`{"type":"mystery"}`,
+		}))
+		stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range stream {
+			break
+		}
+	})
+
 	t.Run("invalid snapshot", func(t *testing.T) {
 		model := newResponsesServer(t, sseHandler(t, []string{
 			`{"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","name":"work","arguments":"bad"}]}}`,
@@ -146,10 +175,78 @@ func TestResponsesCompletedSnapshotErrorsAndConsumerStop(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		for range stream {
-			break
+		for event := range stream {
+			if _, ok := event.(ai.TextDeltaEvent); ok {
+				break
+			}
 		}
 	})
+}
+
+func TestResponsesStreamDetachPreservesBackgroundJob(t *testing.T) {
+	var paths []string
+	model := newResponsesServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		sseHandler(t, []string{
+			`{"type":"response.created","sequence_number":4,"response":{"id":"job","model":"gpt-5","status":"queued","background":true,"usage":{"input_tokens":2}}}`,
+			`{"type":"response.output_text.delta","sequence_number":5,"item_id":"message","delta":"partial"}`,
+		})(w, r)
+	}, openai.WithBackgroundMode(true), openai.WithBackgroundPollInterval(0))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "go", struct{}{})
+	for range stream.Events() {
+		break
+	}
+	suspended := stream.Suspended()
+	if suspended == nil || suspended.Response().ProviderResponseID != "job" ||
+		suspended.Response().Text() != "partial" || suspended.Response().ProviderDetails["sequence_number"] != 5 {
+		t.Fatalf("unexpected OpenAI detached snapshot: %+v", suspended)
+	}
+	if len(paths) != 1 || paths[0] != "/responses" {
+		t.Fatalf("detach polled or canceled the background job: %v", paths)
+	}
+
+	resumeModel := newResponsesServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/responses/job" {
+			t.Fatalf("unexpected resume request %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"job","model":"gpt-5","status":"completed","background":true,
+			"output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}],
+			"usage":{"input_tokens":2,"output_tokens":1}
+		}`))
+	}, openai.WithBackgroundPollInterval(0))
+	result, err := ai.NewAgent[struct{}, string](resumeModel).Resume(t.Context(), suspended.Messages(), struct{}{})
+	if err != nil || result.Output != "done" {
+		t.Fatalf("OpenAI detached history did not resume: result=%+v err=%v", result, err)
+	}
+}
+
+func TestResponsesResumedStreamDetachesWithoutCreatedEvent(t *testing.T) {
+	model := newResponsesServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Query().Get("starting_after") != "1" {
+			t.Fatalf("unexpected resumed stream request: %s %s", r.Method, r.URL.String())
+		}
+		sseHandler(t, []string{
+			`{"type":"response.output_text.delta","sequence_number":2,"item_id":"message","delta":"partial"}`,
+		})(w, r)
+	}, openai.WithBackgroundPollInterval(0))
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}}},
+		ai.ModelResponse{
+			ProviderName: "openai", ProviderResponseID: "job", ModelName: "gpt-5",
+			ProviderDetails: map[string]any{"background": true, "sequence_number": 1},
+			State:           ai.ModelResponseStateSuspended,
+		},
+	}
+	stream := ai.NewAgent[struct{}, string](model).ResumeStream(t.Context(), history, struct{}{})
+	for range stream.Events() {
+		break
+	}
+	suspended := stream.Suspended()
+	if suspended == nil || suspended.Response().ProviderResponseID != "job" ||
+		suspended.Response().ProviderDetails["sequence_number"] != 2 || suspended.Response().Text() != "partial" {
+		t.Fatalf("unexpected resumed detached snapshot: %+v", suspended)
+	}
 }
 
 func TestResponsesStreamContinuesBackgroundJob(t *testing.T) {
@@ -311,6 +408,17 @@ func TestResponsesBackgroundStreamRequestFailures(t *testing.T) {
 			ProviderDetails: details,
 		}}
 	}
+	t.Run("seed consumer stop", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{`{"type":"mystery"}`}))
+		stream, err := model.StreamRequest(t.Context(), messages(true), ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range stream {
+			break
+		}
+	})
+
 	t.Run("static retrieve", func(t *testing.T) {
 		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, "missing", http.StatusNotFound)

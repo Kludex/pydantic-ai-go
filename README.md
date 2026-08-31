@@ -168,6 +168,8 @@ Use `agent.Resume(ctx, history, deps)` or `agent.ResumeStream(ctx, history, deps
 
 `RunStream` emits part events from every segment. Accumulated segments receive continuous part indexes. Repeated snapshots for one response ID reuse their index space. Each segment emits its own `FinishEvent`, while `RunResult.Usage()` contains the merged usage.
 
+Breaking out of `StreamedRun.Events()` detaches from a provider-managed suspended response without canceling its server-side job. `StreamedRun.Suspended()` then returns a `SuspendedRun` with detached `Response()`, `Messages()`, and `Usage()` snapshots. Persist `Messages()` and pass them to `Resume` later. Canceling the run context instead invokes `SuspendedResponseCanceler` so the provider can stop the job.
+
 ## Concurrent tools
 
 Independent tool calls from one model response run concurrently. Results still go back to the model in the order it requested them.

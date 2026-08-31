@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"slices"
@@ -74,6 +75,8 @@ func (rc *RunContext[Deps]) Cancel() {
 	}
 }
 
+var errStreamDetached = errors.New("ai: stream consumer detached")
+
 type runCancellation struct {
 	mutex  sync.Mutex
 	cancel context.CancelCauseFunc
@@ -92,7 +95,7 @@ func (c *runCancellation) stopStream() {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()
 	if c.active {
-		c.cancel(context.Canceled)
+		c.cancel(errStreamDetached)
 	}
 }
 

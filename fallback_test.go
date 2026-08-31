@@ -216,6 +216,17 @@ func TestFallbackModelRejectsNilResponsesAndInvalidSettings(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), "must be non-negative") {
 		t.Fatalf("unexpected settings error: %v", err)
 	}
+	invalidProfile := invalidProfileModel{Model: requestModel{name: "invalid", request: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return nil, nil
+	}}}
+	fallback = ai.NewFallbackModel(invalidProfile)
+	if _, err := fallback.Request(t.Context(), nil, ai.ModelRequestParams{
+		OutputMode: ai.OutputModeAuto, OutputSchema: map[string]any{"type": "object"},
+	}); err == nil || !strings.Contains(err.Error(), "invalid default output mode") {
+		t.Fatalf("unexpected profile error: %v", err)
+	}
 }
 
 func TestFallbackModelPinsAndRewindsContinuations(t *testing.T) {
@@ -522,6 +533,16 @@ func TestFallbackModelStreamOpeningFailures(t *testing.T) {
 		})
 		if err == nil || !strings.Contains(err.Error(), "must be non-negative") {
 			t.Fatalf("unexpected settings error: %v", err)
+		}
+	})
+
+	t.Run("invalid profile", func(t *testing.T) {
+		fallback := ai.NewFallbackModel(invalidProfileModel{Model: fallbackTextModel("model", "unused", nil)})
+		_, err := fallback.StreamRequest(t.Context(), nil, ai.ModelRequestParams{
+			OutputMode: ai.OutputModeAuto, OutputSchema: map[string]any{"type": "object"},
+		})
+		if err == nil || !strings.Contains(err.Error(), "invalid default output mode") {
+			t.Fatalf("unexpected profile error: %v", err)
 		}
 	})
 

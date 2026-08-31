@@ -21,7 +21,10 @@ func RequestModel(
 	if modelIsNil(model) {
 		return nil, ErrNoModel
 	}
-	messages, params = prepareDirectRequest(model, messages, params)
+	messages, params, err = prepareDirectRequest(model, messages, params)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateModelSettings(params.Settings); err != nil {
 		return nil, err
 	}
@@ -42,6 +45,7 @@ type ModelResponseStream struct {
 	model    Model
 	messages []ModelMessage
 	params   ModelRequestParams
+	setupErr error
 
 	mu       sync.RWMutex
 	response *ModelResponse
@@ -55,8 +59,8 @@ type ModelResponseStream struct {
 func StreamModel(
 	ctx context.Context, model Model, messages []ModelMessage, params ModelRequestParams,
 ) *ModelResponseStream {
-	messages, params = prepareDirectRequest(model, messages, params)
-	return &ModelResponseStream{ctx: ctx, model: model, messages: messages, params: params}
+	messages, params, err := prepareDirectRequest(model, messages, params)
+	return &ModelResponseStream{ctx: ctx, model: model, messages: messages, params: params, setupErr: err}
 }
 
 // Events returns normalized response-part events. The sequence may be consumed once.
@@ -74,6 +78,11 @@ func (stream *ModelResponseStream) Events() EventStream {
 		if modelIsNil(stream.model) {
 			stream.finish(nil, ErrNoModel)
 			yield(nil, ErrNoModel)
+			return
+		}
+		if stream.setupErr != nil {
+			stream.finish(nil, stream.setupErr)
+			yield(nil, stream.setupErr)
 			return
 		}
 		if err := validateModelSettings(stream.params.Settings); err != nil {
@@ -198,7 +207,7 @@ func (stream *ModelResponseStream) finish(response *ModelResponse, err error) {
 
 func prepareDirectRequest(
 	model Model, messages []ModelMessage, params ModelRequestParams,
-) ([]ModelMessage, ModelRequestParams) {
+) ([]ModelMessage, ModelRequestParams, error) {
 	request := ModelRequestContext{Messages: messages, Params: params}.Clone()
 	if !modelIsNil(model) {
 		if defaults, ok := model.(ModelDefaultSettings); ok {
@@ -222,7 +231,11 @@ func prepareDirectRequest(
 		}
 		params.Instructions = strings.Join(instructions, "\n\n")
 	}
-	return messages, params
+	params, err := resolveModelOutputParams(model, params, OutputToolConfig{}, "")
+	if err != nil {
+		return nil, ModelRequestParams{}, err
+	}
+	return messages, params, nil
 }
 
 func openDirectModel(ctx context.Context, model Model) (ModelCloseFunc, error) {

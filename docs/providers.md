@@ -224,3 +224,33 @@ func main() {
 ```
 
 Agent settings override model defaults. Capability and run settings override both. Unsupported portable fields are omitted by each provider.
+
+## Structured-output profiles
+
+Wrap a model when an OpenAI-compatible endpoint needs different structured-output defaults:
+
+```go
+package main
+
+import (
+	"fmt"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	model := ai.NewProfiledModel(
+		openai.NewModel("compatible-model", openai.WithBaseURL("https://example.com/v1")),
+		ai.ModelProfile{
+			DefaultOutputMode:      ai.OutputModePrompted,
+			PromptedOutputTemplate: "Return JSON matching this schema:\n{schema}",
+		},
+	)
+	fmt.Println(model.Name())
+}
+```
+
+`OutputModeAuto` uses this profile. It is the default for reflected structured output. An explicit agent or run output mode always wins. Adaptive model selection resolves the profile after selecting each model, and fallback chains resolve it separately for every attempted model.
+
+Set `NativeOutputRequiresPrompt` when an endpoint supports native JSON Schema output but also requires the schema in its instructions. `NewProfiledModel` preserves streaming, lifecycle, tool-search, continuation, and other optional model behavior.

@@ -138,7 +138,7 @@ Status:
 - [x] Azure OpenAI and Azure AI Foundry configuration through `models/azure`: current `/v1`, serverless `.models.ai.azure.com`, and legacy deployment routes; API-key and per-request Microsoft Entra token authentication; environment defaults; API-version validation; Chat Completions and Responses models; and Azure provider attribution.
 - [ ] AWS Bedrock, including the legacy InvokeModel tool-search profile that defaults to regex and rejects explicit BM25.
 - [ ] Groq, Mistral, Cohere, Cerebras, xAI, OpenRouter, Ollama, Hugging Face, and other upstream providers.
-- [ ] Provider profiles/capability detection instead of model-name conditionals.
+- [~] `ModelProfile`, `ModelProfiler`, and transparent `NewProfiledModel` provide wrapper-safe model-specific structured-output defaults and prompted templates; bundled strict-tool, thinking, native-tool, and provider-setting support still relies on model-name checks and provider-local switches rather than one complete profile matrix.
 - [ ] Provider HTTP retries and configurable retry policy.
 - [x] Transparent `ModelWrapper` delegation and wrapper-aware provider compaction are complete. `FallbackModel` supports ordered models, default provider-API-error fallback, composable error/response predicates, detached diagnostics, rejected-response cost accounting, streaming-open fallback, pinned suspended continuations with rewind, combined strategy/native-history behavior, and reverse lifecycle cleanup. Shared concurrency-limited and OpenTelemetry-instrumented model wrappers preserve optional model capabilities.
 
@@ -160,7 +160,7 @@ Status:
 - [x] Native structured output alongside function calls obeys end strategies; plain text remains non-preemptive.
 - [x] Prompted JSON output fallback for reflected structured outputs, including default/custom schema instructions, validation retries, streaming, per-run overrides, and end-strategy handling.
 - [ ] Multiple output alternatives / union outputs.
-- [ ] Provider-profile default output modes and provider-specific prompted-output templates.
+- [x] `OutputModeAuto` resolves the selected model's `ModelProfile` for each step, including adaptive selectors, model-request-hook switches, transparent wrappers, direct requests, streams, and each fallback candidate. Explicit agent/run modes and templates win; profiles can supply prompted templates and require schema instructions alongside native output.
 - [ ] Image and binary outputs.
 - [x] Output tool name, description, strict mode, sequential execution barrier, and independent retry configuration through `OutputToolConfig`, with per-run replacement.
 - [x] Output-tool definitions can be modified, renamed, or omitted from fresh copies before each request through `AddOutputToolPrepareFunc`.
@@ -239,5 +239,5 @@ Status:
 1. Complete OpenTelemetry output-function spans, richer run metadata, remaining event shapes, and message-fragment caching/mutation diagnostics.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
-4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.
+4. Add multiple/union output alternatives; automatic profile-selected modes and prompted templates are complete.
 5. Extend upstream message fixtures as remaining persisted part types land.

@@ -58,7 +58,8 @@ type systemPromptRunner[Deps any] struct {
 // selector, capability selector, or per-run model always supplies one.
 func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output] {
 	a := &Agent[Deps, Output]{
-		model: model, retryLimits: RetryLimits{Tools: 1, Output: 1}, endStrategy: EndStrategyGraceful,
+		model: model, retryLimits: RetryLimits{Tools: 1, Output: 1}, outputMode: OutputModeAuto,
+		endStrategy: EndStrategyGraceful,
 	}
 	var cfg config
 	for _, opt := range opts {
@@ -68,7 +69,9 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	a.systemPrompts = slices.Clone(cfg.systemPrompts)
 	a.settings = cfg.settings.Clone()
 	a.usageLimits = cfg.limits
-	a.outputMode = cfg.outputMode
+	if cfg.outputMode != nil {
+		a.outputMode = *cfg.outputMode
+	}
 	a.outputTool = cloneOutputToolConfig(cfg.outputTool)
 	a.promptedTemplate = cfg.promptedTemplate
 	validateOutputToolConfig(a.outputTool)
@@ -245,7 +248,7 @@ type config struct {
 	settings         ModelSettings
 	limits           UsageLimits
 	retryLimits      *RetryLimits
-	outputMode       OutputMode
+	outputMode       *OutputMode
 	outputTool       OutputToolConfig
 	promptedTemplate string
 	endStrategy      EndStrategy
@@ -258,7 +261,7 @@ type OutputMode int
 
 const (
 	// OutputModeTool asks for structured output via a final output tool
-	// the model must call. It works with every provider and is the default.
+	// the model must call. It works with every provider.
 	OutputModeTool OutputMode = iota
 	// OutputModeNative uses the provider's native JSON mode: the model
 	// responds with JSON text conforming to the output schema. The
@@ -267,12 +270,15 @@ const (
 	// OutputModePrompted asks for schema-compatible JSON through instructions.
 	// It works with providers that do not implement native structured output.
 	OutputModePrompted
+	// OutputModeAuto uses the selected model's profile. The default profile uses
+	// OutputModeTool. This is the default for reflected structured output.
+	OutputModeAuto
 )
 
 // WithOutputMode selects how structured output is requested. It has no
 // effect when Output is string.
 func WithOutputMode(mode OutputMode) Option {
-	return func(c *config) { c.outputMode = mode }
+	return func(c *config) { c.outputMode = &mode }
 }
 
 // WithPromptedOutputTemplate replaces the default prompted-output instructions.
@@ -571,7 +577,7 @@ func validateOutputToolConfig(config OutputToolConfig) {
 }
 
 func validateOutputMode(mode OutputMode) {
-	if mode != OutputModeTool && mode != OutputModeNative && mode != OutputModePrompted {
+	if mode != OutputModeTool && mode != OutputModeNative && mode != OutputModePrompted && mode != OutputModeAuto {
 		panic(fmt.Sprintf("ai: invalid output mode %d", mode))
 	}
 }

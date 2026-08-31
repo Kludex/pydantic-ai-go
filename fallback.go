@@ -86,6 +86,9 @@ func NewFallbackModel(primary Model, options ...FallbackModelOption) *FallbackMo
 	return fallback
 }
 
+// DispatchesOutputProfile reports that each fallback candidate resolves OutputModeAuto independently.
+func (*FallbackModel) DispatchesOutputProfile() bool { return true }
+
 // Name identifies the ordered fallback chain.
 func (fallback *FallbackModel) Name() string {
 	names := make([]string, len(fallback.models))
@@ -308,7 +311,10 @@ func (fallback *FallbackModel) useCustomPolicy() {
 func (fallback *FallbackModel) requestModel(
 	ctx context.Context, model Model, messages []ModelMessage, params ModelRequestParams,
 ) (*ModelResponse, error) {
-	messages, params = prepareDirectRequest(model, messages, params)
+	messages, params, err := prepareDirectRequest(model, messages, params)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateModelSettings(params.Settings); err != nil {
 		return nil, err
 	}
@@ -318,7 +324,10 @@ func (fallback *FallbackModel) requestModel(
 func (fallback *FallbackModel) streamModel(
 	ctx context.Context, model Model, messages []ModelMessage, params ModelRequestParams,
 ) (iter.Seq2[ModelStreamEvent, error], error) {
-	messages, params = prepareDirectRequest(model, messages, params)
+	messages, params, err := prepareDirectRequest(model, messages, params)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateModelSettings(params.Settings); err != nil {
 		return nil, err
 	}

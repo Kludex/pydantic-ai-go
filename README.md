@@ -115,7 +115,7 @@ func main() {
 
 The agent reflects a Draft 2020-12 JSON Schema from `City`. It validates the model response against that schema, decodes it into `City`, and retries invalid output.
 
-Tool-based structured output is the default because it works across providers. Use `WithOutputMode(ai.OutputModeNative)` when the selected provider supports native JSON Schema output. Use `OutputModePrompted` when it only supports JSON in text.
+`OutputModeAuto` is the default. It reads the selected model's `ModelProfile`; the standard profile chooses tool output because it works across providers. Use `WithOutputMode(ai.OutputModeNative)` to require native JSON Schema output, or `OutputModePrompted` to require JSON in text.
 
 ## Stream a response
 

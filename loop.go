@@ -313,9 +313,9 @@ func (a *Agent[Deps, Output]) newRun(
 	if cfg.promptedTemplate != nil {
 		promptedTemplate = *cfg.promptedTemplate
 	}
-	r.params, err = a.buildParams(
-		r.staticInstructions, settings, outputMode, r.outputTool, promptedTemplate, r.tools,
-	)
+	r.baseParams, err = a.buildParams(r.staticInstructions, settings, outputMode, r.tools)
+	r.params = r.baseParams
+	r.promptedTemplate = promptedTemplate
 	if err != nil {
 		cancellation.finish()
 		return nil, err
@@ -569,6 +569,8 @@ type run[Deps, Output any] struct {
 	rc                         *RunContext[Deps]
 	info                       *RunInfo
 	params                     ModelRequestParams
+	baseParams                 ModelRequestParams
+	promptedTemplate           string
 	messages                   []ModelMessage
 	newMessages                int
 	usage                      Usage
@@ -957,6 +959,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	if err != nil {
 		return nil, err
 	}
+	r.params = params
 	if r.resumeSeed == nil {
 		setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
 	}
@@ -1045,6 +1048,24 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		}
 	}
 	modelChanged := !sameModelInstance(r.model, request.Model)
+	if modelChanged && request.Params.OutputMode == r.params.OutputMode && r.baseParams.OutputMode == OutputModeAuto {
+		outputParams := request.Params
+		outputParams.OutputMode = r.baseParams.OutputMode
+		if outputParams.OutputSchema == nil && outputParams.OutputTool != nil {
+			outputParams.OutputSchema = cloneSchemaMap(outputParams.OutputTool.Schema)
+		}
+		outputParams.OutputPrompt = ""
+		outputParams.InstructionParts = removeOutputPrompt(outputParams.InstructionParts, r.params.OutputPrompt)
+		instructions := make([]string, len(outputParams.InstructionParts))
+		for index, part := range outputParams.InstructionParts {
+			instructions[index] = part.Content
+		}
+		outputParams.Instructions = strings.Join(instructions, "\n\n")
+		request.Params, err = resolveModelOutputParams(request.Model, outputParams, r.outputTool, r.promptedTemplate)
+		if err != nil {
+			return nil, err
+		}
+	}
 	r.model = request.Model
 	r.rc.Model = request.Model
 	r.rc.ModelID = request.ModelID
@@ -1056,7 +1077,12 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			r.recordSelectedModel(r.model.Name())
 		}
 	}
+	r.params = request.Params
+	r.currentOutputTool = request.Params.OutputTool
 	r.setCurrentTools(request.Params)
+	if err := r.compileCurrentSchemas(request.Params); err != nil {
+		return nil, err
+	}
 	response, err := next(ctx, request.Messages, request.Params)
 	var retry *RetryError
 	if err != nil && !errors.As(err, &retry) {
@@ -1578,7 +1604,7 @@ func toolSearchResultNames(content any) []string {
 }
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
-	params := r.params
+	params := r.baseParams
 	rc := *r.rc
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.outputMaxRetries
@@ -1596,9 +1622,6 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	if err != nil {
 		return ModelRequestParams{}, err
 	}
-	if params.OutputPrompt != "" {
-		instructionParts = append(instructionParts, InstructionPart{Content: params.OutputPrompt})
-	}
 	params.Settings = settings
 	params.InstructionParts = instructionParts
 	instructions := make([]string, 0, len(instructionParts))
@@ -1606,23 +1629,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		instructions = append(instructions, part.Content)
 	}
 	params.Instructions = strings.Join(instructions, "\n\n")
-	if params.OutputTool != nil {
-		prepared := cloneToolDefinition(*params.OutputTool)
-		for _, prepare := range r.agent.outputToolPrepare {
-			result, err := prepare(ctx, &rc, prepared)
-			if err != nil {
-				return ModelRequestParams{}, fmt.Errorf("ai: prepare output tool: %w", err)
-			}
-			if result == nil {
-				params.OutputTool = nil
-				break
-			}
-			prepared = cloneToolDefinition(*result)
-			params.OutputTool = &prepared
-		}
-		if params.OutputTool != nil && params.OutputTool.Name == "" {
-			return ModelRequestParams{}, fmt.Errorf("ai: prepared output tool name must not be empty")
-		}
+	params, err = r.prepareOutputParams(ctx, &rc, params)
+	if err != nil {
+		return ModelRequestParams{}, err
 	}
 	r.currentOutputTool = params.OutputTool
 	stepEntries := make(map[string]toolEntry[Deps], len(r.tools))
@@ -1723,6 +1732,124 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		return ModelRequestParams{}, err
 	}
 	return params, nil
+}
+
+func (r *run[Deps, Output]) prepareOutputParams(
+	ctx context.Context, rc *RunContext[Deps], params ModelRequestParams,
+) (ModelRequestParams, error) {
+	params, err := resolveModelOutputParams(r.model, params, r.outputTool, r.promptedTemplate)
+	if err != nil {
+		return ModelRequestParams{}, err
+	}
+	if params.OutputTool != nil {
+		prepared := cloneToolDefinition(*params.OutputTool)
+		for _, prepare := range r.agent.outputToolPrepare {
+			result, err := prepare(ctx, rc, prepared)
+			if err != nil {
+				return ModelRequestParams{}, fmt.Errorf("ai: prepare output tool: %w", err)
+			}
+			if result == nil {
+				params.OutputTool = nil
+				break
+			}
+			prepared = cloneToolDefinition(*result)
+			params.OutputTool = &prepared
+		}
+		if params.OutputTool != nil && params.OutputTool.Name == "" {
+			return ModelRequestParams{}, fmt.Errorf("ai: prepared output tool name must not be empty")
+		}
+	}
+	return params, nil
+}
+
+func resolveModelOutputParams(
+	model Model, params ModelRequestParams, outputTool OutputToolConfig, promptedTemplate string,
+) (ModelRequestParams, error) {
+	if params.OutputSchema == nil && params.OutputTool == nil {
+		return params, nil
+	}
+	profile := modelProfile(model)
+	mode := params.OutputMode
+	if mode == OutputModeAuto {
+		if dispatcher, ok := model.(ModelOutputProfileDispatcher); ok && dispatcher.DispatchesOutputProfile() {
+			if params.OutputTool == nil {
+				params.OutputTool = defaultOutputTool(params.OutputSchema, outputTool)
+			}
+			params.AllowText = true
+			return params, nil
+		}
+		mode = profile.DefaultOutputMode
+	}
+	switch mode {
+	case OutputModeTool:
+		if params.OutputTool == nil {
+			params.OutputTool = defaultOutputTool(params.OutputSchema, outputTool)
+		}
+		params.OutputSchema = nil
+		params.OutputPrompt = ""
+		params.AllowText = false
+	case OutputModeNative, OutputModePrompted:
+		params.OutputTool = nil
+		params.AllowText = true
+		if mode == OutputModePrompted || profile.NativeOutputRequiresPrompt {
+			template := promptedTemplate
+			if template == "" {
+				template = profile.PromptedOutputTemplate
+			}
+			params.OutputPrompt = buildPromptedOutput(params.OutputSchema, template)
+		}
+	default:
+		return ModelRequestParams{}, fmt.Errorf("ai: model profile has invalid default output mode %d", mode)
+	}
+	params.OutputMode = mode
+	if params.OutputPrompt != "" {
+		params.InstructionParts = append(params.InstructionParts, InstructionPart{Content: params.OutputPrompt})
+		instructions := make([]string, len(params.InstructionParts))
+		for index, part := range params.InstructionParts {
+			instructions[index] = part.Content
+		}
+		params.Instructions = strings.Join(instructions, "\n\n")
+	}
+	return params, nil
+}
+
+func defaultOutputTool(schema map[string]any, config OutputToolConfig) *ToolDefinition {
+	name := config.Name
+	if name == "" {
+		name = outputToolName
+	}
+	description := config.Description
+	if description == "" {
+		description = "The final result of the run."
+	}
+	return &ToolDefinition{
+		Name: name, Description: description, Schema: cloneSchemaMap(schema),
+		Sequential: config.Sequential, Strict: clonePointer(config.Strict),
+	}
+}
+
+func removeOutputPrompt(parts []InstructionPart, prompt string) []InstructionPart {
+	if prompt == "" {
+		return parts
+	}
+	filtered := make([]InstructionPart, 0, len(parts))
+	for _, part := range parts {
+		if part.Content != prompt {
+			filtered = append(filtered, part)
+		}
+	}
+	return filtered
+}
+
+func buildPromptedOutput(outputSchema map[string]any, template string) string {
+	encodedSchema, _ := json.Marshal(outputSchema)
+	if template == "" {
+		template = defaultPromptedOutputTemplate
+	}
+	if !strings.Contains(template, "{schema}") {
+		template += "\n\n{schema}"
+	}
+	return strings.ReplaceAll(template, "{schema}", string(encodedSchema))
 }
 
 func validateToolSearchStrategies(model Model, tools []ToolDefinition) error {
@@ -3004,7 +3131,10 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 		if err := r.countOutputRetry(); err != nil {
 			return nil, nil, err
 		}
-		name := r.params.OutputTool.Name
+		name := outputToolName
+		if r.params.OutputTool != nil {
+			name = r.params.OutputTool.Name
+		}
 		if r.currentOutputTool != nil {
 			name = r.currentOutputTool.Name
 		}
@@ -3378,8 +3508,6 @@ func (a *Agent[Deps, Output]) buildParams(
 	instructionParts []InstructionPart,
 	settings ModelSettings,
 	outputMode OutputMode,
-	outputTool OutputToolConfig,
-	promptedTemplate string,
 	tools []toolEntry[Deps],
 ) (ModelRequestParams, error) {
 	instructions := make([]string, 0, len(instructionParts))
@@ -3402,36 +3530,7 @@ func (a *Agent[Deps, Output]) buildParams(
 	if err != nil {
 		return params, fmt.Errorf("ai: output type: %w", err)
 	}
-	if outputMode == OutputModeNative {
-		params.OutputSchema = s
-		params.AllowText = true
-		return params, nil
-	}
-	if outputMode == OutputModePrompted {
-		encodedSchema, _ := json.Marshal(s)
-		if promptedTemplate == "" {
-			promptedTemplate = defaultPromptedOutputTemplate
-		}
-		if !strings.Contains(promptedTemplate, "{schema}") {
-			promptedTemplate += "\n\n{schema}"
-		}
-		params.OutputPrompt = strings.ReplaceAll(promptedTemplate, "{schema}", string(encodedSchema))
-		params.OutputSchema = s
-		params.AllowText = true
-		return params, nil
-	}
-	name := outputTool.Name
-	if name == "" {
-		name = outputToolName
-	}
-	description := outputTool.Description
-	if description == "" {
-		description = "The final result of the run."
-	}
-	params.OutputTool = &ToolDefinition{
-		Name: name, Description: description, Schema: s,
-		Sequential: outputTool.Sequential, Strict: outputTool.Strict,
-	}
+	params.OutputSchema = s
 	return params, nil
 }
 

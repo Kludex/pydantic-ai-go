@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -23,20 +22,12 @@ func (r *run[Deps, Output]) streamedOutput(
 			if !r.params.AllowText {
 				continue
 			}
-			var output Output
-			if r.params.OutputSchema != nil {
-				if r.currentOutputValidator != nil {
-					if err := r.currentOutputValidator.ValidateJSON([]byte(response.Text())); err != nil {
-						return nil, -1, false, streamOutputValidationError()
-					}
-				}
-				if err := json.Unmarshal([]byte(response.Text()), &output); err != nil {
-					return nil, -1, false, streamOutputValidationError()
-				}
-			} else {
-				output = any(response.Text()).(Output)
-			}
-			if err := r.validateStreamedOutput(ctx, r.outputRunContext(""), output); err != nil {
+			structured := r.params.OutputSchema != nil
+			output, err := r.validateAndProcessOutput(
+				ctx, r.outputRunContext(""), r.outputHookContext(nil, structured, false), response.Text(),
+				func(raw any) (Output, error) { return r.decodeOutput(raw, structured) },
+			)
+			if err := committedOutputError(err); err != nil {
 				return nil, -1, false, err
 			}
 			return &output, -1, true, nil
@@ -45,16 +36,12 @@ func (r *run[Deps, Output]) streamedOutput(
 			if !r.isOutputCall(part) {
 				continue
 			}
-			var output Output
-			if r.currentOutputValidator != nil {
-				if err := r.currentOutputValidator.ValidateJSON(part.Args); err != nil {
-					return nil, callIndex, false, streamOutputValidationError()
-				}
-			}
-			if err := json.Unmarshal(part.Args, &output); err != nil {
-				return nil, callIndex, false, streamOutputValidationError()
-			}
-			if err := r.validateStreamedOutput(ctx, r.outputRunContext(part.ToolCallID), output); err != nil {
+			call := part
+			output, err := r.validateAndProcessOutput(
+				ctx, r.outputRunContext(part.ToolCallID), r.outputHookContext(&call, true, false), part.Args,
+				func(raw any) (Output, error) { return r.decodeOutput(raw, true) },
+			)
+			if err := committedOutputError(err); err != nil {
 				return nil, callIndex, false, err
 			}
 			return &output, callIndex, true, nil
@@ -66,45 +53,61 @@ func (r *run[Deps, Output]) streamedOutput(
 func (r *run[Deps, Output]) validatePartialOutput(
 	ctx context.Context, raw, toolCallID string,
 ) (Output, bool, error) {
-	var output Output
-	if r.params.OutputSchema == nil && r.currentOutputTool == nil {
-		output = any(raw).(Output)
-	} else {
-		var valid bool
-		output, valid = decodePartialJSON[Output](raw, r.currentOutputValidator)
-		if !valid {
-			return output, false, nil
-		}
-	}
+	structured := r.params.OutputSchema != nil || r.currentOutputTool != nil
 	runContext := r.outputRunContext(toolCallID)
 	runContext.PartialOutput = true
-	for _, validate := range r.agent.outputValidators {
-		err := validate(ctx, runContext, output)
-		var retry *RetryError
-		switch {
-		case errors.As(err, &retry):
-			return output, false, nil
-		case err != nil:
-			return output, false, fmt.Errorf("ai: partial output validation: %w", err)
+	var call *ToolCallPart
+	if toolCallID != "" {
+		call = &ToolCallPart{ToolName: outputToolName, ToolCallID: toolCallID, Args: []byte(raw)}
+		if r.currentOutputTool != nil {
+			call.ToolName = r.currentOutputTool.Name
 		}
 	}
-	return output, true, nil
+	output, err := r.validateAndProcessOutput(
+		ctx, runContext, r.outputHookContext(call, structured, true), raw,
+		func(rawOutput any) (Output, error) {
+			if !structured {
+				return r.decodeOutput(rawOutput, false)
+			}
+			encoded, err := outputBytes(rawOutput)
+			if err != nil {
+				var zero Output
+				return zero, err
+			}
+			output, valid := decodePartialJSON[Output](string(encoded), r.currentOutputValidator)
+			if !valid {
+				return output, errPartialOutputIncomplete
+			}
+			return output, nil
+		},
+	)
+	if err == nil {
+		return output, true, nil
+	}
+	var retry *RetryError
+	if errors.Is(err, errPartialOutputIncomplete) || errors.As(err, &retry) {
+		return output, false, nil
+	}
+	if validationError, ok := err.(*outputValidationHookError); ok {
+		return output, false, fmt.Errorf("ai: partial output validation: %w", validationError.err)
+	}
+	processingError := err.(*outputProcessingHookError)
+	return output, false, fmt.Errorf("ai: partial output processing: %w", processingError.err)
 }
 
-func (r *run[Deps, Output]) validateStreamedOutput(
-	ctx context.Context, runContext *RunContext[Deps], output Output,
-) error {
-	for _, validate := range r.agent.outputValidators {
-		err := validate(ctx, runContext, output)
-		var retry *RetryError
-		switch {
-		case errors.As(err, &retry):
-			return streamOutputValidationError()
-		case err != nil:
-			return fmt.Errorf("ai: output validation: %w", err)
-		}
+var errPartialOutputIncomplete = errors.New("partial output is incomplete")
+
+func committedOutputError(err error) error {
+	if err == nil {
+		return nil
 	}
-	return nil
+	var schemaValidation *outputSchemaValidationError
+	var decodeError *outputDecodeError
+	var retry *RetryError
+	if errors.As(err, &schemaValidation) || errors.As(err, &decodeError) || errors.As(err, &retry) {
+		return streamOutputValidationError()
+	}
+	return err
 }
 
 func streamOutputValidationError() error {

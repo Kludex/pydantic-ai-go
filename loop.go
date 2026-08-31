@@ -2014,22 +2014,21 @@ func (r *run[Deps, Output]) earlyNativeOutput(
 	if r.agent.endStrategy != EndStrategyEarly || r.params.OutputSchema == nil || resp.Text() == "" {
 		return nil, false, nil
 	}
-	var out Output
-	if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
+	out, err := r.validateAndProcessOutput(
+		ctx, r.outputRunContext(""), r.outputHookContext(nil, true, false), resp.Text(),
+		func(raw any) (Output, error) { return r.decodeOutput(raw, true) },
+	)
+	var schemaValidation *outputSchemaValidationError
+	var decodeError *outputDecodeError
+	var retry *RetryError
+	switch {
+	case errors.As(err, &schemaValidation), errors.As(err, &decodeError), errors.As(err, &retry):
 		return nil, false, nil
+	case err != nil:
+		return nil, false, err
+	default:
+		return &out, true, nil
 	}
-	outputRC := r.outputRunContext("")
-	for _, validate := range r.agent.outputValidators {
-		err := validate(ctx, outputRC, out)
-		var retry *RetryError
-		switch {
-		case errors.As(err, &retry):
-			return nil, false, nil
-		case err != nil:
-			return nil, false, fmt.Errorf("ai: output validation: %w", err)
-		}
-	}
-	return &out, true, nil
 }
 
 type deferredCallKind uint8
@@ -2804,26 +2803,40 @@ func quoteToolName(name string) string {
 }
 
 func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCallPart) (RequestPart, *Output, error) {
-	var out Output
-	if r.currentOutputValidator != nil {
-		if err := r.currentOutputValidator.ValidateJSON(call.Args); err != nil {
+	hookContext := r.outputHookContext(&call, true, false)
+	out, err := r.validateAndProcessOutput(
+		ctx, r.outputRunContext(call.ToolCallID), hookContext, call.Args,
+		func(raw any) (Output, error) { return r.decodeOutput(raw, true) },
+	)
+	var schemaValidation *outputSchemaValidationError
+	var retry *RetryError
+	switch {
+	case errors.As(err, &schemaValidation):
+		if retryErr := r.countOutputRetry(); retryErr != nil {
+			return nil, nil, retryErr
+		}
+		return validationRetryPrompt(
+			schemaValidation.err, schemaValidation.raw, call.ToolName, call.ToolCallID, "invalid final result",
+		), nil, nil
+	case errors.As(err, &retry):
+		if retryErr := r.countOutputRetry(); retryErr != nil {
+			return nil, nil, retryErr
+		}
+		return RetryPromptPart{
+			Content: retry.Message, ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+		}, nil, nil
+	case err != nil:
+		var decodeError *outputDecodeError
+		if errors.As(err, &decodeError) {
 			if retryErr := r.countOutputRetry(); retryErr != nil {
 				return nil, nil, retryErr
 			}
-			return validationRetryPrompt(err, call.Args, call.ToolName, call.ToolCallID, "invalid final result"), nil, nil
+			return RetryPromptPart{
+				Content:  fmt.Sprintf("invalid final result: %v", decodeError),
+				ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+			}, nil, nil
 		}
-	}
-	if err := json.Unmarshal(call.Args, &out); err != nil {
-		if err := r.countOutputRetry(); err != nil {
-			return nil, nil, err
-		}
-		msg := fmt.Sprintf("invalid final result: %v", err)
-		return RetryPromptPart{Content: msg, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
-	}
-	if retry, err := r.validate(ctx, r.outputRunContext(call.ToolCallID), out); err != nil {
 		return nil, nil, err
-	} else if retry != nil {
-		return RetryPromptPart{Content: retry.Message, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
 	}
 	return ToolReturnPart{
 		ToolName: call.ToolName, Content: finalResultProcessed, ToolCallID: call.ToolCallID,
@@ -2847,53 +2860,39 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 			"Respond by calling the %s tool to provide the final result.", name,
 		)}, nil
 	}
-	var out Output
-	if r.params.OutputSchema != nil {
-		if r.currentOutputValidator != nil {
-			if err := r.currentOutputValidator.ValidateJSON([]byte(resp.Text())); err != nil {
-				if retryErr := r.countOutputRetry(); retryErr != nil {
-					return nil, nil, retryErr
-				}
-				retry := validationRetryPrompt(err, []byte(resp.Text()), "", "", "invalid JSON output")
-				return nil, &retry, nil
-			}
+	structured := r.params.OutputSchema != nil
+	hookContext := r.outputHookContext(nil, structured, false)
+	out, err := r.validateAndProcessOutput(
+		ctx, r.outputRunContext(""), hookContext, resp.Text(),
+		func(raw any) (Output, error) { return r.decodeOutput(raw, structured) },
+	)
+	var schemaValidation *outputSchemaValidationError
+	var retry *RetryError
+	switch {
+	case errors.As(err, &schemaValidation):
+		if retryErr := r.countOutputRetry(); retryErr != nil {
+			return nil, nil, retryErr
 		}
-		if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
-			if err := r.countOutputRetry(); err != nil {
-				return nil, nil, err
-			}
-			return nil, &RetryPromptPart{Content: fmt.Sprintf("invalid JSON output: %v", err)}, nil
+		part := validationRetryPrompt(
+			schemaValidation.err, schemaValidation.raw, "", "", "invalid JSON output",
+		)
+		return nil, &part, nil
+	case errors.As(err, &retry):
+		if retryErr := r.countOutputRetry(); retryErr != nil {
+			return nil, nil, retryErr
 		}
-	} else {
-		// buildParams sets AllowText without a schema only when Output is
-		// string, so this assertion cannot fail.
-		out = any(resp.Text()).(Output)
-	}
-	if retry, err := r.validate(ctx, r.outputRunContext(""), out); err != nil {
-		return nil, nil, err
-	} else if retry != nil {
 		return nil, &RetryPromptPart{Content: retry.Message}, nil
+	case err != nil:
+		var decodeError *outputDecodeError
+		if errors.As(err, &decodeError) {
+			if retryErr := r.countOutputRetry(); retryErr != nil {
+				return nil, nil, retryErr
+			}
+			return nil, &RetryPromptPart{Content: fmt.Sprintf("invalid JSON output: %v", decodeError)}, nil
+		}
+		return nil, nil, err
 	}
 	return r.result(out), nil, nil
-}
-
-func (r *run[Deps, Output]) validate(
-	ctx context.Context, rc *RunContext[Deps], out Output,
-) (*RetryError, error) {
-	for _, validate := range r.agent.outputValidators {
-		err := validate(ctx, rc, out)
-		var retry *RetryError
-		switch {
-		case errors.As(err, &retry):
-			if err := r.countOutputRetry(); err != nil {
-				return nil, err
-			}
-			return retry, nil
-		case err != nil:
-			return nil, fmt.Errorf("ai: output validation: %w", err)
-		}
-	}
-	return nil, nil
 }
 
 func (r *run[Deps, Output]) appendRequest(parts []RequestPart, state RequestState) {

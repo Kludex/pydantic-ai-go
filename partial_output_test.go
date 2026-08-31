@@ -267,7 +267,7 @@ func TestRunStreamOutputsPropagatePartialValidatorErrors(t *testing.T) {
 			got = err
 		}
 	}
-	if got == nil || got.Error() != "ai: partial output validation: partial rejected" || stream.Result() != nil {
+	if got == nil || got.Error() != "ai: partial output processing: partial rejected" || stream.Result() != nil {
 		t.Fatalf("unexpected partial validation failure: err=%v result=%+v", got, stream.Result())
 	}
 }

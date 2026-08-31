@@ -625,6 +625,31 @@ func TestStoppingDuringSuspendedContinuationDetachesJob(t *testing.T) {
 	}
 }
 
+func TestStoppingDuringCompleteContinuationPreservesPriorSuspendedJob(t *testing.T) {
+	model := &continuationModel{responses: []*ai.ModelResponse{
+		{ProviderResponseID: "one", State: ai.ModelResponseStateSuspended},
+		{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "pending"}}, ModelName: "model",
+			ProviderResponseID: "two", State: ai.ModelResponseStateComplete,
+		},
+	}}
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	events := 0
+	for range stream.Events() {
+		events++
+		if events == 2 {
+			break
+		}
+	}
+	if stream.Result() != nil || len(model.canceled) != 0 || stream.Suspended() == nil ||
+		stream.Suspended().Response().ProviderResponseID != "one" {
+		t.Fatalf(
+			"complete continuation did not preserve prior job: result=%+v canceled=%+v snapshot=%+v",
+			stream.Result(), model.canceled, stream.Suspended(),
+		)
+	}
+}
+
 func TestStreamedContinuationsReindexAccumulatedParts(t *testing.T) {
 	model := &continuationModel{responses: []*ai.ModelResponse{
 		{

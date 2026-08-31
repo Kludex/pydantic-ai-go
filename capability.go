@@ -9,9 +9,8 @@ import (
 // A Capability is a reusable, composable unit of agent behavior. Setup runs
 // once per agent at registration and contributes tools, instructions, and
 // settings. A capability opts into loop interception by also implementing
-// any model lifecycle hook, RunWrapper, ModelRequestWrapper, ToolCallWrapper,
-// RunEventStreamWrapper, StreamEventProcessor, or InstructionsProvider - the
-// agent discovers them by type assertion.
+// lifecycle hooks or wrappers for runs, model requests, tools, outputs, and
+// event streams. The agent discovers optional interfaces by type assertion.
 //
 // Capabilities are untyped so one implementation works with every agent
 // regardless of its Deps and Output types.

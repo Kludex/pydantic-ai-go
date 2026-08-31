@@ -171,8 +171,8 @@ Status:
 - [x] Run, model request, tool call, and dynamic instruction hooks.
 - [x] Ordered middleware composition; first capability is outermost.
 - [x] History processing can be expressed as model-request middleware.
-- [~] Prepared model requests and function-tool validation/execution have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Model hooks can detach snapshots, modify requests, switch models, recover errors, and request budgeted retries that preserve rejected responses. Tool hooks transform raw or typed values, recover ordinary errors, and preserve retry/failure control flow. Equivalent run and output-validation/processing lifecycle hooks remain.
-- [ ] Output validation/processing hooks.
+- [~] Prepared model requests, function-tool validation/execution, and output validation/processing have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Model hooks can detach snapshots, modify requests, switch models, recover errors, and request budgeted retries that preserve rejected responses. Tool and output hooks transform raw or typed values, recover ordinary errors, and preserve retry/failure control flow. Equivalent run lifecycle hooks remain.
+- [x] Output validation/processing hooks cover raw structured repair, schema/decoding/semantic validation, final typed processing, wrapper and recovery composition, normal and early outputs, and streaming partial/final values.
 - [x] Function-tool schema validation, typed decoding, and semantic argument validation are separate from local execution, with dedicated wrappers and before/after/error hooks. Static approvals and external calls defer only after validation, wrapper-modified raw arguments are revalidated, and validated values retain their registered concrete Go type. After-validation and before/after-execution hooks can request durable approval or external execution without changing tool registration; validation-error hooks cannot defer invalid arguments.
 - [x] Event-stream wrapper and per-event processor with standard capability middleware ordering.
 - [ ] Capability ordering constraints and outermost/innermost tiers.
@@ -230,8 +230,9 @@ Status:
 
 ## Next work
 
-1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add provider-managed tool search; OpenAI Responses client search now uses native wire items in streaming and non-streaming requests.
-3. Add provider-managed search for Anthropic and OpenAI Responses.
-4. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
-5. Define pending-message preservation when a run pauses for deferred work, and add external enqueue when an iterative run driver exists.
+1. Add ordered before/after/error run lifecycle hooks around the existing run wrapper, including recovery and streamed completion semantics.
+2. Preserve queued messages across deferred pauses, then expose external enqueue through an iterative/manual run driver.
+3. Add provider-managed search for Anthropic and OpenAI Responses; OpenAI Responses client search already uses native wire items in streaming and non-streaming requests.
+4. Add `CompactionPart` and reset derived deferred-tool visibility at compaction boundaries.
+5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
+6. Extend upstream message fixtures as remaining persisted part types land.

@@ -108,13 +108,21 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				usage = event.Message.Usage.usage()
 			case "content_block_start":
 				_, toolSearch := anthropicToolSearchStrategy(event.ContentBlock.Name)
-				if event.ContentBlock.Type == "server_tool_use" && (event.ContentBlock.Name == "web_search" || toolSearch) {
+				if event.ContentBlock.Type == "server_tool_use" &&
+					(event.ContentBlock.Name == "web_search" || event.ContentBlock.Name == "web_fetch" || toolSearch) {
 					searchCalls[event.Index] = event.ContentBlock
 					searchArgs[event.Index] = &strings.Builder{}
 					continue
 				}
-				if event.ContentBlock.Type == "web_search_tool_result" {
-					part := parseAnthropicWebSearchResult(event.ContentBlock)
+				if event.ContentBlock.Type == "web_search_tool_result" ||
+					event.ContentBlock.Type == "web_fetch_tool_result" {
+					toolName := "web_search"
+					kind := ai.ToolPartKindWebSearch
+					if event.ContentBlock.Type == "web_fetch_tool_result" {
+						toolName = "web_fetch"
+						kind = ai.ToolPartKindWebFetch
+					}
+					part := parseAnthropicWebResult(event.ContentBlock, toolName, kind)
 					if !yield(ai.NativeToolReturnEvent{PartID: strconv.Itoa(event.Index), Part: part}, nil) {
 						return
 					}
@@ -182,9 +190,12 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				toolKind := ai.ToolPartKindToolSearch
 				var details map[string]any
 				var args json.RawMessage
-				if block.Name == "web_search" {
-					toolName = "web_search"
+				if block.Name == "web_search" || block.Name == "web_fetch" {
+					toolName = block.Name
 					toolKind = ai.ToolPartKindWebSearch
+					if block.Name == "web_fetch" {
+						toolKind = ai.ToolPartKindWebFetch
+					}
 					args = slices.Clone(raw)
 					if len(args) == 0 || string(args) == "null" {
 						args = json.RawMessage(`{}`)

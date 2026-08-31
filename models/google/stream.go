@@ -67,6 +67,8 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		blockReasonMessage := ""
 		var safetyRatings []map[string]any
 		var groundingMetadata map[string]any
+		var urlContextMetadata map[string]any
+		webFetchEmitted := false
 		received := false
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -113,20 +115,29 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 			if chunk.Candidates[0].GroundingMetadata != nil {
 				groundingMetadata = chunk.Candidates[0].GroundingMetadata
 			}
+			if chunk.Candidates[0].URLContextMetadata != nil {
+				urlContextMetadata = chunk.Candidates[0].URLContextMetadata
+			}
 			if !webSearchEmitted {
 				call, returned := googleWebSearchParts(
 					chunk.Candidates[0].GroundingMetadata, responseID, m.providerName, responseTimestamp,
 				)
 				if call != nil {
-					partID := "web-search:" + call.ToolCallID
-					if !yield(ai.ToolCallStartEvent{
-						PartID: partID, ToolName: call.ToolName, ToolCallID: call.ToolCallID,
-						ToolKind: call.ToolKind, ProviderName: call.ProviderName, Native: true,
-					}, nil) || !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(call.Args)}, nil) ||
-						!yield(ai.NativeToolReturnEvent{PartID: "return:" + call.ToolCallID, Part: *returned}, nil) {
+					if !emitGoogleNativeTool(yield, call, returned) {
 						return
 					}
 					webSearchEmitted = true
+				}
+			}
+			if !webFetchEmitted {
+				call, returned := googleWebFetchParts(
+					chunk.Candidates[0].URLContextMetadata, responseID, m.providerName, responseTimestamp,
+				)
+				if call != nil {
+					if !emitGoogleNativeTool(yield, call, returned) {
+						return
+					}
+					webFetchEmitted = true
 				}
 			}
 			for index, part := range chunk.Candidates[0].Content.Parts {
@@ -169,6 +180,9 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		if groundingMetadata != nil {
 			providerDetails["grounding_metadata"] = groundingMetadata
 		}
+		if urlContextMetadata != nil {
+			providerDetails["url_context_metadata"] = urlContextMetadata
+		}
 		if len(providerDetails) == 0 {
 			providerDetails = nil
 		}
@@ -178,6 +192,19 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 			FinishReason: normalizedFinishReason, State: ai.ModelResponseStateComplete,
 		}, nil)
 	}
+}
+
+func emitGoogleNativeTool(
+	yield func(ai.ModelStreamEvent, error) bool,
+	call *ai.NativeToolCallPart,
+	returned *ai.NativeToolReturnPart,
+) bool {
+	partID := string(call.ToolKind) + ":" + call.ToolCallID
+	return yield(ai.ToolCallStartEvent{
+		PartID: partID, ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+		ToolKind: call.ToolKind, ProviderName: call.ProviderName, Native: true,
+	}, nil) && yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(call.Args)}, nil) &&
+		yield(ai.NativeToolReturnEvent{PartID: "return:" + call.ToolCallID, Part: *returned}, nil)
 }
 
 func emitPart(yield func(ai.ModelStreamEvent, error) bool, part part, index int, modelProviderName string) bool {

@@ -84,6 +84,32 @@ func (tool WebSearchTool) IsOptional() bool { return tool.Optional }
 // CloneNativeTool returns a detached definition.
 func (tool WebSearchTool) CloneNativeTool() NativeTool { return cloneWebSearchTool(tool) }
 
+// WebFetchTool asks a compatible provider to retrieve content from URLs.
+type WebFetchTool struct {
+	MaxUses          int
+	AllowedDomains   []string
+	BlockedDomains   []string
+	EnableCitations  bool
+	MaxContentTokens int
+	Optional         bool
+}
+
+// Kind returns the stable native-tool discriminator.
+func (WebFetchTool) Kind() string { return "web_fetch" }
+
+// UniqueID identifies this native tool within one model request.
+func (WebFetchTool) UniqueID() string { return "web_fetch" }
+
+// IsOptional reports whether an unsupported model may omit the tool.
+func (tool WebFetchTool) IsOptional() bool { return tool.Optional }
+
+// CloneNativeTool returns a detached definition.
+func (tool WebFetchTool) CloneNativeTool() NativeTool {
+	tool.AllowedDomains = slices.Clone(tool.AllowedDomains)
+	tool.BlockedDomains = slices.Clone(tool.BlockedDomains)
+	return tool
+}
+
 // CloneNativeTools returns detached native-tool definitions.
 func CloneNativeTools(tools []NativeTool) []NativeTool {
 	if tools == nil {
@@ -137,9 +163,17 @@ func validateNativeTools(tools []NativeTool) error {
 			return fmt.Errorf("ai: duplicate native tool ID %q", tool.UniqueID())
 		}
 		ids[tool.UniqueID()] = struct{}{}
-		if webSearch, ok := tool.(WebSearchTool); ok {
-			if err := validateWebSearchTool(webSearch); err != nil {
+		switch tool := tool.(type) {
+		case WebSearchTool:
+			if err := validateWebSearchTool(tool); err != nil {
 				return err
+			}
+		case WebFetchTool:
+			if tool.MaxUses < 0 {
+				return fmt.Errorf("ai: web fetch max uses must not be negative")
+			}
+			if tool.MaxContentTokens < 0 {
+				return fmt.Errorf("ai: web fetch max content tokens must not be negative")
 			}
 		}
 	}

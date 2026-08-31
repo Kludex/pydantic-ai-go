@@ -157,6 +157,14 @@ func TestNativeToolValidation(t *testing.T) {
 				ai.WithCapabilities(nativeToolCapability{tool: ai.WebSearchTool{}}),
 			)
 		},
+		"web fetch max uses": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.WebFetchTool{MaxUses: -1}))
+		},
+		"web fetch max content": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.WebFetchTool{
+				MaxContentTokens: -1,
+			}))
+		},
 		"agent method duplicate": func() {
 			agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
 			agent.AddNativeTool(ai.WebSearchTool{})
@@ -364,5 +372,15 @@ func TestCloneCustomNativeTool(t *testing.T) {
 	}
 	if (ai.WebSearchTool{Optional: true}).IsOptional() != true {
 		t.Fatal("web search optional state was not exposed")
+	}
+	fetch := ai.WebFetchTool{
+		AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"example.com"}, Optional: true,
+	}
+	clonedFetch := fetch.CloneNativeTool().(ai.WebFetchTool)
+	clonedFetch.AllowedDomains[0] = "changed"
+	clonedFetch.BlockedDomains[0] = "changed"
+	if fetch.AllowedDomains[0] != "go.dev" || fetch.BlockedDomains[0] != "example.com" ||
+		!clonedFetch.IsOptional() || clonedFetch.Kind() != "web_fetch" || clonedFetch.UniqueID() != "web_fetch" {
+		t.Fatalf("web fetch clone or identity is invalid: %+v", clonedFetch)
 	}
 }

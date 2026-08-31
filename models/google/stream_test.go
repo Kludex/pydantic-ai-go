@@ -79,6 +79,53 @@ func TestGoogleStreamWebSearchGroundingMetadata(t *testing.T) {
 	}
 }
 
+func TestGoogleStreamWebFetchURLContext(t *testing.T) {
+	metadata := `"urlContextMetadata":{"urlMetadata":[{"retrievedUrl":"https://go.dev","urlRetrievalStatus":"URL_RETRIEVAL_STATUS_SUCCESS"}]}`
+	model := newServer(t, googleSSE(t, []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"first"}]},` + metadata + `}]}`,
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"second"}]},` + metadata + `}]}`,
+	}))
+	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebFetchTool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var starts, returns int
+	var finish ai.FinishEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			if event.ToolKind == ai.ToolPartKindWebFetch {
+				starts++
+			}
+		case ai.NativeToolReturnEvent:
+			if event.Part.ToolKind == ai.ToolPartKindWebFetch {
+				returns++
+			}
+		case ai.FinishEvent:
+			finish = event
+		}
+	}
+	if starts != 1 || returns != 1 || finish.ProviderDetails["url_context_metadata"] == nil {
+		t.Fatalf("unexpected streamed URL context events: %#v", events)
+	}
+}
+
+func TestGoogleStreamWebFetchConsumerBreak(t *testing.T) {
+	model := newServer(t, googleSSE(t, []string{
+		`{"responseId":"response","candidates":[{"urlContextMetadata":{"urlMetadata":[{"retrievedUrl":"https://go.dev"}]}}]}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		break
+	}
+}
+
 func TestGoogleStreamWebSearchConsumerBreak(t *testing.T) {
 	model := newServer(t, googleSSE(t, []string{
 		`{"responseId":"response","candidates":[{"groundingMetadata":{"webSearchQueries":["query"]}}]}`,

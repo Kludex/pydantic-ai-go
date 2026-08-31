@@ -128,3 +128,40 @@ func main() {
 `AddNativeToolFunc` runs before every model request. This lets a tool follow dependencies, selected-model state, usage, or retry state. The callback can run concurrently across agent runs and must return detached state.
 
 Use `WithRunNativeToolFunc` for a callback scoped to one run. Static tools remain in registration order with dynamic tools. Every resolved request is cloned and revalidated, including tools changed by model-request hooks.
+
+## Fetch URLs
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-6"),
+		ai.WithNativeTools(ai.WebFetchTool{
+			AllowedDomains:   []string{"go.dev"},
+			MaxUses:          3,
+			MaxContentTokens: 4096,
+			EnableCitations:  true,
+		}),
+	)
+
+	result, err := agent.Run(context.Background(), "Summarize https://go.dev/doc/go1.25", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`WebFetchTool` lets Anthropic or Gemini retrieve URL content. Anthropic sends domain filters, maximum uses, content limits, and citation configuration. Gemini renders the portable tool as `urlContext` and leaves unsupported settings out.
+
+Provider responses use `ToolPartKindWebFetch`. Gemini reconstructs calls and returns from `urlContextMetadata` while retaining the complete metadata in `ModelResponse.ProviderDetails`. Anthropic preserves native result payloads and caller metadata.

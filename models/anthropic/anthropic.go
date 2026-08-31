@@ -295,16 +295,22 @@ type toolReferenceContent struct {
 }
 
 type toolParam struct {
-	Type           string                      `json:"type,omitempty"`
-	Name           string                      `json:"name"`
-	Description    string                      `json:"description,omitempty"`
-	InputSchema    map[string]any              `json:"input_schema,omitempty"`
-	Strict         *bool                       `json:"strict,omitempty"`
-	DeferLoading   bool                        `json:"defer_loading,omitempty"`
-	MaxUses        int                         `json:"max_uses,omitempty"`
-	AllowedDomains []string                    `json:"allowed_domains,omitempty"`
-	BlockedDomains []string                    `json:"blocked_domains,omitempty"`
-	UserLocation   *anthropicWebSearchLocation `json:"user_location,omitempty"`
+	Type             string                      `json:"type,omitempty"`
+	Name             string                      `json:"name"`
+	Description      string                      `json:"description,omitempty"`
+	InputSchema      map[string]any              `json:"input_schema,omitempty"`
+	Strict           *bool                       `json:"strict,omitempty"`
+	DeferLoading     bool                        `json:"defer_loading,omitempty"`
+	MaxUses          int                         `json:"max_uses,omitempty"`
+	AllowedDomains   []string                    `json:"allowed_domains,omitempty"`
+	BlockedDomains   []string                    `json:"blocked_domains,omitempty"`
+	UserLocation     *anthropicWebSearchLocation `json:"user_location,omitempty"`
+	Citations        *anthropicCitations         `json:"citations,omitempty"`
+	MaxContentTokens int                         `json:"max_content_tokens,omitempty"`
+}
+
+type anthropicCitations struct {
+	Enabled bool `json:"enabled"`
 }
 
 type anthropicWebSearchLocation struct {
@@ -357,36 +363,58 @@ func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]tool
 		if nativeTool == nil || (reflect.ValueOf(nativeTool).Kind() == reflect.Pointer && reflect.ValueOf(nativeTool).IsNil()) {
 			return nil, fmt.Errorf("anthropic: native tool must not be nil")
 		}
-		var webSearch ai.WebSearchTool
-		switch tool := nativeTool.(type) {
+		switch nativeTool := nativeTool.(type) {
 		case ai.WebSearchTool:
-			webSearch = tool
+			tools = append(tools, anthropicWebSearchTool(modelName, nativeTool))
 		case *ai.WebSearchTool:
-			webSearch = *tool
+			tools = append(tools, anthropicWebSearchTool(modelName, *nativeTool))
+		case ai.WebFetchTool:
+			tools = append(tools, anthropicWebFetchTool(modelName, nativeTool))
+		case *ai.WebFetchTool:
+			tools = append(tools, anthropicWebFetchTool(modelName, *nativeTool))
 		default:
 			if nativeTool.IsOptional() {
 				continue
 			}
 			return nil, fmt.Errorf("anthropic: native tool %q is not implemented", nativeTool.Kind())
 		}
-		version := "web_search_20250305"
-		if anthropicSupportsDynamicFiltering(modelName) {
-			version = "web_search_20260209"
-		}
-		tool := toolParam{
-			Type: version, Name: "web_search", MaxUses: webSearch.MaxUses,
-			AllowedDomains: slices.Clone(webSearch.AllowedDomains),
-			BlockedDomains: slices.Clone(webSearch.BlockedDomains),
-		}
-		if webSearch.UserLocation != nil {
-			tool.UserLocation = &anthropicWebSearchLocation{
-				Type: "approximate", City: webSearch.UserLocation.City, Country: webSearch.UserLocation.Country,
-				Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
-			}
-		}
-		tools = append(tools, tool)
 	}
 	return tools, nil
+}
+
+func anthropicWebSearchTool(modelName string, webSearch ai.WebSearchTool) toolParam {
+	version := "web_search_20250305"
+	if anthropicSupportsDynamicFiltering(modelName) {
+		version = "web_search_20260209"
+	}
+	tool := toolParam{
+		Type: version, Name: "web_search", MaxUses: webSearch.MaxUses,
+		AllowedDomains: slices.Clone(webSearch.AllowedDomains),
+		BlockedDomains: slices.Clone(webSearch.BlockedDomains),
+	}
+	if webSearch.UserLocation != nil {
+		tool.UserLocation = &anthropicWebSearchLocation{
+			Type: "approximate", City: webSearch.UserLocation.City, Country: webSearch.UserLocation.Country,
+			Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
+		}
+	}
+	return tool
+}
+
+func anthropicWebFetchTool(modelName string, webFetch ai.WebFetchTool) toolParam {
+	version := "web_fetch_20250910"
+	if anthropicSupportsDynamicFiltering(modelName) {
+		version = "web_fetch_20260209"
+	}
+	tool := toolParam{
+		Type: version, Name: "web_fetch", MaxUses: webFetch.MaxUses,
+		AllowedDomains: slices.Clone(webFetch.AllowedDomains),
+		BlockedDomains: slices.Clone(webFetch.BlockedDomains), MaxContentTokens: webFetch.MaxContentTokens,
+	}
+	if webFetch.EnableCitations {
+		tool.Citations = &anthropicCitations{Enabled: true}
+	}
+	return tool
 }
 
 func anthropicSupportsDynamicFiltering(modelName string) bool {
@@ -761,13 +789,13 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			if p.ProviderName != "anthropic" {
 				continue
 			}
-			if p.ToolKind == ai.ToolPartKindWebSearch {
+			if p.ToolKind == ai.ToolPartKindWebSearch || p.ToolKind == ai.ToolPartKindWebFetch {
 				input := slices.Clone(p.Args)
 				if len(input) == 0 {
 					input = json.RawMessage(`{}`)
 				}
 				block := contentBlock{
-					Type: "server_tool_use", ID: p.ToolCallID, Name: "web_search", Input: input,
+					Type: "server_tool_use", ID: p.ToolCallID, Name: p.ToolName, Input: input,
 				}
 				if caller, ok := p.ProviderDetails["anthropic_caller"].(map[string]any); ok {
 					block.Caller = caller
@@ -798,9 +826,9 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			if p.ProviderName != "anthropic" {
 				continue
 			}
-			if p.ToolKind == ai.ToolPartKindWebSearch {
+			if p.ToolKind == ai.ToolPartKindWebSearch || p.ToolKind == ai.ToolPartKindWebFetch {
 				block := contentBlock{
-					Type: "web_search_tool_result", ToolUseID: p.ToolCallID, Content: p.Content,
+					Type: p.ToolName + "_tool_result", ToolUseID: p.ToolCallID, Content: p.Content,
 				}
 				if caller, ok := p.ProviderDetails["anthropic_caller"].(map[string]any); ok {
 					block.Caller = caller
@@ -976,7 +1004,7 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		case "tool_use":
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{ToolName: block.Name, Args: block.Input, ToolCallID: block.ID})
 		case "server_tool_use":
-			if block.Name == "web_search" {
+			if block.Name == "web_search" || block.Name == "web_fetch" {
 				args := slices.Clone(block.Input)
 				if len(args) == 0 || string(args) == "null" {
 					args = json.RawMessage(`{}`)
@@ -985,9 +1013,13 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 				if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
 					details = map[string]any{"anthropic_caller": block.Caller}
 				}
+				kind := ai.ToolPartKindWebSearch
+				if block.Name == "web_fetch" {
+					kind = ai.ToolPartKindWebFetch
+				}
 				resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
-					ToolName: "web_search", Args: args, ToolCallID: block.ID,
-					ToolKind: ai.ToolPartKindWebSearch, ProviderName: "anthropic", ProviderDetails: details,
+					ToolName: block.Name, Args: args, ToolCallID: block.ID,
+					ToolKind: kind, ProviderName: "anthropic", ProviderDetails: details,
 				})
 				continue
 			}
@@ -1011,7 +1043,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 				ToolKind: ai.ToolPartKindToolSearch, ProviderName: "anthropic", ProviderDetails: details,
 			})
 		case "web_search_tool_result":
-			resp.Parts = append(resp.Parts, parseAnthropicWebSearchResult(block))
+			resp.Parts = append(resp.Parts, parseAnthropicWebResult(block, "web_search", ai.ToolPartKindWebSearch))
+		case "web_fetch_tool_result":
+			resp.Parts = append(resp.Parts, parseAnthropicWebResult(block, "web_fetch", ai.ToolPartKindWebFetch))
 		case "tool_search_tool_result":
 			part, err := parseAnthropicToolSearchResult(block)
 			if err != nil {
@@ -1062,7 +1096,9 @@ func normalizeAnthropicToolSearchArguments(raw json.RawMessage, strategy string)
 	return json.Marshal(map[string]any{"queries": queries})
 }
 
-func parseAnthropicWebSearchResult(block responseContentBlock) ai.NativeToolReturnPart {
+func parseAnthropicWebResult(
+	block responseContentBlock, toolName string, kind ai.ToolPartKind,
+) ai.NativeToolReturnPart {
 	var content any
 	if len(block.Content) > 0 {
 		_ = json.Unmarshal(block.Content, &content)
@@ -1072,7 +1108,7 @@ func parseAnthropicWebSearchResult(block responseContentBlock) ai.NativeToolRetu
 		details = map[string]any{"anthropic_caller": block.Caller}
 	}
 	return ai.NativeToolReturnPart{
-		ToolName: "web_search", ToolCallID: block.ToolUseID, ToolKind: ai.ToolPartKindWebSearch,
+		ToolName: toolName, ToolCallID: block.ToolUseID, ToolKind: kind,
 		Content: content, ProviderName: "anthropic", ProviderDetails: details,
 	}
 }

@@ -278,6 +278,7 @@ type functionResponse struct {
 type toolsParam struct {
 	FunctionDeclarations []functionDeclaration `json:"functionDeclarations,omitempty"`
 	GoogleSearch         *struct{}             `json:"googleSearch,omitempty"`
+	URLContext           *struct{}             `json:"urlContext,omitempty"`
 }
 
 type functionDeclaration struct {
@@ -323,6 +324,8 @@ func googleNativeTools(nativeTools []ai.NativeTool) ([]toolsParam, error) {
 		switch nativeTool.(type) {
 		case ai.WebSearchTool, *ai.WebSearchTool:
 			tools = append(tools, toolsParam{GoogleSearch: &struct{}{}})
+		case ai.WebFetchTool, *ai.WebFetchTool:
+			tools = append(tools, toolsParam{URLContext: &struct{}{}})
 		default:
 			if !nativeTool.IsOptional() {
 				return nil, fmt.Errorf("google: native tool %q is not implemented", nativeTool.Kind())
@@ -654,11 +657,12 @@ type generateResponse struct {
 		Content struct {
 			Parts []part `json:"parts"`
 		} `json:"content"`
-		FinishReason      string           `json:"finishReason"`
-		SafetyRatings     []map[string]any `json:"safetyRatings"`
-		LogprobsResult    map[string]any   `json:"logprobsResult"`
-		AvgLogprobs       *float64         `json:"avgLogprobs"`
-		GroundingMetadata map[string]any   `json:"groundingMetadata"`
+		FinishReason       string           `json:"finishReason"`
+		SafetyRatings      []map[string]any `json:"safetyRatings"`
+		LogprobsResult     map[string]any   `json:"logprobsResult"`
+		AvgLogprobs        *float64         `json:"avgLogprobs"`
+		GroundingMetadata  map[string]any   `json:"groundingMetadata"`
+		URLContextMetadata map[string]any   `json:"urlContextMetadata"`
 	} `json:"candidates"`
 	PromptFeedback struct {
 		BlockReason        string           `json:"blockReason"`
@@ -793,6 +797,46 @@ func googleWebSearchParts(
 		}
 }
 
+func googleWebFetchParts(
+	metadata map[string]any, responseID, providerName string, timestamp time.Time,
+) (*ai.NativeToolCallPart, *ai.NativeToolReturnPart) {
+	rawMetadata, ok := metadata["urlMetadata"].([]any)
+	if !ok || len(rawMetadata) == 0 {
+		return nil, nil
+	}
+	urls := make([]string, 0, len(rawMetadata))
+	results := make([]map[string]any, 0, len(rawMetadata))
+	for _, rawResult := range rawMetadata {
+		result, ok := rawResult.(map[string]any)
+		if !ok {
+			continue
+		}
+		cloned := make(map[string]any, len(result))
+		for key, value := range result {
+			cloned[key] = value
+		}
+		results = append(results, cloned)
+		if url, _ := result["retrievedUrl"].(string); url != "" {
+			urls = append(urls, url)
+		}
+	}
+	args := json.RawMessage(`{}`)
+	if len(urls) > 0 {
+		args, _ = json.Marshal(map[string]any{"urls": urls})
+	}
+	callID := responseID + ":web_fetch"
+	if responseID == "" {
+		callID = "web_fetch"
+	}
+	return &ai.NativeToolCallPart{
+			ToolName: "web_fetch", ToolCallID: callID, ToolKind: ai.ToolPartKindWebFetch,
+			Args: args, ProviderName: providerName,
+		}, &ai.NativeToolReturnPart{
+			ToolName: "web_fetch", ToolCallID: callID, ToolKind: ai.ToolPartKindWebFetch,
+			Content: results, Timestamp: timestamp, ProviderName: providerName,
+		}
+}
+
 func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) {
 	var gr generateResponse
 	if err := json.Unmarshal(data, &gr); err != nil {
@@ -831,6 +875,9 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 	if gr.Candidates[0].GroundingMetadata != nil {
 		providerDetails["grounding_metadata"] = gr.Candidates[0].GroundingMetadata
 	}
+	if gr.Candidates[0].URLContextMetadata != nil {
+		providerDetails["url_context_metadata"] = gr.Candidates[0].URLContextMetadata
+	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil
 	}
@@ -841,6 +888,11 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 	}
 	if call, returned := googleWebSearchParts(
 		gr.Candidates[0].GroundingMetadata, gr.ResponseID, providerName, resp.Timestamp,
+	); call != nil {
+		resp.Parts = append(resp.Parts, *call, *returned)
+	}
+	if call, returned := googleWebFetchParts(
+		gr.Candidates[0].URLContextMetadata, gr.ResponseID, providerName, resp.Timestamp,
 	); call != nil {
 		resp.Parts = append(resp.Parts, *call, *returned)
 	}

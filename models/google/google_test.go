@@ -678,6 +678,48 @@ func TestGoogleWebSearchGroundingMetadata(t *testing.T) {
 	}
 }
 
+func TestGoogleWebFetchURLContextMetadata(t *testing.T) {
+	responses := []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"answer"}]},"urlContextMetadata":{"urlMetadata":[1,{"retrievedUrl":"https://go.dev","urlRetrievalStatus":"URL_RETRIEVAL_STATUS_SUCCESS"},{"urlRetrievalStatus":"URL_RETRIEVAL_STATUS_ERROR"}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"text":"answer"}]},"urlContextMetadata":{"urlMetadata":[{"urlRetrievalStatus":"URL_RETRIEVAL_STATUS_ERROR"}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"text":"answer"}]},"urlContextMetadata":{}}]}`,
+	}
+	index := 0
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(responses[index]))
+		index++
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ProviderDetails["url_context_metadata"] == nil || len(response.Parts) != 3 {
+		t.Fatalf("unexpected URL context response: %+v", response)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	results := returned.Content.([]map[string]any)
+	if call.ToolKind != ai.ToolPartKindWebFetch || call.ToolCallID != "response:web_fetch" ||
+		string(call.Args) != `{"urls":["https://go.dev"]}` || returned.ToolKind != ai.ToolPartKindWebFetch ||
+		len(results) != 2 || results[0]["retrievedUrl"] != "https://go.dev" {
+		t.Fatalf("unexpected URL context parts: call=%+v return=%+v", call, returned)
+	}
+	response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call = response.Parts[0].(ai.NativeToolCallPart); call.ToolCallID != "web_fetch" || string(call.Args) != `{}` {
+		t.Fatalf("unexpected URL context without URL or response ID: %+v", call)
+	}
+	response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 1 {
+		t.Fatalf("empty URL context produced native parts: %#v", response.Parts)
+	}
+}
+
 func TestErrors(t *testing.T) {
 	t.Run("native tools", func(t *testing.T) {
 		var body map[string]any
@@ -689,13 +731,14 @@ func TestErrors(t *testing.T) {
 		}
 		model := newServer(t, handler)
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{}, ai.WebFetchTool{}},
 		}); err != nil {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 1 || tools[0].(map[string]any)["googleSearch"] == nil ||
-			tools[0].(map[string]any)["functionDeclarations"] != nil {
+		if len(tools) != 2 || tools[0].(map[string]any)["googleSearch"] == nil ||
+			tools[0].(map[string]any)["functionDeclarations"] != nil ||
+			tools[1].(map[string]any)["urlContext"] == nil {
 			t.Fatalf("unexpected Google web-search tool: %#v", tools)
 		}
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{

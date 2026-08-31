@@ -371,6 +371,28 @@ func TestAnthropicStreamWebSearch(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamWebFetch(t *testing.T) {
+	model := newServer(t, anthropicSSE(t, []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"fetch","name":"web_fetch","input":{}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"url\":\"https://go.dev\"}"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"web_fetch_tool_result","tool_use_id":"fetch","content":{"type":"web_fetch_result","url":"https://go.dev"}}}`,
+		`{"type":"message_stop"}`,
+	}))
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebFetchTool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := events[0].(ai.ToolCallStartEvent)
+	delta := events[1].(ai.ToolCallDeltaEvent)
+	returned := events[2].(ai.NativeToolReturnEvent)
+	if start.ToolName != "web_fetch" || start.ToolKind != ai.ToolPartKindWebFetch || !start.Native ||
+		delta.ArgsDelta != `{"url":"https://go.dev"}` || returned.Part.ToolKind != ai.ToolPartKindWebFetch ||
+		returned.Part.Content.(map[string]any)["url"] != "https://go.dev" {
+		t.Fatalf("unexpected streamed web fetch events: %#v", events)
+	}
+}
+
 func TestAnthropicStreamWebSearchEdges(t *testing.T) {
 	t.Run("empty arguments", func(t *testing.T) {
 		model := newServer(t, anthropicSSE(t, []string{

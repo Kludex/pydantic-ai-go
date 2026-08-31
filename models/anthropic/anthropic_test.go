@@ -744,6 +744,9 @@ func TestErrors(t *testing.T) {
 					City: "Paris", Country: "FR", Region: "IDF", Timezone: "Europe/Paris",
 				},
 				AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"example.com"}, MaxUses: 3,
+			}, ai.WebFetchTool{
+				AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"example.com"}, MaxUses: 2,
+				EnableCitations: true, MaxContentTokens: 4096,
 			}},
 		}); err != nil {
 			t.Fatal(err)
@@ -755,6 +758,12 @@ func TestErrors(t *testing.T) {
 			tool["blocked_domains"].([]any)[0] != "example.com" || location["type"] != "approximate" ||
 			location["city"] != "Paris" {
 			t.Fatalf("unexpected Anthropic web-search tool: %#v", tool)
+		}
+		fetch := body["tools"].([]any)[1].(map[string]any)
+		if fetch["type"] != "web_fetch_20250910" || fetch["name"] != "web_fetch" ||
+			fetch["max_uses"] != float64(2) || fetch["max_content_tokens"] != float64(4096) ||
+			fetch["citations"].(map[string]any)["enabled"] != true {
+			t.Fatalf("unexpected Anthropic web-fetch tool: %#v", fetch)
 		}
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
 			NativeTools: []ai.NativeTool{unsupportedNativeTool{}},
@@ -1201,13 +1210,17 @@ func TestAnthropicDynamicWebSearchVersion(t *testing.T) {
 		anthropic.WithHTTPClient(server.Client()),
 	)
 	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-		NativeTools: []ai.NativeTool{&ai.WebSearchTool{}},
+		NativeTools: []ai.NativeTool{&ai.WebSearchTool{}, &ai.WebFetchTool{}},
 	}); err != nil {
 		t.Fatal(err)
 	}
-	if tool := body["tools"].([]any)[0].(map[string]any); tool["type"] != "web_search_20260209" ||
+	tools := body["tools"].([]any)
+	if tool := tools[0].(map[string]any); tool["type"] != "web_search_20260209" ||
 		tool["max_uses"] != nil || tool["user_location"] != nil {
 		t.Fatalf("unexpected dynamic web search tool: %#v", tool)
+	}
+	if tool := tools[1].(map[string]any); tool["type"] != "web_fetch_20260209" || tool["citations"] != nil {
+		t.Fatalf("unexpected dynamic web fetch tool: %#v", tool)
 	}
 }
 
@@ -1266,6 +1279,41 @@ func TestAnthropicWebSearchResponseAndReplay(t *testing.T) {
 	content = body["messages"].([]any)[0].(map[string]any)["content"].([]any)
 	if len(content) != 2 || content[0].(map[string]any)["input"].(map[string]any) == nil {
 		t.Fatalf("unexpected empty or foreign web search replay: %#v", content)
+	}
+}
+
+func TestAnthropicWebFetchResponseAndReplay(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"content":[
+			{"type":"server_tool_use","id":"fetch-1","name":"web_fetch","input":{"url":"https://go.dev"}},
+			{"type":"web_fetch_tool_result","tool_use_id":"fetch-1","content":{"type":"web_fetch_result","url":"https://go.dev","content":"Go"}},
+			{"type":"text","text":"done"}
+		]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebFetchTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if call.ToolName != "web_fetch" || call.ToolKind != ai.ToolPartKindWebFetch ||
+		string(call.Args) != `{"url":"https://go.dev"}` || returned.ToolKind != ai.ToolPartKindWebFetch ||
+		returned.Content.(map[string]any)["content"] != "Go" {
+		t.Fatalf("unexpected web fetch parts: call=%+v return=%+v", call, returned)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	content := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if content[0].(map[string]any)["name"] != "web_fetch" ||
+		content[1].(map[string]any)["type"] != "web_fetch_tool_result" {
+		t.Fatalf("unexpected web fetch replay: %#v", content)
 	}
 }
 

@@ -400,6 +400,16 @@ result, err := agent.Run(ctx, "Weather in SF?", deps)
 
 `Output = string` means plain text - no output tool is involved.
 
+Specialize the output type for one run without changing the agent:
+
+```go
+agent := ai.NewAgent[Deps, string](model)
+result, err := ai.RunAs[Weather](ctx, agent, "Weather in SF?", deps)
+// result.Output is a Weather
+```
+
+Use `RunPartsAs`, `RunStreamAs`, or `RunStreamPartsAs` for multimodal and streaming runs. Go methods cannot introduce a new type parameter, so these are package functions instead of `Agent` methods. A specialized run returns `ErrOutputTypeOverrideWithValidators` when the agent has output validators, because those validators accept the agent's declared output type.
+
 Customize the tool contract without changing the output type:
 
 ```go

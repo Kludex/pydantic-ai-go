@@ -21,6 +21,12 @@ var ErrUnknownModelID = errors.New("ai: unknown model ID")
 // ErrNoModel is returned when no default or selector supplies a model.
 var ErrNoModel = errors.New("ai: no model selected")
 
+// ErrOutputTypeOverrideWithValidators is returned when RunAs or RunStreamAs
+// would replace the type expected by an agent-level output validator.
+var ErrOutputTypeOverrideWithValidators = errors.New(
+	"ai: per-run output type cannot be used when the agent has output validators",
+)
+
 // UnknownModelIDError reports an unresolved application model ID.
 type UnknownModelIDError struct {
 	ID string

@@ -28,7 +28,7 @@ Status:
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
 - [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
-- [~] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, output mode/tool configuration, usage limits, retry limits, history, reusable tools/toolsets, and additive capabilities with setup contributions. Typed output specialization remains.
+- [x] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, type-safe output specialization, output mode/tool configuration, usage limits, retry limits, history, reusable tools/toolsets, and additive capabilities with setup contributions.
 - [x] Typed agent/run and untyped capability model selectors run before every logical request with step, completed-history, prior-model, model-ID, deps, and usage context.
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
@@ -156,6 +156,7 @@ Status:
 - [ ] Image and binary outputs.
 - [x] Output tool name, description, strict mode, sequential execution barrier, and independent retry configuration through `OutputToolConfig`, with per-run replacement.
 - [x] Output-tool definitions can be modified, renamed, or omitted from fresh copies before each request through `AddOutputToolPrepareFunc`.
+- [x] Per-run output specialization through type-safe `RunAs`, `RunPartsAs`, `RunStreamAs`, and `RunStreamPartsAs`, with validator incompatibility rejected explicitly.
 
 ## P1 - Capabilities and ecosystem
 
@@ -224,8 +225,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run typed output specialization.
-3. Add provider-native tool search, deferred definitions, and mid-conversation addition rendering for Anthropic and OpenAI Responses.
-4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
-5. Add streamed deferred request and result events with that lifecycle.
-6. Add MCP now that raw/dynamic toolsets have run and step lifecycle support, after deferred calls define the pause/resume boundary.
+2. Add provider-native tool search, deferred definitions, and mid-conversation addition rendering for Anthropic and OpenAI Responses.
+3. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
+4. Add streamed deferred request and result events with that lifecycle.
+5. Add MCP now that raw/dynamic toolsets have run and step lifecycle support, after deferred calls define the pause/resume boundary.

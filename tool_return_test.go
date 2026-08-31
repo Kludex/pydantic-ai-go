@@ -93,6 +93,33 @@ func TestNestedRichToolReturnsAreRejected(t *testing.T) {
 	}
 }
 
+func TestOrdinaryToolReturnSlicesAreAccepted(t *testing.T) {
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		if request == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "items", ToolCallID: "items", Args: []byte(`{}`),
+			}}}, nil
+		}
+		returned := messages[len(messages)-1].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
+		items := returned.Content.([]any)
+		if len(items) != 2 || items[0] != nil || items[1] != "ok" {
+			t.Fatalf("unexpected ordinary slice return: %+v", returned)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddSimpleTool(agent, "items", func(context.Context, struct{}) ([]any, error) {
+		return []any{nil, "ok"}, nil
+	})
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRichToolReturnsPreserveValueContentAndMetadata(t *testing.T) {
 	model := fakes.NewFunctionModel(func(
 		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,

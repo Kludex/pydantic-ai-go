@@ -2234,6 +2234,9 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return nil, err
 		}
 		r.messages = append(r.messages, *resp)
+		if len(resp.Parts) == 0 && resp.FinishReason == FinishReasonContentFilter {
+			return nil, newContentFilterError(resp)
+		}
 
 		calls := resp.ToolCalls()
 		if r.emit != nil && r.commitStreamedOutput {

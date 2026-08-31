@@ -95,6 +95,22 @@ func (e *UnexpectedModelBehaviorError) Error() string {
 	return "ai: unexpected model behavior: " + e.Message
 }
 
+// ContentFilterError reports a provider content filter. It retains the full
+// response so callers can inspect partial output and provider details.
+type ContentFilterError struct {
+	Message  string
+	response ModelResponse
+	body     []byte
+}
+
+func (e *ContentFilterError) Error() string { return "ai: " + e.Message }
+
+// Response returns a detached filtered response.
+func (e *ContentFilterError) Response() ModelResponse { return *cloneModelResponse(&e.response) }
+
+// Body returns the filtered response serialized as an interoperable message array.
+func (e *ContentFilterError) Body() []byte { return append([]byte(nil), e.body...) }
+
 // RetryError asks the model to try again. Return one from a tool or output
 // validator with Retryf; the message is sent back to the model as a retry
 // prompt instead of failing the run.

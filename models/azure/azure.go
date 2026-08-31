@@ -39,7 +39,12 @@ func NewModel(deployment string, config Config, opts ...openai.Option) (*openai.
 	if err != nil {
 		return nil, err
 	}
-	opts = append(opts, openai.WithProvider(provider), openai.WithDeferredToolSupport(false))
+	opts = append(
+		opts,
+		openai.WithProvider(provider),
+		openai.WithDeferredToolSupport(false),
+		openai.WithChatDocumentInput(false),
+	)
 	return openai.NewModel(deployment, opts...), nil
 }
 

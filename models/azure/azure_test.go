@@ -48,6 +48,14 @@ func TestAzureV1Model(t *testing.T) {
 	if model.DefaultModelSettings().MaxTokens != 10 {
 		t.Fatal("additional OpenAI options were not applied")
 	}
+	_, err = model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.BinaryContent{Data: []byte("pdf"), MediaType: "application/pdf"},
+		}},
+	}}}, ai.ModelRequestParams{})
+	if err == nil || !strings.Contains(err.Error(), "azure: Chat Completions does not support document input") {
+		t.Fatalf("unexpected Azure document input error: %v", err)
+	}
 }
 
 func TestAzureLegacyResponsesModelFromEnvironment(t *testing.T) {

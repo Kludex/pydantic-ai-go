@@ -482,7 +482,7 @@ func TestOpenRouterResponseVariants(t *testing.T) {
 	}
 }
 
-func TestOpenRouterVideoInput(t *testing.T) {
+func TestOpenRouterFileInput(t *testing.T) {
 	videoServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.Header().Set("Content-Type", "video/webm")
 		_, _ = response.Write([]byte("video-bytes"))
@@ -506,17 +506,22 @@ func TestOpenRouterVideoInput(t *testing.T) {
 		ai.VideoURL{URL: "https://example.com/video.mp4"},
 		ai.BinaryContent{Data: []byte("inline"), MediaType: "video/mp4"},
 		ai.VideoURL{URL: videoServer.URL + "/clip.webm", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.DocumentURL{URL: "https://example.com/report.pdf"},
+		ai.BinaryContent{Data: []byte("audio"), MediaType: "audio/mpeg"},
 	}}}}}
 	response, err := model.Request(t.Context(), messages, ai.ModelRequestParams{})
 	if err != nil || response.Text() != "done" {
 		t.Fatalf("unexpected video response=%+v err=%v", response, err)
 	}
 	content := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
-	if len(content) != 4 || content[0].(map[string]any)["type"] != "text" ||
+	if len(content) != 6 || content[0].(map[string]any)["type"] != "text" ||
 		content[1].(map[string]any)["video_url"].(map[string]any)["url"] != "https://example.com/video.mp4" ||
 		content[2].(map[string]any)["video_url"].(map[string]any)["url"] != "data:video/mp4;base64,aW5saW5l" ||
 		content[3].(map[string]any)["video_url"].(map[string]any)["url"] !=
-			"data:video/webm;base64,dmlkZW8tYnl0ZXM=" {
+			"data:video/webm;base64,dmlkZW8tYnl0ZXM=" ||
+		content[4].(map[string]any)["file"].(map[string]any)["file_data"] !=
+			"https://example.com/report.pdf" ||
+		content[5].(map[string]any)["input_audio"].(map[string]any)["data"] != "YXVkaW8=" {
 		t.Fatalf("unexpected OpenRouter video content: %#v", content)
 	}
 

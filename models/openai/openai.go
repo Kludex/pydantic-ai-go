@@ -17,7 +17,6 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
-	"github.com/Kludex/pydantic-ai-go/internal/download"
 )
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
@@ -75,14 +74,17 @@ type ChatNativeToolFunc func(ai.NativeTool) (ChatNativeTool, bool, error)
 // Completions wire format. The configuration is intended for provider packages;
 // applications should prefer a dedicated provider model.
 type ChatCompatibility struct {
-	ReasoningContent bool
-	Reasoning        bool
-	ReasoningDetails bool
-	LegacyMaxTokens  bool
-	ExtendedMetadata bool
-	VideoInput       bool
-	NativeToolFunc   ChatNativeToolFunc
-	FinishReasons    map[string]ai.FinishReason
+	ReasoningContent     bool
+	Reasoning            bool
+	ReasoningDetails     bool
+	LegacyMaxTokens      bool
+	ExtendedMetadata     bool
+	VideoInput           bool
+	FileURLInput         bool
+	AudioInputDataURI    bool
+	DisableDocumentInput bool
+	NativeToolFunc       ChatNativeToolFunc
+	FinishReasons        map[string]ai.FinishReason
 }
 
 // WithChatCompatibility configures OpenAI-compatible response and history
@@ -102,16 +104,24 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 	}
 	return func(model *Model) {
 		model.chatCompatibility = ChatCompatibility{
-			ReasoningContent: compatibility.ReasoningContent,
-			Reasoning:        compatibility.Reasoning,
-			ReasoningDetails: compatibility.ReasoningDetails,
-			LegacyMaxTokens:  compatibility.LegacyMaxTokens,
-			ExtendedMetadata: compatibility.ExtendedMetadata,
-			VideoInput:       compatibility.VideoInput,
-			NativeToolFunc:   compatibility.NativeToolFunc,
-			FinishReasons:    maps.Clone(finishReasons),
+			ReasoningContent:     compatibility.ReasoningContent,
+			Reasoning:            compatibility.Reasoning,
+			ReasoningDetails:     compatibility.ReasoningDetails,
+			LegacyMaxTokens:      compatibility.LegacyMaxTokens,
+			ExtendedMetadata:     compatibility.ExtendedMetadata,
+			VideoInput:           compatibility.VideoInput,
+			FileURLInput:         compatibility.FileURLInput,
+			AudioInputDataURI:    compatibility.AudioInputDataURI,
+			DisableDocumentInput: compatibility.DisableDocumentInput,
+			NativeToolFunc:       compatibility.NativeToolFunc,
+			FinishReasons:        maps.Clone(finishReasons),
 		}
 	}
+}
+
+// WithChatDocumentInput controls document input for a compatible Chat Completions endpoint.
+func WithChatDocumentInput(enabled bool) Option {
+	return func(model *Model) { model.chatCompatibility.DisableDocumentInput = !enabled }
 }
 
 // WithResponsesCodeExecutionOutputs includes code-interpreter logs and image outputs in Responses results.
@@ -354,12 +364,25 @@ type contentPart struct {
 	Text                  string                       `json:"text,omitempty"`
 	ImageURL              *imageURL                    `json:"image_url,omitempty"`
 	VideoURL              *videoURL                    `json:"video_url,omitempty"`
+	InputAudio            *inputAudio                  `json:"input_audio,omitempty"`
+	File                  *chatFile                    `json:"file,omitempty"`
 	CacheControl          *chatCacheControl            `json:"cache_control,omitempty"`
 	PromptCacheBreakpoint *openAIPromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 type imageURL struct {
-	URL string `json:"url"`
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
+
+type inputAudio struct {
+	Data   string `json:"data"`
+	Format string `json:"format"`
+}
+
+type chatFile struct {
+	FileData string `json:"file_data"`
+	Filename string `json:"filename"`
 }
 
 type videoURL struct {
@@ -996,7 +1019,22 @@ func (model *Model) convertUserPrompt(
 		case ai.TextContent:
 			parts = append(parts, contentPart{Type: "text", Text: item.Text})
 		case ai.ImageURL:
-			parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: item.URL}})
+			if err := item.ForceDownload.Validate(); err != nil {
+				return chatMessage{}, err
+			}
+			location := item.URL
+			if item.ForceDownload != ai.FileDownloadNever {
+				downloaded, err := downloadFileContent(
+					ctx, item.URL, item.ResolvedMediaType, item.ForceDownload,
+				)
+				if err != nil {
+					return chatMessage{}, err
+				}
+				location = downloaded.dataURI
+			}
+			parts = append(parts, contentPart{
+				Type: "image_url", ImageURL: &imageURL{URL: location, Detail: chatImageDetail(item.VendorMetadata)},
+			})
 		case ai.VideoURL:
 			if !model.chatCompatibility.VideoInput {
 				return chatMessage{}, fmt.Errorf("%s: Chat Completions does not support video URL input", model.providerName)
@@ -1004,38 +1042,92 @@ func (model *Model) convertUserPrompt(
 			if err := item.ForceDownload.Validate(); err != nil {
 				return chatMessage{}, err
 			}
-			videoLocation := item.URL
+			location := item.URL
 			if item.ForceDownload != ai.FileDownloadNever {
 				if item.IsYouTube() {
 					return chatMessage{}, fmt.Errorf("%s: downloading YouTube videos is not supported", model.providerName)
 				}
-				downloaded, err := download.Fetch(ctx, item.URL, item.ForceDownload == ai.FileDownloadAllowLocal)
+				downloaded, err := downloadFileContent(
+					ctx, item.URL, item.ResolvedMediaType, item.ForceDownload,
+				)
 				if err != nil {
 					return chatMessage{}, err
 				}
-				mediaType := downloaded.MediaType
-				if mediaType == "" {
-					mediaType, err = item.ResolvedMediaType()
-					if err != nil {
-						return chatMessage{}, err
-					}
-				}
-				videoLocation = fmt.Sprintf(
-					"data:%s;base64,%s", mediaType, base64.StdEncoding.EncodeToString(downloaded.Data),
-				)
+				location = downloaded.dataURI
 			}
-			parts = append(parts, contentPart{Type: "video_url", VideoURL: &videoURL{URL: videoLocation}})
+			parts = append(parts, contentPart{Type: "video_url", VideoURL: &videoURL{URL: location}})
+		case ai.AudioURL:
+			downloaded, err := downloadFileContent(ctx, item.URL, item.ResolvedMediaType, item.ForceDownload)
+			if err != nil {
+				return chatMessage{}, err
+			}
+			audioPart, err := model.chatAudioPart(downloaded.dataURI, downloaded.mediaType)
+			if err != nil {
+				return chatMessage{}, err
+			}
+			parts = append(parts, audioPart)
+		case ai.DocumentURL:
+			if err := item.ForceDownload.Validate(); err != nil {
+				return chatMessage{}, err
+			}
+			mediaType, err := item.ResolvedMediaType()
+			if err != nil {
+				return chatMessage{}, err
+			}
+			if item.ForceDownload == ai.FileDownloadNever && model.chatCompatibility.FileURLInput {
+				extension, err := fileExtension(mediaType)
+				if err != nil {
+					return chatMessage{}, err
+				}
+				parts = append(parts, contentPart{
+					Type: "file", File: &chatFile{FileData: item.URL, Filename: "filename." + extension},
+				})
+				continue
+			}
+			downloaded, err := downloadFileContent(ctx, item.URL, item.ResolvedMediaType, item.ForceDownload)
+			if err != nil {
+				return chatMessage{}, err
+			}
+			documentPart, err := model.chatDocumentPart(
+				downloaded.data, downloaded.dataURI, downloaded.mediaType, item.ResolvedIdentifier(),
+			)
+			if err != nil {
+				return chatMessage{}, err
+			}
+			parts = append(parts, documentPart)
 		case ai.BinaryContent:
 			location := fmt.Sprintf("data:%s;base64,%s", item.MediaType, base64.StdEncoding.EncodeToString(item.Data))
-			if strings.HasPrefix(strings.ToLower(item.MediaType), "video/") {
+			switch {
+			case isImageMediaType(item.MediaType):
+				parts = append(parts, contentPart{
+					Type: "image_url", ImageURL: &imageURL{
+						URL: location, Detail: chatImageDetail(item.VendorMetadata),
+					},
+				})
+			case isAudioMediaType(item.MediaType):
+				audioPart, err := model.chatAudioPart(location, item.MediaType)
+				if err != nil {
+					return chatMessage{}, err
+				}
+				parts = append(parts, audioPart)
+			case isVideoMediaType(item.MediaType):
 				if !model.chatCompatibility.VideoInput {
 					return chatMessage{}, fmt.Errorf(
 						"%s: Chat Completions does not support inline video input", model.providerName,
 					)
 				}
 				parts = append(parts, contentPart{Type: "video_url", VideoURL: &videoURL{URL: location}})
-			} else {
-				parts = append(parts, contentPart{Type: "image_url", ImageURL: &imageURL{URL: location}})
+			default:
+				if _, err := fileExtension(item.MediaType); err != nil {
+					return chatMessage{}, err
+				}
+				documentPart, err := model.chatDocumentPart(
+					item.Data, location, item.MediaType, item.ResolvedIdentifier(),
+				)
+				if err != nil {
+					return chatMessage{}, err
+				}
+				parts = append(parts, documentPart)
 			}
 		default:
 			return chatMessage{}, fmt.Errorf("openai: unknown user content type %T", c)

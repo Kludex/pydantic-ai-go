@@ -1,13 +1,8 @@
 package ai
 
 import (
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"net/url"
-	"path"
-	"strings"
 	"time"
 )
 
@@ -152,114 +147,6 @@ type TextContent struct {
 
 func (TextContent) userContentKind() string { return "text-content" }
 func (TextContent) enqueueItemKind() string { return "user-content" }
-
-// ImageURL references an image by URL.
-type ImageURL struct {
-	URL string
-}
-
-func (ImageURL) userContentKind() string { return "image-url" }
-func (ImageURL) enqueueItemKind() string { return "user-content" }
-
-// FileDownloadMode controls whether a URL is downloaded by this process.
-type FileDownloadMode string
-
-const (
-	// FileDownloadNever sends a URL directly when the provider supports it.
-	FileDownloadNever FileDownloadMode = ""
-	// FileDownloadSafe always downloads while blocking private networks and cloud metadata.
-	FileDownloadSafe FileDownloadMode = "safe"
-	// FileDownloadAllowLocal permits private networks but still blocks cloud metadata.
-	FileDownloadAllowLocal FileDownloadMode = "allow-local"
-)
-
-// Validate checks whether the download mode is supported.
-func (mode FileDownloadMode) Validate() error {
-	switch mode {
-	case FileDownloadNever, FileDownloadSafe, FileDownloadAllowLocal:
-		return nil
-	default:
-		return fmt.Errorf("ai: invalid file download mode %q", mode)
-	}
-}
-
-// VideoURL references a video by URL.
-type VideoURL struct {
-	URL            string
-	MediaType      string
-	Identifier     string
-	ForceDownload  FileDownloadMode
-	VendorMetadata map[string]any
-}
-
-// ResolvedMediaType returns the explicit media type or infers it from the URL.
-func (video VideoURL) ResolvedMediaType() (string, error) {
-	if video.MediaType != "" {
-		return video.MediaType, nil
-	}
-	if video.IsYouTube() {
-		return "video/mp4", nil
-	}
-	parsed, err := url.Parse(video.URL)
-	if err != nil {
-		return "", fmt.Errorf("ai: parse video URL: %w", err)
-	}
-	switch strings.ToLower(path.Ext(parsed.Path)) {
-	case ".3gp":
-		return "video/3gpp", nil
-	case ".flv":
-		return "video/x-flv", nil
-	case ".mkv":
-		return "video/x-matroska", nil
-	case ".mov":
-		return "video/quicktime", nil
-	case ".mp4":
-		return "video/mp4", nil
-	case ".mpeg", ".mpg":
-		return "video/mpeg", nil
-	case ".webm":
-		return "video/webm", nil
-	case ".wmv":
-		return "video/x-ms-wmv", nil
-	default:
-		return "", fmt.Errorf("ai: cannot infer media type from video URL %q", video.URL)
-	}
-}
-
-// ResolvedIdentifier returns the caller-provided identifier or a stable URL digest.
-func (video VideoURL) ResolvedIdentifier() string {
-	if video.Identifier != "" {
-		return video.Identifier
-	}
-	digest := sha1.Sum([]byte(video.URL))
-	return hex.EncodeToString(digest[:])[:6]
-}
-
-// IsYouTube reports whether Google models can consume the URL directly as a YouTube video.
-func (video VideoURL) IsYouTube() bool {
-	parsed, err := url.Parse(video.URL)
-	if err != nil {
-		return false
-	}
-	switch strings.ToLower(parsed.Hostname()) {
-	case "youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com":
-		return true
-	default:
-		return false
-	}
-}
-
-func (VideoURL) userContentKind() string { return "video-url" }
-func (VideoURL) enqueueItemKind() string { return "user-content" }
-
-// BinaryContent carries inline binary data, such as an image or document.
-type BinaryContent struct {
-	Data      []byte
-	MediaType string // e.g. "image/png"
-}
-
-func (BinaryContent) userContentKind() string { return "binary" }
-func (BinaryContent) enqueueItemKind() string { return "user-content" }
 
 // CachePointTTL selects the lifetime of an explicit prompt-cache boundary.
 type CachePointTTL string

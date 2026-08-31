@@ -1,0 +1,98 @@
+[
+  {
+    "parts": [
+      {
+        "content": [
+          {
+            "url": "https://example.com/photo.jpg",
+            "force_download": true,
+            "vendor_metadata": {
+              "detail": "high"
+            },
+            "kind": "image-url",
+            "media_type": "image/jpeg",
+            "identifier": "3b0283"
+          },
+          {
+            "url": "https://example.com/speech.mp3",
+            "force_download": false,
+            "vendor_metadata": null,
+            "kind": "audio-url",
+            "media_type": "audio/mpeg",
+            "identifier": "4e3096"
+          },
+          {
+            "url": "http://example.com/report.pdf",
+            "force_download": "allow-local",
+            "vendor_metadata": null,
+            "kind": "document-url",
+            "media_type": "application/pdf",
+            "identifier": "report"
+          },
+          {
+            "data": "ZG9jdW1lbnQ=",
+            "media_type": "application/pdf",
+            "vendor_metadata": {
+              "name": "report.pdf"
+            },
+            "kind": "binary",
+            "identifier": "4f8278"
+          }
+        ],
+        "timestamp": "2026-09-01T00:00:00Z",
+        "part_kind": "user-prompt"
+      }
+    ],
+    "timestamp": null,
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  },
+  {
+    "parts": [
+      {
+        "content": {
+          "data": "ZmlsZQ==",
+          "media_type": "application/pdf",
+          "vendor_metadata": {
+            "name": "generated.pdf"
+          },
+          "kind": "binary",
+          "identifier": "971c41"
+        },
+        "id": "file-part",
+        "provider_name": "provider",
+        "provider_details": {
+          "source": "generated"
+        },
+        "part_kind": "file"
+      }
+    ],
+    "usage": {
+      "input_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "input_audio_tokens": 0,
+      "cache_audio_read_tokens": 0,
+      "output_audio_tokens": 0,
+      "details": {},
+      "cost": null
+    },
+    "model_name": "model",
+    "timestamp": "2026-09-01T00:00:01Z",
+    "kind": "response",
+    "provider_name": "provider",
+    "provider_url": null,
+    "provider_details": null,
+    "provider_response_id": null,
+    "finish_reason": null,
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

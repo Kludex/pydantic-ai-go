@@ -1379,11 +1379,14 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
 		ai.TextContent{Text: "what is this?"}, ai.CachePoint{},
-		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
-		ai.ImageURL{URL: "https://example.com/cat.png"},
+		ai.BinaryContent{
+			Data: []byte("hi"), MediaType: "image/png", VendorMetadata: map[string]any{"start_offset": "1s"},
+		},
+		ai.ImageURL{URL: "https://generativelanguage.googleapis.com/v1beta/files/cat.png"},
 		ai.UploadedFile{
 			FileID:       "https://generativelanguage.googleapis.com/v1beta/files/report",
 			ProviderName: "google", MediaType: "application/pdf",
+			VendorMetadata: map[string]any{"media_resolution": "MEDIA_RESOLUTION_LOW"},
 		},
 	}}}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
@@ -1391,17 +1394,80 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	}
 	parts := gotBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)
 	inline := parts[1].(map[string]any)["inlineData"].(map[string]any)
-	if inline["mimeType"] != "image/png" || inline["data"] != "aGk=" {
+	if inline["mimeType"] != "image/png" || inline["data"] != "aGk=" ||
+		parts[1].(map[string]any)["videoMetadata"].(map[string]any)["startOffset"] != "1s" {
 		t.Fatalf("unexpected inline data %v", inline)
 	}
 	file := parts[2].(map[string]any)["fileData"].(map[string]any)
-	if file["fileUri"] != "https://example.com/cat.png" {
+	if file["fileUri"] != "https://generativelanguage.googleapis.com/v1beta/files/cat.png" {
 		t.Fatalf("unexpected file data %v", file)
 	}
 	uploaded := parts[3].(map[string]any)["fileData"].(map[string]any)
 	if uploaded["fileUri"] != "https://generativelanguage.googleapis.com/v1beta/files/report" ||
-		uploaded["mimeType"] != "application/pdf" {
+		uploaded["mimeType"] != "application/pdf" ||
+		parts[3].(map[string]any)["mediaResolution"] != "MEDIA_RESOLUTION_LOW" {
 		t.Fatalf("unexpected uploaded file data %v", uploaded)
+	}
+}
+
+func TestFileURLPrompt(t *testing.T) {
+	fileServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/photo.png" {
+			response.Header().Set("Content-Type", "image/webp")
+		} else {
+			response.Header().Set("Content-Type", "application/octet-stream")
+		}
+		_, _ = response.Write([]byte("file"))
+	}))
+	defer fileServer.Close()
+	var gotBody map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	})
+	metadata := map[string]any{"media_resolution": "MEDIA_RESOLUTION_HIGH", "ignored": true}
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.ImageURL{
+			URL: fileServer.URL + "/photo.png", ForceDownload: ai.FileDownloadAllowLocal,
+			VendorMetadata: metadata,
+		},
+		ai.AudioURL{URL: fileServer.URL + "/speech.mp3", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.DocumentURL{URL: fileServer.URL + "/report.pdf", ForceDownload: ai.FileDownloadAllowLocal},
+	}}}}}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	parts := gotBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	image := parts[0].(map[string]any)
+	if image["inlineData"].(map[string]any)["mimeType"] != "image/webp" ||
+		image["inlineData"].(map[string]any)["data"] != "ZmlsZQ==" ||
+		image["mediaResolution"] != "MEDIA_RESOLUTION_HIGH" || image["videoMetadata"] != nil {
+		t.Fatalf("unexpected image URL part: %#v", image)
+	}
+	if metadata["media_resolution"] != "MEDIA_RESOLUTION_HIGH" || metadata["ignored"] != true {
+		t.Fatalf("Google mutated image metadata: %#v", metadata)
+	}
+	if parts[1].(map[string]any)["inlineData"].(map[string]any)["mimeType"] != "audio/mpeg" ||
+		parts[2].(map[string]any)["inlineData"].(map[string]any)["mimeType"] != "application/pdf" {
+		t.Fatalf("unexpected audio or document URL parts: %#v", parts)
+	}
+	for name, content := range map[string]ai.UserContent{
+		"blocked image": ai.ImageURL{URL: fileServer.URL + "/photo.png"},
+		"invalid audio mode": ai.AudioURL{
+			URL: "https://example.com/audio.mp3", ForceDownload: "invalid",
+		},
+		"unknown document media": ai.DocumentURL{URL: "https://example.com/document"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{content}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil {
+				t.Fatal("invalid Google file URL succeeded")
+			}
+		})
 	}
 }
 
@@ -1426,7 +1492,7 @@ func TestVideoURLPrompt(t *testing.T) {
 		"start_offset": "1s", "end_offset": "2s", "media_resolution": "MEDIA_RESOLUTION_HIGH",
 	}
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
-		ai.VideoURL{URL: "https://youtu.be/example", VendorMetadata: metadata},
+		ai.VideoURL{URL: "https://youtu.be/example", ForceDownload: ai.FileDownloadSafe, VendorMetadata: metadata},
 		ai.VideoURL{URL: "https://generativelanguage.googleapis.com/v1beta/files/video", MediaType: "video/mp4"},
 		ai.VideoURL{URL: videoServer.URL + "/clip.webm", ForceDownload: ai.FileDownloadAllowLocal},
 		ai.VideoURL{URL: videoServer.URL + "/typed.mp4", ForceDownload: ai.FileDownloadAllowLocal},
@@ -1458,10 +1524,9 @@ func TestVideoURLPrompt(t *testing.T) {
 	}
 
 	for name, video := range map[string]ai.VideoURL{
-		"blocked local":  {URL: videoServer.URL + "/clip.webm"},
-		"forced YouTube": {URL: "https://youtu.be/example", ForceDownload: ai.FileDownloadSafe},
-		"unknown media":  {URL: "https://example.com/video"},
-		"invalid mode":   {URL: "https://example.com/video.mp4", ForceDownload: "invalid"},
+		"blocked local": {URL: videoServer.URL + "/clip.webm"},
+		"unknown media": {URL: "https://example.com/video"},
+		"invalid mode":  {URL: "https://example.com/video.mp4", ForceDownload: "invalid"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
@@ -1488,14 +1553,20 @@ func TestVertexVideoURLPrompt(t *testing.T) {
 		APIKey: "key", HTTPClient: server.Client(),
 	}))
 	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
-		ai.UserPromptPart{Contents: []ai.UserContent{ai.VideoURL{URL: "gs://bucket/video.mp4"}}},
+		ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.VideoURL{URL: "gs://bucket/video.mp4", ForceDownload: ai.FileDownloadSafe},
+			ai.DocumentURL{URL: "https://example.com/report.pdf"},
+		}},
 	}}}, ai.ModelRequestParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	file := gotBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)[0].(map[string]any)["fileData"].(map[string]any)
-	if file["fileUri"] != "gs://bucket/video.mp4" || file["mimeType"] != "video/mp4" {
-		t.Fatalf("unexpected Vertex video: %#v", file)
+	parts := gotBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	video := parts[0].(map[string]any)["fileData"].(map[string]any)
+	document := parts[1].(map[string]any)["fileData"].(map[string]any)
+	if video["fileUri"] != "gs://bucket/video.mp4" || video["mimeType"] != "video/mp4" ||
+		document["fileUri"] != "https://example.com/report.pdf" || document["mimeType"] != "application/pdf" {
+		t.Fatalf("unexpected Vertex files: video=%#v document=%#v", video, document)
 	}
 }
 

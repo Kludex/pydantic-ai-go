@@ -33,7 +33,7 @@ func (m *ResponsesModel) StreamRequest(
 		}
 		return m.retrieveResponseStream(ctx, responseID, sequence, params.Settings.ExtraHeaders)
 	}
-	payload, err := m.buildResponsesPayload(msgs, params, true)
+	payload, err := m.buildResponsesPayload(ctx, msgs, params, true)
 	if err != nil {
 		return nil, err
 	}

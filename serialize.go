@@ -185,9 +185,16 @@ func marshalResponsePart(p ResponsePart) (wirePart, error) {
 		}, nil
 	case FilePart:
 		content, _ := json.Marshal(struct {
-			Data      []byte `json:"data"`
-			MediaType string `json:"media_type"`
-		}{Data: part.Content.Data, MediaType: part.Content.MediaType})
+			Data           []byte         `json:"data"`
+			MediaType      string         `json:"media_type"`
+			VendorMetadata map[string]any `json:"vendor_metadata,omitempty"`
+			Kind           string         `json:"kind"`
+			Identifier     string         `json:"identifier"`
+		}{
+			Data: part.Content.Data, MediaType: part.Content.MediaType,
+			VendorMetadata: part.Content.VendorMetadata, Kind: "binary",
+			Identifier: part.Content.ResolvedIdentifier(),
+		})
 		return wirePart{
 			PartKind: "file", Content: content, ID: part.ID,
 			ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
@@ -364,14 +371,20 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 		}, nil
 	case "file":
 		var content struct {
-			Data      []byte `json:"data"`
-			MediaType string `json:"media_type"`
+			Data           []byte         `json:"data"`
+			MediaType      string         `json:"media_type"`
+			VendorMetadata map[string]any `json:"vendor_metadata"`
+			Identifier     string         `json:"identifier"`
 		}
 		if err := json.Unmarshal(wp.Content, &content); err != nil {
 			return nil, fmt.Errorf("ai: unmarshal file content: %w", err)
 		}
 		return FilePart{
-			Content: BinaryContent{Data: content.Data, MediaType: content.MediaType}, ID: wp.ID,
+			Content: BinaryContent{
+				Data: content.Data, MediaType: content.MediaType,
+				VendorMetadata: content.VendorMetadata, Identifier: content.Identifier,
+			},
+			ID:           wp.ID,
 			ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
 		}, nil
 	case "tool-call":
@@ -457,28 +470,46 @@ func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
 		case TextContent:
 			items = append(items, wireUserContent{Kind: "text-content", Content: item.Text})
 		case ImageURL:
-			items = append(items, wireUserContent{Kind: "image-url", URL: item.URL})
-		case VideoURL:
-			if err := item.ForceDownload.Validate(); err != nil {
-				return nil, err
-			}
-			mediaType, err := item.ResolvedMediaType()
+			wire, err := marshalFileURL(
+				"image-url", item.URL, item.ResolvedMediaType, item.ResolvedIdentifier(), item.ForceDownload,
+				item.VendorMetadata,
+			)
 			if err != nil {
 				return nil, err
 			}
-			forceDownload := any(false)
-			switch item.ForceDownload {
-			case FileDownloadSafe:
-				forceDownload = true
-			case FileDownloadAllowLocal:
-				forceDownload = string(FileDownloadAllowLocal)
+			items = append(items, wire)
+		case VideoURL:
+			wire, err := marshalFileURL(
+				"video-url", item.URL, item.ResolvedMediaType, item.ResolvedIdentifier(), item.ForceDownload,
+				item.VendorMetadata,
+			)
+			if err != nil {
+				return nil, err
 			}
-			items = append(items, wireUserContent{
-				Kind: "video-url", URL: item.URL, MediaType: mediaType, Identifier: item.ResolvedIdentifier(),
-				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
-			})
+			items = append(items, wire)
+		case AudioURL:
+			wire, err := marshalFileURL(
+				"audio-url", item.URL, item.ResolvedMediaType, item.ResolvedIdentifier(), item.ForceDownload,
+				item.VendorMetadata,
+			)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, wire)
+		case DocumentURL:
+			wire, err := marshalFileURL(
+				"document-url", item.URL, item.ResolvedMediaType, item.ResolvedIdentifier(), item.ForceDownload,
+				item.VendorMetadata,
+			)
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, wire)
 		case BinaryContent:
-			items = append(items, wireUserContent{Kind: "binary", Data: item.Data, MediaType: item.MediaType})
+			items = append(items, wireUserContent{
+				Kind: "binary", Data: item.Data, MediaType: item.MediaType,
+				Identifier: item.ResolvedIdentifier(), VendorMetadata: item.VendorMetadata,
+			})
 		case CachePoint:
 			ttl, err := item.ResolvedTTL()
 			if err != nil {
@@ -513,29 +544,46 @@ func unmarshalUserContent(raw json.RawMessage) (UserPromptPart, error) {
 		case "text-content":
 			part.Contents = append(part.Contents, TextContent{Text: item.Content})
 		case "image-url":
-			part.Contents = append(part.Contents, ImageURL{URL: item.URL})
-		case "video-url":
-			video := VideoURL{
-				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
-				VendorMetadata: item.VendorMetadata,
-			}
-			switch forceDownload := item.ForceDownload.(type) {
-			case nil:
-			case bool:
-				if forceDownload {
-					video.ForceDownload = FileDownloadSafe
-				}
-			case string:
-				video.ForceDownload = FileDownloadMode(forceDownload)
-			default:
-				return UserPromptPart{}, fmt.Errorf("ai: invalid video force_download value %T", item.ForceDownload)
-			}
-			if err := video.ForceDownload.Validate(); err != nil {
+			forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "image")
+			if err != nil {
 				return UserPromptPart{}, err
 			}
-			part.Contents = append(part.Contents, video)
+			part.Contents = append(part.Contents, ImageURL{
+				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+			})
+		case "video-url":
+			forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "video")
+			if err != nil {
+				return UserPromptPart{}, err
+			}
+			part.Contents = append(part.Contents, VideoURL{
+				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+			})
+		case "audio-url":
+			forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "audio")
+			if err != nil {
+				return UserPromptPart{}, err
+			}
+			part.Contents = append(part.Contents, AudioURL{
+				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+			})
+		case "document-url":
+			forceDownload, err := unmarshalFileDownloadMode(item.ForceDownload, "document")
+			if err != nil {
+				return UserPromptPart{}, err
+			}
+			part.Contents = append(part.Contents, DocumentURL{
+				URL: item.URL, MediaType: item.MediaType, Identifier: item.Identifier,
+				ForceDownload: forceDownload, VendorMetadata: item.VendorMetadata,
+			})
 		case "binary":
-			part.Contents = append(part.Contents, BinaryContent{Data: item.Data, MediaType: item.MediaType})
+			part.Contents = append(part.Contents, BinaryContent{
+				Data: item.Data, MediaType: item.MediaType, Identifier: item.Identifier,
+				VendorMetadata: item.VendorMetadata,
+			})
 		case "cache-point":
 			point := CachePoint{TTL: item.TTL}
 			ttl, err := point.ResolvedTTL()
@@ -553,4 +601,50 @@ func unmarshalUserContent(raw json.RawMessage) (UserPromptPart, error) {
 		}
 	}
 	return part, nil
+}
+
+func marshalFileURL(
+	kind, rawURL string,
+	resolveMediaType func() (string, error),
+	identifier string,
+	forceDownload FileDownloadMode,
+	vendorMetadata map[string]any,
+) (wireUserContent, error) {
+	if err := forceDownload.Validate(); err != nil {
+		return wireUserContent{}, err
+	}
+	mediaType, err := resolveMediaType()
+	if err != nil {
+		return wireUserContent{}, err
+	}
+	wireForceDownload := any(false)
+	switch forceDownload {
+	case FileDownloadSafe:
+		wireForceDownload = true
+	case FileDownloadAllowLocal:
+		wireForceDownload = string(FileDownloadAllowLocal)
+	}
+	return wireUserContent{
+		Kind: kind, URL: rawURL, MediaType: mediaType, Identifier: identifier,
+		ForceDownload: wireForceDownload, VendorMetadata: vendorMetadata,
+	}, nil
+}
+
+func unmarshalFileDownloadMode(value any, kind string) (FileDownloadMode, error) {
+	var mode FileDownloadMode
+	switch forceDownload := value.(type) {
+	case nil:
+	case bool:
+		if forceDownload {
+			mode = FileDownloadSafe
+		}
+	case string:
+		mode = FileDownloadMode(forceDownload)
+	default:
+		return "", fmt.Errorf("ai: invalid %s force_download value %T", kind, value)
+	}
+	if err := mode.Validate(); err != nil {
+		return "", err
+	}
+	return mode, nil
 }

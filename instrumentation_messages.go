@@ -4,9 +4,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"mime"
-	"net/url"
-	"path"
 	"strings"
 )
 
@@ -114,37 +111,21 @@ func telemetryUserContent(content UserContent, includeContent, includeBinary boo
 	case TextContent:
 		return telemetryText(content.Text, includeContent)
 	case ImageURL:
-		if version <= 3 {
-			value := map[string]any{"type": "image-url"}
-			if includeContent {
-				value["url"] = content.URL
-			}
-			return value
-		}
-		value := map[string]any{"type": "uri", "modality": "image"}
-		if includeContent {
-			value["uri"] = content.URL
-		}
-		if mediaType := telemetryURLMediaType(content.URL); mediaType != "" {
-			value["mime_type"] = mediaType
-		}
-		return value
+		return telemetryFileURL(
+			"image-url", "image", content.URL, content.ResolvedMediaType, includeContent, version,
+		)
 	case VideoURL:
-		if version <= 3 {
-			value := map[string]any{"type": "video-url"}
-			if includeContent {
-				value["url"] = content.URL
-			}
-			return value
-		}
-		value := map[string]any{"type": "uri", "modality": "video"}
-		if includeContent {
-			value["uri"] = content.URL
-		}
-		if mediaType, err := content.ResolvedMediaType(); err == nil {
-			value["mime_type"] = mediaType
-		}
-		return value
+		return telemetryFileURL(
+			"video-url", "video", content.URL, content.ResolvedMediaType, includeContent, version,
+		)
+	case AudioURL:
+		return telemetryFileURL(
+			"audio-url", "audio", content.URL, content.ResolvedMediaType, includeContent, version,
+		)
+	case DocumentURL:
+		return telemetryFileURL(
+			"document-url", "", content.URL, content.ResolvedMediaType, includeContent, version,
+		)
 	case UploadedFile:
 		value := map[string]any{"type": "file", "mime_type": content.MediaType}
 		if slash := strings.IndexByte(content.MediaType, '/'); slash > 0 {
@@ -181,12 +162,30 @@ func telemetryUserContent(content UserContent, includeContent, includeBinary boo
 	}
 }
 
-func telemetryURLMediaType(rawURL string) string {
-	parsed, err := url.Parse(rawURL)
-	if err != nil {
-		return ""
+func telemetryFileURL(
+	kind, modality, rawURL string,
+	resolveMediaType func() (string, error),
+	includeContent bool,
+	version int,
+) map[string]any {
+	if version <= 3 {
+		value := map[string]any{"type": kind}
+		if includeContent {
+			value["url"] = rawURL
+		}
+		return value
 	}
-	return mime.TypeByExtension(path.Ext(parsed.Path))
+	value := map[string]any{"type": "uri"}
+	if modality != "" {
+		value["modality"] = modality
+	}
+	if includeContent {
+		value["uri"] = rawURL
+	}
+	if mediaType, err := resolveMediaType(); err == nil {
+		value["mime_type"] = mediaType
+	}
+	return value
 }
 
 func telemetryResponseParts(parts []ResponsePart, includeContent, includeBinary bool, version int) []any {

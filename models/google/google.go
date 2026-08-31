@@ -284,59 +284,51 @@ func (model *Model) convertUserPrompt(ctx context.Context, p ai.UserPromptPart) 
 		case ai.TextContent:
 			parts = append(parts, part{Text: item.Text})
 		case ai.BinaryContent:
-			parts = append(parts, part{InlineData: &inlineData{
+			filePart := part{InlineData: &inlineData{
 				MimeType: item.MediaType,
 				Data:     base64.StdEncoding.EncodeToString(item.Data),
-			}})
+			}}
+			applyGoogleFileMetadata(&filePart, item.VendorMetadata, true)
+			parts = append(parts, filePart)
 		case ai.ImageURL:
-			parts = append(parts, part{FileData: &fileData{FileURI: item.URL}})
-		case ai.VideoURL:
-			if err := item.ForceDownload.Validate(); err != nil {
-				return nil, err
-			}
-			mediaType, err := item.ResolvedMediaType()
+			filePart, err := model.convertURLFile(ctx, googleURLFile{
+				url: item.URL, resolveMediaType: item.ResolvedMediaType,
+				forceDownload: item.ForceDownload, vendorMetadata: item.VendorMetadata,
+			})
 			if err != nil {
 				return nil, err
 			}
-			videoPart := part{}
-			direct := item.IsYouTube() ||
-				(model.transport == TransportVertexAI && strings.HasPrefix(item.URL, "gs://")) ||
-				(model.transport != TransportVertexAI && item.ForceDownload == ai.FileDownloadNever &&
-					strings.HasPrefix(item.URL, "https://generativelanguage.googleapis.com/v1beta/files"))
-			if direct && item.ForceDownload == ai.FileDownloadNever {
-				videoPart.FileData = &fileData{MimeType: mediaType, FileURI: item.URL}
-			} else {
-				if item.IsYouTube() {
-					return nil, fmt.Errorf("google: downloading YouTube videos is not supported")
-				}
-				downloaded, err := download.Fetch(ctx, item.URL, item.ForceDownload == ai.FileDownloadAllowLocal)
-				if err != nil {
-					return nil, err
-				}
-				if downloaded.MediaType != "" {
-					mediaType = downloaded.MediaType
-				}
-				videoPart.InlineData = &inlineData{
-					MimeType: mediaType, Data: base64.StdEncoding.EncodeToString(downloaded.Data),
-				}
+			parts = append(parts, filePart)
+		case ai.VideoURL:
+			filePart, err := model.convertURLFile(ctx, googleURLFile{
+				url: item.URL, resolveMediaType: item.ResolvedMediaType,
+				forceDownload: item.ForceDownload, vendorMetadata: item.VendorMetadata,
+				directAlways: item.IsYouTube() ||
+					model.transport == TransportVertexAI && strings.HasPrefix(item.URL, "gs://"),
+				videoMetadata: true,
+			})
+			if err != nil {
+				return nil, err
 			}
-			videoMetadata := cloneGoogleMap(item.VendorMetadata)
-			if resolution, exists := videoMetadata["media_resolution"]; exists {
-				videoPart.MediaResolution = resolution
-				delete(videoMetadata, "media_resolution")
+			parts = append(parts, filePart)
+		case ai.AudioURL:
+			filePart, err := model.convertURLFile(ctx, googleURLFile{
+				url: item.URL, resolveMediaType: item.ResolvedMediaType,
+				forceDownload: item.ForceDownload, vendorMetadata: item.VendorMetadata,
+			})
+			if err != nil {
+				return nil, err
 			}
-			if start, exists := videoMetadata["start_offset"]; exists {
-				videoMetadata["startOffset"] = start
-				delete(videoMetadata, "start_offset")
+			parts = append(parts, filePart)
+		case ai.DocumentURL:
+			filePart, err := model.convertURLFile(ctx, googleURLFile{
+				url: item.URL, resolveMediaType: item.ResolvedMediaType,
+				forceDownload: item.ForceDownload, vendorMetadata: item.VendorMetadata,
+			})
+			if err != nil {
+				return nil, err
 			}
-			if end, exists := videoMetadata["end_offset"]; exists {
-				videoMetadata["endOffset"] = end
-				delete(videoMetadata, "end_offset")
-			}
-			if len(videoMetadata) > 0 {
-				videoPart.VideoMetadata = videoMetadata
-			}
-			parts = append(parts, videoPart)
+			parts = append(parts, filePart)
 		case ai.UploadedFile:
 			if item.ProviderName != model.providerName {
 				return nil, fmt.Errorf("google: uploaded file %q belongs to provider %q", item.FileID, item.ProviderName)
@@ -347,12 +339,76 @@ func (model *Model) convertUserPrompt(ctx context.Context, p ai.UserPromptPart) 
 			if model.transport != TransportVertexAI && !strings.HasPrefix(item.FileID, "https://") {
 				return nil, fmt.Errorf("google: Gemini API uploaded file must use an https:// Files API URI, got %q", item.FileID)
 			}
-			parts = append(parts, part{FileData: &fileData{MimeType: item.MediaType, FileURI: item.FileID}})
+			filePart := part{FileData: &fileData{MimeType: item.MediaType, FileURI: item.FileID}}
+			applyGoogleFileMetadata(&filePart, item.VendorMetadata, true)
+			parts = append(parts, filePart)
 		default:
 			return nil, fmt.Errorf("google: unsupported user content type %T", c)
 		}
 	}
 	return parts, nil
+}
+
+type googleURLFile struct {
+	url              string
+	resolveMediaType func() (string, error)
+	forceDownload    ai.FileDownloadMode
+	vendorMetadata   map[string]any
+	directAlways     bool
+	videoMetadata    bool
+}
+
+func (model *Model) convertURLFile(ctx context.Context, file googleURLFile) (part, error) {
+	if err := file.forceDownload.Validate(); err != nil {
+		return part{}, err
+	}
+	mediaType, err := file.resolveMediaType()
+	if err != nil {
+		return part{}, err
+	}
+	direct := file.directAlways || file.forceDownload == ai.FileDownloadNever &&
+		(model.transport == TransportVertexAI ||
+			strings.HasPrefix(file.url, "https://generativelanguage.googleapis.com/v1beta/files"))
+	filePart := part{}
+	if direct {
+		filePart.FileData = &fileData{MimeType: mediaType, FileURI: file.url}
+	} else {
+		downloaded, err := download.Fetch(ctx, file.url, file.forceDownload == ai.FileDownloadAllowLocal)
+		if err != nil {
+			return part{}, err
+		}
+		if downloaded.MediaType != "" {
+			mediaType = downloaded.MediaType
+		}
+		filePart.InlineData = &inlineData{
+			MimeType: mediaType,
+			Data:     base64.StdEncoding.EncodeToString(downloaded.Data),
+		}
+	}
+	applyGoogleFileMetadata(&filePart, file.vendorMetadata, file.videoMetadata)
+	return filePart, nil
+}
+
+func applyGoogleFileMetadata(filePart *part, metadata map[string]any, video bool) {
+	metadata = cloneGoogleMap(metadata)
+	if resolution, exists := metadata["media_resolution"]; exists {
+		filePart.MediaResolution = resolution
+		delete(metadata, "media_resolution")
+	}
+	if !video {
+		return
+	}
+	if start, exists := metadata["start_offset"]; exists {
+		metadata["startOffset"] = start
+		delete(metadata, "start_offset")
+	}
+	if end, exists := metadata["end_offset"]; exists {
+		metadata["endOffset"] = end
+		delete(metadata, "end_offset")
+	}
+	if len(metadata) > 0 {
+		filePart.VideoMetadata = metadata
+	}
 }
 
 type functionCall struct {

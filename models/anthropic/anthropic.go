@@ -15,6 +15,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/internal/download"
 )
 
 const defaultMaxTokens = 4096
@@ -123,7 +124,7 @@ func (m *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, 
 
 // Request implements ai.Model.
 func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
-	payload, err := m.buildPayload(msgs, params)
+	payload, err := m.buildPayload(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +163,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 func (m *Model) CountTokens(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (ai.Usage, error) {
-	payload, err := m.buildPayload(messages, params)
+	payload, err := m.buildPayload(ctx, messages, params)
 	if err != nil {
 		return ai.Usage{}, err
 	}
@@ -416,7 +417,7 @@ type imageSource struct {
 	FileID    string `json:"file_id,omitempty"`
 }
 
-func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
+func convertUserPrompt(ctx context.Context, p ai.UserPromptPart) ([]contentBlock, error) {
 	if len(p.Contents) == 0 {
 		return []contentBlock{{Type: "text", Text: p.Content}}, nil
 	}
@@ -435,13 +436,64 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 		case ai.TextContent:
 			blocks = append(blocks, contentBlock{Type: "text", Text: item.Text})
 		case ai.BinaryContent:
-			blocks = append(blocks, contentBlock{Type: "image", Source: &imageSource{
-				Type:      "base64",
-				MediaType: item.MediaType,
-				Data:      base64.StdEncoding.EncodeToString(item.Data),
-			}})
+			block, err := anthropicBinaryBlock(item.Data, item.MediaType)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
 		case ai.ImageURL:
-			blocks = append(blocks, contentBlock{Type: "image", Source: &imageSource{Type: "url", URL: item.URL}})
+			if err := item.ForceDownload.Validate(); err != nil {
+				return nil, err
+			}
+			if item.ForceDownload == ai.FileDownloadNever {
+				blocks = append(blocks, contentBlock{
+					Type: "image", Source: &imageSource{Type: "url", URL: item.URL},
+				})
+				continue
+			}
+			mediaType, err := item.ResolvedMediaType()
+			if err != nil {
+				return nil, err
+			}
+			downloaded, err := download.Fetch(
+				ctx, item.URL, item.ForceDownload == ai.FileDownloadAllowLocal,
+			)
+			if err != nil {
+				return nil, err
+			}
+			block, err := anthropicBinaryBlock(downloaded.Data, mediaType)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
+		case ai.DocumentURL:
+			if err := item.ForceDownload.Validate(); err != nil {
+				return nil, err
+			}
+			mediaType, err := item.ResolvedMediaType()
+			if err != nil {
+				return nil, err
+			}
+			if mediaType == "application/pdf" && item.ForceDownload == ai.FileDownloadNever {
+				blocks = append(blocks, contentBlock{
+					Type: "document", Source: &imageSource{Type: "url", URL: item.URL},
+				})
+				continue
+			}
+			if mediaType != "application/pdf" && mediaType != "text/plain" {
+				return nil, fmt.Errorf("anthropic: unsupported document media type %q", mediaType)
+			}
+			downloaded, err := download.Fetch(
+				ctx, item.URL, item.ForceDownload == ai.FileDownloadAllowLocal,
+			)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, anthropicDocumentBlock(downloaded.Data, mediaType))
+		case ai.AudioURL:
+			return nil, fmt.Errorf("anthropic: audio URL input is not supported")
+		case ai.VideoURL:
+			return nil, fmt.Errorf("anthropic: video URL input is not supported")
 		case ai.UploadedFile:
 			if item.ProviderName != "anthropic" {
 				return nil, fmt.Errorf(
@@ -463,6 +515,30 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 		}
 	}
 	return blocks, nil
+}
+
+func anthropicBinaryBlock(data []byte, mediaType string) (contentBlock, error) {
+	switch {
+	case strings.HasPrefix(mediaType, "image/"):
+		return contentBlock{Type: "image", Source: &imageSource{
+			Type: "base64", MediaType: mediaType, Data: base64.StdEncoding.EncodeToString(data),
+		}}, nil
+	case mediaType == "application/pdf", mediaType == "text/plain":
+		return anthropicDocumentBlock(data, mediaType), nil
+	default:
+		return contentBlock{}, fmt.Errorf("anthropic: unsupported binary content media type %q", mediaType)
+	}
+}
+
+func anthropicDocumentBlock(data []byte, mediaType string) contentBlock {
+	if mediaType == "application/pdf" {
+		return contentBlock{Type: "document", Source: &imageSource{
+			Type: "base64", MediaType: mediaType, Data: base64.StdEncoding.EncodeToString(data),
+		}}
+	}
+	return contentBlock{Type: "document", Source: &imageSource{
+		Type: "text", MediaType: mediaType, Data: string(data),
+	}}
 }
 
 func resolveAnthropicCachePoints(messages *[]messageParam) error {
@@ -702,7 +778,9 @@ func anthropicSupportsDynamicFiltering(modelName string) bool {
 	return false
 }
 
-func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*messagesRequest, error) {
+func (m *Model) buildPayload(
+	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
+) (*messagesRequest, error) {
 	settings, cache, err := extractCacheSettings(params.Settings)
 	if err != nil {
 		return nil, err
@@ -867,7 +945,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		}
 	}
 	for _, msg := range trimmedMessages {
-		converted, err := convertMessage(msg, deferredNames, advisorActive)
+		converted, err := convertMessage(ctx, msg, deferredNames, advisorActive)
 		if err != nil {
 			return nil, err
 		}
@@ -1083,11 +1161,11 @@ func hasStableAnthropicTool(params ai.ModelRequestParams) bool {
 }
 
 func convertMessage(
-	msg ai.ModelMessage, deferredNames map[string]struct{}, advisorActive bool,
+	ctx context.Context, msg ai.ModelMessage, deferredNames map[string]struct{}, advisorActive bool,
 ) ([]messageParam, error) {
 	switch m := msg.(type) {
 	case ai.ModelRequest:
-		return convertRequest(m, deferredNames)
+		return convertRequest(ctx, m, deferredNames)
 	case ai.ModelResponse:
 		return convertResponse(m, deferredNames, advisorActive)
 	default:
@@ -1095,7 +1173,9 @@ func convertMessage(
 	}
 }
 
-func convertRequest(m ai.ModelRequest, deferredNames map[string]struct{}) ([]messageParam, error) {
+func convertRequest(
+	ctx context.Context, m ai.ModelRequest, deferredNames map[string]struct{},
+) ([]messageParam, error) {
 	var blocks []contentBlock
 	searchReveals := make(map[string]struct{})
 	for _, part := range m.Parts {
@@ -1105,7 +1185,7 @@ func convertRequest(m ai.ModelRequest, deferredNames map[string]struct{}) ([]mes
 			// system part in history becomes user-visible context.
 			blocks = append(blocks, contentBlock{Type: "text", Text: p.Content})
 		case ai.UserPromptPart:
-			converted, err := convertUserPrompt(p)
+			converted, err := convertUserPrompt(ctx, p)
 			if err != nil {
 				return nil, err
 			}

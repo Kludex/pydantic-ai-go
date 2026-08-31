@@ -1003,7 +1003,10 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
 		ai.TextContent{Text: "what is this?"},
 		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
+		ai.BinaryContent{Data: []byte("pdf"), MediaType: "application/pdf"},
+		ai.BinaryContent{Data: []byte("text"), MediaType: "text/plain"},
 		ai.ImageURL{URL: "https://example.com/cat.png"},
+		ai.DocumentURL{URL: "https://example.com/report.pdf"},
 		ai.UploadedFile{FileID: "file-image", ProviderName: "anthropic", MediaType: "image/png"},
 		ai.UploadedFile{FileID: "file-document", ProviderName: "anthropic", MediaType: "application/pdf"},
 	}}}}}
@@ -1011,23 +1014,100 @@ func TestMultimodalUserPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	blocks := gotBody["messages"].([]any)[0].(map[string]any)["content"].([]any)
-	if len(blocks) != 5 {
+	if len(blocks) != 8 {
 		t.Fatalf("unexpected blocks %v", blocks)
 	}
 	source := blocks[1].(map[string]any)["source"].(map[string]any)
 	if source["type"] != "base64" || source["data"] != "aGk=" || source["media_type"] != "image/png" {
 		t.Fatalf("unexpected image source %v", source)
 	}
-	urlSource := blocks[2].(map[string]any)["source"].(map[string]any)
+	pdfSource := blocks[2].(map[string]any)["source"].(map[string]any)
+	textSource := blocks[3].(map[string]any)["source"].(map[string]any)
+	if blocks[2].(map[string]any)["type"] != "document" || pdfSource["type"] != "base64" ||
+		pdfSource["data"] != "cGRm" || blocks[3].(map[string]any)["type"] != "document" ||
+		textSource["type"] != "text" || textSource["data"] != "text" {
+		t.Fatalf("unexpected inline documents: pdf=%#v text=%#v", blocks[2], blocks[3])
+	}
+	urlSource := blocks[4].(map[string]any)["source"].(map[string]any)
 	if urlSource["type"] != "url" || urlSource["url"] != "https://example.com/cat.png" {
 		t.Fatalf("unexpected url source %v", urlSource)
 	}
-	imageFile := blocks[3].(map[string]any)
-	documentFile := blocks[4].(map[string]any)
+	documentURL := blocks[5].(map[string]any)
+	if documentURL["type"] != "document" ||
+		documentURL["source"].(map[string]any)["url"] != "https://example.com/report.pdf" {
+		t.Fatalf("unexpected document URL: %#v", documentURL)
+	}
+	imageFile := blocks[6].(map[string]any)
+	documentFile := blocks[7].(map[string]any)
 	if imageFile["type"] != "image" || imageFile["source"].(map[string]any)["file_id"] != "file-image" ||
 		documentFile["type"] != "document" ||
 		documentFile["source"].(map[string]any)["file_id"] != "file-document" {
 		t.Fatalf("unexpected uploaded files: image=%#v document=%#v", imageFile, documentFile)
+	}
+}
+
+func TestDownloadedFileContent(t *testing.T) {
+	fileServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = response.Write([]byte(strings.TrimPrefix(request.URL.Path, "/")))
+	}))
+	defer fileServer.Close()
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"m","content":[{"type":"text","text":"done"}],"usage":{}}`))
+	})
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.ImageURL{URL: fileServer.URL + "/image.png", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.DocumentURL{URL: fileServer.URL + "/document.pdf", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.DocumentURL{URL: fileServer.URL + "/text.txt", ForceDownload: ai.FileDownloadAllowLocal},
+	}}}}}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	blocks := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if blocks[0].(map[string]any)["source"].(map[string]any)["data"] != "aW1hZ2UucG5n" ||
+		blocks[1].(map[string]any)["source"].(map[string]any)["data"] != "ZG9jdW1lbnQucGRm" ||
+		blocks[2].(map[string]any)["source"].(map[string]any)["data"] != "text.txt" {
+		t.Fatalf("unexpected downloaded files: %#v", blocks)
+	}
+
+	for name, content := range map[string]ai.UserContent{
+		"audio URL": ai.AudioURL{URL: "https://example.com/audio.mp3"},
+		"video URL": ai.VideoURL{URL: "https://example.com/video.mp4"},
+		"binary audio": ai.BinaryContent{
+			Data: []byte("audio"), MediaType: "audio/mpeg",
+		},
+		"document media": ai.DocumentURL{URL: "https://example.com/document.docx"},
+		"image mode": ai.ImageURL{
+			URL: "https://example.com/image.png", ForceDownload: "invalid",
+		},
+		"image media": ai.ImageURL{
+			URL: fileServer.URL + "/image", ForceDownload: ai.FileDownloadAllowLocal,
+		},
+		"image download": ai.ImageURL{
+			URL: fileServer.URL + "/image.png", ForceDownload: ai.FileDownloadSafe,
+		},
+		"image content type": ai.ImageURL{
+			URL: fileServer.URL + "/image.unknown", MediaType: "application/unknown",
+			ForceDownload: ai.FileDownloadAllowLocal,
+		},
+		"document mode": ai.DocumentURL{
+			URL: "https://example.com/report.pdf", ForceDownload: "invalid",
+		},
+		"document inference": ai.DocumentURL{URL: "https://example.com/report"},
+		"blocked local":      ai.DocumentURL{URL: fileServer.URL + "/text.txt"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{content}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil {
+				t.Fatal("unsupported Anthropic content succeeded")
+			}
+		})
 	}
 }
 

@@ -86,7 +86,7 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 	if responseID, ok := suspendedResponsesID(msgs, m.providerName); ok {
 		return m.retrieveResponse(ctx, responseID, params.Settings.ExtraHeaders)
 	}
-	payload, err := m.buildResponsesPayload(msgs, params, true)
+	payload, err := m.buildResponsesPayload(ctx, msgs, params, true)
 	if err != nil {
 		return nil, err
 	}
@@ -129,7 +129,7 @@ func (m *ResponsesModel) CountTokens(
 	if len(messages) == 0 {
 		return ai.Usage{}, fmt.Errorf("openai: cannot count tokens without messages")
 	}
-	payload, err := m.buildResponsesPayload(messages, params, true)
+	payload, err := m.buildResponsesPayload(ctx, messages, params, true)
 	if err != nil {
 		return ai.Usage{}, err
 	}
@@ -185,7 +185,7 @@ func (m *ResponsesModel) CountTokens(
 func (m *ResponsesModel) CompactMessages(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*ai.ModelResponse, error) {
-	payload, err := m.buildResponsesPayload(messages, params, false)
+	payload, err := m.buildResponsesPayload(ctx, messages, params, false)
 	if err != nil {
 		return nil, err
 	}
@@ -420,6 +420,9 @@ type responsesInputContent struct {
 	Text                  string                       `json:"text,omitempty"`
 	ImageURL              string                       `json:"image_url,omitempty"`
 	FileID                string                       `json:"file_id,omitempty"`
+	FileURL               string                       `json:"file_url,omitempty"`
+	FileData              string                       `json:"file_data,omitempty"`
+	Filename              string                       `json:"filename,omitempty"`
 	Detail                string                       `json:"detail,omitempty"`
 	PromptCacheBreakpoint *openAIPromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 }
@@ -626,7 +629,7 @@ func responsesImageGenerationSize(size ai.ImageGenerationSize, aspectRatio ai.Im
 }
 
 func (m *ResponsesModel) buildResponsesPayload(
-	msgs []ai.ModelMessage, params ai.ModelRequestParams, nativeDeferred bool,
+	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams, nativeDeferred bool,
 ) (*responsesRequest, error) {
 	settings, promptCache, err := extractPromptCacheSettings(params.Settings)
 	if err != nil {
@@ -711,6 +714,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 	}
 	converter := responsesMessageConverter{
+		ctx:                    ctx,
 		providerName:           m.providerName,
 		clientToolSearch:       activeToolSearch,
 		serverToolSearch:       serverToolSearch,

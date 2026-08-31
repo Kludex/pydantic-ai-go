@@ -102,7 +102,7 @@ func TestCachePlacementEdges(t *testing.T) {
 		t.Fatal(err)
 	}
 	model := NewModel("model")
-	request, err := model.buildPayload(nil, ai.ModelRequestParams{
+	request, err := model.buildPayload(t.Context(), nil, ai.ModelRequestParams{
 		Instructions: "stable", Settings: settings,
 	})
 	if err != nil {
@@ -112,7 +112,7 @@ func TestCachePlacementEdges(t *testing.T) {
 	if system[0].CacheControl == nil || len(request.Messages) != 0 || len(request.Tools) != 0 {
 		t.Fatalf("cache placement without messages or tools changed: %#v", request)
 	}
-	request, err = model.buildPayload(nil, ai.ModelRequestParams{
+	request, err = model.buildPayload(t.Context(), nil, ai.ModelRequestParams{
 		Instructions:     "dynamic",
 		InstructionParts: []ai.InstructionPart{{Content: "dynamic", Dynamic: true}},
 		Settings:         settings,

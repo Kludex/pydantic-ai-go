@@ -375,21 +375,28 @@ func TestInstrumentationMessageVersions(t *testing.T) {
 		unwantedOut   []string
 	}{
 		{
-			version:       2,
-			wantInput:     []string{`"role":"user"`, `"type":"image-url"`, `"type":"video-url"`, `"type":"binary"`},
+			version: 2,
+			wantInput: []string{
+				`"role":"user"`, `"type":"image-url"`, `"type":"video-url"`, `"type":"audio-url"`,
+				`"type":"document-url"`, `"type":"binary"`,
+			},
 			unwantedInput: []string{`"role":"tool"`, `"type":"uri"`, `"type":"blob"`},
 			unwantedOut:   []string{`"type":"reasoning"`},
 		},
 		{
-			version:       3,
-			wantInput:     []string{`"role":"user"`, `"type":"image-url"`, `"type":"video-url"`, `"type":"binary"`},
+			version: 3,
+			wantInput: []string{
+				`"role":"user"`, `"type":"image-url"`, `"type":"video-url"`, `"type":"audio-url"`,
+				`"type":"document-url"`, `"type":"binary"`,
+			},
 			unwantedInput: []string{`"role":"tool"`, `"type":"uri"`, `"type":"blob"`},
 			wantOutput:    []string{`"type":"reasoning"`},
 		},
 		{
 			version: 4,
 			wantInput: []string{
-				`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"modality":"video"`, `"type":"blob"`,
+				`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"modality":"video"`,
+				`"mime_type":"audio/mpeg"`, `"mime_type":"application/pdf"`, `"type":"blob"`,
 			},
 			unwantedInput: []string{`"role":"tool"`, `"type":"image-url"`},
 			wantOutput:    []string{`"type":"reasoning"`},
@@ -397,7 +404,8 @@ func TestInstrumentationMessageVersions(t *testing.T) {
 		{
 			version: 5,
 			wantInput: []string{
-				`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"modality":"video"`, `"type":"blob"`,
+				`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"modality":"video"`,
+				`"mime_type":"audio/mpeg"`, `"mime_type":"application/pdf"`, `"type":"blob"`,
 			},
 			unwantedInput: []string{`"role":"tool"`, `"type":"image-url"`},
 			wantOutput:    []string{`"type":"reasoning"`},
@@ -405,7 +413,8 @@ func TestInstrumentationMessageVersions(t *testing.T) {
 		{
 			version: 6,
 			wantInput: []string{
-				`"role":"tool"`, `"type":"uri"`, `"modality":"video"`, `"type":"blob"`,
+				`"role":"tool"`, `"type":"uri"`, `"modality":"video"`, `"modality":"audio"`,
+				`"mime_type":"application/pdf"`, `"type":"blob"`,
 			},
 			unwantedInput: []string{`"type":"image-url"`},
 			wantOutput:    []string{`"type":"reasoning"`},
@@ -429,6 +438,8 @@ func TestInstrumentationMessageVersions(t *testing.T) {
 				ai.UserPromptPart{Contents: []ai.UserContent{
 					ai.ImageURL{URL: "https://example.com/image.png"}, ai.ImageURL{URL: "://invalid"},
 					ai.VideoURL{URL: "https://example.com/video.mp4"}, ai.VideoURL{URL: "://invalid"},
+					ai.AudioURL{URL: "https://example.com/audio.mp3"}, ai.AudioURL{URL: "://invalid"},
+					ai.DocumentURL{URL: "https://example.com/report.pdf"}, ai.DocumentURL{URL: "://invalid"},
 					ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
 				}},
 				ai.ToolReturnPart{ToolName: "lookup", ToolCallID: "call", Content: "result"},

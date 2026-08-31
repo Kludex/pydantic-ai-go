@@ -40,8 +40,8 @@ func (a *Agent[Deps, Output]) Run(ctx context.Context, prompt string, deps Deps,
 	return a.runPrompt(ctx, UserPromptPart{Content: prompt}, deps, opts)
 }
 
-// RunParts is Run with a multimodal prompt: text, image URLs, and inline
-// binary data. Providers reject content kinds they do not support.
+// RunParts is Run with ordered text, file URLs, uploaded files, and inline binary data.
+// Providers reject content kinds they do not support.
 func (a *Agent[Deps, Output]) RunParts(ctx context.Context, contents []UserContent, deps Deps, opts ...RunOption) (*RunResult[Output], error) {
 	return a.runPrompt(ctx, UserPromptPart{Contents: contents}, deps, opts)
 }
@@ -929,8 +929,18 @@ func cloneUserContents(contents []UserContent) []UserContent {
 		switch content := content.(type) {
 		case BinaryContent:
 			content.Data = slices.Clone(content.Data)
+			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
+			cloned[index] = content
+		case ImageURL:
+			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
 			cloned[index] = content
 		case VideoURL:
+			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
+			cloned[index] = content
+		case AudioURL:
+			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
+			cloned[index] = content
+		case DocumentURL:
 			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
 			cloned[index] = content
 		case UploadedFile:

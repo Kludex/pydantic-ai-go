@@ -3,7 +3,7 @@ package ai_test
 import (
 	"context"
 	"errors"
-	"slices"
+	"reflect"
 	"sync"
 	"testing"
 
@@ -90,7 +90,7 @@ func TestRunPartsAsUsesMultimodalPrompt(t *testing.T) {
 	) (*ai.ModelResponse, error) {
 		request := messages[0].(ai.ModelRequest)
 		prompt := request.Parts[0].(ai.UserPromptPart)
-		if !slices.Equal(prompt.Contents, contents) || params.OutputTool == nil {
+		if !reflect.DeepEqual(prompt.Contents, contents) || params.OutputTool == nil {
 			t.Fatalf("unexpected specialized multimodal request: messages=%+v params=%+v", messages, params)
 		}
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{

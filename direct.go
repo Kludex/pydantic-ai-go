@@ -34,7 +34,11 @@ func RequestModel(
 	defer func() {
 		err = errors.Join(err, closeDirectModel(ctx, closeModel))
 	}()
-	return requestModelDirect(ctx, model, messages, params, false, nil, nil)
+	response, err = requestModelDirect(ctx, model, messages, params, false, nil, nil)
+	if response != nil {
+		response = cloneModelResponse(response)
+	}
+	return response, err
 }
 
 // ModelResponseStream is a single-consumer direct model stream.

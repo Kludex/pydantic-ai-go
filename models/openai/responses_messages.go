@@ -1,6 +1,7 @@
 package openai
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -72,6 +73,7 @@ func prepareResponsesFunctionTool(definition ai.ToolDefinition, strictSupport bo
 }
 
 type responsesMessageConverter struct {
+	ctx                    context.Context
 	providerName           string
 	clientToolSearch       bool
 	serverToolSearch       bool
@@ -100,7 +102,7 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 		case ai.SystemPromptPart:
 			out = append(out, responsesInput{Role: "system", Content: part.Content})
 		case ai.UserPromptPart:
-			content, err := responsesUserContent(part, c.providerName, c.promptCacheBreakpoints)
+			content, err := responsesUserContent(c.ctx, part, c.providerName, c.promptCacheBreakpoints)
 			if err != nil {
 				return nil, err
 			}
@@ -145,7 +147,7 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 }
 
 func responsesUserContent(
-	prompt ai.UserPromptPart, providerName string, promptCacheBreakpoints bool,
+	ctx context.Context, prompt ai.UserPromptPart, providerName string, promptCacheBreakpoints bool,
 ) (any, error) {
 	if len(prompt.Contents) == 0 {
 		return prompt.Content, nil
@@ -167,13 +169,54 @@ func responsesUserContent(
 		case ai.TextContent:
 			content = append(content, responsesInputContent{Type: "input_text", Text: item.Text})
 		case ai.ImageURL:
-			content = append(content, responsesInputContent{Type: "input_image", ImageURL: item.URL})
-		case ai.BinaryContent:
-			if !strings.HasPrefix(item.MediaType, "image/") {
-				return nil, fmt.Errorf("openai: Responses binary input requires an image media type, got %q", item.MediaType)
+			if err := item.ForceDownload.Validate(); err != nil {
+				return nil, err
 			}
-			imageURL := "data:" + item.MediaType + ";base64," + base64.StdEncoding.EncodeToString(item.Data)
-			content = append(content, responsesInputContent{Type: "input_image", ImageURL: imageURL})
+			imageURL := item.URL
+			if item.ForceDownload != ai.FileDownloadNever {
+				downloaded, err := downloadFileContent(
+					ctx, item.URL, item.ResolvedMediaType, item.ForceDownload,
+				)
+				if err != nil {
+					return nil, err
+				}
+				imageURL = downloaded.dataURI
+			}
+			content = append(content, responsesInputContent{
+				Type: "input_image", ImageURL: imageURL, Detail: imageDetail(item.VendorMetadata),
+			})
+		case ai.AudioURL:
+			file, err := responsesFileURL(ctx, item.URL, item.ResolvedMediaType, item.ForceDownload)
+			if err != nil {
+				return nil, err
+			}
+			content = append(content, file)
+		case ai.DocumentURL:
+			file, err := responsesFileURL(ctx, item.URL, item.ResolvedMediaType, item.ForceDownload)
+			if err != nil {
+				return nil, err
+			}
+			content = append(content, file)
+		case ai.VideoURL:
+			return nil, fmt.Errorf("openai: Responses does not support video URL input")
+		case ai.BinaryContent:
+			dataURI := "data:" + item.MediaType + ";base64," + base64.StdEncoding.EncodeToString(item.Data)
+			if isImageMediaType(item.MediaType) {
+				content = append(content, responsesInputContent{
+					Type: "input_image", ImageURL: dataURI, Detail: imageDetail(item.VendorMetadata),
+				})
+				continue
+			}
+			if isAudioMediaType(item.MediaType) || isVideoMediaType(item.MediaType) {
+				return nil, fmt.Errorf("openai: Responses does not support inline %s input", item.MediaType)
+			}
+			extension, err := fileExtension(item.MediaType)
+			if err != nil {
+				return nil, err
+			}
+			content = append(content, responsesInputContent{
+				Type: "input_file", FileData: dataURI, Filename: "filename." + extension,
+			})
 		case ai.UploadedFile:
 			if item.ProviderName != providerName {
 				return nil, fmt.Errorf("openai: uploaded file %q belongs to provider %q", item.FileID, item.ProviderName)
@@ -194,6 +237,31 @@ func responsesUserContent(
 		}
 	}
 	return content, nil
+}
+
+func responsesFileURL(
+	ctx context.Context,
+	rawURL string,
+	resolveMediaType func() (string, error),
+	mode ai.FileDownloadMode,
+) (responsesInputContent, error) {
+	if err := mode.Validate(); err != nil {
+		return responsesInputContent{}, err
+	}
+	if mode == ai.FileDownloadNever {
+		return responsesInputContent{Type: "input_file", FileURL: rawURL}, nil
+	}
+	downloaded, err := downloadFileContent(ctx, rawURL, resolveMediaType, mode)
+	if err != nil {
+		return responsesInputContent{}, err
+	}
+	extension, err := fileExtension(downloaded.mediaType)
+	if err != nil {
+		return responsesInputContent{}, err
+	}
+	return responsesInputContent{
+		Type: "input_file", FileData: downloaded.dataURI, Filename: "filename." + extension,
+	}, nil
 }
 
 func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([]responsesInput, error) {

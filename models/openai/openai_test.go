@@ -560,8 +560,10 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
 		ai.TextContent{Text: "what is this?"},
-		ai.ImageURL{URL: "https://example.com/cat.png"},
-		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
+		ai.ImageURL{URL: "https://example.com/cat.png", VendorMetadata: map[string]any{"detail": "low"}},
+		ai.BinaryContent{
+			Data: []byte("hi"), MediaType: "image/png", VendorMetadata: map[string]any{"detail": "high"},
+		},
 	}}}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
 		t.Fatal(err)
@@ -573,12 +575,176 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	if parts[0].(map[string]any)["type"] != "text" {
 		t.Fatalf("unexpected first part %v", parts[0])
 	}
-	if parts[1].(map[string]any)["image_url"].(map[string]any)["url"] != "https://example.com/cat.png" {
+	if parts[1].(map[string]any)["image_url"].(map[string]any)["url"] != "https://example.com/cat.png" ||
+		parts[1].(map[string]any)["image_url"].(map[string]any)["detail"] != "low" {
 		t.Fatalf("unexpected image part %v", parts[1])
 	}
 	dataURL := parts[2].(map[string]any)["image_url"].(map[string]any)["url"].(string)
-	if dataURL != "data:image/png;base64,aGk=" {
+	if dataURL != "data:image/png;base64,aGk=" ||
+		parts[2].(map[string]any)["image_url"].(map[string]any)["detail"] != "high" {
 		t.Fatalf("unexpected data URL %q", dataURL)
+	}
+}
+
+func TestChatFileContent(t *testing.T) {
+	fileServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/audio":
+			response.Header().Set("Content-Type", "audio/mpeg")
+		case "/document.pdf":
+			response.Header().Set("Content-Type", "application/pdf")
+		case "/text.txt":
+			response.Header().Set("Content-Type", "text/plain")
+		case "/image":
+			response.Header().Set("Content-Type", "image/png")
+		default:
+			response.Header().Set("Content-Type", "application/octet-stream")
+		}
+		_, _ = response.Write([]byte("file"))
+	}))
+	defer fileServer.Close()
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}]}`))
+	})
+	textURL := fileServer.URL + "/text.txt"
+	textIdentifier := (ai.DocumentURL{URL: textURL}).ResolvedIdentifier()
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.AudioURL{URL: fileServer.URL + "/audio", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.DocumentURL{URL: fileServer.URL + "/document.pdf", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.DocumentURL{URL: textURL, ForceDownload: ai.FileDownloadAllowLocal},
+		ai.ImageURL{URL: fileServer.URL + "/image", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.BinaryContent{Data: []byte("audio"), MediaType: "audio/wav"},
+		ai.BinaryContent{Data: []byte("document"), MediaType: "application/pdf"},
+		ai.BinaryContent{Data: []byte("config"), MediaType: "text/plain", Identifier: "config"},
+	}}}}}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	parts := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if parts[0].(map[string]any)["input_audio"].(map[string]any)["data"] != "ZmlsZQ==" ||
+		parts[0].(map[string]any)["input_audio"].(map[string]any)["format"] != "mp3" ||
+		parts[1].(map[string]any)["file"].(map[string]any)["file_data"] !=
+			"data:application/pdf;base64,ZmlsZQ==" ||
+		parts[1].(map[string]any)["file"].(map[string]any)["filename"] != "filename.pdf" ||
+		parts[2].(map[string]any)["text"] !=
+			"-----BEGIN FILE id=\""+textIdentifier+"\" type=\"text/plain\"-----\nfile\n-----END FILE id=\""+
+				textIdentifier+"\"-----" ||
+		parts[3].(map[string]any)["image_url"].(map[string]any)["url"] != "data:image/png;base64,ZmlsZQ==" ||
+		parts[4].(map[string]any)["input_audio"].(map[string]any)["format"] != "wav" ||
+		parts[5].(map[string]any)["file"].(map[string]any)["filename"] != "filename.pdf" ||
+		parts[6].(map[string]any)["text"] !=
+			"-----BEGIN FILE id=\"config\" type=\"text/plain\"-----\nconfig\n-----END FILE id=\"config\"-----" {
+		t.Fatalf("unexpected Chat file content: %#v", parts)
+	}
+}
+
+func TestChatFileContentCompatibility(t *testing.T) {
+	contentServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/audio.ogg":
+			response.Header().Set("Content-Type", "audio/ogg")
+		case "/unknown.bin":
+			response.Header().Set("Content-Type", "application/unknown")
+		default:
+			response.Header().Set("Content-Type", "application/octet-stream")
+		}
+		_, _ = response.Write([]byte("content"))
+	}))
+	defer contentServer.Close()
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}]}`))
+	}))
+	defer server.Close()
+	model := openai.NewModel(
+		"compatible",
+		openai.WithBaseURL(server.URL),
+		openai.WithHTTPClient(server.Client()),
+		openai.WithChatCompatibility(openai.ChatCompatibility{
+			FileURLInput: true, AudioInputDataURI: true,
+		}),
+	)
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.DocumentURL{URL: "https://example.com/report.pdf"},
+		ai.BinaryContent{Data: []byte("audio"), MediaType: "audio/mpeg"},
+	}}}}}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	parts := bodies[0]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if parts[0].(map[string]any)["file"].(map[string]any)["file_data"] != "https://example.com/report.pdf" ||
+		parts[1].(map[string]any)["input_audio"].(map[string]any)["data"] !=
+			"data:audio/mpeg;base64,YXVkaW8=" {
+		t.Fatalf("unexpected compatible file content: %#v", parts)
+	}
+
+	disabled := openai.NewModel(
+		"compatible", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+		openai.WithChatDocumentInput(false),
+	)
+	enabled := openai.NewModel(
+		"compatible", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+	)
+	for _, test := range []struct {
+		name    string
+		model   *openai.Model
+		content ai.UserContent
+	}{
+		{name: "document disabled", model: disabled, content: ai.BinaryContent{
+			Data: []byte("pdf"), MediaType: "application/pdf",
+		}},
+		{name: "unsupported audio", model: enabled, content: ai.BinaryContent{
+			Data: []byte("audio"), MediaType: "audio/ogg",
+		}},
+		{name: "unsupported file", model: enabled, content: ai.BinaryContent{
+			Data: []byte("data"), MediaType: "application/unknown",
+		}},
+		{name: "invalid image mode", model: enabled, content: ai.ImageURL{
+			URL: "https://example.com/image.png", ForceDownload: "invalid",
+		}},
+		{name: "blocked image", model: enabled, content: ai.ImageURL{
+			URL: "http://127.0.0.1/image.png", ForceDownload: ai.FileDownloadSafe,
+		}},
+		{name: "blocked audio", model: enabled, content: ai.AudioURL{
+			URL: "http://127.0.0.1/audio.mp3",
+		}},
+		{name: "unsupported downloaded audio", model: enabled, content: ai.AudioURL{
+			URL: contentServer.URL + "/audio.ogg", ForceDownload: ai.FileDownloadAllowLocal,
+		}},
+		{name: "unknown document media", model: enabled, content: ai.DocumentURL{
+			URL: "https://example.com/report",
+		}},
+		{name: "invalid document mode", model: enabled, content: ai.DocumentURL{
+			URL: "https://example.com/report.pdf", ForceDownload: "invalid",
+		}},
+		{name: "blocked document", model: enabled, content: ai.DocumentURL{
+			URL: "http://127.0.0.1/report.pdf", ForceDownload: ai.FileDownloadSafe,
+		}},
+		{name: "unsupported downloaded document", model: enabled, content: ai.DocumentURL{
+			URL: contentServer.URL + "/unknown.bin", MediaType: "application/pdf",
+			ForceDownload: ai.FileDownloadAllowLocal,
+		}},
+		{name: "unsupported direct document", model: model, content: ai.DocumentURL{
+			URL: "https://example.com/report.json",
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := test.model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{test.content}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil {
+				t.Fatal("unsupported Chat file content succeeded")
+			}
+		})
 	}
 }
 

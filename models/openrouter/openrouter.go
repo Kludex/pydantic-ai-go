@@ -97,7 +97,8 @@ func NewModel(name string, options ...Option) *Model {
 			Name: "openrouter", BaseURL: defaultBaseURL, APIKey: os.Getenv("OPENROUTER_API_KEY"), Headers: headers,
 		}),
 		openai.WithChatCompatibility(openai.ChatCompatibility{
-			Reasoning: true, ReasoningDetails: true, LegacyMaxTokens: true, ExtendedMetadata: true, VideoInput: true,
+			Reasoning: true, ReasoningDetails: true, LegacyMaxTokens: true, ExtendedMetadata: true,
+			VideoInput: true, FileURLInput: true,
 			NativeToolFunc: openRouterNativeTool,
 			FinishReasons:  map[string]ai.FinishReason{"error": ai.FinishReasonError},
 		}),

@@ -28,7 +28,7 @@ func main() {
 
 Set `OPENAI_API_KEY`. You can also set `OPENAI_BASE_URL` when a proxy preserves OpenAI's provider identity and behavior.
 
-Use `openai.NewResponsesModel` instead of `openai.NewModel` when you need the Responses API.
+Use `openai.NewResponsesModel` instead of `openai.NewModel` when you need the Responses API. Both models accept image, document, and supported audio input. See [Multimodal input](multimodal.md) for provider-specific URL and inline-data behavior.
 
 Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, and `gpt-5.6` model families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
 
@@ -184,7 +184,7 @@ OpenRouter reasoning details become separate `ThinkingPart` values. Text, summar
 
 The OpenRouter model supports native web search and advisor declarations. OpenRouter ignores `AdvisorTool.MaxUses` and `AdvisorTool.Caching`; it maps `MaxTokens` to `max_completion_tokens`. Use `WithAppAttribution` or `OPENROUTER_APP_URL` and `OPENROUTER_APP_TITLE` to identify your application.
 
-`VideoURL` and inline `video/*` binary content use OpenRouter's `video_url` extension. See [Multimodal input](multimodal.md) for safe forced downloads.
+`VideoURL` and inline `video/*` binary content use OpenRouter's `video_url` extension. `DocumentURL` uses OpenRouter's remote file support. Audio URLs are downloaded before they are sent. See [Multimodal input](multimodal.md) for safe forced downloads.
 
 Use `openrouter.Settings` for fallback models, provider routing, presets, context transforms, reasoning, extended usage, and prompt caching. `CacheInstructions`, `CacheMessages`, and `CacheToolDefinitions` add explicit cache boundaries only for supported downstream providers. Anthropic receives the selected TTL and keeps a static instruction boundary before dynamic instructions. Gemini receives message or stable-instruction boundaries without an unsupported TTL. Other routed providers ignore these settings.
 
@@ -301,6 +301,8 @@ func main() {
 
 Use `Config.TokenProvider` instead of `Config.APIKey` for Microsoft Entra ID. The callback runs for every request and receives that request's context.
 
+Azure Chat Completions rejects document input before transport. Use `azure.NewResponsesModel` when you need document URLs, uploaded documents, or inline document data.
+
 ## Anthropic
 
 ```go
@@ -326,6 +328,8 @@ func main() {
 ```
 
 Set `ANTHROPIC_API_KEY`. Use `anthropic.WithBaseURL` and `anthropic.WithHTTPClient` for a compatible gateway.
+
+Anthropic accepts image URLs, PDF URLs, inline images, inline PDFs, and plain-text documents. Forced URL downloads use the shared SSRF protections. Anthropic does not accept audio or video input.
 
 ### Prompt caching
 
@@ -391,6 +395,8 @@ func main() {
 
 Set `GOOGLE_API_KEY` or the legacy `GEMINI_API_KEY`. `GOOGLE_API_KEY` takes precedence. Use `google.WithBaseURL` and `google.WithHTTPClient` for a compatible Gemini Developer API gateway.
 
+Gemini accepts image, document, audio, and video content. Ordinary URLs are downloaded with SSRF protection. Gemini Files API URLs and YouTube videos are sent directly.
+
 ## Google Cloud Vertex AI
 
 ```go
@@ -428,6 +434,8 @@ Routing follows the configured transport. `global` uses `aiplatform.googleapis.c
 Use `google.WithProvider` for a gateway or preconfigured transport. `ProviderConfig.Transport` controls Vertex-specific behavior. `ProviderConfig.Name` is independent persisted identity. This separation keeps history replay correct when a gateway's identity does not match its underlying transport.
 
 Portable `ServiceTierFlex` and `ServiceTierPriority` values become Vertex spillover headers. `ServiceTierDefault` explicitly selects shared on-demand capacity. Per-request `ExtraHeaders` are applied last.
+
+Vertex sends file URLs directly unless you set a forced download mode. YouTube and `gs://` video references remain provider-hosted.
 
 ## Request settings
 

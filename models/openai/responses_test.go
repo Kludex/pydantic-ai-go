@@ -746,8 +746,13 @@ func TestResponsesMultimodalInput(t *testing.T) {
 	})
 	result, err := ai.NewAgent[struct{}, string](model).RunParts(t.Context(), []ai.UserContent{
 		ai.TextContent{Text: "describe"},
-		ai.ImageURL{URL: "https://example.com/image.png"},
+		ai.ImageURL{
+			URL: "https://example.com/image.png", VendorMetadata: map[string]any{"detail": "low"},
+		},
 		ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
+		ai.AudioURL{URL: "https://example.com/audio.mp3"},
+		ai.DocumentURL{URL: "https://example.com/document.pdf"},
+		ai.BinaryContent{Data: []byte("document"), MediaType: "application/pdf"},
 		ai.UploadedFile{
 			FileID: "file-image", ProviderName: "openai", MediaType: "image/png",
 			VendorMetadata: map[string]any{"detail": "high"},
@@ -760,17 +765,88 @@ func TestResponsesMultimodalInput(t *testing.T) {
 	}
 	input := body["input"].([]any)
 	content := input[0].(map[string]any)["content"].([]any)
-	if len(content) != 6 || content[0].(map[string]any)["type"] != "input_text" ||
+	if len(content) != 9 || content[0].(map[string]any)["type"] != "input_text" ||
 		content[0].(map[string]any)["text"] != "describe" ||
 		content[1].(map[string]any)["image_url"] != "https://example.com/image.png" ||
+		content[1].(map[string]any)["detail"] != "low" ||
 		content[2].(map[string]any)["image_url"] != "data:image/png;base64,aW1hZ2U=" ||
-		content[3].(map[string]any)["type"] != "input_image" ||
-		content[3].(map[string]any)["file_id"] != "file-image" ||
-		content[3].(map[string]any)["detail"] != "high" ||
-		content[4].(map[string]any)["type"] != "input_file" ||
-		content[4].(map[string]any)["file_id"] != "file-document" ||
-		content[5].(map[string]any)["detail"] != "auto" {
+		content[2].(map[string]any)["detail"] != "auto" ||
+		content[3].(map[string]any)["file_url"] != "https://example.com/audio.mp3" ||
+		content[4].(map[string]any)["file_url"] != "https://example.com/document.pdf" ||
+		content[5].(map[string]any)["file_data"] != "data:application/pdf;base64,ZG9jdW1lbnQ=" ||
+		content[5].(map[string]any)["filename"] != "filename.pdf" ||
+		content[6].(map[string]any)["type"] != "input_image" ||
+		content[6].(map[string]any)["file_id"] != "file-image" ||
+		content[6].(map[string]any)["detail"] != "high" ||
+		content[7].(map[string]any)["type"] != "input_file" ||
+		content[7].(map[string]any)["file_id"] != "file-document" ||
+		content[8].(map[string]any)["detail"] != "auto" {
 		t.Fatalf("unexpected Responses multimodal content: %#v", content)
+	}
+}
+
+func TestResponsesForcedFileURLs(t *testing.T) {
+	fileServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/image":
+			response.Header().Set("Content-Type", "image/png")
+		case "/audio":
+			response.Header().Set("Content-Type", "audio/mpeg")
+		case "/document":
+			response.Header().Set("Content-Type", "application/pdf")
+		case "/unknown.bin":
+			response.Header().Set("Content-Type", "application/unknown")
+		default:
+			response.Header().Set("Content-Type", "application/octet-stream")
+		}
+		_, _ = response.Write([]byte("file"))
+	}))
+	defer fileServer.Close()
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`))
+	})
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.ImageURL{URL: fileServer.URL + "/image", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.AudioURL{URL: fileServer.URL + "/audio", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.DocumentURL{URL: fileServer.URL + "/document", ForceDownload: ai.FileDownloadAllowLocal},
+	}}}}}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	content := body["input"].([]any)[0].(map[string]any)["content"].([]any)
+	if content[0].(map[string]any)["image_url"] != "data:image/png;base64,ZmlsZQ==" ||
+		content[1].(map[string]any)["file_data"] != "data:audio/mpeg;base64,ZmlsZQ==" ||
+		content[1].(map[string]any)["filename"] != "filename.mp3" ||
+		content[2].(map[string]any)["file_data"] != "data:application/pdf;base64,ZmlsZQ==" ||
+		content[2].(map[string]any)["filename"] != "filename.pdf" {
+		t.Fatalf("unexpected forced file content: %#v", content)
+	}
+
+	for name, item := range map[string]ai.UserContent{
+		"image mode": ai.ImageURL{URL: "https://example.com/image.png", ForceDownload: "invalid"},
+		"blocked image": ai.ImageURL{
+			URL: fileServer.URL + "/image", ForceDownload: ai.FileDownloadSafe,
+		},
+		"audio mode": ai.AudioURL{URL: "https://example.com/audio.mp3", ForceDownload: "invalid"},
+		"download media": ai.DocumentURL{
+			URL: fileServer.URL + "/unknown.bin", ForceDownload: ai.FileDownloadAllowLocal,
+		},
+		"infer media": ai.DocumentURL{
+			URL: fileServer.URL + "/unknown", ForceDownload: ai.FileDownloadAllowLocal,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{item}},
+			}}}, ai.ModelRequestParams{})
+			if err == nil {
+				t.Fatal("invalid forced file URL succeeded")
+			}
+		})
 	}
 }
 
@@ -828,9 +904,18 @@ func TestResponsesRejectsUnsupportedUserContent(t *testing.T) {
 		want    string
 	}{
 		{name: "pointer", content: &text, want: "unsupported Responses user content type *ai.TextContent"},
-		{name: "non-image binary", content: ai.BinaryContent{
-			Data: []byte("document"), MediaType: "application/pdf",
-		}, want: `Responses binary input requires an image media type, got "application/pdf"`},
+		{name: "audio binary", content: ai.BinaryContent{
+			Data: []byte("audio"), MediaType: "audio/mpeg",
+		}, want: `Responses does not support inline audio/mpeg input`},
+		{name: "video binary", content: ai.BinaryContent{
+			Data: []byte("video"), MediaType: "video/mp4",
+		}, want: `Responses does not support inline video/mp4 input`},
+		{name: "unsupported binary", content: ai.BinaryContent{
+			Data: []byte("data"), MediaType: "application/json",
+		}, want: `unsupported file media type "application/json"`},
+		{name: "video URL", content: ai.VideoURL{
+			URL: "https://example.com/video.mp4",
+		}, want: `Responses does not support video URL input`},
 		{name: "foreign uploaded file", content: ai.UploadedFile{
 			FileID: "file", ProviderName: "anthropic", MediaType: "image/png",
 		}, want: `uploaded file "file" belongs to provider "anthropic"`},

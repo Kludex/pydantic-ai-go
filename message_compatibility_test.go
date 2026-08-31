@@ -61,11 +61,12 @@ func TestUnmarshalUpstreamMultimodalMessageFixture(t *testing.T) {
 	if prompt.Contents[0].(ai.TextContent).Text != "look" {
 		t.Fatalf("unexpected text content %+v", prompt.Contents[0])
 	}
-	if prompt.Contents[1].(ai.ImageURL).URL != "https://example.com/a.png" {
-		t.Fatalf("unexpected image URL %+v", prompt.Contents[1])
+	image := prompt.Contents[1].(ai.ImageURL)
+	if image.URL != "https://example.com/a.png" || image.MediaType != "image/png" || image.Identifier != "b86daf" {
+		t.Fatalf("unexpected image URL %+v", image)
 	}
 	binary := prompt.Contents[2].(ai.BinaryContent)
-	if string(binary.Data) != "hi" || binary.MediaType != "image/png" {
+	if string(binary.Data) != "hi" || binary.MediaType != "image/png" || binary.Identifier != "c22b5f" {
 		t.Fatalf("unexpected binary content %+v", binary)
 	}
 }

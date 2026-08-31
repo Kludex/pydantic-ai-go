@@ -423,8 +423,10 @@ func TestRequestTransportError(t *testing.T) {
 }
 
 func TestModelName(t *testing.T) {
-	if openai.NewModel("gpt-5").Name() != "gpt-5" {
-		t.Fatal("unexpected name")
+	model := openai.NewModel("gpt-5")
+	if model.Name() != "gpt-5" || model.ProviderName() != "openai" ||
+		model.ProviderURL() != "https://api.openai.com/v1" {
+		t.Fatalf("unexpected model identity: %q %q %q", model.Name(), model.ProviderName(), model.ProviderURL())
 	}
 }
 

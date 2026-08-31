@@ -49,6 +49,12 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 // Name returns the model name.
 func (m *ResponsesModel) Name() string { return m.name }
 
+// ProviderName returns the durable provider identity.
+func (m *ResponsesModel) ProviderName() string { return m.providerName }
+
+// ProviderURL returns the configured provider API URL.
+func (m *ResponsesModel) ProviderURL() string { return m.baseURL }
+
 // DefaultModelSettings returns this model's request defaults.
 func (m *ResponsesModel) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 
@@ -91,6 +97,65 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 		setResponsesProvider(response, m.providerName, m.baseURL)
 	}
 	return response, err
+}
+
+// CountTokens counts input tokens through the Responses input_tokens endpoint.
+func (m *ResponsesModel) CountTokens(
+	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+) (ai.Usage, error) {
+	if len(messages) == 0 {
+		return ai.Usage{}, fmt.Errorf("openai: cannot count tokens without messages")
+	}
+	payload, err := m.buildResponsesPayload(messages, params, true)
+	if err != nil {
+		return ai.Usage{}, err
+	}
+	countPayload := struct {
+		Model             string              `json:"model"`
+		Instructions      string              `json:"instructions,omitempty"`
+		Input             []responsesInput    `json:"input"`
+		Tools             []responsesTool     `json:"tools,omitempty"`
+		ToolChoice        any                 `json:"tool_choice,omitempty"`
+		ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
+		Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
+	}{
+		Model: payload.Model, Instructions: payload.Instructions, Input: payload.Input,
+		Tools: payload.Tools, ToolChoice: payload.ToolChoice, ParallelToolCalls: payload.ParallelToolCalls,
+		Reasoning: payload.Reasoning,
+	}
+	body, err := marshalRequest(countPayload, params.Settings.ExtraBody)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("openai: marshal token count request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, m.baseURL+"/responses/input_tokens", bytes.NewReader(body),
+	)
+	if err != nil {
+		return ai.Usage{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if err := m.configureRequest(req, params.Settings.ExtraHeaders); err != nil {
+		return ai.Usage{}, err
+	}
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("openai: token count request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("openai: read token count response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return ai.Usage{}, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	var counted struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(data, &counted); err != nil {
+		return ai.Usage{}, fmt.Errorf("openai: decode token count response: %w", err)
+	}
+	return ai.Usage{InputTokens: counted.InputTokens}, nil
 }
 
 // CompactMessages calls the stateless Responses compaction endpoint.

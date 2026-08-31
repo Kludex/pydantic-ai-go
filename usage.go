@@ -112,12 +112,56 @@ func (u *Usage) Add(other Usage) {
 
 // UsageLimits bounds a run. The zero value means unlimited.
 type UsageLimits struct {
-	RequestLimit     int
-	InputTokenLimit  int
+	// RequestLimit caps model generation requests. Zero disables the limit.
+	RequestLimit int
+	// InputTokenLimit caps cumulative input tokens. Zero disables the limit.
+	InputTokenLimit int
+	// OutputTokenLimit caps cumulative output tokens. Zero disables the limit.
 	OutputTokenLimit int
-	TotalTokenLimit  int
-	ToolCallLimit    *int
-	CostLimitUSD     *float64
+	// TotalTokenLimit caps cumulative input and output tokens. Zero disables the limit.
+	TotalTokenLimit int
+	// PerRequestInputTokenLimit caps one request context. Zero disables the limit.
+	PerRequestInputTokenLimit int
+	// CountTokensBeforeRequest checks projected input tokens and cost before generation.
+	CountTokensBeforeRequest bool
+	// ToolCallLimit caps successful local calls. Nil disables the limit.
+	ToolCallLimit *int
+	// CostLimitUSD caps known run cost in US dollars. Nil disables the limit.
+	CostLimitUSD *float64
+}
+
+func (l UsageLimits) checkBeforeRequest(u Usage) error {
+	if l.RequestLimit > 0 && u.Requests >= l.RequestLimit {
+		return fmt.Errorf(
+			"%w: the next request would exceed request limit %d", ErrUsageLimitExceeded, l.RequestLimit,
+		)
+	}
+	return nil
+}
+
+func (l UsageLimits) checkCountedRequest(current Usage, counted Usage) error {
+	if l.PerRequestInputTokenLimit > 0 && counted.InputTokens > l.PerRequestInputTokenLimit {
+		return usageLimitError("per-request input token", counted.InputTokens, l.PerRequestInputTokenLimit)
+	}
+	projected := current
+	projected.Add(counted)
+	if l.InputTokenLimit > 0 && projected.InputTokens > l.InputTokenLimit {
+		return usageLimitError("input token", projected.InputTokens, l.InputTokenLimit)
+	}
+	if l.TotalTokenLimit > 0 && projected.TotalTokens() > l.TotalTokenLimit {
+		return usageLimitError("total token", projected.TotalTokens(), l.TotalTokenLimit)
+	}
+	if l.CostLimitUSD != nil && projected.CostUSD != nil && *projected.CostUSD > *l.CostLimitUSD {
+		return fmt.Errorf("%w: cost $%g exceeds limit $%g", ErrUsageLimitExceeded, *projected.CostUSD, *l.CostLimitUSD)
+	}
+	return nil
+}
+
+func (l UsageLimits) checkResponse(response Usage) error {
+	if l.PerRequestInputTokenLimit > 0 && response.InputTokens > l.PerRequestInputTokenLimit {
+		return usageLimitError("per-request input token", response.InputTokens, l.PerRequestInputTokenLimit)
+	}
+	return nil
 }
 
 func (l UsageLimits) check(u Usage) error {

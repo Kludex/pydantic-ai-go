@@ -188,9 +188,12 @@ func (a *Agent[Deps, Output]) newRun(
 		limits = *cfg.usageLimits
 	}
 	if limits != (UsageLimits{}) {
-		limitCapability := usageLimitsCapability{limits: limits}
-		_ = limitCapability.Setup(&CapabilityRegistry{})
-		capabilities = append([]Capability{limitCapability}, capabilities...)
+		postRequestLimits := usageLimitsCapability{limits: limits}
+		preRequestLimits := usagePreRequestLimitsCapability{limits: limits}
+		_ = postRequestLimits.Setup(&CapabilityRegistry{})
+		_ = preRequestLimits.Setup(&CapabilityRegistry{})
+		capabilities = append([]Capability{postRequestLimits}, capabilities...)
+		capabilities = append(capabilities, preRequestLimits)
 	}
 	r := &run[Deps, Output]{
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,

@@ -92,6 +92,12 @@ func NewModel(name string, opts ...Option) *Model {
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
 
+// ProviderName returns Anthropic's durable provider identity.
+func (*Model) ProviderName() string { return "anthropic" }
+
+// ProviderURL returns the configured provider API URL.
+func (m *Model) ProviderURL() string { return m.baseURL }
+
 // DefaultModelSettings returns this model's request defaults.
 func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 
@@ -130,6 +136,62 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 		response.ProviderURL = m.baseURL
 	}
 	return response, err
+}
+
+// CountTokens counts prospective input tokens through Anthropic's count endpoint.
+func (m *Model) CountTokens(
+	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+) (ai.Usage, error) {
+	payload, err := m.buildPayload(messages, params)
+	if err != nil {
+		return ai.Usage{}, err
+	}
+	countPayload := struct {
+		Model             string           `json:"model"`
+		System            string           `json:"system,omitempty"`
+		Messages          []messageParam   `json:"messages"`
+		Tools             []toolParam      `json:"tools,omitempty"`
+		ToolChoice        *toolChoiceParam `json:"tool_choice,omitempty"`
+		Thinking          *thinkingParam   `json:"thinking,omitempty"`
+		ContextManagement map[string]any   `json:"context_management,omitempty"`
+	}{
+		Model: payload.Model, System: payload.System, Messages: payload.Messages, Tools: payload.Tools,
+		ToolChoice: payload.ToolChoice, Thinking: payload.Thinking, ContextManagement: payload.ContextManagement,
+	}
+	body, err := marshalRequest(countPayload, params.Settings.ExtraBody)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("anthropic: marshal token count request: %w", err)
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost, m.baseURL+"/messages/count_tokens?beta=true", bytes.NewReader(body),
+	)
+	if err != nil {
+		return ai.Usage{}, err
+	}
+	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	m.setRequestHeaders(req, payload, false)
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("anthropic: token count request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("anthropic: read token count response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return ai.Usage{}, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	var counted struct {
+		InputTokens *int `json:"input_tokens"`
+	}
+	if err := json.Unmarshal(data, &counted); err != nil {
+		return ai.Usage{}, fmt.Errorf("anthropic: decode token count response: %w", err)
+	}
+	if counted.InputTokens == nil {
+		return ai.Usage{}, fmt.Errorf("anthropic: token count response omitted input_tokens")
+	}
+	return ai.Usage{InputTokens: *counted.InputTokens}, nil
 }
 
 func (m *Model) setRequestHeaders(req *http.Request, payload *messagesRequest, stream bool) {

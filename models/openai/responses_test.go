@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -36,6 +37,118 @@ func newResponsesServerWithOptions(
 		openai.WithHTTPClient(server.Client()),
 	}
 	return openai.NewResponsesModel("gpt-5", append(options, opts...)...)
+}
+
+func TestResponsesCountTokens(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/responses/input_tokens" || request.Header.Get("X-Custom") != "value" {
+			t.Errorf("unexpected token count request: %s headers=%v", request.URL.Path, request.Header)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"input_tokens":17}`))
+	})
+	if model.ProviderName() != "openai" || model.ProviderURL() == "" {
+		t.Fatalf("unexpected provider identity: %q %q", model.ProviderName(), model.ProviderURL())
+	}
+	parallel := true
+	usage, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{
+		Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}},
+	}}, ai.ModelRequestParams{
+		Instructions: "Be brief.",
+		Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		Settings: ai.ModelSettings{
+			MaxTokens: 100, ParallelToolCalls: &parallel,
+			ExtraHeaders: map[string]string{"X-Custom": "value"}, ExtraBody: map[string]any{"store": true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.InputTokens != 17 || usage.Requests != 0 {
+		t.Fatalf("unexpected token usage: %+v", usage)
+	}
+	if body["model"] != "gpt-5" || body["instructions"] != "Be brief." || body["store"] != true ||
+		body["max_output_tokens"] != nil || body["background"] != nil || body["include"] != nil {
+		t.Fatalf("unexpected token count body: %v", body)
+	}
+	if _, err := model.CountTokens(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
+		!strings.Contains(err.Error(), "cannot count tokens without messages") {
+		t.Fatalf("unexpected empty token count error: %v", err)
+	}
+}
+
+func TestResponsesCountTokensErrors(t *testing.T) {
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}}}}
+	t.Run("payload", func(t *testing.T) {
+		model := openai.NewResponsesModel("gpt-5")
+		_, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: "extreme"},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "invalid thinking level") {
+			t.Fatalf("unexpected payload error: %v", err)
+		}
+	})
+	t.Run("marshal", func(t *testing.T) {
+		model := openai.NewResponsesModel("gpt-5")
+		_, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"bad": make(chan struct{})},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "marshal token count request") {
+			t.Fatalf("unexpected marshal error: %v", err)
+		}
+	})
+	t.Run("request", func(t *testing.T) {
+		model := openai.NewResponsesModel("gpt-5", openai.WithBaseURL(":"))
+		if _, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected request construction error")
+		}
+	})
+	t.Run("prepare", func(t *testing.T) {
+		prepareErr := errors.New("prepare failed")
+		model := openai.NewResponsesModel("gpt-5", openai.WithProvider(openai.ProviderConfig{
+			Name: "compatible", BaseURL: "http://example.test",
+			PrepareRequest: func(*http.Request) error { return prepareErr },
+		}))
+		if _, err := model.CountTokens(
+			t.Context(), messages, ai.ModelRequestParams{},
+		); !errors.Is(err, prepareErr) {
+			t.Fatalf("unexpected prepare error: %v", err)
+		}
+	})
+	for _, test := range []struct {
+		name       string
+		response   *http.Response
+		requestErr error
+		contains   string
+	}{
+		{name: "request failure", requestErr: errors.New("request failed"), contains: "token count request"},
+		{name: "read failure", response: &http.Response{
+			StatusCode: http.StatusOK, Body: compactionErrorBody{}, Header: make(http.Header),
+		}, contains: "read token count response"},
+		{name: "status", response: &http.Response{
+			StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader("bad")), Header: make(http.Header),
+		}, contains: "status 400"},
+		{name: "decode", response: &http.Response{
+			StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{")), Header: make(http.Header),
+		}, contains: "decode token count response"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: compactionRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				return test.response, test.requestErr
+			})}
+			model := openai.NewResponsesModel(
+				"gpt-5", openai.WithBaseURL("http://example.test"), openai.WithHTTPClient(client),
+			)
+			if _, err := model.CountTokens(
+				t.Context(), messages, ai.ModelRequestParams{},
+			); err == nil || !strings.Contains(err.Error(), test.contains) {
+				t.Fatalf("unexpected token count error: %v", err)
+			}
+		})
+	}
 }
 
 func TestResponsesTextResponse(t *testing.T) {

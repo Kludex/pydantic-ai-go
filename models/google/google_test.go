@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -28,6 +29,134 @@ func newNamedServer(t *testing.T, name string, handler http.HandlerFunc, extra .
 		google.WithHTTPClient(server.Client()),
 	}
 	return google.NewModel(name, append(opts, extra...)...)
+}
+
+func TestGoogleCountTokensByTransport(t *testing.T) {
+	for _, transport := range []google.Transport{google.TransportGeminiAPI, google.TransportVertexAI} {
+		t.Run(string(transport), func(t *testing.T) {
+			var body map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if request.URL.Path != "/models/gemini:countTokens" || request.Header.Get("x-goog-api-key") != "key" {
+					t.Errorf("unexpected token count request: %s headers=%v", request.URL.String(), request.Header)
+				}
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = response.Write([]byte(`{"totalTokens":23}`))
+			}))
+			defer server.Close()
+			model := google.NewModel("gemini", google.WithProvider(google.ProviderConfig{
+				Transport: transport, Name: "custom", BaseURL: server.URL, APIKey: "key", HTTPClient: server.Client(),
+			}))
+			usage, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{
+				Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}},
+			}}, ai.ModelRequestParams{
+				Instructions: "Be brief.",
+				Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+				Settings:     ai.ModelSettings{ExtraHeaders: map[string]string{"X-Test": "value"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if usage.InputTokens != 23 || usage.Requests != 0 {
+				t.Fatalf("unexpected token count: %+v", usage)
+			}
+			if _, ok := body["contents"]; !ok {
+				t.Fatalf("count body omitted contents: %v", body)
+			}
+			_, hasSystem := body["systemInstruction"]
+			_, hasTools := body["tools"]
+			if transport == google.TransportVertexAI &&
+				(!hasSystem || !hasTools || body["generationConfig"] == nil || body["toolConfig"] != nil) {
+				t.Fatalf("Vertex count has invalid generation context: %v", body)
+			}
+			if transport == google.TransportGeminiAPI && (hasSystem || hasTools) {
+				t.Fatalf("Gemini API count included unsupported context: %v", body)
+			}
+		})
+	}
+}
+
+type googleErrorBody struct{}
+
+func (googleErrorBody) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+func (googleErrorBody) Close() error             { return nil }
+
+func TestGoogleCountTokensErrors(t *testing.T) {
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}}}}
+	t.Run("payload", func(t *testing.T) {
+		model := google.NewModel("gemini")
+		_, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: "extreme"},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "invalid thinking level") {
+			t.Fatalf("unexpected payload error: %v", err)
+		}
+	})
+	t.Run("marshal", func(t *testing.T) {
+		included := true
+		model := google.NewModel("gemini", google.WithProvider(google.ProviderConfig{
+			Transport: google.TransportVertexAI, BaseURL: "http://example.test", APIKey: "key",
+		}))
+		_, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{Tools: []ai.ToolDefinition{{
+			Name: "tool", Schema: map[string]any{"type": "object"},
+			ReturnSchema: map[string]any{"bad": make(chan struct{})}, IncludeReturnSchema: &included,
+		}}})
+		if err == nil || !strings.Contains(err.Error(), "marshal token count request") {
+			t.Fatalf("unexpected marshal error: %v", err)
+		}
+	})
+	t.Run("request", func(t *testing.T) {
+		model := google.NewModel("gemini", google.WithBaseURL(":"))
+		if _, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected request construction error")
+		}
+	})
+	t.Run("prepare", func(t *testing.T) {
+		prepareErr := errors.New("prepare failed")
+		model := google.NewModel("gemini", google.WithProvider(google.ProviderConfig{
+			BaseURL: "http://example.test", PrepareRequest: func(*http.Request) error { return prepareErr },
+		}))
+		if _, err := model.CountTokens(
+			t.Context(), messages, ai.ModelRequestParams{},
+		); !errors.Is(err, prepareErr) {
+			t.Fatalf("unexpected prepare error: %v", err)
+		}
+	})
+	for _, test := range []struct {
+		name       string
+		response   *http.Response
+		requestErr error
+		contains   string
+	}{
+		{name: "request failure", requestErr: errors.New("request failed"), contains: "token count request"},
+		{name: "read failure", response: &http.Response{
+			StatusCode: http.StatusOK, Body: googleErrorBody{}, Header: make(http.Header),
+		}, contains: "read token count response"},
+		{name: "status", response: &http.Response{
+			StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader("bad")), Header: make(http.Header),
+		}, contains: "status 400"},
+		{name: "decode", response: &http.Response{
+			StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{")), Header: make(http.Header),
+		}, contains: "decode token count response"},
+		{name: "missing", response: &http.Response{
+			StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header),
+		}, contains: "omitted totalTokens"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+				return test.response, test.requestErr
+			})}
+			model := google.NewModel(
+				"gemini", google.WithBaseURL("http://example.test"), google.WithHTTPClient(client),
+			)
+			if _, err := model.CountTokens(
+				t.Context(), messages, ai.ModelRequestParams{},
+			); err == nil || !strings.Contains(err.Error(), test.contains) {
+				t.Fatalf("unexpected token count error: %v", err)
+			}
+		})
+	}
 }
 
 func TestGeminiNativeToolReturnSchema(t *testing.T) {
@@ -502,8 +631,10 @@ func TestErrors(t *testing.T) {
 }
 
 func TestModelName(t *testing.T) {
-	if google.NewModel("gemini-2.5-flash").Name() != "gemini-2.5-flash" {
-		t.Fatal("unexpected name")
+	model := google.NewModel("gemini-2.5-flash")
+	if model.Name() != "gemini-2.5-flash" || model.ProviderName() != "google" ||
+		model.ProviderURL() != "https://generativelanguage.googleapis.com/v1beta" {
+		t.Fatalf("unexpected model identity: %q %q %q", model.Name(), model.ProviderName(), model.ProviderURL())
 	}
 }
 

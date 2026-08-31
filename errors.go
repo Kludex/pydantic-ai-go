@@ -21,6 +21,9 @@ var ErrUnknownModelID = errors.New("ai: unknown model ID")
 // ErrNoModel is returned when no default or selector supplies a model.
 var ErrNoModel = errors.New("ai: no model selected")
 
+// ErrTokenCountingUnsupported is returned when a model has no token-counting API.
+var ErrTokenCountingUnsupported = errors.New("ai: token counting is not supported")
+
 // ErrNoSuspendedResponse is returned when Resume receives history that does
 // not end with a suspended model response.
 var ErrNoSuspendedResponse = errors.New("ai: message history does not end with a suspended model response")

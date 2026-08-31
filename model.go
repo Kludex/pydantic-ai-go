@@ -22,6 +22,44 @@ type Model interface {
 	Name() string
 }
 
+// TokenCountingModel is implemented by models that can count request tokens
+// before generation. The returned usage describes the prospective request and
+// is not added to run usage.
+type TokenCountingModel interface {
+	CountTokens(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (Usage, error)
+}
+
+// ModelProviderIdentity is implemented by models that expose the provider
+// identity used for pricing and telemetry.
+type ModelProviderIdentity interface {
+	ProviderName() string
+	ProviderURL() string
+}
+
+// CountModelTokens counts a detached prospective request.
+func CountModelTokens(
+	ctx context.Context, model Model, msgs []ModelMessage, params ModelRequestParams,
+) (Usage, error) {
+	if modelIsNil(model) {
+		return Usage{}, ErrNoModel
+	}
+	counter, ok := model.(TokenCountingModel)
+	if !ok {
+		return Usage{}, fmt.Errorf("%w by model %q", ErrTokenCountingUnsupported, model.Name())
+	}
+	request := ModelRequestContext{Messages: msgs, Params: params}.Clone()
+	if err := validateModelSettings(request.Params.Settings); err != nil {
+		return Usage{}, err
+	}
+	if request.Params.Settings.RequestTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, request.Params.Settings.RequestTimeout)
+		defer cancel()
+	}
+	usage, err := counter.CountTokens(ctx, request.Messages, request.Params)
+	return usage.Clone(), err
+}
+
 // ToolSearchStrategyModel is implemented by models that support required
 // named provider-managed tool-search strategies.
 type ToolSearchStrategyModel interface {

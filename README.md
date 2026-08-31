@@ -268,7 +268,7 @@ func TestAgent(t *testing.T) {
 | Reuse or combine tools | `NewTool`, `NewFunctionToolset`, and the toolset wrappers |
 | Require approval | `WithApprovalRequired` and `DeferredToolResults` |
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |
-| Limit usage or cost | `UsageLimits` |
+| Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
 | Configure a provider or compatible endpoint | [Provider configuration](docs/providers.md) |
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |

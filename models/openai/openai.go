@@ -189,6 +189,12 @@ func NewModel(name string, opts ...Option) *Model {
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
 
+// ProviderName returns the durable provider identity.
+func (m *Model) ProviderName() string { return m.providerName }
+
+// ProviderURL returns the configured provider API URL.
+func (m *Model) ProviderURL() string { return m.baseURL }
+
 // DefaultModelSettings returns this model's request defaults.
 func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 

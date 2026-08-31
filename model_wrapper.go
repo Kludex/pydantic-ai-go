@@ -38,6 +38,29 @@ func (wrapper *ModelWrapper) Request(
 	return wrapper.wrapped.Request(ctx, messages, params)
 }
 
+// ProviderName returns the wrapped model's provider identity when present.
+func (wrapper *ModelWrapper) ProviderName() string {
+	if model, ok := wrapper.wrapped.(ModelProviderIdentity); ok {
+		return model.ProviderName()
+	}
+	return ""
+}
+
+// ProviderURL returns the wrapped model's provider API URL when present.
+func (wrapper *ModelWrapper) ProviderURL() string {
+	if model, ok := wrapper.wrapped.(ModelProviderIdentity); ok {
+		return model.ProviderURL()
+	}
+	return ""
+}
+
+// CountTokens delegates request token counting when supported.
+func (wrapper *ModelWrapper) CountTokens(
+	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
+) (Usage, error) {
+	return CountModelTokens(ctx, wrapper.wrapped, messages, params)
+}
+
 // StreamRequest delegates streaming or replays a non-streaming response as events.
 func (wrapper *ModelWrapper) StreamRequest(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,

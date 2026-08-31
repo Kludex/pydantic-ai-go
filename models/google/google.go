@@ -76,6 +76,12 @@ func (m *Model) Name() string { return m.name }
 // Transport returns the configured Gemini Developer API or Vertex AI route.
 func (m *Model) Transport() Transport { return m.transport }
 
+// ProviderName returns the durable provider identity.
+func (m *Model) ProviderName() string { return m.providerName }
+
+// ProviderURL returns the configured provider API URL.
+func (m *Model) ProviderURL() string { return m.baseURL }
+
 // DefaultModelSettings returns this model's request defaults.
 func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 
@@ -122,6 +128,68 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 		}
 	}
 	return response, err
+}
+
+// CountTokens counts prospective input tokens through the configured Google transport.
+func (m *Model) CountTokens(
+	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+) (ai.Usage, error) {
+	payload, err := m.buildPayload(messages, params)
+	if err != nil {
+		return ai.Usage{}, err
+	}
+	var countPayload any = struct {
+		Contents []content `json:"contents"`
+	}{Contents: payload.Contents}
+	if m.transport == TransportVertexAI {
+		generation := payload.GenerationConfig
+		if generation == nil {
+			generation = &generationConfig{}
+		}
+		countPayload = struct {
+			SystemInstruction *content          `json:"systemInstruction,omitempty"`
+			Contents          []content         `json:"contents"`
+			Tools             []toolsParam      `json:"tools,omitempty"`
+			GenerationConfig  *generationConfig `json:"generationConfig"`
+		}{
+			SystemInstruction: payload.SystemInstruction, Contents: payload.Contents,
+			Tools: payload.Tools, GenerationConfig: generation,
+		}
+	}
+	body, err := json.Marshal(countPayload)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("google: marshal token count request: %w", err)
+	}
+	endpoint := fmt.Sprintf("%s/models/%s:countTokens", m.baseURL, m.name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return ai.Usage{}, err
+	}
+	if err := m.prepareHTTPRequest(req, params.Settings); err != nil {
+		return ai.Usage{}, err
+	}
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("google: token count request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return ai.Usage{}, fmt.Errorf("google: read token count response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return ai.Usage{}, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	var counted struct {
+		TotalTokens *int `json:"totalTokens"`
+	}
+	if err := json.Unmarshal(data, &counted); err != nil {
+		return ai.Usage{}, fmt.Errorf("google: decode token count response: %w", err)
+	}
+	if counted.TotalTokens == nil {
+		return ai.Usage{}, fmt.Errorf("google: token count response omitted totalTokens")
+	}
+	return ai.Usage{InputTokens: *counted.TotalTokens}, nil
 }
 
 // APIError is a non-200 response from the Gemini API.

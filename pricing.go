@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"errors"
+	"time"
 
 	genaiprices "github.com/pydantic/genai-prices/packages/go"
 )
@@ -69,6 +70,16 @@ func (response ModelResponse) Price() (PriceCalculation, error) {
 	request.ProviderAPIURL = ""
 	request.ProviderID = response.ProviderName
 	return genaiprices.Calculate(request)
+}
+
+func priceProspectiveUsage(ctx context.Context, model Model, usage Usage) Usage {
+	response := &ModelResponse{ModelName: model.Name(), Timestamp: time.Now().UTC(), Usage: usage.Clone()}
+	if identity, ok := model.(ModelProviderIdentity); ok {
+		response.ProviderName = identity.ProviderName()
+		response.ProviderURL = identity.ProviderURL()
+	}
+	fillResponseCost(ctx, response)
+	return response.Usage
 }
 
 func fillResponseCost(ctx context.Context, response *ModelResponse) {

@@ -208,6 +208,17 @@ func (model *ConcurrencyLimitedModel) Request(
 	return model.UnwrapModel().Request(ctx, messages, params)
 }
 
+// CountTokens holds one concurrency slot for token counting.
+func (model *ConcurrencyLimitedModel) CountTokens(
+	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
+) (Usage, error) {
+	if err := model.limiter.Acquire(ctx, "model:"+model.Name()); err != nil {
+		return Usage{}, err
+	}
+	defer model.limiter.Release()
+	return CountModelTokens(ctx, model.UnwrapModel(), messages, params)
+}
+
 // StreamRequest holds one concurrency slot until the returned sequence ends.
 func (model *ConcurrencyLimitedModel) StreamRequest(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,

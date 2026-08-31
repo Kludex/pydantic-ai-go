@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -34,6 +35,115 @@ func newServerWithOptions(
 		anthropic.WithHTTPClient(server.Client()),
 	}
 	return anthropic.NewModel("claude-sonnet-4-5", append(options, opts...)...)
+}
+
+func TestAnthropicCountTokens(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path != "/messages/count_tokens" || request.URL.Query().Get("beta") != "true" ||
+			request.Header.Get("X-Test") != "value" || request.Header.Get("x-api-key") != "test-key" {
+			t.Errorf("unexpected token count request: %s headers=%v", request.URL.Path, request.Header)
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"input_tokens":19}`))
+	})
+	parallel := false
+	temperature := 0.5
+	usage, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{
+		Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}},
+	}}, ai.ModelRequestParams{
+		Instructions: "Be brief.",
+		Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		Settings: ai.ModelSettings{
+			MaxTokens: 100, Temperature: &temperature, ParallelToolCalls: &parallel,
+			ExtraHeaders: map[string]string{"X-Test": "value"}, ExtraBody: map[string]any{"custom": true},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.InputTokens != 19 || usage.Requests != 0 {
+		t.Fatalf("unexpected token usage: %+v", usage)
+	}
+	if body["model"] != "claude-sonnet-4-5" || body["system"] != "Be brief." || body["custom"] != true ||
+		body["max_tokens"] != nil || body["temperature"] != nil {
+		t.Fatalf("unexpected token count body: %v", body)
+	}
+}
+
+type anthropicRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function anthropicRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
+type anthropicErrorBody struct{}
+
+func (anthropicErrorBody) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+func (anthropicErrorBody) Close() error             { return nil }
+
+func TestAnthropicCountTokensErrors(t *testing.T) {
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}}}}
+	t.Run("payload", func(t *testing.T) {
+		model := anthropic.NewModel("claude")
+		_, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: "extreme"},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "invalid thinking level") {
+			t.Fatalf("unexpected payload error: %v", err)
+		}
+	})
+	t.Run("marshal", func(t *testing.T) {
+		model := anthropic.NewModel("claude")
+		_, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"bad": make(chan struct{})},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "marshal token count request") {
+			t.Fatalf("unexpected marshal error: %v", err)
+		}
+	})
+	t.Run("request", func(t *testing.T) {
+		model := anthropic.NewModel("claude", anthropic.WithBaseURL(":"))
+		if _, err := model.CountTokens(t.Context(), messages, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected request construction error")
+		}
+	})
+	for _, test := range []struct {
+		name       string
+		response   *http.Response
+		requestErr error
+		contains   string
+	}{
+		{name: "request failure", requestErr: errors.New("request failed"), contains: "token count request"},
+		{name: "read failure", response: &http.Response{
+			StatusCode: http.StatusOK, Body: anthropicErrorBody{}, Header: make(http.Header),
+		}, contains: "read token count response"},
+		{name: "status", response: &http.Response{
+			StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader("bad")), Header: make(http.Header),
+		}, contains: "status 400"},
+		{name: "decode", response: &http.Response{
+			StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{")), Header: make(http.Header),
+		}, contains: "decode token count response"},
+		{name: "missing", response: &http.Response{
+			StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}")), Header: make(http.Header),
+		}, contains: "omitted input_tokens"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: anthropicRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				return test.response, test.requestErr
+			})}
+			model := anthropic.NewModel(
+				"claude", anthropic.WithBaseURL("http://example.test"), anthropic.WithHTTPClient(client),
+			)
+			if _, err := model.CountTokens(
+				t.Context(), messages, ai.ModelRequestParams{},
+			); err == nil || !strings.Contains(err.Error(), test.contains) {
+				t.Fatalf("unexpected token count error: %v", err)
+			}
+		})
+	}
 }
 
 func TestDefaultSettingsAreDetached(t *testing.T) {
@@ -692,8 +802,10 @@ func TestErrors(t *testing.T) {
 }
 
 func TestModelName(t *testing.T) {
-	if anthropic.NewModel("claude-sonnet-4-5").Name() != "claude-sonnet-4-5" {
-		t.Fatal("unexpected name")
+	model := anthropic.NewModel("claude-sonnet-4-5")
+	if model.Name() != "claude-sonnet-4-5" || model.ProviderName() != "anthropic" ||
+		model.ProviderURL() != "https://api.anthropic.com/v1" {
+		t.Fatalf("unexpected model identity: %q %q %q", model.Name(), model.ProviderName(), model.ProviderURL())
 	}
 }
 

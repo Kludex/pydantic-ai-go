@@ -67,13 +67,18 @@ type wireResponse struct {
 }
 
 type wirePart struct {
-	PartKind   string            `json:"part_kind"`
-	Content    json.RawMessage   `json:"content,omitempty"`
-	ToolName   string            `json:"tool_name,omitempty"`
-	ToolCallID string            `json:"tool_call_id,omitempty"`
-	Args       json.RawMessage   `json:"args,omitempty"`
-	Outcome    ToolReturnOutcome `json:"outcome,omitempty"`
-	Metadata   map[string]any    `json:"metadata,omitempty"`
+	PartKind        string            `json:"part_kind"`
+	Content         json.RawMessage   `json:"content,omitempty"`
+	ToolName        string            `json:"tool_name,omitempty"`
+	ToolCallID      string            `json:"tool_call_id,omitempty"`
+	ToolKind        ToolPartKind      `json:"tool_kind,omitempty"`
+	Args            json.RawMessage   `json:"args,omitempty"`
+	ID              string            `json:"id,omitempty"`
+	Signature       string            `json:"signature,omitempty"`
+	ProviderName    string            `json:"provider_name,omitempty"`
+	ProviderDetails map[string]any    `json:"provider_details,omitempty"`
+	Outcome         ToolReturnOutcome `json:"outcome,omitempty"`
+	Metadata        map[string]any    `json:"metadata,omitempty"`
 }
 
 func marshalMessage(m ModelMessage) ([]byte, error) {
@@ -152,11 +157,21 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 func marshalResponsePart(p ResponsePart) (wirePart, error) {
 	switch part := p.(type) {
 	case TextPart:
-		return wirePart{PartKind: "text", Content: mustJSON(part.Content)}, nil
+		return wirePart{
+			PartKind: "text", Content: mustJSON(part.Content), ID: part.ID,
+			ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+		}, nil
 	case ToolCallPart:
-		return wirePart{PartKind: "tool-call", ToolName: part.ToolName, Args: part.Args, ToolCallID: part.ToolCallID}, nil
+		return wirePart{
+			PartKind: "tool-call", ToolName: part.ToolName, Args: part.Args, ToolCallID: part.ToolCallID,
+			ToolKind: part.ToolKind, ID: part.ID, ProviderName: part.ProviderName,
+			ProviderDetails: part.ProviderDetails,
+		}, nil
 	case ThinkingPart:
-		return wirePart{PartKind: "thinking", Content: mustJSON(part.Content)}, nil
+		return wirePart{
+			PartKind: "thinking", Content: mustJSON(part.Content), ID: part.ID, Signature: part.Signature,
+			ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+		}, nil
 	default:
 		return wirePart{}, fmt.Errorf("ai: unknown response part type %T", p)
 	}
@@ -255,11 +270,20 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 	switch wp.PartKind {
 	case "text":
-		return TextPart{Content: stringContent(wp.Content)}, nil
+		return TextPart{
+			Content: stringContent(wp.Content), ID: wp.ID,
+			ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
+		}, nil
 	case "tool-call":
-		return ToolCallPart{ToolName: wp.ToolName, Args: wp.Args, ToolCallID: wp.ToolCallID}, nil
+		return ToolCallPart{
+			ToolName: wp.ToolName, Args: wp.Args, ToolCallID: wp.ToolCallID, ToolKind: wp.ToolKind,
+			ID: wp.ID, ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
+		}, nil
 	case "thinking":
-		return ThinkingPart{Content: stringContent(wp.Content)}, nil
+		return ThinkingPart{
+			Content: stringContent(wp.Content), ID: wp.ID, Signature: wp.Signature,
+			ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
+		}, nil
 	default:
 		return nil, fmt.Errorf("ai: unknown response part kind %q", wp.PartKind)
 	}

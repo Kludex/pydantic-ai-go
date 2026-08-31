@@ -124,7 +124,7 @@ func TestRequestToolUseRoundTrip(t *testing.T) {
 			_, _ = w.Write([]byte(`{
 				"model": "claude-sonnet-4-5",
 				"content": [
-					{"type": "thinking", "thinking": "checking"},
+					{"type": "thinking", "thinking": "checking", "signature": "signature"},
 					{"type": "tool_use", "id": "tu1", "name": "get_weather", "input": {"city": "SF"}}
 				],
 				"usage": {"input_tokens": 20, "output_tokens": 8}
@@ -151,8 +151,9 @@ func TestRequestToolUseRoundTrip(t *testing.T) {
 	if len(calls) != 1 || calls[0].ToolName != "get_weather" || calls[0].ToolCallID != "tu1" {
 		t.Fatalf("unexpected calls %+v", calls)
 	}
-	if _, ok := resp.Parts[0].(ai.ThinkingPart); !ok {
-		t.Fatalf("thinking block lost: %+v", resp.Parts)
+	thinking, ok := resp.Parts[0].(ai.ThinkingPart)
+	if !ok || thinking.Signature != "signature" || thinking.ProviderName != "anthropic" {
+		t.Fatalf("thinking metadata lost: %+v", resp.Parts)
 	}
 
 	msgs = append(msgs, *resp, ai.ModelRequest{Parts: []ai.RequestPart{
@@ -165,6 +166,10 @@ func TestRequestToolUseRoundTrip(t *testing.T) {
 	assistant := sent[1].(map[string]any)
 	if assistant["role"] != "assistant" {
 		t.Fatalf("unexpected roles %v", sent)
+	}
+	thinkingBlock := assistant["content"].([]any)[0].(map[string]any)
+	if thinkingBlock["type"] != "thinking" || thinkingBlock["signature"] != "signature" {
+		t.Fatalf("thinking signature was not round-tripped: %v", thinkingBlock)
 	}
 	toolResult := sent[2].(map[string]any)["content"].([]any)[0].(map[string]any)
 	if toolResult["type"] != "tool_result" || toolResult["tool_use_id"] != "tu1" || toolResult["content"] != "sunny" {

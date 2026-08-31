@@ -57,7 +57,7 @@ func TestRequestTextResponse(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{
 			"responseId": "response-1", "modelVersion": "gemini-2.5-flash",
-			"candidates": [{"content": {"parts": [{"text": "Hello!"}]}, "finishReason": "STOP"}],
+			"candidates": [{"content": {"parts": [{"text": "Hello!", "thoughtSignature": "signature"}]}, "finishReason": "STOP"}],
 			"usageMetadata": {
 				"promptTokenCount": 12, "candidatesTokenCount": 3,
 				"cachedContentTokenCount": 4, "thoughtsTokenCount": 2,
@@ -101,6 +101,10 @@ func TestRequestTextResponse(t *testing.T) {
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
 	}
+	textPart := resp.Parts[0].(ai.TextPart)
+	if textPart.ProviderName != "google" || textPart.ProviderDetails["thought_signature"] != "signature" {
+		t.Fatalf("thought signature metadata lost: %+v", textPart)
+	}
 	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 || resp.Usage.Requests != 1 ||
 		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 ||
 		resp.Usage.InputAudioTokens != 2 || resp.Usage.CacheAudioReadTokens != 1 ||
@@ -131,7 +135,7 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 				"modelVersion": "gemini-2.5-flash",
 				"candidates": [{"content": {"parts": [
 					{"thought": true, "text": "checking"},
-					{"functionCall": {"id": "call1", "name": "get_weather", "args": {"city": "SF"}}}
+					{"functionCall": {"id": "call1", "name": "get_weather", "args": {"city": "SF"}}, "thoughtSignature": "tool-signature"}
 				]}}],
 				"usageMetadata": {"promptTokenCount": 20, "candidatesTokenCount": 8}
 			}`))
@@ -161,7 +165,8 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 	}
 	calls := resp.ToolCalls()
 	if len(calls) != 1 || calls[0].ToolName != "get_weather" || calls[0].ToolCallID != "call1" ||
-		string(calls[0].Args) != `{"city":"SF"}` {
+		string(calls[0].Args) != `{"city":"SF"}` || calls[0].ProviderName != "google" ||
+		calls[0].ProviderDetails["thought_signature"] != "tool-signature" {
 		t.Fatalf("unexpected calls %+v", calls)
 	}
 	if _, ok := resp.Parts[0].(ai.ThinkingPart); !ok {
@@ -178,6 +183,11 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 	modelTurn := contents[1].(map[string]any)
 	if modelTurn["role"] != "model" {
 		t.Fatalf("unexpected roles %v", contents)
+	}
+	modelParts := modelTurn["parts"].([]any)
+	functionCall := modelParts[1].(map[string]any)
+	if functionCall["thoughtSignature"] != "tool-signature" {
+		t.Fatalf("thought signature was not round-tripped: %v", functionCall)
 	}
 	toolTurn := contents[2].(map[string]any)["parts"].([]any)[0].(map[string]any)
 	functionResponse := toolTurn["functionResponse"].(map[string]any)
@@ -374,14 +384,18 @@ func TestAssistantHistoryWithText(t *testing.T) {
 		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{}}`))
 	})
 	msgs := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
-		ai.TextPart{Content: "previous answer"},
+		ai.TextPart{
+			Content: "previous answer", ProviderName: "other",
+			ProviderDetails: map[string]any{"thought_signature": "foreign"},
+		},
 		ai.ToolCallPart{ToolName: "t"},
 	}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
 		t.Fatal(err)
 	}
 	parts := gotBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)
-	if parts[0].(map[string]any)["text"] != "previous answer" {
+	if parts[0].(map[string]any)["text"] != "previous answer" ||
+		parts[0].(map[string]any)["thoughtSignature"] != nil {
 		t.Fatalf("text part lost: %v", parts)
 	}
 	if parts[1].(map[string]any)["functionCall"] == nil {

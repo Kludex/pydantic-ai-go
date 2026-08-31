@@ -39,8 +39,8 @@ func TestResponsesTextResponse(t *testing.T) {
 			"id": "response-1", "model": "gpt-5", "created_at": 1735689600.25,
 			"status": "completed",
 			"output": [
-				{"type": "reasoning", "summary": [{"text": "thinking"}]},
-				{"type": "message", "content": [{"type": "output_text", "text": "Hello!"}]}
+				{"id": "reasoning-1", "type": "reasoning", "encrypted_content": "signature", "summary": [{"text": "thinking"}]},
+				{"id": "message-1", "type": "message", "content": [{"type": "output_text", "text": "Hello!"}]}
 			],
 			"usage": {
 				"input_tokens": 12, "output_tokens": 5,
@@ -63,8 +63,14 @@ func TestResponsesTextResponse(t *testing.T) {
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
 	}
-	if _, ok := resp.Parts[0].(ai.ThinkingPart); !ok {
-		t.Fatalf("reasoning summary lost: %+v", resp.Parts)
+	thinking, ok := resp.Parts[0].(ai.ThinkingPart)
+	if !ok || thinking.ID != "reasoning-1" || thinking.Signature != "signature" ||
+		thinking.ProviderName != "openai" {
+		t.Fatalf("reasoning metadata lost: %+v", resp.Parts)
+	}
+	text := resp.Parts[1].(ai.TextPart)
+	if text.ID != "message-1" || text.ProviderName != "openai" {
+		t.Fatalf("text metadata lost: %+v", text)
 	}
 	if resp.ProviderName != "openai" || resp.ProviderURL == "" || resp.ProviderResponseID != "response-1" ||
 		resp.FinishReason != ai.FinishReasonStop || resp.State != ai.ModelResponseStateComplete ||
@@ -75,6 +81,24 @@ func TestResponsesTextResponse(t *testing.T) {
 		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 ||
 		resp.Usage.Details["reasoning_tokens"] != 2 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
+	}
+}
+
+func TestResponsesPreservesEncryptedReasoningWithoutSummary(t *testing.T) {
+	model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"model":"gpt-5","status":"completed",
+			"output":[{"id":"reasoning-1","type":"reasoning","encrypted_content":"signature"}]
+		}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thinking := response.Parts[0].(ai.ThinkingPart)
+	if thinking.Content != "" || thinking.ID != "reasoning-1" || thinking.Signature != "signature" ||
+		thinking.ProviderName != "openai" {
+		t.Fatalf("encrypted reasoning was not retained: %+v", thinking)
 	}
 }
 
@@ -132,7 +156,7 @@ func TestResponsesToolCallRoundTrip(t *testing.T) {
 			first = false
 			_, _ = w.Write([]byte(`{
 				"model": "gpt-5",
-				"output": [{"type": "function_call", "call_id": "c1", "name": "get_weather", "arguments": "{\"city\":\"SF\"}"}],
+				"output": [{"id": "function-1", "type": "function_call", "call_id": "c1", "name": "get_weather", "namespace": "weather", "arguments": "{\"city\":\"SF\"}"}],
 				"usage": {"input_tokens": 20, "output_tokens": 8}
 			}`))
 			return
@@ -153,7 +177,8 @@ func TestResponsesToolCallRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	calls := resp.ToolCalls()
-	if len(calls) != 1 || calls[0].ToolCallID != "c1" {
+	if len(calls) != 1 || calls[0].ToolCallID != "c1" || calls[0].ID != "function-1" ||
+		calls[0].ProviderName != "openai" || calls[0].ProviderDetails["namespace"] != "weather" {
 		t.Fatalf("unexpected calls %+v", calls)
 	}
 	msgs = append(msgs, *resp, ai.ModelRequest{Parts: []ai.RequestPart{
@@ -164,7 +189,8 @@ func TestResponsesToolCallRoundTrip(t *testing.T) {
 	}
 	input := gotBody["input"].([]any)
 	callItem := input[1].(map[string]any)
-	if callItem["type"] != "function_call" || callItem["call_id"] != "c1" {
+	if callItem["type"] != "function_call" || callItem["call_id"] != "c1" || callItem["id"] != "function-1" ||
+		callItem["namespace"] != "weather" {
 		t.Fatalf("function call not echoed: %v", callItem)
 	}
 	outputItem := input[2].(map[string]any)
@@ -364,14 +390,18 @@ func TestResponsesAssistantHistoryWithThinking(t *testing.T) {
 	})
 	msgs := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
 		ai.ThinkingPart{Content: "hidden"},
+		ai.ThinkingPart{ID: "reasoning-1", Signature: "signature", ProviderName: "openai"},
 		ai.TextPart{Content: "previous"},
 	}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
 		t.Fatal(err)
 	}
 	input := gotBody["input"].([]any)
-	if len(input) != 1 || input[0].(map[string]any)["role"] != "assistant" {
-		t.Fatalf("thinking should be dropped, text kept: %v", input)
+	if len(input) != 2 || input[0].(map[string]any)["type"] != "reasoning" ||
+		input[0].(map[string]any)["id"] != "reasoning-1" ||
+		input[0].(map[string]any)["encrypted_content"] != "signature" ||
+		input[1].(map[string]any)["role"] != "assistant" {
+		t.Fatalf("provider reasoning metadata was not round-tripped: %v", input)
 	}
 }
 

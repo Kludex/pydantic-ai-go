@@ -192,23 +192,42 @@ type ResponsePart interface {
 
 // TextPart is plain text produced by the model.
 type TextPart struct {
-	Content string
+	Content         string
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
 }
 
 func (TextPart) responsePartKind() string { return "text" }
 
+// ToolPartKind identifies a typed cross-provider tool part.
+type ToolPartKind string
+
+const (
+	ToolPartKindToolSearch     ToolPartKind = "tool-search"
+	ToolPartKindCapabilityLoad ToolPartKind = "capability-load"
+)
+
 // ToolCallPart is a tool call requested by the model.
 type ToolCallPart struct {
-	ToolName   string
-	Args       json.RawMessage
-	ToolCallID string
+	ToolName        string
+	Args            json.RawMessage
+	ToolCallID      string
+	ToolKind        ToolPartKind
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
 }
 
 func (ToolCallPart) responsePartKind() string { return "tool-call" }
 
 // ThinkingPart is reasoning content produced by the model.
 type ThinkingPart struct {
-	Content string
+	Content         string
+	ID              string
+	Signature       string
+	ProviderName    string
+	ProviderDetails map[string]any
 }
 
 func (ThinkingPart) responsePartKind() string { return "thinking" }

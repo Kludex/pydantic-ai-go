@@ -139,6 +139,7 @@ type part struct {
 	FunctionCall     *functionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *functionResponse `json:"functionResponse,omitempty"`
 	Thought          bool              `json:"thought,omitempty"`
+	ThoughtSignature string            `json:"thoughtSignature,omitempty"`
 }
 
 type inlineData struct {
@@ -321,7 +322,14 @@ func convertResponse(m ai.ModelResponse) ([]content, error) {
 	for _, p := range m.Parts {
 		switch rp := p.(type) {
 		case ai.TextPart:
-			parts = append(parts, part{Text: rp.Content})
+			parts = append(parts, part{Text: rp.Content, ThoughtSignature: googleThoughtSignature(
+				rp.ProviderName, rp.ProviderDetails,
+			)})
+		case ai.ThinkingPart:
+			parts = append(parts, part{
+				Text: rp.Content, Thought: true,
+				ThoughtSignature: googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
+			})
 		case ai.ToolCallPart:
 			var args map[string]any
 			if len(rp.Args) > 0 {
@@ -329,10 +337,28 @@ func convertResponse(m ai.ModelResponse) ([]content, error) {
 					return nil, fmt.Errorf("google: tool call args: %w", err)
 				}
 			}
-			parts = append(parts, part{FunctionCall: &functionCall{ID: rp.ToolCallID, Name: rp.ToolName, Args: args}})
+			parts = append(parts, part{
+				FunctionCall:     &functionCall{ID: rp.ToolCallID, Name: rp.ToolName, Args: args},
+				ThoughtSignature: googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
+			})
 		}
 	}
 	return []content{{Role: "model", Parts: parts}}, nil
+}
+
+func googlePartMetadata(signature string) (string, map[string]any) {
+	if signature == "" {
+		return "", nil
+	}
+	return "google", map[string]any{"thought_signature": signature}
+}
+
+func googleThoughtSignature(providerName string, details map[string]any) string {
+	if providerName != "" && providerName != "google" {
+		return ""
+	}
+	signature, _ := details["thought_signature"].(string)
+	return signature
 }
 
 func convertTool(def ai.ToolDefinition) functionDeclaration {
@@ -492,17 +518,23 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		FinishReason: googleFinishReason(gr.Candidates[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
 	for _, p := range gr.Candidates[0].Content.Parts {
+		providerName, providerDetails := googlePartMetadata(p.ThoughtSignature)
 		switch {
 		case p.FunctionCall != nil:
 			// args came from parsed JSON, so re-marshalling cannot fail
 			args, _ := json.Marshal(p.FunctionCall.Args)
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{
 				ToolName: p.FunctionCall.Name, Args: args, ToolCallID: p.FunctionCall.ID,
+				ProviderName: providerName, ProviderDetails: providerDetails,
 			})
 		case p.Thought:
-			resp.Parts = append(resp.Parts, ai.ThinkingPart{Content: p.Text})
-		case p.Text != "":
-			resp.Parts = append(resp.Parts, ai.TextPart{Content: p.Text})
+			resp.Parts = append(resp.Parts, ai.ThinkingPart{
+				Content: p.Text, ProviderName: providerName, ProviderDetails: providerDetails,
+			})
+		case p.Text != "" || providerDetails != nil:
+			resp.Parts = append(resp.Parts, ai.TextPart{
+				Content: p.Text, ProviderName: providerName, ProviderDetails: providerDetails,
+			})
 		}
 	}
 	return resp, nil

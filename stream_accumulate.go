@@ -8,23 +8,38 @@ import (
 )
 
 type accumulatedPart struct {
-	index      int
-	id         string
-	kind       ResponsePartKind
-	text       string
-	toolName   string
-	toolCallID string
-	toolArgs   string
+	index           int
+	id              string
+	kind            ResponsePartKind
+	text            string
+	responseID      string
+	signature       string
+	toolName        string
+	toolCallID      string
+	toolKind        ToolPartKind
+	toolArgs        string
+	providerName    string
+	providerDetails map[string]any
 }
 
 func (p *accumulatedPart) responsePart() ResponsePart {
 	if p.kind == ResponsePartKindText {
-		return TextPart{Content: p.text}
+		return TextPart{
+			Content: p.text, ID: p.responseID,
+			ProviderName: p.providerName, ProviderDetails: cloneSchemaMap(p.providerDetails),
+		}
 	}
 	if p.kind == ResponsePartKindThinking {
-		return ThinkingPart{Content: p.text}
+		return ThinkingPart{
+			Content: p.text, ID: p.responseID, Signature: p.signature,
+			ProviderName: p.providerName, ProviderDetails: cloneSchemaMap(p.providerDetails),
+		}
 	}
-	return ToolCallPart{ToolName: p.toolName, Args: json.RawMessage(p.toolArgs), ToolCallID: p.toolCallID}
+	return ToolCallPart{
+		ToolName: p.toolName, Args: json.RawMessage(p.toolArgs), ToolCallID: p.toolCallID,
+		ToolKind: p.toolKind, ID: p.responseID,
+		ProviderName: p.providerName, ProviderDetails: cloneSchemaMap(p.providerDetails),
+	}
 }
 
 // accumulate replays provider deltas into a ModelResponse and emits
@@ -117,7 +132,8 @@ func accumulate(
 		for _, part := range parts {
 			switch part.kind {
 			case ResponsePartKindText, ResponsePartKindThinking:
-				if part.text != "" {
+				if part.text != "" || part.responseID != "" || part.signature != "" ||
+					part.providerName != "" || len(part.providerDetails) > 0 {
 					response.Parts = append(response.Parts, part.responsePart())
 				}
 			case ResponsePartKindToolCall:
@@ -137,12 +153,21 @@ func accumulate(
 				return nil, err
 			}
 			part.text += event.Delta
+			if event.ID != "" {
+				part.responseID = event.ID
+			}
+			if event.ProviderName != "" {
+				part.providerName = event.ProviderName
+			}
+			part.providerDetails = mergeProviderDetails(part.providerDetails, event.ProviderDetails)
 			if started {
 				if err := startPart(part); err != nil {
 					return nil, err
 				}
 			} else if err := emitEvent(PartDeltaEvent{
-				Index: part.index, PartID: part.id, Delta: TextPartDelta{ContentDelta: event.Delta},
+				Index: part.index, PartID: part.id, Delta: TextPartDelta{
+					ContentDelta: event.Delta, ProviderName: event.ProviderName,
+				},
 			}); err != nil {
 				return nil, err
 			}
@@ -152,12 +177,25 @@ func accumulate(
 				return nil, err
 			}
 			part.text += event.Delta
+			if event.ID != "" {
+				part.responseID = event.ID
+			}
+			if event.SignatureDelta != "" {
+				part.signature = event.SignatureDelta
+			}
+			if event.ProviderName != "" {
+				part.providerName = event.ProviderName
+			}
+			part.providerDetails = mergeProviderDetails(part.providerDetails, event.ProviderDetails)
 			if started {
 				if err := startPart(part); err != nil {
 					return nil, err
 				}
 			} else if err := emitEvent(PartDeltaEvent{
-				Index: part.index, PartID: part.id, Delta: ThinkingPartDelta{ContentDelta: event.Delta},
+				Index: part.index, PartID: part.id, Delta: ThinkingPartDelta{
+					ContentDelta: event.Delta, SignatureDelta: event.SignatureDelta,
+					ProviderName: event.ProviderName,
+				},
 			}); err != nil {
 				return nil, err
 			}
@@ -172,6 +210,10 @@ func accumulate(
 			part := newPart(event.PartID, ResponsePartKindToolCall)
 			part.toolName = event.ToolName
 			part.toolCallID = event.ToolCallID
+			part.toolKind = event.ToolKind
+			part.responseID = event.ID
+			part.providerName = event.ProviderName
+			part.providerDetails = cloneSchemaMap(event.ProviderDetails)
 			if err := startPart(part); err != nil {
 				return nil, err
 			}

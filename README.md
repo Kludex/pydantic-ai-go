@@ -332,7 +332,7 @@ result := stream.Result()
 
 OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Google Gemini stream text, thinking, tool arguments, and usage from their SSE APIs. Models that do not implement `ai.StreamingModel` still work: each response is replayed as events.
 
-`PartStartEvent` contains the first content for a part. Later content arrives through `PartDeltaEvent`, and `PartEndEvent` marks its grouping boundary. Each event carries a stable `PartID` and response index, so you can route interleaved deltas without relying on arrival order. `FinalResultEvent` follows the first part matching the configured output.
+`PartStartEvent` contains the first content for a part. Later content, thinking signatures, and provider names arrive through typed `PartDeltaEvent` values. `PartEndEvent` contains the complete part and merged provider details. Each event carries a stable `PartID` and response index, so you can route interleaved deltas without relying on arrival order. `FinalResultEvent` follows the first part matching the configured output.
 
 Bundled providers populate part IDs. A custom `StreamingModel` emits provider-facing `ModelStreamEvent` values and can leave `PartID` empty only when its parts are strictly sequential.
 
@@ -409,7 +409,7 @@ agent := ai.NewAgent[Deps, string](fakes.NewTestModel())
 
 ## Interoperability
 
-Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. OpenTelemetry spans follow the GenAI semantic conventions and are free unless you set a global tracer provider.
+Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. Text, thinking, and tool-call parts also retain provider IDs, signatures, details, and typed tool kinds. OpenTelemetry spans follow the GenAI semantic conventions and are free unless you set a global tracer provider.
 
 ## Status
 

@@ -29,6 +29,7 @@ type ResponsePartDelta interface {
 // TextPartDelta appends content to a TextPart.
 type TextPartDelta struct {
 	ContentDelta string
+	ProviderName string
 }
 
 func (TextPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindText }
@@ -40,12 +41,17 @@ func (d TextPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 		return nil, fmt.Errorf("ai: cannot apply TextPartDelta to %T", part)
 	}
 	text.Content += d.ContentDelta
+	if d.ProviderName != "" {
+		text.ProviderName = d.ProviderName
+	}
 	return text, nil
 }
 
 // ThinkingPartDelta appends content to a ThinkingPart.
 type ThinkingPartDelta struct {
-	ContentDelta string
+	ContentDelta   string
+	SignatureDelta string
+	ProviderName   string
 }
 
 func (ThinkingPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindThinking }
@@ -57,6 +63,12 @@ func (d ThinkingPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 		return nil, fmt.Errorf("ai: cannot apply ThinkingPartDelta to %T", part)
 	}
 	thinking.Content += d.ContentDelta
+	if d.SignatureDelta != "" {
+		thinking.Signature = d.SignatureDelta
+	}
+	if d.ProviderName != "" {
+		thinking.ProviderName = d.ProviderName
+	}
 	return thinking, nil
 }
 
@@ -66,6 +78,7 @@ type ToolCallPartDelta struct {
 	ToolNameDelta string
 	ArgsDelta     string
 	ToolCallID    string
+	ProviderName  string
 }
 
 func (ToolCallPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindToolCall }
@@ -86,7 +99,24 @@ func (d ToolCallPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 	if d.ToolCallID != "" {
 		call.ToolCallID = d.ToolCallID
 	}
+	if d.ProviderName != "" {
+		call.ProviderName = d.ProviderName
+	}
 	return call, nil
+}
+
+func mergeProviderDetails(base, update map[string]any) map[string]any {
+	if len(update) == 0 {
+		return base
+	}
+	merged := cloneSchemaMap(base)
+	if merged == nil {
+		merged = make(map[string]any, len(update))
+	}
+	for key, value := range update {
+		merged[key] = cloneSchemaValue(value)
+	}
+	return merged
 }
 
 // PartStartEvent announces a new response part. Index is stable within the

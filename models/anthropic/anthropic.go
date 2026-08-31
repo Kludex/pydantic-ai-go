@@ -154,8 +154,10 @@ type messageParam struct {
 
 type contentBlock struct {
 	Type string `json:"type"`
-	// text
-	Text string `json:"text,omitempty"`
+	// text and thinking
+	Text      string `json:"text,omitempty"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
 	// image
 	Source *imageSource `json:"source,omitempty"`
 	// tool_use
@@ -313,6 +315,10 @@ func convertResponse(m ai.ModelResponse) []messageParam {
 		switch p := part.(type) {
 		case ai.TextPart:
 			blocks = append(blocks, contentBlock{Type: "text", Text: p.Content})
+		case ai.ThinkingPart:
+			if p.Signature != "" && (p.ProviderName == "" || p.ProviderName == "anthropic") {
+				blocks = append(blocks, contentBlock{Type: "thinking", Thinking: p.Content, Signature: p.Signature})
+			}
 		case ai.ToolCallPart:
 			blocks = append(blocks, contentBlock{Type: "tool_use", ID: p.ToolCallID, Name: p.ToolName, Input: p.Args})
 		}
@@ -338,12 +344,13 @@ type messagesResponse struct {
 	Model      string `json:"model"`
 	StopReason string `json:"stop_reason"`
 	Content    []struct {
-		Type     string          `json:"type"`
-		Text     string          `json:"text"`
-		Thinking string          `json:"thinking"`
-		ID       string          `json:"id"`
-		Name     string          `json:"name"`
-		Input    json.RawMessage `json:"input"`
+		Type      string          `json:"type"`
+		Text      string          `json:"text"`
+		Thinking  string          `json:"thinking"`
+		Signature string          `json:"signature"`
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		Input     json.RawMessage `json:"input"`
 	} `json:"content"`
 	Usage anthropicUsage `json:"usage"`
 }
@@ -395,7 +402,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		case "text":
 			resp.Parts = append(resp.Parts, ai.TextPart{Content: block.Text})
 		case "thinking":
-			resp.Parts = append(resp.Parts, ai.ThinkingPart{Content: block.Thinking})
+			resp.Parts = append(resp.Parts, ai.ThinkingPart{
+				Content: block.Thinking, Signature: block.Signature, ProviderName: "anthropic",
+			})
 		case "tool_use":
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{ToolName: block.Name, Args: block.Input, ToolCallID: block.ID})
 		default:

@@ -41,19 +41,20 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, response-metadata, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, response/part-metadata, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [~] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging. Legacy dynamic system-prompt IDs and history reevaluation remain.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
 - [ ] Compaction and builtin-tool return parts.
 - [ ] Tool availability delta parts.
-- [~] Requests and responses preserve timestamps, local metadata, run/conversation IDs, normalized finish reasons, provider details/URLs/names, response IDs, and lifecycle state, including deprecated `vendor_*` aliases. Response-part provider metadata remains.
+- [x] Implemented requests/responses preserve timestamps, local metadata, run/conversation IDs, normalized finish reasons, provider details/URLs/names, response IDs, and lifecycle state, including deprecated `vendor_*` aliases.
+- [x] Text, thinking, and function-tool-call parts preserve IDs, signatures, provider names/details, and typed tool kinds through serialization, fallback replay, keyed streaming accumulation, and consumer-safe copies.
 - [ ] Retry prompt structured validation errors.
 - [x] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
 - [x] Synthesized-return metadata markers and deterministic, idempotent repair of trailing, interior, shadowed-ID, malformed-order, and empty-ID dangling calls.
 - [x] Orphaned tool results are removed while plain validation feedback is preserved; consecutive requests and synthetic responses are merged with tool results hoisted before user-facing content.
 - [~] `ToolReturn` metadata is preserved; separate return value, extra content, and revealed tools remain.
-- [x] Stable stream part IDs and keyed/interleaved text, thinking, and tool-argument deltas across bundled providers and fallback replay.
+- [x] Stable stream part IDs and keyed/interleaved text, thinking, signature, provider-metadata, and tool-argument deltas across bundled providers and fallback replay.
 - [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, `FinalResultEvent`, and metadata-bearing `FinishEvent` with typed, applicable deltas.
 - [ ] Enqueued-message events.
 
@@ -114,9 +115,9 @@ Status:
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: text/reasoning/function-call streaming plus response IDs, status, timestamps, and background metadata; native output, multimodal content, builtin tools, and background continuation remain.
-- [~] Anthropic Messages: text/thinking/function-tool streaming, multimodal input, response IDs, stop reasons, and suspended `pause_turn` state; automatic pause continuation, advanced thinking, citations, and native tools remain.
-- [~] Google Gemini: text/thinking/function-tool streaming, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
+- [~] OpenAI Responses: text/reasoning/function-call streaming plus response/item IDs, encrypted reasoning, function namespaces, status, timestamps, and background metadata; native output, multimodal content, builtin tools, and background continuation remain.
+- [~] Anthropic Messages: text/thinking/function-tool streaming, signed-thinking round trips, multimodal input, response IDs, stop reasons, and suspended `pause_turn` state; automatic pause continuation, citations, and native tools remain.
+- [~] Google Gemini: text/thinking/function-tool streaming, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.
 - [ ] AWS Bedrock.

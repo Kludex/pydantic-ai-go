@@ -38,6 +38,60 @@ func newStreamingModel(script func(msgs []ai.ModelMessage) []ai.ModelStreamEvent
 	return &streamingModel{Model: fakes.NewTestModel(), script: script}
 }
 
+func TestRunStreamPreservesPartProviderMetadata(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ThinkingDeltaEvent{
+				PartID: "thinking", Delta: "plan", ID: "reasoning-1", ProviderName: "provider",
+				ProviderDetails: map[string]any{"first": true},
+			},
+			ai.ThinkingDeltaEvent{
+				PartID: "thinking", SignatureDelta: "signature", ProviderName: "provider",
+				ProviderDetails: map[string]any{"second": true},
+			},
+			ai.TextDeltaEvent{
+				PartID: "text", Delta: "do", ID: "message-1", ProviderName: "provider",
+				ProviderDetails: map[string]any{"first": true},
+			},
+			ai.TextDeltaEvent{
+				PartID: "text", Delta: "ne", ProviderName: "provider",
+				ProviderDetails: map[string]any{"second": true},
+			},
+			ai.FinishEvent{ProviderDetails: map[string]any{"finish": true}},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case ai.PartStartEvent:
+			switch part := event.Part.(type) {
+			case ai.TextPart:
+				part.ProviderDetails["consumer"] = true
+			case ai.ThinkingPart:
+				part.ProviderDetails["consumer"] = true
+			}
+		case ai.FinishEvent:
+			event.ProviderDetails["consumer"] = true
+		}
+	}
+	response := stream.Result().Messages()[1].(ai.ModelResponse)
+	thinking := response.Parts[0].(ai.ThinkingPart)
+	text := response.Parts[1].(ai.TextPart)
+	if thinking.Content != "plan" || thinking.ID != "reasoning-1" || thinking.Signature != "signature" ||
+		thinking.ProviderName != "provider" || thinking.ProviderDetails["first"] != true ||
+		thinking.ProviderDetails["second"] != true || thinking.ProviderDetails["consumer"] != nil {
+		t.Fatalf("unexpected thinking metadata: %+v", thinking)
+	}
+	if text.Content != "done" || text.ID != "message-1" || text.ProviderName != "provider" ||
+		text.ProviderDetails["first"] != true || text.ProviderDetails["second"] != true ||
+		text.ProviderDetails["consumer"] != nil || response.ProviderDetails["consumer"] != nil {
+		t.Fatalf("unexpected text/response metadata: text=%+v response=%+v", text, response)
+	}
+}
+
 func TestRunStreamTextDeltas(t *testing.T) {
 	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
 		return []ai.ModelStreamEvent{
@@ -126,22 +180,26 @@ func TestRunStreamPartLifecycle(t *testing.T) {
 }
 
 func TestResponsePartDeltasApply(t *testing.T) {
-	text, err := (ai.TextPartDelta{ContentDelta: "b"}).Apply(ai.TextPart{Content: "a"})
-	if err != nil || text.(ai.TextPart).Content != "ab" {
+	text, err := (ai.TextPartDelta{ContentDelta: "b", ProviderName: "provider"}).Apply(ai.TextPart{Content: "a"})
+	if err != nil || text.(ai.TextPart).Content != "ab" || text.(ai.TextPart).ProviderName != "provider" {
 		t.Fatalf("unexpected text delta result=%v err=%v", text, err)
 	}
-	thinking, err := (ai.ThinkingPartDelta{ContentDelta: "b"}).Apply(ai.ThinkingPart{Content: "a"})
-	if err != nil || thinking.(ai.ThinkingPart).Content != "ab" {
+	thinking, err := (ai.ThinkingPartDelta{
+		ContentDelta: "b", SignatureDelta: "signature", ProviderName: "provider",
+	}).Apply(ai.ThinkingPart{Content: "a"})
+	if err != nil || thinking.(ai.ThinkingPart).Content != "ab" ||
+		thinking.(ai.ThinkingPart).Signature != "signature" || thinking.(ai.ThinkingPart).ProviderName != "provider" {
 		t.Fatalf("unexpected thinking delta result=%v err=%v", thinking, err)
 	}
 	call, err := (ai.ToolCallPartDelta{
-		ToolNameDelta: "ther", ArgsDelta: "1}", ToolCallID: "call",
+		ToolNameDelta: "ther", ArgsDelta: "1}", ToolCallID: "call", ProviderName: "provider",
 	}).Apply(ai.ToolCallPart{ToolName: "wea", Args: json.RawMessage(`{"x":`), ToolCallID: "call"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	toolCall := call.(ai.ToolCallPart)
-	if toolCall.ToolName != "weather" || string(toolCall.Args) != `{"x":1}` || toolCall.ToolCallID != "call" {
+	if toolCall.ToolName != "weather" || string(toolCall.Args) != `{"x":1}` || toolCall.ToolCallID != "call" ||
+		toolCall.ProviderName != "provider" {
 		t.Fatalf("unexpected tool-call delta result: %+v", toolCall)
 	}
 	call, err = (ai.ToolCallPartDelta{ToolCallID: "assigned"}).Apply(ai.ToolCallPart{})

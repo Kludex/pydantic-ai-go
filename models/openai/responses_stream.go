@@ -58,11 +58,13 @@ type responsesStreamEvent struct {
 	ContentIndex int    `json:"content_index"`
 	SummaryIndex int    `json:"summary_index"`
 	Item         struct {
-		ID        string `json:"id"`
-		Type      string `json:"type"`
-		CallID    string `json:"call_id"`
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
+		ID               string `json:"id"`
+		Type             string `json:"type"`
+		CallID           string `json:"call_id"`
+		Name             string `json:"name"`
+		Arguments        string `json:"arguments"`
+		Namespace        string `json:"namespace"`
+		EncryptedContent string `json:"encrypted_content"`
 	} `json:"item"`
 	Part struct {
 		Text string `json:"text"`
@@ -108,29 +110,52 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 			switch event.Type {
 			case "response.output_text.delta":
 				partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
-				if !yield(ai.TextDeltaEvent{PartID: partID, Delta: event.Delta}, nil) {
+				providerName := ""
+				if event.ItemID != "" {
+					providerName = "openai"
+				}
+				if !yield(ai.TextDeltaEvent{
+					PartID: partID, Delta: event.Delta, ID: event.ItemID, ProviderName: providerName,
+				}, nil) {
 					return
 				}
 			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
 				partID := responsesThinkingPartID(event)
-				if !yield(ai.ThinkingDeltaEvent{PartID: partID, Delta: event.Delta}, nil) {
+				if !yield(ai.ThinkingDeltaEvent{
+					PartID: partID, Delta: event.Delta, ID: event.ItemID, ProviderName: "openai",
+				}, nil) {
 					return
 				}
 			case "response.reasoning_summary_part.added":
 				partID := responsesThinkingPartID(event)
-				if event.Part.Text != "" && !yield(ai.ThinkingDeltaEvent{PartID: partID, Delta: event.Part.Text}, nil) {
+				if event.Part.Text != "" && !yield(ai.ThinkingDeltaEvent{
+					PartID: partID, Delta: event.Part.Text, ID: event.ItemID, ProviderName: "openai",
+				}, nil) {
 					return
 				}
 			case "response.output_item.added":
-				if event.Item.Type == "function_call" {
+				switch event.Item.Type {
+				case "function_call":
 					partID := responsesToolPartID(event)
+					var providerDetails map[string]any
+					if event.Item.Namespace != "" {
+						providerDetails = map[string]any{"namespace": event.Item.Namespace}
+					}
 					if !yield(ai.ToolCallStartEvent{
 						PartID: partID, ToolName: event.Item.Name, ToolCallID: event.Item.CallID,
+						ID: event.Item.ID, ProviderName: "openai", ProviderDetails: providerDetails,
 					}, nil) {
 						return
 					}
 					if event.Item.Arguments != "" && !yield(ai.ToolCallDeltaEvent{
 						PartID: partID, ArgsDelta: event.Item.Arguments,
+					}, nil) {
+						return
+					}
+				case "reasoning":
+					if event.Item.EncryptedContent != "" && !yield(ai.ThinkingDeltaEvent{
+						PartID: responsesThinkingPartID(event), ID: event.Item.ID,
+						SignatureDelta: event.Item.EncryptedContent, ProviderName: "openai",
 					}, nil) {
 						return
 					}

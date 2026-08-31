@@ -99,6 +99,35 @@ func TestUnmarshalUpstreamSynthesizedReturnFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamPartMetadataFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_part_metadata.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := messages[0].(ai.ModelResponse).Parts
+	text := parts[0].(ai.TextPart)
+	thinking := parts[1].(ai.ThinkingPart)
+	call := parts[2].(ai.ToolCallPart)
+	if text.ID != "text-1" || text.ProviderName != "fixture" || text.ProviderDetails["phase"] != "final" ||
+		thinking.ID != "thinking-1" || thinking.Signature != "signature" ||
+		thinking.ProviderDetails["encrypted"] != true || call.ID != "tool-1" ||
+		call.ProviderName != "fixture" || call.ProviderDetails["namespace"] != "ns" {
+		t.Fatalf("unexpected part metadata fixture: %+v", parts)
+	}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"signature":"signature"`) ||
+		!strings.Contains(string(encoded), `"provider_details":{"namespace":"ns"}`) {
+		t.Fatalf("part metadata was not serialized: %s", encoded)
+	}
+}
+
 func TestUnmarshalUpstreamResponseMetadataFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/messages/upstream_response_metadata.json")
 	if err != nil {

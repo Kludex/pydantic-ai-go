@@ -18,7 +18,10 @@ func TestMessagesRoundTrip(t *testing.T) {
 		ai.ModelResponse{
 			Parts: []ai.ResponsePart{
 				ai.ThinkingPart{Content: "hmm"},
-				ai.ToolCallPart{ToolName: "get_weather", Args: json.RawMessage(`{"city":"SF"}`), ToolCallID: "c1"},
+				ai.ToolCallPart{
+					ToolName: "get_weather", Args: json.RawMessage(`{"city":"SF"}`), ToolCallID: "c1",
+					ToolKind: ai.ToolPartKindToolSearch,
+				},
 			},
 			Usage: ai.Usage{
 				Requests: 1, InputTokens: 10, OutputTokens: 5,
@@ -58,7 +61,8 @@ func TestMessagesRoundTrip(t *testing.T) {
 		resp.Usage.Details["provider_units"] != 7 {
 		t.Fatalf("unexpected response %+v", resp)
 	}
-	if resp.ToolCalls()[0].ToolName != "get_weather" {
+	if resp.ToolCalls()[0].ToolName != "get_weather" ||
+		resp.ToolCalls()[0].ToolKind != ai.ToolPartKindToolSearch {
 		t.Fatal("tool call lost in round trip")
 	}
 	req := back[2].(ai.ModelRequest)

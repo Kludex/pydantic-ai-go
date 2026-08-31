@@ -74,6 +74,7 @@ func TestStreamEvents(t *testing.T) {
 			`{"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"A"}}`,
 			`{"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"B"}}`,
 			`{"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":"ignored"}}`,
+			`{"type":"content_block_delta","index":1,"delta":{"type":"citations_delta"}}`,
 			`{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"c1","name":"work","input":{}}}`,
 			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"x\":"}}`,
 			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"1}"}}`,
@@ -89,7 +90,7 @@ func TestStreamEvents(t *testing.T) {
 	if !gotStream || gotAccept != "text/event-stream" {
 		t.Fatalf("stream request not configured: stream=%v accept=%q", gotStream, gotAccept)
 	}
-	var text, thinking, args string
+	var text, thinking, signature, args string
 	var textPartID, thinkingPartID, argsPartID string
 	var start ai.ToolCallStartEvent
 	var finish ai.FinishEvent
@@ -101,6 +102,9 @@ func TestStreamEvents(t *testing.T) {
 		case ai.ThinkingDeltaEvent:
 			thinking += event.Delta
 			thinkingPartID = event.PartID
+			if event.SignatureDelta != "" {
+				signature = event.SignatureDelta
+			}
 		case ai.ToolCallStartEvent:
 			start = event
 		case ai.ToolCallDeltaEvent:
@@ -110,7 +114,8 @@ func TestStreamEvents(t *testing.T) {
 			finish = event
 		}
 	}
-	if text != "Hi" || thinking != "AB" || start.ToolName != "work" || start.ToolCallID != "c1" || args != `{"x":1}` {
+	if text != "Hi" || thinking != "AB" || signature != "ignored" || start.ToolName != "work" ||
+		start.ToolCallID != "c1" || args != `{"x":1}` {
 		t.Fatalf("unexpected events: text=%q thinking=%q start=%+v args=%q", text, thinking, start, args)
 	}
 	if textPartID != "0" || thinkingPartID != "1" || start.PartID != "2" || argsPartID != "2" {

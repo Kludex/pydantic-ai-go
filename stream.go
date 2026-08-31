@@ -34,8 +34,11 @@ type TextDeltaEvent struct {
 	// PartID identifies the response part this delta updates. A stable,
 	// non-empty ID allows deltas for multiple parts to be interleaved. An
 	// empty ID appends to the current text part for sequential streams.
-	PartID string
-	Delta  string
+	PartID          string
+	Delta           string
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
 }
 
 func (TextDeltaEvent) modelStreamEventKind() string { return "text-delta" }
@@ -45,8 +48,12 @@ type ThinkingDeltaEvent struct {
 	// PartID identifies the response part this delta updates. A stable,
 	// non-empty ID allows deltas for multiple parts to be interleaved. An
 	// empty ID appends to the current thinking part for sequential streams.
-	PartID string
-	Delta  string
+	PartID          string
+	Delta           string
+	ID              string
+	SignatureDelta  string
+	ProviderName    string
+	ProviderDetails map[string]any
 }
 
 func (ThinkingDeltaEvent) modelStreamEventKind() string { return "thinking-delta" }
@@ -56,9 +63,13 @@ type ToolCallStartEvent struct {
 	// PartID identifies this tool-call part. ToolCallDeltaEvent uses the
 	// same ID so multiple calls can stream arguments concurrently. An empty
 	// ID starts a new sequential tool-call part.
-	PartID     string
-	ToolName   string
-	ToolCallID string
+	PartID          string
+	ToolName        string
+	ToolCallID      string
+	ToolKind        ToolPartKind
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
 }
 
 func (ToolCallStartEvent) modelStreamEventKind() string { return "tool-call-start" }

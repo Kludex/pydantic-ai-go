@@ -286,16 +286,24 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 			partID := strconv.Itoa(index)
 			switch part := part.(type) {
 			case TextPart:
-				if !yield(TextDeltaEvent{PartID: partID, Delta: part.Content}, nil) {
+				if !yield(TextDeltaEvent{
+					PartID: partID, Delta: part.Content, ID: part.ID,
+					ProviderName: part.ProviderName, ProviderDetails: cloneSchemaMap(part.ProviderDetails),
+				}, nil) {
 					return
 				}
 			case ThinkingPart:
-				if !yield(ThinkingDeltaEvent{PartID: partID, Delta: part.Content}, nil) {
+				if !yield(ThinkingDeltaEvent{
+					PartID: partID, Delta: part.Content, ID: part.ID, SignatureDelta: part.Signature,
+					ProviderName: part.ProviderName, ProviderDetails: cloneSchemaMap(part.ProviderDetails),
+				}, nil) {
 					return
 				}
 			case ToolCallPart:
 				if !yield(ToolCallStartEvent{
 					PartID: partID, ToolName: part.ToolName, ToolCallID: part.ToolCallID,
+					ToolKind: part.ToolKind, ID: part.ID,
+					ProviderName: part.ProviderName, ProviderDetails: cloneSchemaMap(part.ProviderDetails),
 				}, nil) {
 					return
 				}

@@ -24,11 +24,12 @@ func TestResponsesStreamEvents(t *testing.T) {
 		sseHandler(t, []string{
 			`{"type":"response.created","response":{"model":"gpt-5"}}`,
 			`{"type":"response.output_item.added","item":{"id":"msg","type":"message"}}`,
-			`{"type":"response.output_text.delta","delta":"Hi"}`,
+			`{"type":"response.output_text.delta","item_id":"msg","delta":"Hi"}`,
+			`{"type":"response.output_item.added","item":{"id":"reason","type":"reasoning","encrypted_content":"signature"}}`,
 			`{"type":"response.reasoning_summary_part.added","item_id":"reason","part":{"text":"A"}}`,
 			`{"type":"response.reasoning_summary_text.delta","item_id":"reason","delta":"B"}`,
 			`{"type":"response.reasoning_text.delta","item_id":"reason","delta":"C"}`,
-			`{"type":"response.output_item.added","item":{"id":"fc","type":"function_call","call_id":"c1","name":"work","arguments":""}}`,
+			`{"type":"response.output_item.added","item":{"id":"fc","type":"function_call","call_id":"c1","name":"work","namespace":"tools","arguments":""}}`,
 			`{"type":"response.function_call_arguments.delta","item_id":"fc","delta":"{\"x\":"}`,
 			`{"type":"response.function_call_arguments.delta","item_id":"fc","delta":"1}"}`,
 			`{"type":"response.output_text.done"}`,
@@ -44,7 +45,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 		t.Fatal("Responses request did not enable streaming")
 	}
 	var text, thinking, args string
-	var textPartID, thinkingPartID, argsPartID string
+	var textPartID, textID, thinkingPartID, thinkingID, thinkingSignature, argsPartID string
 	var start ai.ToolCallStartEvent
 	var finish ai.FinishEvent
 	for _, event := range events {
@@ -52,9 +53,16 @@ func TestResponsesStreamEvents(t *testing.T) {
 		case ai.TextDeltaEvent:
 			text += event.Delta
 			textPartID = event.PartID
+			textID = event.ID
 		case ai.ThinkingDeltaEvent:
 			thinking += event.Delta
 			thinkingPartID = event.PartID
+			if event.ID != "" {
+				thinkingID = event.ID
+			}
+			if event.SignatureDelta != "" {
+				thinkingSignature = event.SignatureDelta
+			}
 		case ai.ToolCallStartEvent:
 			start = event
 		case ai.ToolCallDeltaEvent:
@@ -67,8 +75,10 @@ func TestResponsesStreamEvents(t *testing.T) {
 	if text != "Hi" || thinking != "ABC" || start.ToolName != "work" || start.ToolCallID != "c1" || args != `{"x":1}` {
 		t.Fatalf("unexpected events text=%q thinking=%q start=%+v args=%q", text, thinking, start, args)
 	}
-	if textPartID != "output:0:content:0:text" || thinkingPartID != "item:reason:thinking:0" ||
-		start.PartID != "item:fc" || argsPartID != start.PartID {
+	if textPartID != "output:0:content:0:text" || textID != "msg" ||
+		thinkingPartID != "item:reason:thinking:0" || thinkingID != "reason" || thinkingSignature != "signature" ||
+		start.PartID != "item:fc" || start.ID != "fc" || start.ProviderDetails["namespace"] != "tools" ||
+		argsPartID != start.PartID {
 		t.Fatalf("unstable Responses part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
 	if finish.ModelName != "gpt-5" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 ||
@@ -77,6 +87,26 @@ func TestResponsesStreamEvents(t *testing.T) {
 		finish.State != ai.ModelResponseStateComplete || finish.Timestamp.IsZero() ||
 		finish.ProviderDetails["finish_reason"] != "completed" || finish.ProviderDetails["timestamp"] == nil {
 		t.Fatalf("unexpected finish %+v", finish)
+	}
+}
+
+func TestResponsesStreamConsumerBreakOnEncryptedReasoning(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_item.added","item":{"id":"reason","type":"reasoning","encrypted_content":"signature"}}`,
+		`{"type":"mystery"}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.(ai.ThinkingDeltaEvent).SignatureDelta != "signature" {
+			t.Fatalf("unexpected reasoning event: %+v", event)
+		}
+		break
 	}
 }
 

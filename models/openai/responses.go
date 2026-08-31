@@ -95,11 +95,14 @@ type responsesInput struct {
 	Role    string `json:"role,omitempty"`
 	Content string `json:"content,omitempty"`
 	// function_call and function_call_output items
-	Type      string `json:"type,omitempty"`
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
-	Output    string `json:"output,omitempty"`
+	Type             string `json:"type,omitempty"`
+	ID               string `json:"id,omitempty"`
+	CallID           string `json:"call_id,omitempty"`
+	Name             string `json:"name,omitempty"`
+	Arguments        string `json:"arguments,omitempty"`
+	Namespace        string `json:"namespace,omitempty"`
+	Output           string `json:"output,omitempty"`
+	EncryptedContent string `json:"encrypted_content,omitempty"`
 }
 
 type responsesTool struct {
@@ -199,9 +202,31 @@ func convertResponsesResponse(m ai.ModelResponse) []responsesInput {
 	for _, p := range m.Parts {
 		switch part := p.(type) {
 		case ai.TextPart:
-			out = append(out, responsesInput{Role: "assistant", Content: part.Content})
+			id := ""
+			if part.ProviderName == "" || part.ProviderName == "openai" {
+				id = part.ID
+			}
+			out = append(out, responsesInput{Role: "assistant", Content: part.Content, ID: id})
+		case ai.ThinkingPart:
+			if (part.ProviderName == "" || part.ProviderName == "openai") &&
+				(part.ID != "" || part.Signature != "") {
+				out = append(out, responsesInput{
+					Type: "reasoning", ID: part.ID, EncryptedContent: part.Signature,
+				})
+			}
 		case ai.ToolCallPart:
-			out = append(out, responsesInput{Type: "function_call", CallID: part.ToolCallID, Name: part.ToolName, Arguments: string(part.Args)})
+			id := ""
+			if part.ProviderName == "" || part.ProviderName == "openai" {
+				id = part.ID
+			}
+			namespace := ""
+			if part.ProviderName == "" || part.ProviderName == "openai" {
+				namespace, _ = part.ProviderDetails["namespace"].(string)
+			}
+			out = append(out, responsesInput{
+				Type: "function_call", ID: id, CallID: part.ToolCallID,
+				Name: part.ToolName, Arguments: string(part.Args), Namespace: namespace,
+			})
 		}
 	}
 	return out
@@ -219,15 +244,18 @@ type responsesResponse struct {
 	Background        bool               `json:"background"`
 	IncompleteDetails *incompleteDetails `json:"incomplete_details"`
 	Output            []struct {
+		ID      string `json:"id"`
 		Type    string `json:"type"`
 		Content []struct {
 			Type string `json:"type"`
 			Text string `json:"text"`
 		} `json:"content"`
-		CallID    string `json:"call_id"`
-		Name      string `json:"name"`
-		Arguments string `json:"arguments"`
-		Summary   []struct {
+		CallID           string `json:"call_id"`
+		Name             string `json:"name"`
+		Arguments        string `json:"arguments"`
+		Namespace        string `json:"namespace"`
+		EncryptedContent string `json:"encrypted_content"`
+		Summary          []struct {
 			Text string `json:"text"`
 		} `json:"summary"`
 	} `json:"output"`
@@ -317,18 +345,34 @@ func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
 		case "message":
 			for _, c := range item.Content {
 				if c.Type == "output_text" {
-					resp.Parts = append(resp.Parts, ai.TextPart{Content: c.Text})
+					resp.Parts = append(resp.Parts, ai.TextPart{
+						Content: c.Text, ID: item.ID, ProviderName: "openai",
+					})
 				}
 			}
 		case "function_call":
+			var providerDetails map[string]any
+			if item.Namespace != "" {
+				providerDetails = map[string]any{"namespace": item.Namespace}
+			}
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{
-				ToolName:   item.Name,
-				Args:       json.RawMessage(item.Arguments),
-				ToolCallID: item.CallID,
+				ToolName: item.Name, Args: json.RawMessage(item.Arguments), ToolCallID: item.CallID,
+				ID: item.ID, ProviderName: "openai", ProviderDetails: providerDetails,
 			})
 		case "reasoning":
-			for _, s := range item.Summary {
-				resp.Parts = append(resp.Parts, ai.ThinkingPart{Content: s.Text})
+			if len(item.Summary) == 0 && item.EncryptedContent != "" {
+				resp.Parts = append(resp.Parts, ai.ThinkingPart{
+					ID: item.ID, Signature: item.EncryptedContent, ProviderName: "openai",
+				})
+			}
+			for index, s := range item.Summary {
+				signature := ""
+				if index == 0 {
+					signature = item.EncryptedContent
+				}
+				resp.Parts = append(resp.Parts, ai.ThinkingPart{
+					Content: s.Text, ID: item.ID, Signature: signature, ProviderName: "openai",
+				})
 			}
 		}
 	}

@@ -58,9 +58,9 @@ func TestStreamEvents(t *testing.T) {
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		path, query, accept = r.URL.Path, r.URL.RawQuery, r.Header.Get("Accept")
 		googleSSE(t, []string{
-			`{"responseId":"response-stream","modelVersion":"gemini-stream","candidates":[{"content":{"parts":[{"text":"Hel"}]}}]}`,
-			`{"candidates":[{"content":{"parts":[{"thought":true,"text":"plan"}]}}]}`,
-			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"c1","name":"work","args":{"x":1}}}]}}]}`,
+			`{"responseId":"response-stream","modelVersion":"gemini-stream","candidates":[{"content":{"parts":[{"text":"Hel","thoughtSignature":"text-signature"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"thought":true,"text":"plan","thoughtSignature":"thinking-signature"}]}}]}`,
+			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"c1","name":"work","args":{"x":1}},"thoughtSignature":"tool-signature"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
 		})(w, r)
 	})
@@ -72,7 +72,7 @@ func TestStreamEvents(t *testing.T) {
 		t.Fatalf("unexpected request path=%q query=%q accept=%q", path, query, accept)
 	}
 	var text, thinking, args string
-	var textPartID, thinkingPartID, argsPartID string
+	var textPartID, textSignature, thinkingPartID, thinkingSignature, argsPartID string
 	var start ai.ToolCallStartEvent
 	var finish ai.FinishEvent
 	for _, event := range events {
@@ -80,9 +80,15 @@ func TestStreamEvents(t *testing.T) {
 		case ai.TextDeltaEvent:
 			text += event.Delta
 			textPartID = event.PartID
+			if signature, ok := event.ProviderDetails["thought_signature"].(string); ok {
+				textSignature = signature
+			}
 		case ai.ThinkingDeltaEvent:
 			thinking += event.Delta
 			thinkingPartID = event.PartID
+			if signature, ok := event.ProviderDetails["thought_signature"].(string); ok {
+				thinkingSignature = signature
+			}
 		case ai.ToolCallStartEvent:
 			start = event
 		case ai.ToolCallDeltaEvent:
@@ -95,7 +101,10 @@ func TestStreamEvents(t *testing.T) {
 	if text != "Hello" || thinking != "plan" || start.ToolName != "work" || start.ToolCallID != "c1" || args != `{"x":1}` {
 		t.Fatalf("unexpected events text=%q thinking=%q start=%+v args=%q", text, thinking, start, args)
 	}
-	if textPartID != "text:0" || thinkingPartID != "thinking:0" || start.PartID != "tool:0" || argsPartID != "tool:0" {
+	if textPartID != "text:0" || textSignature != "text-signature" ||
+		thinkingPartID != "thinking:0" || thinkingSignature != "thinking-signature" ||
+		start.PartID != "tool:0" || start.ProviderDetails["thought_signature"] != "tool-signature" ||
+		argsPartID != "tool:0" {
 		t.Fatalf("unstable Gemini part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)
 	}
 	if finish.ModelName != "gemini-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 ||

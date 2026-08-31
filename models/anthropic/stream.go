@@ -61,12 +61,13 @@ type streamEvent struct {
 		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
 	ContentBlock struct {
-		Type     string          `json:"type"`
-		Text     string          `json:"text"`
-		Thinking string          `json:"thinking"`
-		ID       string          `json:"id"`
-		Name     string          `json:"name"`
-		Input    json.RawMessage `json:"input"`
+		Type      string          `json:"type"`
+		Text      string          `json:"text"`
+		Thinking  string          `json:"thinking"`
+		Signature string          `json:"signature"`
+		ID        string          `json:"id"`
+		Name      string          `json:"name"`
+		Input     json.RawMessage `json:"input"`
 	} `json:"content_block"`
 	Delta struct {
 		Type        string `json:"type"`
@@ -74,6 +75,7 @@ type streamEvent struct {
 		Text        string `json:"text"`
 		Thinking    string `json:"thinking"`
 		PartialJSON string `json:"partial_json"`
+		Signature   string `json:"signature"`
 	} `json:"delta"`
 	Usage anthropicUsage `json:"usage"`
 	Error struct {
@@ -165,9 +167,11 @@ func (m *Model) emitContentBlockStart(yield func(ai.ModelStreamEvent, error) boo
 	case "text":
 		return event.ContentBlock.Text == "" || yield(ai.TextDeltaEvent{PartID: partID, Delta: event.ContentBlock.Text}, nil)
 	case "thinking":
-		return event.ContentBlock.Thinking == "" || yield(ai.ThinkingDeltaEvent{
-			PartID: partID, Delta: event.ContentBlock.Thinking,
-		}, nil)
+		return event.ContentBlock.Thinking == "" && event.ContentBlock.Signature == "" ||
+			yield(ai.ThinkingDeltaEvent{
+				PartID: partID, Delta: event.ContentBlock.Thinking,
+				SignatureDelta: event.ContentBlock.Signature, ProviderName: "anthropic",
+			}, nil)
 	case "tool_use":
 		if !yield(ai.ToolCallStartEvent{
 			PartID: partID, ToolName: event.ContentBlock.Name, ToolCallID: event.ContentBlock.ID,
@@ -190,7 +194,11 @@ func emitContentBlockDelta(yield func(ai.ModelStreamEvent, error) bool, event st
 		return yield(ai.ThinkingDeltaEvent{PartID: partID, Delta: event.Delta.Thinking}, nil)
 	case "input_json_delta":
 		return yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: event.Delta.PartialJSON}, nil)
-	case "signature_delta", "citations_delta":
+	case "signature_delta":
+		return yield(ai.ThinkingDeltaEvent{
+			PartID: partID, SignatureDelta: event.Delta.Signature, ProviderName: "anthropic",
+		}, nil)
+	case "citations_delta":
 		return true
 	default:
 		return yield(nil, fmt.Errorf("anthropic: unsupported content block delta type %q", event.Delta.Type))

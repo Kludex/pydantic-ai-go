@@ -74,13 +74,14 @@ Status:
 - [x] Complete Draft 2020-12 tool schemas, including prepared raw schemas and asserted formats, compile before each request and validate arguments before Go decoding or execution; failures produce persisted structured retry details.
 - [x] Typed semantic argument validators run after JSON Schema validation and Go decoding but before execution for dependency-aware, simple, prepared, and raw-schema tools, with retry and terminal-failure semantics.
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
-- [ ] Per-toolset retry defaults and output-tool-specific overrides once those abstractions land.
+- [x] Per-toolset retry and timeout defaults preserve explicit per-tool overrides.
+- [ ] Output-tool-specific retry overrides.
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
 - [x] Failed and interrupted tool returns use Anthropic error results and Gemini error responses.
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
-- [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, and metadata wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
+- [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
 - [ ] Approval-required toolset wrapper.
 - [ ] Toolset IDs plus per-run/per-step enter, exit, and replacement lifecycle for stateful remote toolsets.
 - [ ] Deferred/lazy tool loading and tool search.

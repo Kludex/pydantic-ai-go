@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 // Toolset lists a dynamic collection of reusable tools for one model step.
@@ -65,6 +66,24 @@ func PrepareToolset[Deps any](toolset Toolset[Deps], prepare ToolsPrepareFunc[De
 // SetToolsetMetadata merges metadata onto every tool. New values take precedence.
 func SetToolsetMetadata[Deps any](toolset Toolset[Deps], metadata map[string]any) Toolset[Deps] {
 	return metadataToolset[Deps]{toolset: toolset, metadata: cloneSchemaMap(metadata)}
+}
+
+// WithToolsetMaxRetries sets the default retry budget for tools that do not
+// have an explicit WithToolMaxRetries option.
+func WithToolsetMaxRetries[Deps any](toolset Toolset[Deps], retries int) Toolset[Deps] {
+	if retries < 0 {
+		panic(fmt.Sprintf("ai: toolset max retries must be non-negative, got %d", retries))
+	}
+	return defaultedToolset[Deps]{toolset: toolset, maxRetries: &retries}
+}
+
+// WithToolsetTimeout sets the default timeout for tools without an explicit
+// WithToolTimeout option.
+func WithToolsetTimeout[Deps any](toolset Toolset[Deps], timeout time.Duration) Toolset[Deps] {
+	if timeout <= 0 {
+		panic(fmt.Sprintf("ai: toolset timeout must be positive, got %s", timeout))
+	}
+	return defaultedToolset[Deps]{toolset: toolset, timeout: timeout}
 }
 
 type functionToolset[Deps any] struct {
@@ -277,6 +296,38 @@ func (t preparedToolset[Deps]) Tools(
 }
 
 func (t preparedToolset[Deps]) ToolsetInstructions(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]InstructionPart, error) {
+	return resolveToolsetInstructions(ctx, rc, t.toolset)
+}
+
+type defaultedToolset[Deps any] struct {
+	toolset    Toolset[Deps]
+	maxRetries *int
+	timeout    time.Duration
+}
+
+func (t defaultedToolset[Deps]) Tools(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]Tool[Deps], error) {
+	tools, err := t.toolset.Tools(ctx, rc)
+	if err != nil {
+		return nil, err
+	}
+	for index, tool := range tools {
+		if t.maxRetries != nil && tool.entry.def.maxRetries == nil {
+			retries := *t.maxRetries
+			tool.entry.def.maxRetries = &retries
+		}
+		if t.timeout > 0 && tool.entry.def.timeout == 0 {
+			tool.entry.def.timeout = t.timeout
+		}
+		tools[index] = tool
+	}
+	return tools, nil
+}
+
+func (t defaultedToolset[Deps]) ToolsetInstructions(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]InstructionPart, error) {
 	return resolveToolsetInstructions(ctx, rc, t.toolset)

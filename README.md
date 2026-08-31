@@ -214,7 +214,7 @@ publicWeatherTools := ai.FilterToolset(weatherTools, func(
 agent.AddToolset(ai.PrefixToolset(publicWeatherTools, "weather"))
 ```
 
-The model sees `weather_get_weather`, while the function receives `get_weather` through `RunContext.ToolName`. You can also use `CombineToolsets`, `RenameToolset`, `PrepareToolset`, and `SetToolsetMetadata`. Toolsets list tools and contribute optional instructions before each model step. Pass them through `WithRunToolsets` to scope them to one run.
+The model sees `weather_get_weather`, while the function receives `get_weather` through `RunContext.ToolName`. You can also use `CombineToolsets`, `RenameToolset`, `PrepareToolset`, and `SetToolsetMetadata`. `WithToolsetMaxRetries` and `WithToolsetTimeout` provide defaults without replacing explicit tool options. Toolsets list tools and contribute optional instructions before each model step. Pass them through `WithRunToolsets` to scope them to one run.
 
 ## Dynamic tools
 

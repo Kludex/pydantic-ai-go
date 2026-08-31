@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
@@ -211,6 +212,72 @@ func TestFunctionToolsetPreparation(t *testing.T) {
 	}
 }
 
+func TestToolsetRetryAndTimeoutDefaults(t *testing.T) {
+	defaulted := ai.NewTool("defaulted", func(
+		ctx context.Context, rc *ai.RunContext[deps], _ toolsetArgs,
+	) (string, error) {
+		if rc.MaxRetries != 3 {
+			t.Fatalf("unexpected toolset retry default: %d", rc.MaxRetries)
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) > 500*time.Millisecond {
+			t.Fatalf("toolset timeout default missing: deadline=%v ok=%v", deadline, ok)
+		}
+		return "defaulted", nil
+	})
+	explicit := ai.NewTool("explicit", func(
+		ctx context.Context, rc *ai.RunContext[deps], _ toolsetArgs,
+	) (string, error) {
+		if rc.MaxRetries != 7 {
+			t.Fatalf("explicit retry budget was replaced: %d", rc.MaxRetries)
+		}
+		deadline, ok := ctx.Deadline()
+		if !ok || time.Until(deadline) < 500*time.Millisecond {
+			t.Fatalf("explicit timeout was replaced: deadline=%v ok=%v", deadline, ok)
+		}
+		return "explicit", nil
+	}, ai.WithToolMaxRetries(7), ai.WithToolTimeout(time.Second))
+	toolset := ai.WithToolsetTimeout(
+		ai.WithToolsetMaxRetries(ai.NewFunctionToolset(defaulted, explicit), 3),
+		100*time.Millisecond,
+	)
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		if request == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.ToolCallPart{ToolName: "defaulted", ToolCallID: "one", Args: []byte(`{"value":"x"}`)},
+				ai.ToolCallPart{ToolName: "explicit", ToolCallID: "two", Args: []byte(`{"value":"x"}`)},
+			}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	if _, err := ai.NewAgent[deps, string](model).Run(
+		t.Context(), "go", deps{}, ai.WithRunToolsets(toolset),
+	); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestToolsetDefaultValidation(t *testing.T) {
+	toolset := ai.NewFunctionToolset[deps]()
+	for name, fn := range map[string]func(){
+		"retries": func() { ai.WithToolsetMaxRetries(toolset, -1) },
+		"timeout": func() { ai.WithToolsetTimeout(toolset, 0) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			fn()
+		})
+	}
+}
+
 func TestToolsetResolutionErrors(t *testing.T) {
 	tool := ai.NewTool("same", func(
 		context.Context, *ai.RunContext[deps], toolsetArgs,
@@ -319,6 +386,7 @@ func TestWrapperToolsetsPropagateListingErrors(t *testing.T) {
 			return nil, nil
 		}),
 		"metadata": ai.SetToolsetMetadata[deps](failed, nil),
+		"defaults": ai.WithToolsetMaxRetries[deps](failed, 1),
 	}
 	for name, toolset := range wrappers {
 		t.Run(name, func(t *testing.T) {

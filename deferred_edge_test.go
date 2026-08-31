@@ -36,6 +36,20 @@ func TestDeferredResumeRejectsMalformedPendingHistory(t *testing.T) {
 			}}}},
 			results: ai.DeferredToolResults{Calls: map[string]any{"ordinary": "result"}}, want: "is not deferred",
 		},
+		"legacy approval receives call result": {
+			history: []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "approval", ToolCallID: "approval", Args: json.RawMessage(`{}`),
+			}}}},
+			results: ai.DeferredToolResults{Calls: map[string]any{"approval": "result"}}, want: "approval tool call",
+		},
+		"legacy external receives approval": {
+			history: []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "external", ToolCallID: "external", Args: json.RawMessage(`{}`),
+			}}}},
+			results: ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{
+				"external": ai.ApproveTool(),
+			}}, want: "external tool call",
+		},
 		"unknown tool": {
 			history: []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
 				ToolName: "missing", ToolCallID: "missing", Args: json.RawMessage(`{}`),
@@ -46,6 +60,9 @@ func TestDeferredResumeRejectsMalformedPendingHistory(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			agent := ai.NewAgent[deps, string](model)
 			ai.AddExternalTool[deps, string, struct{}, string](agent, "external")
+			ai.AddSimpleTool(agent, "approval", func(context.Context, struct{}) (string, error) {
+				return "approved", nil
+			}, ai.WithApprovalRequired())
 			ai.AddSimpleTool(agent, "ordinary", func(context.Context, struct{}) (string, error) { return "ok", nil })
 			_, err := agent.Run(
 				t.Context(), "continue", deps{}, ai.WithMessageHistory(test.history),
@@ -55,6 +72,32 @@ func TestDeferredResumeRejectsMalformedPendingHistory(t *testing.T) {
 				t.Fatalf("expected %q, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestDeferredKindLookupSkipsLaterResponses(t *testing.T) {
+	history := []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "approval", ToolCallID: "approval", Args: json.RawMessage(`{}`),
+		}}, Metadata: map[string]any{ai.DeferredToolKindsMetadataKey: map[string]any{"approval": "approval"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolAvailabilityDeltaPart{ToolsAdded: []string{"other"}}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "later response"}}},
+	}
+	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddSimpleTool(agent, "approval", func(context.Context, struct{}) (string, error) {
+		return "unreachable", nil
+	}, ai.WithApprovalRequired())
+	result, err := agent.Run(
+		t.Context(), "continue", deps{}, ai.WithMessageHistory(history),
+		ai.WithDeferredToolResults(ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{
+			"approval": ai.DenyTool("denied"),
+		}}),
+	)
+	if err != nil || result.Output != "done" {
+		t.Fatalf("unexpected interior deferred result=%+v err=%v", result, err)
 	}
 }
 

@@ -100,7 +100,7 @@ Status:
 - [x] Ordered `DeferredToolCallHandler` capability hook plus `DeferredToolHandlerFunc`, with partial resolution and unresolved-call bubbling.
 - [x] Approved/denied results, validated argument overrides, and detached approval metadata through `RunContext.ToolCallApproved` and `ToolCallMetadata`.
 - [x] Preserve intended deferred gaps while repairing unrelated incomplete tool-call histories on ordinary resume; completed siblings are not re-executed.
-- [ ] Allow a resolved call to defer again and bubble its new pending kind/metadata instead of rejecting repeated approval.
+- [x] Resolved calls can defer again with a new approval/external kind and detached metadata; completed sibling results remain in history, unsent resume prompts are omitted on another pause, and the next inline handler receives the replacement request without a duplicate request event. Pending kinds survive serialization through `DeferredToolKindsMetadataKey`, preventing cross-kind result substitution.
 
 ### Streaming
 
@@ -228,6 +228,6 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add provider-managed tool search; OpenAI Responses client search now uses native wire items in streaming and non-streaming requests.
-3. Support re-deferral from resolved calls while preserving one request/result event batch per logical call.
-4. Add provider-managed search for Anthropic and OpenAI Responses.
-5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
+3. Add provider-managed search for Anthropic and OpenAI Responses.
+4. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
+5. Add enqueued-message APIs and events for messages produced asynchronously during a run.

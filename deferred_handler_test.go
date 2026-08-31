@@ -88,6 +88,67 @@ func TestDeferredHandlerResolvesCallsInline(t *testing.T) {
 	}
 }
 
+func TestDeferredHandlersResolveRedeferredCallInline(t *testing.T) {
+	approvalHandler := ai.DeferredToolHandlerFunc(func(
+		_ context.Context, _ *ai.RunInfo, requests ai.DeferredToolRequests,
+	) (*ai.DeferredToolResults, error) {
+		if len(requests.Approvals) != 1 || len(requests.Calls) != 0 {
+			t.Fatalf("approval handler received unexpected requests: %+v", requests)
+		}
+		return &ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{"work": ai.ApproveTool()}}, nil
+	})
+	externalHandler := ai.DeferredToolHandlerFunc(func(
+		_ context.Context, _ *ai.RunInfo, requests ai.DeferredToolRequests,
+	) (*ai.DeferredToolResults, error) {
+		if len(requests.Approvals) != 0 || len(requests.Calls) != 1 ||
+			requests.Metadata["work"]["queue"] != "remote" {
+			t.Fatalf("external handler did not receive re-deferred call: %+v", requests)
+		}
+		return &ai.DeferredToolResults{Calls: map[string]any{"work": "remote result"}}, nil
+	})
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		if request == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "work", ToolCallID: "work", Args: json.RawMessage(`{}`),
+			}}}, nil
+		}
+		latest := messages[len(messages)-1].(ai.ModelRequest)
+		if latest.Parts[0].(ai.ToolReturnPart).Content != "remote result" {
+			t.Fatalf("unexpected re-deferred result: %+v", latest.Parts)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model, ai.WithCapabilities(approvalHandler, externalHandler))
+	ai.AddTool(agent, "work", func(
+		_ context.Context, rc *ai.RunContext[deps], _ struct{},
+	) (any, error) {
+		if !rc.ToolCallApproved {
+			t.Fatal("approval was not propagated")
+		}
+		return ai.RequestExternalToolExecution(map[string]any{"queue": "remote"}), nil
+	}, ai.WithApprovalRequired(), ai.WithDynamicExternalExecution())
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	var requestEvents, resultEvents int
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event.(type) {
+		case ai.DeferredToolRequestsEvent:
+			requestEvents++
+		case ai.DeferredToolResultsEvent:
+			resultEvents++
+		}
+	}
+	if stream.Result() == nil || stream.Result().Output != "done" || requestEvents != 1 || resultEvents != 2 {
+		t.Fatalf("unexpected re-deferred inline result=%+v request events=%d result events=%d", stream.Result(), requestEvents, resultEvents)
+	}
+}
+
 func TestDeferredHandlersComposeAndBubbleRemainingCalls(t *testing.T) {
 	var seen []string
 	empty := ai.DeferredToolHandlerFunc(func(

@@ -802,6 +802,11 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			endSpan(reqSpan, err)
 			return nil, err
 		}
+		if resp == nil {
+			err := &UnexpectedModelBehaviorError{Message: "model returned no response"}
+			endSpan(reqSpan, err)
+			return nil, err
+		}
 		recordUsage(reqSpan, resp.Usage)
 		endSpan(reqSpan, nil)
 		if resp.Timestamp.IsZero() {
@@ -842,7 +847,25 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			return nil, err
 		}
 		r.deferredResults = nil
+		if r.pendingDeferred != nil {
+			if !r.emitStreamEvent(DeferredToolRequestsEvent{Requests: r.pendingDeferred.Clone()}) {
+				return nil, context.Canceled
+			}
+			resolvedParts, remaining, err := r.handleDeferredToolCalls(ctx, *r.pendingDeferred)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, resolvedParts...)
+			r.pendingDeferred = remaining
+		}
 		r.prependLatestRequestParts(parts)
+		if r.pendingDeferred != nil {
+			r.removeLatestUserPrompts()
+			return nil, nil
+		}
+		if err := r.refreshRevealedDeferredTools(&params); err != nil {
+			return nil, err
+		}
 	}
 	return next(ctx, r.messages, params)
 }
@@ -881,11 +904,47 @@ func (r *run[Deps, Output]) prependLatestRequestParts(parts []RequestPart) {
 	r.messages[index] = request
 }
 
+func (r *run[Deps, Output]) removeLatestUserPrompts() {
+	index := len(r.messages) - 1
+	request := r.messages[index].(ModelRequest)
+	parts := make([]RequestPart, 0, len(request.Parts))
+	for _, part := range request.Parts {
+		if _, prompt := part.(UserPromptPart); !prompt {
+			parts = append(parts, part)
+		}
+	}
+	if len(parts) == 0 {
+		r.messages = r.messages[:index]
+		return
+	}
+	request.Parts = parts
+	r.messages[index] = request
+}
+
 func (r *run[Deps, Output]) setCurrentTools(params ModelRequestParams) {
 	r.currentTools = make(map[string]struct{}, len(params.Tools))
 	for _, def := range params.Tools {
 		r.currentTools[def.Name] = struct{}{}
 	}
+}
+
+func (r *run[Deps, Output]) refreshRevealedDeferredTools(params *ModelRequestParams) error {
+	visible := make(map[string]struct{}, len(params.Tools))
+	for _, definition := range params.Tools {
+		visible[definition.Name] = struct{}{}
+	}
+	for _, definition := range params.DeferredTools {
+		if _, revealed := r.revealedTools[definition.Name]; !revealed {
+			continue
+		}
+		if _, exists := visible[definition.Name]; exists {
+			continue
+		}
+		params.Tools = append(params.Tools, cloneToolDefinition(definition))
+		visible[definition.Name] = struct{}{}
+	}
+	r.setCurrentTools(*params)
+	return r.compileCurrentSchemas(*params)
 }
 
 func (r *run[Deps, Output]) resolveDeferredToolResults(
@@ -940,38 +999,48 @@ func (r *run[Deps, Output]) applyDeferredToolResults(
 		if !registered || !available {
 			return nil, nil, fmt.Errorf("ai: pending tool %q is not available in the resumed run", call.ToolName)
 		}
+		if !entry.def.ExternalExecution && !entry.def.DynamicExternalExecution &&
+			!entry.def.RequiresApproval && !entry.def.DynamicApproval {
+			return nil, nil, fmt.Errorf("ai: pending tool call %q is not deferred", call.ToolCallID)
+		}
 		metadata := cloneSchemaMap(results.Metadata[call.ToolCallID])
+		result, hasResult := results.Calls[call.ToolCallID]
+		approval, hasApproval := results.Approvals[call.ToolCallID]
+		expectedKind, hasExpectedKind := deferredToolKind(r.messages, call)
 		switch {
-		case entry.def.ExternalExecution || entry.def.DynamicExternalExecution:
-			if _, wrongKind := results.Approvals[call.ToolCallID]; wrongKind {
-				return nil, nil, fmt.Errorf("ai: external tool call %q received an approval result", call.ToolCallID)
-			}
-			result, exists := results.Calls[call.ToolCallID]
-			if !exists {
-				if requireAll {
-					return nil, nil, fmt.Errorf("ai: missing result for external tool call %q", call.ToolCallID)
-				}
-				continue
-			}
-			r.resolvingDeferred[call.ToolCallID] = deferredResolution{result: result, metadata: metadata}
-		case entry.def.RequiresApproval || entry.def.DynamicApproval:
-			if _, wrongKind := results.Calls[call.ToolCallID]; wrongKind {
+		case hasResult && hasExpectedKind && expectedKind != deferredCallExternal:
+			return nil, nil, fmt.Errorf("ai: approval tool call %q received an external result", call.ToolCallID)
+		case hasApproval && hasExpectedKind && expectedKind != deferredCallApproval:
+			return nil, nil, fmt.Errorf("ai: external tool call %q received an approval result", call.ToolCallID)
+		case hasResult:
+			if !entry.def.ExternalExecution && !entry.def.DynamicExternalExecution {
 				return nil, nil, fmt.Errorf("ai: approval tool call %q received an external result", call.ToolCallID)
 			}
-			approval, exists := results.Approvals[call.ToolCallID]
-			if !exists {
-				if requireAll {
-					return nil, nil, fmt.Errorf("ai: missing approval for tool call %q", call.ToolCallID)
-				}
-				continue
+			r.resolvingDeferred[call.ToolCallID] = deferredResolution{
+				kind: deferredCallExternal, result: result, metadata: metadata,
+			}
+		case hasApproval:
+			if !entry.def.RequiresApproval && !entry.def.DynamicApproval {
+				return nil, nil, fmt.Errorf("ai: external tool call %q received an approval result", call.ToolCallID)
 			}
 			normalized, err := normalizeToolApproval(approval)
 			if err != nil {
 				return nil, nil, fmt.Errorf("ai: approval for tool call %q: %w", call.ToolCallID, err)
 			}
-			r.resolvingDeferred[call.ToolCallID] = deferredResolution{approval: normalized, metadata: metadata}
+			r.resolvingDeferred[call.ToolCallID] = deferredResolution{
+				kind: deferredCallApproval, approval: normalized, metadata: metadata,
+			}
+		case requireAll:
+			switch {
+			case entry.def.ExternalExecution && !entry.def.RequiresApproval && !entry.def.DynamicApproval:
+				return nil, nil, fmt.Errorf("ai: missing result for external tool call %q", call.ToolCallID)
+			case entry.def.RequiresApproval && !entry.def.DynamicExternalExecution:
+				return nil, nil, fmt.Errorf("ai: missing approval for tool call %q", call.ToolCallID)
+			default:
+				return nil, nil, fmt.Errorf("ai: missing deferred result for tool call %q", call.ToolCallID)
+			}
 		default:
-			return nil, nil, fmt.Errorf("ai: pending tool call %q is not deferred", call.ToolCallID)
+			continue
 		}
 		selected = append(selected, call)
 		resolved[call.ToolCallID] = struct{}{}
@@ -1002,6 +1071,7 @@ func (r *run[Deps, Output]) handleDeferredToolCalls(
 		}
 		clonedResults := cloneDeferredToolResults(*results)
 		pending := append(cloneToolCalls(remaining.Approvals), remaining.Calls...)
+		r.pendingDeferred = nil
 		resolvedParts, resolved, err := r.applyDeferredToolResults(ctx, pending, clonedResults, false)
 		if err != nil {
 			return nil, nil, err
@@ -1011,11 +1081,27 @@ func (r *run[Deps, Output]) handleDeferredToolCalls(
 		}
 		parts = append(parts, resolvedParts...)
 		remaining = remainingDeferredToolRequests(remaining, resolved)
+		if r.pendingDeferred != nil {
+			remaining = appendDeferredToolRequests(remaining, *r.pendingDeferred)
+			r.pendingDeferred = nil
+		}
 		if len(remaining.Calls) == 0 && len(remaining.Approvals) == 0 {
 			return parts, nil, nil
 		}
 	}
 	return parts, &remaining, nil
+}
+
+func appendDeferredToolRequests(first, second DeferredToolRequests) DeferredToolRequests {
+	first.Calls = append(first.Calls, cloneToolCalls(second.Calls)...)
+	first.Approvals = append(first.Approvals, cloneToolCalls(second.Approvals)...)
+	if len(second.Metadata) > 0 && first.Metadata == nil {
+		first.Metadata = make(map[string]map[string]any, len(second.Metadata))
+	}
+	for id, metadata := range second.Metadata {
+		first.Metadata[id] = cloneSchemaMap(metadata)
+	}
+	return first
 }
 
 func remainingDeferredToolRequests(
@@ -1064,6 +1150,71 @@ func normalizeToolApproval(approval ToolApproval) (ToolApproval, error) {
 	default:
 		return nil, fmt.Errorf("unsupported approval type %T", approval)
 	}
+}
+
+func (r *run[Deps, Output]) persistDeferredToolKinds(requests DeferredToolRequests) {
+	kinds := make(map[string]string, len(requests.Calls)+len(requests.Approvals))
+	for _, call := range requests.Calls {
+		kinds[call.ToolCallID] = "external"
+	}
+	for _, call := range requests.Approvals {
+		kinds[call.ToolCallID] = "approval"
+	}
+	for index := len(r.messages) - 1; index >= 0 && len(kinds) > 0; index-- {
+		response, ok := r.messages[index].(ModelResponse)
+		if !ok {
+			continue
+		}
+		stored := map[string]any{}
+		if existing, ok := response.Metadata[DeferredToolKindsMetadataKey].(map[string]any); ok {
+			stored = cloneSchemaMap(existing)
+		}
+		changed := false
+		for _, call := range response.ToolCalls() {
+			kind, pending := kinds[call.ToolCallID]
+			if !pending {
+				continue
+			}
+			stored[call.ToolCallID] = kind
+			delete(kinds, call.ToolCallID)
+			changed = true
+		}
+		if changed {
+			response.Metadata = cloneSchemaMap(response.Metadata)
+			if response.Metadata == nil {
+				response.Metadata = make(map[string]any, 1)
+			}
+			response.Metadata[DeferredToolKindsMetadataKey] = stored
+			r.messages[index] = response
+		}
+	}
+}
+
+func deferredToolKind(messages []ModelMessage, call ToolCallPart) (deferredCallKind, bool) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		response, ok := messages[index].(ModelResponse)
+		if !ok {
+			continue
+		}
+		containsCall := false
+		for _, candidate := range response.ToolCalls() {
+			if candidate.ToolCallID == call.ToolCallID && candidate.ToolName == call.ToolName {
+				containsCall = true
+				break
+			}
+		}
+		if !containsCall {
+			continue
+		}
+		stored, _ := response.Metadata[DeferredToolKindsMetadataKey].(map[string]any)
+		switch stored[call.ToolCallID] {
+		case "external":
+			return deferredCallExternal, true
+		case "approval":
+			return deferredCallApproval, true
+		}
+	}
+	return 0, false
 }
 
 func unresolvedToolCalls(messages []ModelMessage) []ToolCallPart {
@@ -1223,23 +1374,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	}
 	seen := make(map[string]struct{}, len(tools))
 	for _, def := range tools {
-		approvalModes := 0
-		if def.RequiresApproval {
-			approvalModes++
-		}
-		if def.DynamicApproval {
-			approvalModes++
-		}
-		externalModes := 0
-		if def.ExternalExecution {
-			externalModes++
-		}
-		if def.DynamicExternalExecution {
-			externalModes++
-		}
-		if approvalModes > 0 && externalModes > 0 {
+		if def.ExternalExecution && (def.RequiresApproval || def.DynamicApproval) {
 			return ModelRequestParams{}, fmt.Errorf(
-				"ai: tool %q cannot require approval and external execution", def.Name,
+				"ai: external tool %q cannot require approval", def.Name,
 			)
 		}
 		if def.RequiresApproval && def.DynamicApproval {
@@ -1380,6 +1517,12 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		if err != nil {
 			return nil, err
 		}
+		if resp == nil {
+			if r.pendingDeferred != nil {
+				return r.deferredResult(*r.pendingDeferred), nil
+			}
+			return nil, &UnexpectedModelBehaviorError{Message: "model request returned no response"}
+		}
 		r.usage.Add(resp.Usage)
 		r.applyResponseToolKinds(resp)
 		r.messages = append(r.messages, *resp)
@@ -1513,6 +1656,7 @@ type deferredRequestPart struct {
 func (deferredRequestPart) requestPartKind() string { return "deferred" }
 
 type deferredResolution struct {
+	kind     deferredCallKind
 	approval ToolApproval
 	result   any
 	metadata map[string]any
@@ -1592,9 +1736,9 @@ func (r *run[Deps, Output]) checkToolCallLimit(calls []ToolCallPart) error {
 	for _, call := range calls {
 		entry, registered := r.findTool(call.ToolName)
 		_, available := r.currentTools[call.ToolName]
-		_, resolving := r.resolvingDeferred[call.ToolCallID]
+		resolution, resolving := r.resolvingDeferred[call.ToolCallID]
 		if r.isOutputCall(call) || !registered || !available || entry.def.ExternalExecution ||
-			entry.def.DynamicExternalExecution && resolving {
+			resolving && resolution.kind == deferredCallExternal {
 			continue
 		}
 		if entry.def.RequiresApproval {
@@ -1792,9 +1936,9 @@ func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) c
 		outcome.output = nil
 		outcome.deferred = nil
 	}
-	_, resolving := r.resolvingDeferred[call.ToolCallID]
+	resolution, resolving := r.resolvingDeferred[call.ToolCallID]
 	if outcome.err == nil && outcome.part != nil && outcome.functionCall &&
-		!entry.def.ExternalExecution && (!entry.def.DynamicExternalExecution || !resolving) {
+		!entry.def.ExternalExecution && (!resolving || resolution.kind != deferredCallExternal) {
 		if part, ok := outcome.part.(ToolReturnPart); ok && part.Outcome == ToolReturnOutcomeSuccess {
 			r.toolCalls.Add(1)
 		}
@@ -1914,6 +2058,7 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 		pending.Metadata = nil
 	}
 	if len(pending.Calls) > 0 || len(pending.Approvals) > 0 {
+		r.persistDeferredToolKinds(pending)
 		r.pendingDeferred = &pending
 	} else {
 		r.pendingDeferred = nil
@@ -2014,10 +2159,10 @@ func (r *run[Deps, Output]) executeCall(
 		}, nil, nil, nil
 	}
 	resolution, resolving := r.resolvingDeferred[call.ToolCallID]
-	if resolving && (entry.def.ExternalExecution || entry.def.DynamicExternalExecution) {
+	if resolving && resolution.kind == deferredCallExternal {
 		return r.normalizeDeferredCallResult(call, resolution.result)
 	}
-	if resolving && (entry.def.RequiresApproval || entry.def.DynamicApproval) {
+	if resolving && resolution.kind == deferredCallApproval {
 		switch approval := resolution.approval.(type) {
 		case ToolDenied:
 			message := approval.Message
@@ -2057,7 +2202,7 @@ func (r *run[Deps, Output]) executeCall(
 	toolRC := *r.rc
 	toolRC.ToolName = call.ToolName
 	toolRC.ToolCallID = call.ToolCallID
-	toolRC.ToolCallApproved = resolving && resolution.approval != nil
+	toolRC.ToolCallApproved = resolving && resolution.kind == deferredCallApproval
 	toolRC.ToolCallMetadata = cloneSchemaMap(resolution.metadata)
 	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)
 	spanCtx, toolSpan := startToolSpan(ctx, call.ToolName, call.ToolCallID)
@@ -2086,8 +2231,6 @@ func (r *run[Deps, Output]) executeCall(
 		switch {
 		case approvalRequest != nil && !entry.def.DynamicApproval:
 			err = fmt.Errorf("tool returned ToolApprovalRequest without WithDynamicApproval")
-		case approvalRequest != nil && toolRC.ToolCallApproved:
-			err = fmt.Errorf("approved tool requested approval again")
 		case externalRequest != nil && !entry.def.DynamicExternalExecution:
 			err = fmt.Errorf("tool returned ExternalToolRequest without WithDynamicExternalExecution")
 		case approvalRequest == nil && externalRequest == nil && containsNestedToolReturn(content):

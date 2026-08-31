@@ -12,6 +12,24 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 )
 
+type nilResponseCapability struct{}
+
+func (nilResponseCapability) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (nilResponseCapability) WrapModelRequest(
+	context.Context, *ai.RunInfo, []ai.ModelMessage, ai.ModelRequestParams, ai.ModelRequestFunc,
+) (*ai.ModelResponse, error) {
+	return nil, nil
+}
+
+func TestCapabilityCannotCompleteWithNilModelResponse(t *testing.T) {
+	agent := ai.NewAgent[deps, string](fakes.NewTestModel(), ai.WithCapabilities(nilResponseCapability{}))
+	_, err := agent.Run(t.Context(), "go", deps{})
+	if err == nil || err.Error() != "ai: unexpected model behavior: model request returned no response" {
+		t.Fatalf("unexpected nil model response error: %v", err)
+	}
+}
+
 // traceCapability records the order hooks fire in.
 type traceCapability struct {
 	name  string

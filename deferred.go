@@ -6,6 +6,10 @@ import (
 	"slices"
 )
 
+// DeferredToolKindsMetadataKey identifies the local response metadata map used
+// to retain each pending call's approval or external execution kind.
+const DeferredToolKindsMetadataKey = "pydantic_ai_go_deferred_tool_kinds"
+
 // DeferredToolRequests describes model tool calls that require work outside
 // the current agent step. Calls require external execution. Approvals run
 // locally after the caller approves them.

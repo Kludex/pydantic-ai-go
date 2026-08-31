@@ -15,9 +15,25 @@ type deps struct {
 	Location string
 }
 
+type nilModel struct{}
+
+func (nilModel) Name() string { return "nil-model" }
+
+func (nilModel) Request(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+	return nil, nil
+}
+
 type weatherArgs struct {
 	City string `json:"city" jsonschema:"description=City name"`
 	Unit string `json:"unit,omitempty" jsonschema:"enum=celsius,enum=fahrenheit"`
+}
+
+func TestAgentRejectsNilModelResponse(t *testing.T) {
+	agent := ai.NewAgent[deps, string](nilModel{})
+	_, err := agent.Run(t.Context(), "go", deps{})
+	if err == nil || err.Error() != "ai: unexpected model behavior: model returned no response" {
+		t.Fatalf("unexpected nil response error: %v", err)
+	}
 }
 
 func TestRunPlainText(t *testing.T) {

@@ -58,6 +58,93 @@ func TestDynamicExternalExecutionPausesSelectedCalls(t *testing.T) {
 	}
 }
 
+func TestApprovedCallCanRedeferForExternalExecution(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "work", ToolCallID: "work", Args: json.RawMessage(`{}`),
+			}}}, nil
+		}
+		latest := messages[len(messages)-1].(ai.ModelRequest)
+		if latest.Parts[0].(ai.ToolReturnPart).Content != "remote result" {
+			t.Fatalf("unexpected external result: %+v", latest.Parts)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	invocations := 0
+	ai.AddTool(agent, "work", func(
+		_ context.Context, rc *ai.RunContext[deps], _ struct{},
+	) (any, error) {
+		invocations++
+		if !rc.ToolCallApproved {
+			return ai.RequestToolApproval(map[string]any{"stage": "approval"}), nil
+		}
+		return ai.RequestExternalToolExecution(map[string]any{"stage": "external"}), nil
+	}, ai.WithDynamicApproval(), ai.WithDynamicExternalExecution())
+	approval, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil || approval.Deferred() == nil || len(approval.Deferred().Approvals) != 1 {
+		t.Fatalf("unexpected approval pause: result=%+v err=%v", approval, err)
+	}
+	encoded, err := ai.MarshalMessages(approval.Messages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	approvalHistory, err := ai.UnmarshalMessages(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = agent.Run(
+		t.Context(), "bypass approval", deps{}, ai.WithMessageHistory(approvalHistory),
+		ai.WithDeferredToolResults(ai.DeferredToolResults{Calls: map[string]any{"work": "bypass"}}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "approval tool call") {
+		t.Fatalf("serialized approval kind allowed external result: %v", err)
+	}
+	external, err := agent.Run(
+		t.Context(), "approve", deps{}, ai.WithMessageHistory(approvalHistory),
+		ai.WithDeferredToolResults(ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{
+			"work": ai.ApproveTool(),
+		}}),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending := external.Deferred()
+	if pending == nil || len(pending.Calls) != 1 || len(pending.Approvals) != 0 ||
+		pending.Metadata["work"]["stage"] != "external" || requests != 1 || invocations != 2 {
+		t.Fatalf("unexpected external re-deferral: pending=%+v requests=%d invocations=%d", pending, requests, invocations)
+	}
+	encoded, err = ai.MarshalMessages(external.Messages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	externalHistory, err := ai.UnmarshalMessages(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = agent.Run(
+		t.Context(), "bypass external", deps{}, ai.WithMessageHistory(externalHistory),
+		ai.WithDeferredToolResults(ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{
+			"work": ai.ApproveTool(),
+		}}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "external tool call") {
+		t.Fatalf("serialized external kind allowed approval result: %v", err)
+	}
+	result, err := agent.Run(
+		t.Context(), "finish", deps{}, ai.WithMessageHistory(externalHistory),
+		ai.WithDeferredToolResults(ai.DeferredToolResults{Calls: map[string]any{"work": "remote result"}}),
+	)
+	if err != nil || result.Output != "done" || requests != 2 || invocations != 2 {
+		t.Fatalf("unexpected external continuation: result=%+v requests=%d invocations=%d err=%v", result, requests, invocations, err)
+	}
+}
+
 func TestDynamicExternalExecutionRequiresDeclaration(t *testing.T) {
 	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{

@@ -2,8 +2,10 @@ package ai_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -17,6 +19,111 @@ func toolDefinitionNames(definitions []ai.ToolDefinition) []string {
 	}
 	slices.Sort(names)
 	return names
+}
+
+func TestDeferredResultRevealAppliesToImmediateContinuation(t *testing.T) {
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		names := toolDefinitionNames(params.Tools)
+		if request == 1 {
+			if !slices.Equal(names, []string{"loader"}) {
+				t.Fatalf("hidden tool was initially visible: %v", names)
+			}
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "loader", ToolCallID: "loader", Args: []byte(`{}`),
+			}}}, nil
+		}
+		if !slices.Equal(names, []string{"hidden", "loader"}) {
+			t.Fatalf("deferred result reveal was not applied before continuation: %v", names)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddExternalTool[deps, string, struct{}, ai.ToolReturn](agent, "loader")
+	ai.AddSimpleTool(agent, "hidden", func(context.Context, struct{}) (string, error) {
+		return "hidden", nil
+	}, ai.WithDeferredLoading())
+	ai.AddSimpleTool(agent, "still_hidden", func(context.Context, struct{}) (string, error) {
+		return "still hidden", nil
+	}, ai.WithDeferredLoading())
+	paused, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := agent.Run(
+		t.Context(), "continue", deps{}, ai.WithMessageHistory(paused.Messages()),
+		ai.WithDeferredToolResults(ai.DeferredToolResults{Calls: map[string]any{
+			"loader": ai.ToolReturn{ReturnValue: "loaded", Tools: []string{"hidden"}},
+		}}),
+	)
+	if err != nil || result.Output != "done" {
+		t.Fatalf("unexpected revealed continuation: result=%+v err=%v", result, err)
+	}
+}
+
+func TestDeferredResultCanRepeatHistoryReveal(t *testing.T) {
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "loader", ToolCallID: "loader", Args: []byte(`{}`),
+		}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolAvailabilityDeltaPart{
+			ToolsAdded: []string{"hidden"}, ToolCallID: "earlier-loader",
+		}}},
+	}
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if !slices.Equal(toolDefinitionNames(params.Tools), []string{"hidden", "loader"}) {
+			t.Fatalf("history-revealed tool was not retained: %+v", params.Tools)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddExternalTool[deps, string, struct{}, ai.ToolReturn](agent, "loader")
+	ai.AddSimpleTool(agent, "hidden", func(context.Context, struct{}) (string, error) {
+		return "hidden", nil
+	}, ai.WithDeferredLoading())
+	result, err := agent.Run(
+		t.Context(), "continue", deps{}, ai.WithMessageHistory(history),
+		ai.WithDeferredToolResults(ai.DeferredToolResults{Calls: map[string]any{
+			"loader": ai.ToolReturn{ReturnValue: "loaded", Tools: []string{"hidden"}},
+		}}),
+	)
+	if err != nil || result.Output != "done" {
+		t.Fatalf("unexpected repeated reveal result=%+v err=%v", result, err)
+	}
+}
+
+func TestDeferredResultRevealCompilesNewlyVisibleSchema(t *testing.T) {
+	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "loader", ToolCallID: "loader", Args: []byte(`{}`),
+		}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddExternalTool[deps, string, struct{}, ai.ToolReturn](agent, "loader")
+	agent.AddRawTool(ai.ToolDefinition{
+		Name: "invalid", Schema: map[string]any{"type": "invalid"}, DeferLoading: true,
+	}, func(context.Context, json.RawMessage) (any, error) {
+		return nil, nil
+	})
+	paused, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = agent.Run(
+		t.Context(), "continue", deps{}, ai.WithMessageHistory(paused.Messages()),
+		ai.WithDeferredToolResults(ai.DeferredToolResults{Calls: map[string]any{
+			"loader": ai.ToolReturn{ReturnValue: "loaded", Tools: []string{"invalid"}},
+		}}),
+	)
+	if err == nil || !strings.Contains(err.Error(), "compile schema") {
+		t.Fatalf("unexpected newly visible schema error: %v", err)
+	}
 }
 
 func TestDeferredToolRevealAndHistoryResume(t *testing.T) {

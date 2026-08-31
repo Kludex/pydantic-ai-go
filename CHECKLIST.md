@@ -151,8 +151,9 @@ Status:
 - [x] Tool output.
 - [~] Native output on supported providers.
 - [x] Native structured output alongside function calls obeys end strategies; plain text remains non-preemptive.
-- [ ] Prompted JSON output fallback, including end-strategy handling.
+- [x] Prompted JSON output fallback for reflected structured outputs, including default/custom schema instructions, validation retries, streaming, per-run overrides, and end-strategy handling.
 - [ ] Multiple output alternatives / union outputs.
+- [ ] Provider-profile default output modes and provider-specific prompted-output templates.
 - [ ] Image and binary outputs.
 - [x] Output tool name, description, strict mode, sequential execution barrier, and independent retry configuration through `OutputToolConfig`, with per-run replacement.
 - [x] Output-tool definitions can be modified, renamed, or omitted from fresh copies before each request through `AddOutputToolPrepareFunc`.

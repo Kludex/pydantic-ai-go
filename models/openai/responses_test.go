@@ -469,6 +469,10 @@ func TestResponsesErrors(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "OutputModeTool") {
 			t.Fatalf("expected unsupported error, got %v", err)
 		}
+		params.OutputMode = ai.OutputModePrompted
+		if _, err := model.Request(t.Context(), nil, params); err != nil {
+			t.Fatalf("prompted output should not request native mode: %v", err)
+		}
 	})
 	t.Run("api error", func(t *testing.T) {
 		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {

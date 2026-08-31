@@ -122,6 +122,7 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 		retryLimits:        agent.retryLimits,
 		outputMode:         agent.outputMode,
 		outputTool:         cloneOutputToolConfig(agent.outputTool),
+		promptedTemplate:   agent.promptedTemplate,
 		outputToolPrepare:  slices.Clone(agent.outputToolPrepare),
 		endStrategy:        agent.endStrategy,
 		sequentialTools:    agent.sequentialTools,

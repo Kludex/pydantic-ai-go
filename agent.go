@@ -27,6 +27,7 @@ type Agent[Deps, Output any] struct {
 	retryLimits        RetryLimits
 	outputMode         OutputMode
 	outputTool         OutputToolConfig
+	promptedTemplate   string
 	outputToolPrepare  []OutputToolPrepareFunc[Deps]
 	endStrategy        EndStrategy
 	sequentialTools    bool
@@ -68,6 +69,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	a.usageLimits = cfg.limits
 	a.outputMode = cfg.outputMode
 	a.outputTool = cloneOutputToolConfig(cfg.outputTool)
+	a.promptedTemplate = cfg.promptedTemplate
 	validateOutputToolConfig(a.outputTool)
 	validateOutputMode(a.outputMode)
 	if cfg.endStrategy != "" {
@@ -230,16 +232,17 @@ func (a *Agent[Deps, Output]) checkNotStarted() {
 type Option func(*config)
 
 type config struct {
-	instructions    string
-	systemPrompts   []string
-	settings        ModelSettings
-	limits          UsageLimits
-	retryLimits     *RetryLimits
-	outputMode      OutputMode
-	outputTool      OutputToolConfig
-	endStrategy     EndStrategy
-	sequentialTools bool
-	capabilities    []Capability
+	instructions     string
+	systemPrompts    []string
+	settings         ModelSettings
+	limits           UsageLimits
+	retryLimits      *RetryLimits
+	outputMode       OutputMode
+	outputTool       OutputToolConfig
+	promptedTemplate string
+	endStrategy      EndStrategy
+	sequentialTools  bool
+	capabilities     []Capability
 }
 
 // OutputMode selects how structured output is requested from the model.
@@ -253,12 +256,24 @@ const (
 	// responds with JSON text conforming to the output schema. The
 	// provider must support it; validation retries still apply.
 	OutputModeNative
+	// OutputModePrompted asks for schema-compatible JSON through instructions.
+	// It works with providers that do not implement native structured output.
+	OutputModePrompted
 )
 
 // WithOutputMode selects how structured output is requested. It has no
 // effect when Output is string.
 func WithOutputMode(mode OutputMode) Option {
 	return func(c *config) { c.outputMode = mode }
+}
+
+// WithPromptedOutputTemplate replaces the default prompted-output instructions.
+// If template omits {schema}, the schema is appended.
+func WithPromptedOutputTemplate(template string) Option {
+	if template == "" {
+		panic("ai: prompted output template must not be empty")
+	}
+	return func(c *config) { c.promptedTemplate = template }
 }
 
 // WithOutputTool customizes tool-based structured output. It has no effect
@@ -359,6 +374,7 @@ type runConfig struct {
 	retryLimits       *RetryLimits
 	outputMode        *OutputMode
 	outputTool        *OutputToolConfig
+	promptedTemplate  *string
 	modelID           string
 	runID             string
 	conversationID    *string
@@ -507,6 +523,14 @@ func WithRunOutputMode(mode OutputMode) RunOption {
 	return func(c *runConfig) { c.outputMode = &mode }
 }
 
+// WithRunPromptedOutputTemplate replaces prompted-output instructions for one run.
+func WithRunPromptedOutputTemplate(template string) RunOption {
+	if template == "" {
+		panic("ai: prompted output template must not be empty")
+	}
+	return func(c *runConfig) { c.promptedTemplate = &template }
+}
+
 // WithRunOutputTool customizes the structured output tool for one run.
 func WithRunOutputTool(outputTool OutputToolConfig) RunOption {
 	outputTool = cloneOutputToolConfig(outputTool)
@@ -527,7 +551,7 @@ func validateOutputToolConfig(config OutputToolConfig) {
 }
 
 func validateOutputMode(mode OutputMode) {
-	if mode != OutputModeTool && mode != OutputModeNative {
+	if mode != OutputModeTool && mode != OutputModeNative && mode != OutputModePrompted {
 		panic(fmt.Sprintf("ai: invalid output mode %d", mode))
 	}
 }

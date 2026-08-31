@@ -20,6 +20,12 @@ import (
 
 const outputToolName = "final_result"
 
+const defaultPromptedOutputTemplate = `Always respond with a JSON object that's compatible with this schema:
+
+{schema}
+
+Don't include any text or Markdown fencing before or after.`
+
 type toolFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error)
 
 // Run executes the agent loop: send the conversation to the model, execute
@@ -233,8 +239,14 @@ func (a *Agent[Deps, Output]) newRun(
 		outputMode = *cfg.outputMode
 	}
 	validateOutputMode(outputMode)
+	promptedTemplate := a.promptedTemplate
+	if cfg.promptedTemplate != nil {
+		promptedTemplate = *cfg.promptedTemplate
+	}
 	var err error
-	r.params, err = a.buildParams(r.staticInstructions, settings, outputMode, r.outputTool, r.tools)
+	r.params, err = a.buildParams(
+		r.staticInstructions, settings, outputMode, r.outputTool, promptedTemplate, r.tools,
+	)
 	if err != nil {
 		cancellation.finish()
 		return nil, err
@@ -881,6 +893,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	instructionParts, err := r.prepareInstructions(ctx, &rc)
 	if err != nil {
 		return ModelRequestParams{}, err
+	}
+	if params.OutputPrompt != "" {
+		instructionParts = append(instructionParts, InstructionPart{Content: params.OutputPrompt})
 	}
 	params.Settings = settings
 	params.InstructionParts = instructionParts
@@ -2129,6 +2144,7 @@ func (a *Agent[Deps, Output]) buildParams(
 	settings ModelSettings,
 	outputMode OutputMode,
 	outputTool OutputToolConfig,
+	promptedTemplate string,
 	tools []toolEntry[Deps],
 ) (ModelRequestParams, error) {
 	instructions := make([]string, 0, len(instructionParts))
@@ -2136,7 +2152,8 @@ func (a *Agent[Deps, Output]) buildParams(
 		instructions = append(instructions, part.Content)
 	}
 	params := ModelRequestParams{
-		Instructions: strings.Join(instructions, "\n\n"), InstructionParts: instructionParts, Settings: settings,
+		Instructions: strings.Join(instructions, "\n\n"), InstructionParts: instructionParts,
+		Settings: settings, OutputMode: outputMode,
 	}
 	for _, entry := range tools {
 		params.Tools = append(params.Tools, entry.def)
@@ -2151,6 +2168,19 @@ func (a *Agent[Deps, Output]) buildParams(
 		return params, fmt.Errorf("ai: output type: %w", err)
 	}
 	if outputMode == OutputModeNative {
+		params.OutputSchema = s
+		params.AllowText = true
+		return params, nil
+	}
+	if outputMode == OutputModePrompted {
+		encodedSchema, _ := json.Marshal(s)
+		if promptedTemplate == "" {
+			promptedTemplate = defaultPromptedOutputTemplate
+		}
+		if !strings.Contains(promptedTemplate, "{schema}") {
+			promptedTemplate += "\n\n{schema}"
+		}
+		params.OutputPrompt = strings.ReplaceAll(promptedTemplate, "{schema}", string(encodedSchema))
 		params.OutputSchema = s
 		params.AllowText = true
 		return params, nil

@@ -220,7 +220,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if len(req.Tools) > 0 {
 		req.ParallelToolCalls = params.Settings.ParallelToolCalls
 	}
-	if params.OutputSchema != nil {
+	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		strict := true
 		schema, _, err := prepareOpenAISchema(params.OutputSchema, &strict)
 		if err != nil {

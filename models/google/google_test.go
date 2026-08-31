@@ -466,6 +466,14 @@ func TestNativeJSONOutputMode(t *testing.T) {
 	if schema["additionalProperties"] != false {
 		t.Fatal("additionalProperties should be preserved in Gemini JSON Schema")
 	}
+	params.OutputMode = ai.OutputModePrompted
+	gotBody = nil
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if config, ok := gotBody["generationConfig"].(map[string]any); ok && config["responseMimeType"] != nil {
+		t.Fatalf("prompted output enabled native response schema: %+v", gotBody)
+	}
 }
 
 func TestStrictToolModes(t *testing.T) {

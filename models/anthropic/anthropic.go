@@ -308,7 +308,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		disable := !*params.Settings.ParallelToolCalls
 		req.ToolChoice.DisableParallelToolUse = &disable
 	}
-	if params.OutputSchema != nil {
+	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")
 	}
 	return req, nil

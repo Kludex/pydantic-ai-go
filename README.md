@@ -428,6 +428,18 @@ agent := ai.NewAgent[Deps, Weather](model, ai.WithOutputTool(ai.OutputToolConfig
 
 `MaxRetries` overrides the general output retry budget while leaving function-tool budgets unchanged. Use `WithRunOutputTool` to replace this configuration for one run. Use `AddOutputToolPrepareFunc` to rename, modify, or omit a fresh output-tool definition before each model request. Preparation runs after model selection and dynamic settings.
 
+Use prompted output when a provider does not implement native JSON Schema output and you do not want an output tool:
+
+```go
+agent := ai.NewAgent[Deps, Weather](
+	model,
+	ai.WithOutputMode(ai.OutputModePrompted),
+)
+result, err := agent.Run(ctx, "Weather in SF?", deps)
+```
+
+The agent appends the schema to its instructions, validates the returned JSON, and sends validation failures back for correction. Use `WithPromptedOutputTemplate` or `WithRunPromptedOutputTemplate` to replace the instructions. If a custom template omits `{schema}`, the schema is appended automatically.
+
 ### Tool calls alongside output
 
 The default `ai.EndStrategyGraceful` runs function tools emitted alongside an output tool. The first successful output wins. A function-tool retry suppresses that output so the model can correct the call.
@@ -443,7 +455,7 @@ agent := ai.NewAgent[Deps, Weather](
 
 Use `ai.EndStrategyExhaustive` when every output and function tool must run. Independent calls run concurrently, and the first successful output in emission order wins.
 
-With native structured output, `ai.EndStrategyEarly` also lets valid JSON preempt function tools. Invalid JSON falls through to the tools without consuming a retry. Plain text never preempts a tool call because it may only describe the work the model is about to perform.
+With native or prompted structured output, `ai.EndStrategyEarly` also lets valid JSON preempt function tools. Invalid JSON falls through to the tools without consuming a retry. Plain text never preempts a tool call because it may only describe the work the model is about to perform.
 
 ## Streaming
 

@@ -95,10 +95,13 @@ type ModelRequestParams struct {
 	// OutputTool, when non-nil, is the tool the model must call to
 	// produce the final structured output.
 	OutputTool *ToolDefinition
-	// OutputSchema, when non-nil, asks the provider for native JSON-mode
-	// output conforming to the schema. Set instead of OutputTool when the
-	// agent uses OutputModeNative.
+	// OutputSchema validates structured text output. Providers enforce it
+	// natively unless OutputMode is OutputModePrompted.
 	OutputSchema map[string]any
+	// OutputMode identifies how structured output is requested.
+	OutputMode OutputMode
+	// OutputPrompt contains provider-neutral prompted-output instructions.
+	OutputPrompt string
 	// AllowText reports whether plain text is an acceptable final output.
 	AllowText bool
 	Settings  ModelSettings

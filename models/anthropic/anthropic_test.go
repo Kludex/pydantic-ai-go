@@ -636,6 +636,10 @@ func TestNativeJSONOutputModeUnsupported(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "not supported") {
 		t.Fatalf("expected unsupported error, got %v", err)
 	}
+	params.OutputMode = ai.OutputModePrompted
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatalf("prompted output should not request native mode: %v", err)
+	}
 }
 
 func TestStrictToolDefinition(t *testing.T) {

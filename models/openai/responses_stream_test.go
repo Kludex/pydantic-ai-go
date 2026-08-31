@@ -202,6 +202,15 @@ func TestResponsesStreamRequestErrors(t *testing.T) {
 		if _, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{OutputSchema: map[string]any{"type": "object"}}); err == nil {
 			t.Fatal("expected native output error")
 		}
+		prompted := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.completed","response":{"model":"gpt-5","status":"completed","usage":{}}}`,
+			`[DONE]`,
+		}))
+		if _, err := collect(t, prompted, ai.ModelRequestParams{
+			OutputSchema: map[string]any{"type": "object"}, OutputMode: ai.OutputModePrompted,
+		}); err != nil {
+			t.Fatalf("prompted output should not request native mode: %v", err)
+		}
 	})
 	t.Run("invalid URL", func(t *testing.T) {
 		model := openai.NewResponsesModel("gpt-5", openai.WithBaseURL("http://[::1"))

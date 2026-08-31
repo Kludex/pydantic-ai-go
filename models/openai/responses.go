@@ -201,7 +201,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if len(req.Tools) > 0 {
 		req.ParallelToolCalls = params.Settings.ParallelToolCalls
 	}
-	if params.OutputSchema != nil {
+	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		return nil, fmt.Errorf("openai: the Responses model does not support native JSON output mode yet; use OutputModeTool")
 	}
 	return req, nil

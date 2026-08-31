@@ -256,7 +256,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		}
 		req.ToolConfig = tc
 	}
-	if params.OutputSchema != nil {
+	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		if req.GenerationConfig == nil {
 			req.GenerationConfig = &generationConfig{}
 		}

@@ -487,6 +487,14 @@ func TestNativeJSONOutputMode(t *testing.T) {
 	if js["name"] != "final_result" || js["strict"] != true {
 		t.Fatalf("unexpected json_schema %v", js)
 	}
+	params.OutputMode = ai.OutputModePrompted
+	gotBody = nil
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if gotBody["response_format"] != nil {
+		t.Fatalf("prompted output enabled native response format: %+v", gotBody)
+	}
 }
 
 func TestStrictToolDefinition(t *testing.T) {

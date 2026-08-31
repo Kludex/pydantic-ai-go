@@ -720,6 +720,52 @@ func TestGoogleWebFetchURLContextMetadata(t *testing.T) {
 	}
 }
 
+func TestGoogleCodeExecutionResponse(t *testing.T) {
+	responses := []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[
+			{"executableCode":{"language":"PYTHON","code":"print(1)"}},
+			{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":"1\n"}},
+			{"text":"done"}
+		]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"codeExecutionResult":{"outcome":"OUTCOME_FAILED","output":"bad"}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"pass"}}]}}]}`,
+	}
+	index := 0
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(responses[index]))
+		index++
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if call.ToolKind != ai.ToolPartKindCodeExecution || call.ToolCallID != "response:code_execution:0" ||
+		string(call.Args) != `{"code":"print(1)","language":"PYTHON"}` ||
+		returned.ToolCallID != call.ToolCallID || returned.ToolKind != ai.ToolPartKindCodeExecution ||
+		returned.Content.(map[string]any)["output"] != "1\n" || returned.Timestamp != response.Timestamp {
+		t.Fatalf("unexpected code execution parts: call=%+v return=%+v", call, returned)
+	}
+	response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	returned = response.Parts[0].(ai.NativeToolReturnPart)
+	if returned.ToolCallID != "code_execution:0" || returned.Content.(map[string]any)["outcome"] != "OUTCOME_FAILED" {
+		t.Fatalf("unexpected orphan code execution result: %+v", returned)
+	}
+	response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call = response.Parts[0].(ai.NativeToolCallPart); call.ToolCallID != "code_execution:0" {
+		t.Fatalf("unexpected code call without response ID: %+v", call)
+	}
+}
+
 func TestErrors(t *testing.T) {
 	t.Run("native tools", func(t *testing.T) {
 		var body map[string]any
@@ -731,14 +777,15 @@ func TestErrors(t *testing.T) {
 		}
 		model := newServer(t, handler)
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-			NativeTools: []ai.NativeTool{ai.WebSearchTool{}, ai.WebFetchTool{}},
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{}, ai.WebFetchTool{}, ai.CodeExecutionTool{}},
 		}); err != nil {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 2 || tools[0].(map[string]any)["googleSearch"] == nil ||
+		if len(tools) != 3 || tools[0].(map[string]any)["googleSearch"] == nil ||
 			tools[0].(map[string]any)["functionDeclarations"] != nil ||
-			tools[1].(map[string]any)["urlContext"] == nil {
+			tools[1].(map[string]any)["urlContext"] == nil ||
+			tools[2].(map[string]any)["codeExecution"] == nil {
 			t.Fatalf("unexpected Google web-search tool: %#v", tools)
 		}
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{

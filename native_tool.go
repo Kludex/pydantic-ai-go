@@ -84,6 +84,23 @@ func (tool WebSearchTool) IsOptional() bool { return tool.Optional }
 // CloneNativeTool returns a detached definition.
 func (tool WebSearchTool) CloneNativeTool() NativeTool { return cloneWebSearchTool(tool) }
 
+// CodeExecutionTool asks a compatible provider to execute model-generated code.
+type CodeExecutionTool struct {
+	Optional bool
+}
+
+// Kind returns the stable native-tool discriminator.
+func (CodeExecutionTool) Kind() string { return "code_execution" }
+
+// UniqueID identifies this native tool within one model request.
+func (CodeExecutionTool) UniqueID() string { return "code_execution" }
+
+// IsOptional reports whether an unsupported model may omit the tool.
+func (tool CodeExecutionTool) IsOptional() bool { return tool.Optional }
+
+// CloneNativeTool returns a detached definition.
+func (tool CodeExecutionTool) CloneNativeTool() NativeTool { return tool }
+
 // WebFetchTool asks a compatible provider to retrieve content from URLs.
 type WebFetchTool struct {
 	MaxUses          int

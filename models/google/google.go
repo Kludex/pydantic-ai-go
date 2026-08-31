@@ -221,13 +221,25 @@ type content struct {
 }
 
 type part struct {
-	Text             string            `json:"text,omitempty"`
-	InlineData       *inlineData       `json:"inlineData,omitempty"`
-	FileData         *fileData         `json:"fileData,omitempty"`
-	FunctionCall     *functionCall     `json:"functionCall,omitempty"`
-	FunctionResponse *functionResponse `json:"functionResponse,omitempty"`
-	Thought          bool              `json:"thought,omitempty"`
-	ThoughtSignature string            `json:"thoughtSignature,omitempty"`
+	Text                string               `json:"text,omitempty"`
+	InlineData          *inlineData          `json:"inlineData,omitempty"`
+	FileData            *fileData            `json:"fileData,omitempty"`
+	FunctionCall        *functionCall        `json:"functionCall,omitempty"`
+	FunctionResponse    *functionResponse    `json:"functionResponse,omitempty"`
+	ExecutableCode      *executableCode      `json:"executableCode,omitempty"`
+	CodeExecutionResult *codeExecutionResult `json:"codeExecutionResult,omitempty"`
+	Thought             bool                 `json:"thought,omitempty"`
+	ThoughtSignature    string               `json:"thoughtSignature,omitempty"`
+}
+
+type executableCode struct {
+	Language string `json:"language"`
+	Code     string `json:"code"`
+}
+
+type codeExecutionResult struct {
+	Outcome string `json:"outcome"`
+	Output  string `json:"output"`
 }
 
 type inlineData struct {
@@ -279,6 +291,7 @@ type toolsParam struct {
 	FunctionDeclarations []functionDeclaration `json:"functionDeclarations,omitempty"`
 	GoogleSearch         *struct{}             `json:"googleSearch,omitempty"`
 	URLContext           *struct{}             `json:"urlContext,omitempty"`
+	CodeExecution        *struct{}             `json:"codeExecution,omitempty"`
 }
 
 type functionDeclaration struct {
@@ -326,6 +339,8 @@ func googleNativeTools(nativeTools []ai.NativeTool) ([]toolsParam, error) {
 			tools = append(tools, toolsParam{GoogleSearch: &struct{}{}})
 		case ai.WebFetchTool, *ai.WebFetchTool:
 			tools = append(tools, toolsParam{URLContext: &struct{}{}})
+		case ai.CodeExecutionTool, *ai.CodeExecutionTool:
+			tools = append(tools, toolsParam{CodeExecution: &struct{}{}})
 		default:
 			if !nativeTool.IsOptional() {
 				return nil, fmt.Errorf("google: native tool %q is not implemented", nativeTool.Kind())
@@ -896,9 +911,37 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 	); call != nil {
 		resp.Parts = append(resp.Parts, *call, *returned)
 	}
-	for _, p := range gr.Candidates[0].Content.Parts {
+	lastCodeCallID := ""
+	for index, p := range gr.Candidates[0].Content.Parts {
 		partProviderName, providerDetails := googlePartMetadata(p.ThoughtSignature, providerName)
 		switch {
+		case p.ExecutableCode != nil:
+			lastCodeCallID = fmt.Sprintf("%s:code_execution:%d", gr.ResponseID, index)
+			if gr.ResponseID == "" {
+				lastCodeCallID = fmt.Sprintf("code_execution:%d", index)
+			}
+			args, _ := json.Marshal(map[string]any{
+				"code": p.ExecutableCode.Code, "language": p.ExecutableCode.Language,
+			})
+			resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
+				ToolName: "code_execution", Args: args, ToolCallID: lastCodeCallID,
+				ToolKind: ai.ToolPartKindCodeExecution, ProviderName: providerName,
+			})
+		case p.CodeExecutionResult != nil:
+			if lastCodeCallID == "" {
+				lastCodeCallID = fmt.Sprintf("%s:code_execution:%d", gr.ResponseID, index)
+				if gr.ResponseID == "" {
+					lastCodeCallID = fmt.Sprintf("code_execution:%d", index)
+				}
+			}
+			resp.Parts = append(resp.Parts, ai.NativeToolReturnPart{
+				ToolName: "code_execution", ToolCallID: lastCodeCallID, ToolKind: ai.ToolPartKindCodeExecution,
+				Content: map[string]any{
+					"outcome": p.CodeExecutionResult.Outcome, "output": p.CodeExecutionResult.Output,
+				},
+				Timestamp: resp.Timestamp, ProviderName: providerName,
+			})
+			lastCodeCallID = ""
 		case p.FunctionCall != nil:
 			// args came from parsed JSON, so re-marshalling cannot fail
 			args, _ := json.Marshal(p.FunctionCall.Args)

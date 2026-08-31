@@ -165,3 +165,35 @@ func main() {
 `WebFetchTool` lets Anthropic or Gemini retrieve URL content. Anthropic sends domain filters, maximum uses, content limits, and citation configuration. Gemini renders the portable tool as `urlContext` and leaves unsupported settings out.
 
 Provider responses use `ToolPartKindWebFetch`. Gemini reconstructs calls and returns from `urlContextMetadata` while retaining the complete metadata in `ModelResponse.ProviderDetails`. Anthropic preserves native result payloads and caller metadata.
+
+## Execute code
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/google"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		google.NewModel("gemini-3-flash"),
+		ai.WithNativeTools(ai.CodeExecutionTool{}),
+	)
+
+	result, err := agent.Run(context.Background(), "Calculate the first 20 Fibonacci numbers with Python.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`CodeExecutionTool` lets Gemini run model-generated code. Executable code and its result become normalized call and return parts with `ToolPartKindCodeExecution`. The provider language, source, outcome, and output remain available in those parts.
+
+Uploaded execution files and Anthropic, OpenAI Responses, Bedrock, and xAI rendering remain provider-parity work.

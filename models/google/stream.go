@@ -69,6 +69,8 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		var groundingMetadata map[string]any
 		var urlContextMetadata map[string]any
 		webFetchEmitted := false
+		lastCodeCallID := ""
+		codeCallIndex := 0
 		received := false
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -141,8 +143,47 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 				}
 			}
 			for index, part := range chunk.Candidates[0].Content.Parts {
-				if !emitPart(yield, part, index, m.providerName) {
-					return
+				switch {
+				case part.ExecutableCode != nil:
+					lastCodeCallID = fmt.Sprintf("%s:code_execution:%d", responseID, codeCallIndex)
+					if responseID == "" {
+						lastCodeCallID = fmt.Sprintf("code_execution:%d", codeCallIndex)
+					}
+					codeCallIndex++
+					args, _ := json.Marshal(map[string]any{
+						"code": part.ExecutableCode.Code, "language": part.ExecutableCode.Language,
+					})
+					partID := "code-execution:" + lastCodeCallID
+					if !yield(ai.ToolCallStartEvent{
+						PartID: partID, ToolName: "code_execution", ToolCallID: lastCodeCallID,
+						ToolKind: ai.ToolPartKindCodeExecution, ProviderName: m.providerName, Native: true,
+					}, nil) || !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(args)}, nil) {
+						return
+					}
+				case part.CodeExecutionResult != nil:
+					if lastCodeCallID == "" {
+						lastCodeCallID = fmt.Sprintf("%s:code_execution:%d", responseID, codeCallIndex)
+						if responseID == "" {
+							lastCodeCallID = fmt.Sprintf("code_execution:%d", codeCallIndex)
+						}
+						codeCallIndex++
+					}
+					returned := ai.NativeToolReturnPart{
+						ToolName: "code_execution", ToolCallID: lastCodeCallID,
+						ToolKind: ai.ToolPartKindCodeExecution,
+						Content: map[string]any{
+							"outcome": part.CodeExecutionResult.Outcome, "output": part.CodeExecutionResult.Output,
+						},
+						Timestamp: responseTimestamp, ProviderName: m.providerName,
+					}
+					if !yield(ai.NativeToolReturnEvent{PartID: "return:" + lastCodeCallID, Part: returned}, nil) {
+						return
+					}
+					lastCodeCallID = ""
+				default:
+					if !emitPart(yield, part, index, m.providerName) {
+						return
+					}
 				}
 			}
 		}

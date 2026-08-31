@@ -110,6 +110,76 @@ func TestGoogleStreamWebFetchURLContext(t *testing.T) {
 	}
 }
 
+func TestGoogleStreamCodeExecution(t *testing.T) {
+	model := newServer(t, googleSSE(t, []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"print(1)"}}]}}]}`,
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":"1\n"}}]}}]}`,
+	}))
+	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := events[0].(ai.ToolCallStartEvent)
+	delta := events[1].(ai.ToolCallDeltaEvent)
+	returned := events[2].(ai.NativeToolReturnEvent)
+	if !start.Native || start.ToolKind != ai.ToolPartKindCodeExecution ||
+		start.ToolCallID != "response:code_execution:0" || !strings.Contains(delta.ArgsDelta, "print(1)") ||
+		returned.Part.ToolCallID != start.ToolCallID || returned.Part.Content.(map[string]any)["output"] != "1\n" {
+		t.Fatalf("unexpected streamed code execution events: %#v", events)
+	}
+}
+
+func TestGoogleStreamCodeExecutionEdges(t *testing.T) {
+	t.Run("orphan result", func(t *testing.T) {
+		model := newServer(t, googleSSE(t, []string{
+			`{"candidates":[{"content":{"parts":[{"codeExecutionResult":{"outcome":"OUTCOME_FAILED","output":"bad"}}]}}]}`,
+		}))
+		events, err := collectGoogleStream(t, model, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if returned := events[0].(ai.NativeToolReturnEvent); returned.Part.ToolCallID != "code_execution:0" {
+			t.Fatalf("unexpected orphan code result: %+v", returned)
+		}
+	})
+	for _, breakAfter := range []int{1, 2} {
+		t.Run(fmt.Sprintf("consumer break %d", breakAfter), func(t *testing.T) {
+			model := newServer(t, googleSSE(t, []string{
+				`{"candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"pass"}}]}}]}`,
+			}))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen++
+				if seen == breakAfter {
+					break
+				}
+			}
+		})
+	}
+	t.Run("consumer break on result", func(t *testing.T) {
+		model := newServer(t, googleSSE(t, []string{
+			`{"candidates":[{"content":{"parts":[{"codeExecutionResult":{"outcome":"OUTCOME_OK","output":"done"}}]}}]}`,
+		}))
+		stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, err := range stream {
+			if err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	})
+}
+
 func TestGoogleStreamWebFetchConsumerBreak(t *testing.T) {
 	model := newServer(t, googleSSE(t, []string{
 		`{"responseId":"response","candidates":[{"urlContextMetadata":{"urlMetadata":[{"retrievedUrl":"https://go.dev"}]}}]}`,

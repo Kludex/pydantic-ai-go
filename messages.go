@@ -287,6 +287,7 @@ const (
 	ToolPartKindCapabilityLoad ToolPartKind = "capability-load"
 	ToolPartKindWebSearch      ToolPartKind = "web-search"
 	ToolPartKindWebFetch       ToolPartKind = "web-fetch"
+	ToolPartKindCodeExecution  ToolPartKind = "code-execution"
 )
 
 // ToolCallPart is a tool call requested by the model.

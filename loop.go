@@ -1987,16 +1987,67 @@ func cloneSchemaMap(schema map[string]any) map[string]any {
 }
 
 func cloneSchemaValue(value any) any {
-	switch value := value.(type) {
-	case map[string]any:
-		return cloneSchemaMap(value)
-	case ToolSearchResult:
-		value.DiscoveredTools = slices.Clone(value.DiscoveredTools)
+	if result, ok := value.(ToolSearchResult); ok {
+		result.DiscoveredTools = slices.Clone(result.DiscoveredTools)
+		return result
+	}
+	cloned := cloneCollectionValue(reflect.ValueOf(value), make(map[collectionCloneKey]reflect.Value))
+	if !cloned.IsValid() {
+		return nil
+	}
+	return cloned.Interface()
+}
+
+type collectionCloneKey struct {
+	typeOf  reflect.Type
+	pointer uintptr
+}
+
+func cloneCollectionValue(value reflect.Value, seen map[collectionCloneKey]reflect.Value) reflect.Value {
+	if !value.IsValid() {
 		return value
-	case []any:
-		cloned := make([]any, len(value))
-		for i, item := range value {
-			cloned[i] = cloneSchemaValue(item)
+	}
+	switch value.Kind() {
+	case reflect.Interface:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		cloned := reflect.New(value.Type()).Elem()
+		cloned.Set(cloneCollectionValue(value.Elem(), seen))
+		return cloned
+	case reflect.Map:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		key := collectionCloneKey{typeOf: value.Type(), pointer: value.Pointer()}
+		if cloned, ok := seen[key]; ok {
+			return cloned
+		}
+		cloned := reflect.MakeMapWithSize(value.Type(), value.Len())
+		seen[key] = cloned
+		iterator := value.MapRange()
+		for iterator.Next() {
+			cloned.SetMapIndex(iterator.Key(), cloneCollectionValue(iterator.Value(), seen))
+		}
+		return cloned
+	case reflect.Slice:
+		if value.IsNil() {
+			return reflect.Zero(value.Type())
+		}
+		key := collectionCloneKey{typeOf: value.Type(), pointer: value.Pointer()}
+		if cloned, ok := seen[key]; ok {
+			return cloned
+		}
+		cloned := reflect.MakeSlice(value.Type(), value.Len(), value.Len())
+		seen[key] = cloned
+		for index := range value.Len() {
+			cloned.Index(index).Set(cloneCollectionValue(value.Index(index), seen))
+		}
+		return cloned
+	case reflect.Array:
+		cloned := reflect.New(value.Type()).Elem()
+		for index := range value.Len() {
+			cloned.Index(index).Set(cloneCollectionValue(value.Index(index), seen))
 		}
 		return cloned
 	default:

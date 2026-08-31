@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"sync"
 	"time"
 )
@@ -225,12 +224,9 @@ func prepareDirectRequest(
 		}
 	}
 	if params.Instructions == "" && len(params.InstructionParts) > 0 {
-		instructions := make([]string, len(params.InstructionParts))
-		for index, part := range params.InstructionParts {
-			instructions[index] = part.Content
-		}
-		params.Instructions = strings.Join(instructions, "\n\n")
+		params.Instructions = joinInstructionParts(params.InstructionParts)
 	}
+	params.InstructionParts = cloneInstructionParts(params.InstructionParts)
 	params, err := resolveModelOutputParams(model, params, OutputToolConfig{}, "")
 	if err != nil {
 		return nil, ModelRequestParams{}, err

@@ -128,7 +128,7 @@ func TestCapabilityContributesToolsAndInstructions(t *testing.T) {
 		t.Fatalf("unexpected instructions %q", gotInstructions)
 	}
 	if !reflect.DeepEqual(gotInstructionParts, []ai.InstructionPart{
-		{Content: "Base."}, {Content: "Always be brief."},
+		{Content: "Base.", ID: ai.AgentInstructionID()}, {Content: "Always be brief."},
 	}) {
 		t.Fatalf("unexpected instruction parts %+v", gotInstructionParts)
 	}

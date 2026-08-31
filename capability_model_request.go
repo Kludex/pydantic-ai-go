@@ -1,9 +1,6 @@
 package ai
 
-import (
-	"context"
-	"slices"
-)
+import "context"
 
 // ModelRequestContext is the mutable request passed through model lifecycle hooks.
 type ModelRequestContext struct {
@@ -21,7 +18,7 @@ type ModelRequestContext struct {
 // Clone returns a request context detached from mutable messages, settings, schemas, and tools.
 func (request ModelRequestContext) Clone() ModelRequestContext {
 	request.Messages = cloneModelMessages(request.Messages)
-	request.Params.InstructionParts = slices.Clone(request.Params.InstructionParts)
+	request.Params.InstructionParts = cloneInstructionParts(request.Params.InstructionParts)
 	request.Params.Tools = cloneToolDefinitions(request.Params.Tools)
 	request.Params.DeferredTools = cloneToolDefinitions(request.Params.DeferredTools)
 	if request.Params.OutputTool != nil {
@@ -35,6 +32,8 @@ func (request ModelRequestContext) Clone() ModelRequestContext {
 }
 
 // BeforeModelRequestHook modifies a prepared request before model middleware runs.
+// InstructionParts is the source of truth when a hook changes it. Changing only
+// Instructions remains supported as an aggregate replacement for compatibility.
 type BeforeModelRequestHook interface {
 	BeforeModelRequest(ctx context.Context, ri *RunInfo, request ModelRequestContext) (ModelRequestContext, error)
 }

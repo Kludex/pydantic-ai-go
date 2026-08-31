@@ -20,7 +20,8 @@ type Agent[Deps, Output any] struct {
 	descriptionSet     bool
 	descriptionFunc    AgentDescriptionFunc[Deps]
 	instructions       string
-	instructionsFuncs  []InstructionsFunc[Deps]
+	instructionParts   []InstructionPart
+	instructionsFuncs  []instructionRunner[Deps]
 	systemPrompts      []string
 	systemPromptFuncs  []systemPromptRunner[Deps]
 	modelSettingsFuncs []ModelSettingsFunc[Deps]
@@ -47,8 +48,9 @@ type Agent[Deps, Output any] struct {
 	endStrategy        EndStrategy
 	sequentialTools    bool
 	capabilities       []Capability
-	capInstructions    []string
+	capInstructions    []InstructionPart
 	capSettings        []capabilitySettingsLayer
+	capInstructionIDs  map[string]struct{}
 	outputValidators   []func(ctx context.Context, rc *RunContext[Deps], out Output) error
 
 	tools    []toolEntry[Deps]
@@ -63,6 +65,11 @@ type toolEntry[Deps any] struct {
 	prepare  ToolPrepareFunc[Deps]
 }
 
+type instructionRunner[Deps any] struct {
+	name string
+	fn   InstructionsFunc[Deps]
+}
+
 type systemPromptRunner[Deps any] struct {
 	id      string
 	fn      InstructionsFunc[Deps]
@@ -74,7 +81,7 @@ type systemPromptRunner[Deps any] struct {
 func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output] {
 	a := &Agent[Deps, Output]{
 		model: model, retryLimits: RetryLimits{Tools: 1, Output: 1}, outputMode: OutputModeAuto,
-		endStrategy: EndStrategyGraceful,
+		endStrategy: EndStrategyGraceful, capInstructionIDs: make(map[string]struct{}),
 	}
 	var cfg config
 	for _, opt := range opts {
@@ -91,6 +98,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		a.descriptionFunc = descriptionFunc
 	}
 	a.instructions = cfg.instructions
+	a.instructionParts = cloneInstructionParts(cfg.instructionParts)
 	a.systemPrompts = slices.Clone(cfg.systemPrompts)
 	a.settings = cfg.settings.Clone()
 	a.metadata = cloneSchemaMap(cfg.metadata)
@@ -125,7 +133,23 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		if err := capability.Setup(reg); err != nil {
 			panic(fmt.Sprintf("ai: capability setup: %v", err))
 		}
-		a.capInstructions = append(a.capInstructions, reg.instructions...)
+		source, err := capabilityInstructionSource(capability)
+		if err != nil {
+			panic(fmt.Sprintf("ai: capability instructions: %v", err))
+		}
+		instructions, err := qualifyInstructionParts(reg.instructions, source)
+		if err != nil {
+			panic(fmt.Sprintf("ai: capability instructions: %v", err))
+		}
+		if source != nil && capabilityContributesInstructions(capability, instructions) {
+			if _, duplicate := a.capInstructionIDs[source.ID]; duplicate {
+				panic(fmt.Sprintf(
+					"ai: capability ID %q is used by multiple capabilities that contribute instructions", source.ID,
+				))
+			}
+			a.capInstructionIDs[source.ID] = struct{}{}
+		}
+		a.capInstructions = append(a.capInstructions, instructions...)
 		for _, tool := range reg.tools {
 			fn := tool.call
 			a.tools = append(a.tools, toolEntry[Deps]{
@@ -189,8 +213,37 @@ type InstructionsFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps]) 
 // AddInstructionsFunc registers dynamic instructions evaluated before every
 // model request and appended to the static instructions.
 func (a *Agent[Deps, Output]) AddInstructionsFunc(fn InstructionsFunc[Deps]) {
+	if fn == nil {
+		panic("ai: instructions function must not be nil")
+	}
 	a.checkNotStarted()
-	a.instructionsFuncs = append(a.instructionsFuncs, fn)
+	a.instructionsFuncs = append(a.instructionsFuncs, instructionRunner[Deps]{fn: fn})
+}
+
+// AddNamedInstructionsFunc registers addressable dynamic instructions. Name is
+// qualified as agent:<name> and must remain stable across application versions.
+func (a *Agent[Deps, Output]) AddNamedInstructionsFunc(name string, fn InstructionsFunc[Deps]) {
+	if err := validateInstructionName(name, false); err != nil {
+		panic(err.Error())
+	}
+	if fn == nil {
+		panic("ai: instructions function must not be nil")
+	}
+	a.checkNotStarted()
+	a.instructionsFuncs = append(a.instructionsFuncs, instructionRunner[Deps]{name: name, fn: fn})
+}
+
+// AddInstructionPart appends an independently addressable literal instruction.
+// Its Name is qualified under the agent source.
+func (a *Agent[Deps, Output]) AddInstructionPart(part InstructionPart) {
+	qualified, err := qualifyInstructionParts(
+		[]InstructionPart{part}, &InstructionSource{Kind: InstructionSourceAgent},
+	)
+	if err != nil {
+		panic(err.Error())
+	}
+	a.checkNotStarted()
+	a.instructionParts = append(a.instructionParts, qualified...)
 }
 
 // AddSystemPromptFunc registers a legacy system prompt evaluated when a new
@@ -322,6 +375,7 @@ type config struct {
 	descriptionSet   bool
 	descriptionFunc  any
 	instructions     string
+	instructionParts []InstructionPart
 	systemPrompts    []string
 	settings         ModelSettings
 	metadata         map[string]any
@@ -435,6 +489,18 @@ func WithInstructions(instructions string) Option {
 	return func(c *config) { c.instructions = instructions }
 }
 
+// WithInstructionParts appends literal instruction blocks. Names are
+// qualified under the agent source when the agent is constructed.
+func WithInstructionParts(parts ...InstructionPart) Option {
+	qualified, err := qualifyInstructionParts(parts, &InstructionSource{Kind: InstructionSourceAgent})
+	if err != nil {
+		panic(err.Error())
+	}
+	return func(config *config) {
+		config.instructionParts = append(config.instructionParts, cloneInstructionParts(qualified)...)
+	}
+}
+
 // WithSystemPrompt appends a legacy system prompt to the first request in a
 // conversation. Prefer WithInstructions for new applications.
 func WithSystemPrompt(prompt string) Option {
@@ -499,6 +565,7 @@ type runConfig struct {
 	model             Model
 	settings          *ModelSettings
 	instructions      string
+	instructionParts  []InstructionPart
 	usageLimits       *UsageLimits
 	retryLimits       *RetryLimits
 	outputMode        *OutputMode
@@ -662,6 +729,22 @@ func WithRunModelSettingsFunc[Deps any](fn ModelSettingsFunc[Deps]) RunOption {
 // WithRunInstructions appends static instructions for one run.
 func WithRunInstructions(instructions string) RunOption {
 	return func(c *runConfig) { c.instructions = instructions }
+}
+
+// WithRunInstructionParts appends unaddressable literal blocks for one run.
+// Declared names are preserved, but per-run instructions have no stable source.
+func WithRunInstructionParts(parts ...InstructionPart) RunOption {
+	parts = cloneInstructionParts(parts)
+	for index := range parts {
+		parts[index].ID = nil
+	}
+	qualified, err := qualifyInstructionParts(parts, nil)
+	if err != nil {
+		panic(err.Error())
+	}
+	return func(config *runConfig) {
+		config.instructionParts = append(config.instructionParts, cloneInstructionParts(qualified)...)
+	}
 }
 
 // WithRunInstructionsFunc appends dynamic instructions for one run. The

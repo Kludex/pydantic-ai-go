@@ -20,10 +20,16 @@ type Capability interface {
 	Setup(reg *CapabilityRegistry) error
 }
 
+// CapabilityIDProvider optionally gives instruction contributions a stable
+// application source ID.
+type CapabilityIDProvider interface {
+	CapabilityID() string
+}
+
 // CapabilityRegistry collects what a capability contributes at setup.
 type CapabilityRegistry struct {
 	tools         []capabilityTool
-	instructions  []string
+	instructions  []InstructionPart
 	modelSettings []ModelSettings
 }
 
@@ -39,7 +45,13 @@ func (r *CapabilityRegistry) AddTool(def ToolDefinition, fn func(ctx context.Con
 
 // AddInstructions appends static instructions to the agent's.
 func (r *CapabilityRegistry) AddInstructions(instructions string) {
-	r.instructions = append(r.instructions, instructions)
+	r.instructions = append(r.instructions, InstructionPart{Content: instructions})
+}
+
+// AddInstructionPart appends a named or cache-aware static instruction block.
+// A capability ID qualifies the part's name after Setup returns.
+func (r *CapabilityRegistry) AddInstructionPart(part InstructionPart) {
+	r.instructions = append(r.instructions, part)
 }
 
 // AddModelSettings appends static settings between agent and run settings.
@@ -143,6 +155,12 @@ type ToolCallWrapper interface {
 // InstructionsProvider contributes instructions before every model request.
 type InstructionsProvider interface {
 	Instructions(ctx context.Context, ri *RunInfo) (string, error)
+}
+
+// InstructionPartsProvider contributes named or cache-aware instruction blocks
+// before every model request. It takes precedence over InstructionsProvider.
+type InstructionPartsProvider interface {
+	InstructionParts(ctx context.Context, ri *RunInfo) ([]InstructionPart, error)
 }
 
 // ModelSettingsProvider contributes settings before every model request.

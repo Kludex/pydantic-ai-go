@@ -47,9 +47,9 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, compaction, tool-availability, local and native typed tool-search, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, stable instruction-part IDs, dynamic-system-prompt, structured-retry, response/part-metadata, compaction, tool-availability, local and native typed tool-search, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
-- [ ] Stable addressable instruction IDs and names across agent, capability, and identified-toolset sources, including replacement/removal semantics, serialization, wrapper qualification, duplicate validation, and history/telemetry rendering discovered in upstream `ebad0a022`.
+- [x] Stable addressable instruction IDs and names across agent, capability, and identified-toolset sources through `InstructionID`, source constructors, `WithInstructionParts`, `AddInstructionPart`, `AddNamedInstructionsFunc`, `CapabilityIDProvider`, and `InstructionPartsProvider`. Parts support source qualification through toolset wrappers, static-before-dynamic cache ordering, joined rendering, request-hook replacement/removal as the source of truth, aggregate-hook compatibility, detached IDs, duplicate-source validation, legacy/unknown-namespace JSON decoding, history rendering, telemetry serialization, and per-run unaddressable names.
 - [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
 - [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
 - [x] Provider-native call and return response parts with distinct non-executable types, portable tool kinds, provider identity/details, upstream serialization, and normalized streaming lifecycle.
@@ -180,7 +180,7 @@ Status:
 - [x] Run, model request, tool call, and dynamic instruction hooks.
 - [x] Ordered middleware composition; first capability is outermost.
 - [x] `HistoryProcessor` provides composable request-only history middleware with detached input/output snapshots and `RunInfo`; durable history replacement remains an explicit model-request hook action.
-- [x] Runs, prepared model requests, function-tool validation/execution, and output validation/processing have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Model hooks can detach snapshots, modify requests, switch models, recover errors, and request budgeted retries that preserve rejected responses. Tool and output hooks transform raw or typed values, recover ordinary errors, and preserve retry/failure control flow. Run wrappers can short-circuit, transform, or recover type-checked outcomes while cancellation remains terminal.
+- [x] Runs, prepared model requests, function-tool validation/execution, and output validation/processing have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Model hooks can detach snapshots, edit stable instruction parts, modify requests, switch models, recover errors, and request budgeted retries that preserve rejected responses. Tool and output hooks transform raw or typed values, recover ordinary errors, and preserve retry/failure control flow. Run wrappers can short-circuit, transform, or recover type-checked outcomes while cancellation remains terminal.
 - [x] Output validation/processing hooks cover raw structured repair, schema/decoding/semantic validation, final typed processing, wrapper and recovery composition, normal and early outputs, and streaming partial/final values.
 - [x] Audited upstream user-prompt/model-request/call-tools/end node lifecycles against the plain loop. Focused request, tool validation/execution, output, run-outcome, retry, deferred, and enqueue hooks cover semantic interception; public internal-node replacement remains intentionally excluded with the graph API.
 - [x] Function-tool schema validation, typed decoding, and semantic argument validation are separate from local execution, with dedicated wrappers and before/after/error hooks. Static approvals and external calls defer only after validation, wrapper-modified raw arguments are revalidated, and validated values retain their registered concrete Go type. After-validation and before/after-execution hooks can request durable approval or external execution without changing tool registration; validation-error hooks cannot defer invalid arguments.
@@ -231,8 +231,8 @@ Status:
 - [ ] Record Google Gemini cassettes when credentials are available.
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
-- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused output, provider, MCP, and OpenTelemetry guides cover output functions and unions, OpenAI-compatible/Azure setup, shared-session lifecycle, direct protocol operations, privacy, format compatibility, and usage attribution. Dedicated multimodal and capability examples remain.
-- [~] Focused output, provider, MCP, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for capabilities, deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
+- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused instruction, output, provider, MCP, and OpenTelemetry guides cover stable source-qualified prompts, output functions and unions, OpenAI-compatible/Azure setup, shared-session lifecycle, direct protocol operations, privacy, format compatibility, and usage attribution. Dedicated multimodal and broader capability examples remain.
+- [~] Focused instruction, output, provider, MCP, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for broader capabilities, deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
@@ -243,9 +243,8 @@ Status:
 
 ## Next work
 
-1. Implement stable instruction IDs discovered in upstream `ebad0a022`, including source qualification, editing, validation, and serialization.
-2. Complete richer OpenTelemetry request/tool Logfire schemas/messages, remaining event shapes, and message-fragment caching/mutation diagnostics; agent descriptions, variable instructions, run metadata/schemas, and output-function spans are complete.
-3. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
-4. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
-5. Extend upstream message fixtures as remaining persisted part types land.
-6. Add the remaining provider-native tools, richer content parts, and provider metadata.
+1. Complete richer OpenTelemetry request/tool Logfire schemas/messages, remaining event shapes, and message-fragment caching/mutation diagnostics; agent descriptions, variable instructions, run metadata/schemas, output-function spans, and stable instruction-part serialization are complete.
+2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
+3. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
+4. Extend upstream message fixtures as remaining persisted part types land.
+5. Add the remaining provider-native tools, richer content parts, and provider metadata.

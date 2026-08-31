@@ -111,7 +111,7 @@ func TestRunMergesSettingsAndAppendsInstructions(t *testing.T) {
 		t.Fatalf("unexpected run parameters: output=%q instructions=%q", result.Output, got.Instructions)
 	}
 	wantInstructions := []ai.InstructionPart{
-		{Content: "Base instructions."},
+		{Content: "Base instructions.", ID: ai.AgentInstructionID()},
 		{Content: "Run instructions."},
 		{Content: "Dynamic instructions.", Dynamic: true},
 	}

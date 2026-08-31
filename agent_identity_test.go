@@ -158,6 +158,23 @@ func TestInstrumentationUsesPersistedInstructionsBeforeRequestMiddleware(t *test
 	if instructions, _ := attributes["gen_ai.system_instructions"].(string); !strings.Contains(instructions, "persisted instructions") {
 		t.Fatalf("persisted instructions missing from failed run: %+v", attributes)
 	}
+
+	exporter.Reset()
+	withoutInstructions := ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithCapabilities(
+		ai.NewInstrumentation(ai.WithInstrumentationTracerProvider(provider)), reject,
+	))
+	if _, err := withoutInstructions.Run(t.Context(), "hello", struct{}{}); !errors.Is(err, boom) {
+		t.Fatalf("unexpected request error without instructions: %v", err)
+	}
+	for _, span := range exporter.GetSpans() {
+		if span.Name != "invoke_agent agent" {
+			continue
+		}
+		attributes = instrumentationSpanAttributes(span.Attributes)
+		if _, exists := attributes["gen_ai.system_instructions"]; exists {
+			t.Fatalf("empty instructions were recorded: %+v", attributes)
+		}
+	}
 }
 
 type instructionState struct {

@@ -142,10 +142,14 @@ type ModelRequestParams struct {
 	Settings  ModelSettings
 }
 
-// InstructionPart is one model instruction block.
+// InstructionPart is one independently addressable model instruction block.
+// Declare Name relative to its source. The agent resolves ID before the model
+// request; callers should not invent qualified IDs.
 type InstructionPart struct {
 	Content string
 	Dynamic bool
+	Name    string
+	ID      *InstructionID
 }
 
 // ThinkingLevel configures provider reasoning with a portable effort level.

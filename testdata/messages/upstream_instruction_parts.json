@@ -1,0 +1,37 @@
+[
+  {
+    "content": "Agent.",
+    "dynamic": false,
+    "name": null,
+    "id": "agent",
+    "part_kind": "instruction"
+  },
+  {
+    "content": "Persona.",
+    "dynamic": false,
+    "name": "persona",
+    "id": "agent:persona",
+    "part_kind": "instruction"
+  },
+  {
+    "content": "Weather.",
+    "dynamic": true,
+    "name": "limits",
+    "id": "toolset:weather:limits",
+    "part_kind": "instruction"
+  },
+  {
+    "content": "Memory.",
+    "dynamic": false,
+    "name": null,
+    "id": "capability:memory",
+    "part_kind": "instruction"
+  },
+  {
+    "content": "Anonymous.",
+    "dynamic": false,
+    "name": "local",
+    "id": null,
+    "part_kind": "instruction"
+  }
+]

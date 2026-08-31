@@ -49,6 +49,10 @@ type ToolsetInstructionsProvider[Deps any] interface {
 	ToolsetInstructions(ctx context.Context, rc *RunContext[Deps]) ([]InstructionPart, error)
 }
 
+type toolsetInstructionRelay interface {
+	relaysToolsetInstructions()
+}
+
 // ToolFilterFunc decides whether one tool remains available for a model step.
 type ToolFilterFunc[Deps any] func(
 	ctx context.Context, rc *RunContext[Deps], definition ToolDefinition,
@@ -204,6 +208,8 @@ type combinedToolset[Deps any] struct {
 	toolsets []Toolset[Deps]
 }
 
+func (combinedToolset[Deps]) relaysToolsetInstructions() {}
+
 func (t combinedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
@@ -230,9 +236,13 @@ func (t combinedToolset[Deps]) ToolsetInstructions(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]InstructionPart, error) {
 	var instructions []InstructionPart
-	for _, toolset := range t.toolsets {
+	owners := make(map[string]int)
+	for index, toolset := range t.toolsets {
 		parts, err := resolveToolsetInstructions(ctx, rc, toolset)
 		if err != nil {
+			return nil, err
+		}
+		if err := recordToolsetInstructionOwners(owners, index, parts); err != nil {
 			return nil, err
 		}
 		instructions = append(instructions, parts...)
@@ -244,6 +254,8 @@ type filteredToolset[Deps any] struct {
 	toolset Toolset[Deps]
 	filter  ToolFilterFunc[Deps]
 }
+
+func (filteredToolset[Deps]) relaysToolsetInstructions() {}
 
 func (t filteredToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -276,6 +288,8 @@ type prefixedToolset[Deps any] struct {
 	prefix  string
 }
 
+func (prefixedToolset[Deps]) relaysToolsetInstructions() {}
+
 func (t prefixedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
@@ -299,6 +313,8 @@ type renamedToolset[Deps any] struct {
 	toolset Toolset[Deps]
 	names   map[string]string
 }
+
+func (renamedToolset[Deps]) relaysToolsetInstructions() {}
 
 func (t renamedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -335,6 +351,8 @@ type preparedToolset[Deps any] struct {
 	toolset Toolset[Deps]
 	prepare ToolsPrepareFunc[Deps]
 }
+
+func (preparedToolset[Deps]) relaysToolsetInstructions() {}
 
 func (t preparedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -382,6 +400,8 @@ type defaultedToolset[Deps any] struct {
 	timeout    time.Duration
 }
 
+func (defaultedToolset[Deps]) relaysToolsetInstructions() {}
+
 func (t defaultedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
@@ -413,6 +433,8 @@ type deferredToolset[Deps any] struct {
 	names   map[string]struct{}
 }
 
+func (deferredToolset[Deps]) relaysToolsetInstructions() {}
+
 func (t deferredToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
@@ -439,6 +461,8 @@ type approvalRequiredToolset[Deps any] struct {
 	names   map[string]struct{}
 	check   ToolsetApprovalFunc[Deps]
 }
+
+func (approvalRequiredToolset[Deps]) relaysToolsetInstructions() {}
 
 func (t approvalRequiredToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -492,6 +516,8 @@ type metadataToolset[Deps any] struct {
 	toolset  Toolset[Deps]
 	metadata map[string]any
 }
+
+func (metadataToolset[Deps]) relaysToolsetInstructions() {}
 
 func (t metadataToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -565,9 +591,25 @@ func resolveToolsetInstructions[Deps any](
 	if err != nil {
 		return nil, err
 	}
-	cloned := make([]InstructionPart, len(parts))
-	copy(cloned, parts)
-	return cloned, nil
+	var source *InstructionSource
+	if identified, ok := toolset.(ToolsetIDProvider); ok {
+		if id := identified.ToolsetID(); id != "" {
+			source = &InstructionSource{Kind: InstructionSourceToolset, ID: id}
+		}
+	}
+	if source == nil {
+		if _, relay := toolset.(toolsetInstructionRelay); !relay {
+			parts = cloneInstructionParts(parts)
+			for index := range parts {
+				parts[index].ID = nil
+			}
+		}
+	}
+	qualified, err := qualifyInstructionParts(parts, source)
+	if err != nil {
+		return nil, err
+	}
+	return qualified, nil
 }
 
 func resolveToolsetTools[Deps any](

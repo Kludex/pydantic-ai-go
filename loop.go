@@ -145,16 +145,39 @@ func (a *Agent[Deps, Output]) newRun(
 		return nil, fmt.Errorf("ai: run capability ordering: %w", err)
 	}
 	capabilities := append(slices.Clone(a.capabilities), runCapabilities...)
-	runCapabilityInstructions := []string(nil)
+	runCapabilityInstructions := []InstructionPart(nil)
 	capSettings := slices.Clone(a.capSettings)
 	var runCapabilityTools []capabilityTool
+	capInstructionIDs := make(map[string]struct{}, len(a.capInstructionIDs)+len(runCapabilities))
+	for id := range a.capInstructionIDs {
+		capInstructionIDs[id] = struct{}{}
+	}
 	for _, capability := range runCapabilities {
 		registry := &CapabilityRegistry{}
 		if err := capability.Setup(registry); err != nil {
 			cancellation.finish()
 			return nil, fmt.Errorf("ai: run capability setup: %w", err)
 		}
-		runCapabilityInstructions = append(runCapabilityInstructions, registry.instructions...)
+		source, err := capabilityInstructionSource(capability)
+		if err != nil {
+			cancellation.finish()
+			return nil, fmt.Errorf("ai: run capability instructions: %w", err)
+		}
+		instructions, err := qualifyInstructionParts(registry.instructions, source)
+		if err != nil {
+			cancellation.finish()
+			return nil, fmt.Errorf("ai: run capability instructions: %w", err)
+		}
+		if source != nil && capabilityContributesInstructions(capability, instructions) {
+			if _, duplicate := capInstructionIDs[source.ID]; duplicate {
+				cancellation.finish()
+				return nil, fmt.Errorf(
+					"ai: capability ID %q is used by multiple capabilities that contribute instructions", source.ID,
+				)
+			}
+			capInstructionIDs[source.ID] = struct{}{}
+		}
+		runCapabilityInstructions = append(runCapabilityInstructions, instructions...)
 		runCapabilityTools = append(runCapabilityTools, registry.tools...)
 		capSettings = append(capSettings, capabilitySettingsLayer{
 			static: registry.modelSettings, provider: capabilityModelSettingsProvider(capability),
@@ -316,7 +339,9 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, err
 	}
-	r.staticInstructions = a.staticInstructions(cfg.instructions, runCapabilityInstructions)
+	r.staticInstructions = a.staticInstructions(
+		cfg.instructions, cfg.instructionParts, runCapabilityInstructions,
+	)
 	outputMode := a.outputMode
 	if cfg.outputMode != nil {
 		outputMode = *cfg.outputMode
@@ -1036,10 +1061,13 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		if !ok {
 			continue
 		}
+		previousInstructions := request.Params.Instructions
+		previousParts := cloneInstructionParts(request.Params.InstructionParts)
 		request, err = hook.BeforeModelRequest(ctx, r.info, request)
 		if err != nil {
 			return nil, err
 		}
+		reconcileHookInstructions(&request.Params, previousInstructions, previousParts)
 	}
 	if request.ReplaceHistory {
 		r.messages = cloneModelMessages(request.Messages)
@@ -1078,11 +1106,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		}
 		outputParams.OutputPrompt = ""
 		outputParams.InstructionParts = removeOutputPrompt(outputParams.InstructionParts, r.params.OutputPrompt)
-		instructions := make([]string, len(outputParams.InstructionParts))
-		for index, part := range outputParams.InstructionParts {
-			instructions[index] = part.Content
-		}
-		outputParams.Instructions = strings.Join(instructions, "\n\n")
+		outputParams.Instructions = joinInstructionParts(outputParams.InstructionParts)
 		request.Params, err = resolveModelOutputParams(request.Model, outputParams, r.outputTool, r.promptedTemplate)
 		if err != nil {
 			return nil, err
@@ -1160,6 +1184,22 @@ func (r *run[Deps, Output]) stampModelResponse(response *ModelResponse) {
 	if response.ModelName == "" {
 		response.ModelName = r.model.Name()
 	}
+}
+
+func reconcileHookInstructions(params *ModelRequestParams, previous string, previousParts []InstructionPart) {
+	if !reflect.DeepEqual(params.InstructionParts, previousParts) {
+		params.InstructionParts = cloneInstructionParts(params.InstructionParts)
+		params.Instructions = joinInstructionParts(params.InstructionParts)
+		return
+	}
+	if params.Instructions == previous {
+		return
+	}
+	if strings.TrimSpace(params.Instructions) == "" {
+		params.InstructionParts = nil
+		return
+	}
+	params.InstructionParts = []InstructionPart{{Content: params.Instructions, Dynamic: true}}
 }
 
 func setLatestRequestContext(messages []ModelMessage, instructions, runID, conversationID string) {
@@ -1645,12 +1685,8 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		return ModelRequestParams{}, err
 	}
 	params.Settings = settings
-	params.InstructionParts = instructionParts
-	instructions := make([]string, 0, len(instructionParts))
-	for _, part := range instructionParts {
-		instructions = append(instructions, part.Content)
-	}
-	params.Instructions = strings.Join(instructions, "\n\n")
+	params.InstructionParts = cloneInstructionParts(instructionParts)
+	params.Instructions = joinInstructionParts(instructionParts)
 	params, err = r.prepareOutputParams(ctx, rc, params)
 	if err != nil {
 		return ModelRequestParams{}, err
@@ -1788,7 +1824,7 @@ func resolveModelOutputParams(
 	model Model, params ModelRequestParams, outputTool OutputToolConfig, promptedTemplate string,
 ) (ModelRequestParams, error) {
 	if params.OutputSchema == nil && params.OutputTool == nil {
-		return params, nil
+		return normalizeModelInstructionParams(params), nil
 	}
 	profile := modelProfile(model)
 	mode := params.OutputMode
@@ -1798,7 +1834,7 @@ func resolveModelOutputParams(
 				params.OutputTool = defaultOutputTool(params.OutputSchema, outputTool)
 			}
 			params.AllowText = true
-			return params, nil
+			return normalizeModelInstructionParams(params), nil
 		}
 		mode = profile.DefaultOutputMode
 	}
@@ -1826,13 +1862,14 @@ func resolveModelOutputParams(
 	params.OutputMode = mode
 	if params.OutputPrompt != "" {
 		params.InstructionParts = append(params.InstructionParts, InstructionPart{Content: params.OutputPrompt})
-		instructions := make([]string, len(params.InstructionParts))
-		for index, part := range params.InstructionParts {
-			instructions[index] = part.Content
-		}
-		params.Instructions = strings.Join(instructions, "\n\n")
 	}
-	return params, nil
+	return normalizeModelInstructionParams(params), nil
+}
+
+func normalizeModelInstructionParams(params ModelRequestParams) ModelRequestParams {
+	params.InstructionParts = SortInstructionParts(params.InstructionParts)
+	params.Instructions = JoinInstructionParts(params.InstructionParts)
+	return params
 }
 
 func defaultOutputTool(schema map[string]any, config OutputToolConfig) *ToolDefinition {
@@ -1852,11 +1889,12 @@ func defaultOutputTool(schema map[string]any, config OutputToolConfig) *ToolDefi
 
 func removeOutputPrompt(parts []InstructionPart, prompt string) []InstructionPart {
 	if prompt == "" {
-		return parts
+		return cloneInstructionParts(parts)
 	}
 	filtered := make([]InstructionPart, 0, len(parts))
 	for _, part := range parts {
 		if part.Content != prompt {
+			part.ID = cloneInstructionID(part.ID)
 			filtered = append(filtered, part)
 		}
 	}
@@ -3386,20 +3424,24 @@ func (r *run[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
 	return entry, ok
 }
 
-func (a *Agent[Deps, Output]) staticInstructions(additional string, runCapabilityInstructions []string) []InstructionPart {
-	parts := make([]InstructionPart, 0, len(a.capInstructions)+len(runCapabilityInstructions)+2)
-	if a.instructions != "" {
-		parts = append(parts, InstructionPart{Content: a.instructions})
+func (a *Agent[Deps, Output]) staticInstructions(
+	additional string,
+	additionalParts []InstructionPart,
+	runCapabilityInstructions []InstructionPart,
+) []InstructionPart {
+	parts := make([]InstructionPart, 0,
+		len(a.instructionParts)+len(a.capInstructions)+len(runCapabilityInstructions)+len(additionalParts)+2,
+	)
+	if content := strings.TrimSpace(a.instructions); content != "" {
+		parts = append(parts, InstructionPart{Content: content, ID: AgentInstructionID()})
 	}
-	for _, instructions := range a.capInstructions {
-		parts = append(parts, InstructionPart{Content: instructions})
+	parts = append(parts, cloneInstructionParts(a.instructionParts)...)
+	parts = append(parts, cloneInstructionParts(a.capInstructions)...)
+	parts = append(parts, cloneInstructionParts(runCapabilityInstructions)...)
+	if content := strings.TrimSpace(additional); content != "" {
+		parts = append(parts, InstructionPart{Content: content})
 	}
-	for _, instructions := range runCapabilityInstructions {
-		parts = append(parts, InstructionPart{Content: instructions})
-	}
-	if additional != "" {
-		parts = append(parts, InstructionPart{Content: additional})
-	}
+	parts = append(parts, cloneInstructionParts(additionalParts)...)
 	return parts
 }
 
@@ -3525,24 +3567,48 @@ func (r *run[Deps, Output]) prepareSystemPrompts(ctx context.Context, rc *RunCon
 func (r *run[Deps, Output]) prepareInstructions(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]InstructionPart, error) {
-	parts := slices.Clone(r.staticInstructions)
-	for _, toolset := range r.toolsets {
+	parts := cloneInstructionParts(r.staticInstructions)
+	toolsetInstructionOwners := make(map[string]int)
+	for toolsetIndex, toolset := range r.toolsets {
 		instructions, err := resolveToolsetInstructions(ctx, rc, toolset)
 		if err != nil {
 			return nil, fmt.Errorf("ai: toolset instructions: %w", err)
 		}
+		if err := recordToolsetInstructionOwners(toolsetInstructionOwners, toolsetIndex, instructions); err != nil {
+			return nil, fmt.Errorf("ai: toolset instructions: %w", err)
+		}
 		parts = append(parts, instructions...)
 	}
-	for _, fn := range r.agent.instructionsFuncs {
-		instructions, err := fn(ctx, rc)
+	for _, runner := range r.agent.instructionsFuncs {
+		instructions, err := runner.fn(ctx, rc)
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
-		if instructions != "" {
-			parts = append(parts, InstructionPart{Content: instructions, Dynamic: true})
+		if content := strings.TrimSpace(instructions); content != "" {
+			part := InstructionPart{Content: content, Dynamic: true, Name: runner.name}
+			if runner.name != "" {
+				part.ID = AgentInstructionID(runner.name)
+			}
+			parts = append(parts, part)
 		}
 	}
 	for _, capability := range r.capabilities {
+		source, err := capabilityInstructionSource(capability)
+		if err != nil {
+			return nil, fmt.Errorf("ai: instructions: %w", err)
+		}
+		if provider, ok := capability.(InstructionPartsProvider); ok {
+			provided, err := provider.InstructionParts(ctx, r.info)
+			if err != nil {
+				return nil, fmt.Errorf("ai: instructions: %w", err)
+			}
+			qualified, err := qualifyInstructionParts(provided, source)
+			if err != nil {
+				return nil, fmt.Errorf("ai: instructions: %w", err)
+			}
+			parts = append(parts, qualified...)
+			continue
+		}
 		provider, ok := capability.(InstructionsProvider)
 		if !ok {
 			continue
@@ -3551,8 +3617,12 @@ func (r *run[Deps, Output]) prepareInstructions(
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
-		if instructions != "" {
-			parts = append(parts, InstructionPart{Content: instructions, Dynamic: true})
+		if content := strings.TrimSpace(instructions); content != "" {
+			part := InstructionPart{Content: content, Dynamic: true}
+			if source != nil {
+				part.ID = &InstructionID{Source: *source}
+			}
+			parts = append(parts, part)
 		}
 	}
 	for _, fn := range r.runInstructionsFuncs {
@@ -3560,8 +3630,8 @@ func (r *run[Deps, Output]) prepareInstructions(
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
-		if instructions != "" {
-			parts = append(parts, InstructionPart{Content: instructions, Dynamic: true})
+		if content := strings.TrimSpace(instructions); content != "" {
+			parts = append(parts, InstructionPart{Content: content, Dynamic: true})
 		}
 	}
 	return parts, nil
@@ -3573,12 +3643,8 @@ func (a *Agent[Deps, Output]) buildParams(
 	outputMode OutputMode,
 	tools []toolEntry[Deps],
 ) (ModelRequestParams, error) {
-	instructions := make([]string, 0, len(instructionParts))
-	for _, part := range instructionParts {
-		instructions = append(instructions, part.Content)
-	}
 	params := ModelRequestParams{
-		Instructions: strings.Join(instructions, "\n\n"), InstructionParts: instructionParts,
+		Instructions: joinInstructionParts(instructionParts), InstructionParts: cloneInstructionParts(instructionParts),
 		Settings: settings, OutputMode: outputMode,
 	}
 	for _, entry := range tools {

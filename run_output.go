@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"maps"
 	"slices"
 )
 
@@ -117,6 +118,7 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 		descriptionSet:     agent.descriptionSet,
 		descriptionFunc:    agent.descriptionFunc,
 		instructions:       agent.instructions,
+		instructionParts:   cloneInstructionParts(agent.instructionParts),
 		instructionsFuncs:  slices.Clone(agent.instructionsFuncs),
 		systemPrompts:      slices.Clone(agent.systemPrompts),
 		systemPromptFuncs:  slices.Clone(agent.systemPromptFuncs),
@@ -137,8 +139,9 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 		endStrategy:        agent.endStrategy,
 		sequentialTools:    agent.sequentialTools,
 		capabilities:       slices.Clone(agent.capabilities),
-		capInstructions:    slices.Clone(agent.capInstructions),
+		capInstructions:    cloneInstructionParts(agent.capInstructions),
 		capSettings:        settingsLayers,
+		capInstructionIDs:  maps.Clone(agent.capInstructionIDs),
 		tools:              tools,
 		toolsets:           slices.Clone(agent.toolsets),
 	}

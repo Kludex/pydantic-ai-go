@@ -102,6 +102,8 @@ type toolSearchToolset[Deps any] struct {
 	config  ToolSearchConfig[Deps]
 }
 
+func (toolSearchToolset[Deps]) relaysToolsetInstructions() {}
+
 func (t toolSearchToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {

@@ -172,7 +172,8 @@ func (a *Agent[Deps, Output]) newRun(
 	r := &run[Deps, Output]{
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int), availabilityRefused: make(map[string]struct{}),
-		runSettings: cfg.settings, tools: slices.Clone(a.tools), toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
+		runSettings: cfg.settings, usageLimits: limits,
+		tools: slices.Clone(a.tools), toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
 		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
@@ -592,6 +593,7 @@ type run[Deps, Output any] struct {
 	systemPromptsPrepared  bool
 	capSettings            []capabilitySettingsLayer
 	runSettings            *ModelSettings
+	usageLimits            UsageLimits
 	runSettingsFuncs       []erasedModelSettingsFunc
 	runInstructionsFuncs   []erasedInstructionsFunc
 	explicitRunModel       bool
@@ -1018,6 +1020,16 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		}
 		request, err = hook.BeforeModelRequest(ctx, r.info, request)
 		if err != nil {
+			return nil, err
+		}
+	}
+	if request.ReplaceHistory {
+		r.messages = cloneModelMessages(request.Messages)
+		r.newMessages = 0
+	}
+	if !request.AdditionalUsage.IsZero() {
+		r.usage.Add(request.AdditionalUsage)
+		if err := r.usageLimits.check(r.info.Usage()); err != nil {
 			return nil, err
 		}
 	}

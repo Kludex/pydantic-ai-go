@@ -87,6 +87,56 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 	return response, err
 }
 
+// CompactMessages calls the stateless Responses compaction endpoint.
+func (m *ResponsesModel) CompactMessages(
+	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+) (*ai.ModelResponse, error) {
+	payload, err := m.buildResponsesPayload(messages, params, false)
+	if err != nil {
+		return nil, err
+	}
+	body, _ := json.Marshal(struct {
+		Model        string           `json:"model"`
+		Instructions string           `json:"instructions,omitempty"`
+		Input        []responsesInput `json:"input"`
+	}{Model: payload.Model, Instructions: payload.Instructions, Input: payload.Input}) // The closed payload is JSON-safe.
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/responses/compact", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: compact request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai: read compaction response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	compacted, err := parseResponsesResponse(data)
+	if err != nil {
+		return nil, err
+	}
+	if len(compacted.Parts) == 0 {
+		return nil, fmt.Errorf("openai: compaction response contained no output")
+	}
+	part, ok := compacted.Parts[len(compacted.Parts)-1].(ai.CompactionPart)
+	if !ok {
+		return nil, fmt.Errorf("openai: last compaction response item has type %T", compacted.Parts[len(compacted.Parts)-1])
+	}
+	part.ProviderDetails[ai.StandingPromptPlantedKey] = true
+	compacted.Parts[len(compacted.Parts)-1] = part
+	compacted.ProviderName = "openai"
+	compacted.ProviderURL = m.baseURL
+	return compacted, nil
+}
+
 // ContinuationDelay implements ai.ModelContinuationDelayer.
 func (m *ResponsesModel) ContinuationDelay(response ai.ModelResponse) time.Duration {
 	if response.State == ai.ModelResponseStateSuspended && providerBool(response.ProviderDetails, "background") {

@@ -56,6 +56,11 @@ func (compaction *Compaction) Setup(*ai.CapabilityRegistry) error {
 	return nil
 }
 
+// CapabilityOrdering keeps compaction inside model-changing request hooks.
+func (*Compaction) CapabilityOrdering() ai.CapabilityOrdering {
+	return ai.CapabilityOrdering{Position: ai.CapabilityInnermost}
+}
+
 // BeforeModelRequest rejects compaction on non-Anthropic models.
 func (compaction *Compaction) BeforeModelRequest(
 	_ context.Context, _ *ai.RunInfo, request ai.ModelRequestContext,

@@ -128,7 +128,7 @@ Status:
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: text/reasoning/function-call/compaction streaming plus authoritative terminal snapshots, response/item IDs, encrypted reasoning and compaction round trips, latest-compaction history trimming with standing-prompt provenance, stateful compaction context management and thresholds, function namespaces, portable reasoning effort, logprob requests/static text metadata, service tiers, status, timestamps, configurable background create/poll/retrieve/cancel/detach continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; stateless `/responses/compact`, streamed logprob metadata, provider-managed search, native output, multimodal content, and other builtin tools remain.
+- [~] OpenAI Responses: text/reasoning/function-call/compaction streaming plus authoritative terminal snapshots, response/item IDs, encrypted reasoning and compaction round trips, latest-compaction history trimming with standing-prompt provenance, stateful context management and explicit stateless `/responses/compact` with message/custom triggers, durable history replacement, combined usage accounting, function namespaces, portable reasoning effort, logprob requests/static text metadata, service tiers, status, timestamps, configurable background create/poll/retrieve/cancel/detach continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; streamed logprob metadata, provider-managed search, native output, multimodal content, and other builtin tools remain.
 - [~] Anthropic Messages: text/thinking/function-tool/compaction streaming, portable effort-to-budget and explicit-budget thinking configuration, service-tier mapping and response metadata, signed-thinking and readable/encrypted compaction round trips, latest-compaction trimming, explicit token-triggered compaction capabilities with summary/pause options, required beta/default context management with extension overrides, multimodal input, response IDs, stop reasons, automatic ordinary/streamed `pause_turn` continuation, and provider-native deferred-definition/reveal rendering; adaptive thinking profiles, native server search, citations, and other native tools remain.
 - [~] Google Gemini: text/thinking/function-tool streaming, generation-aware thinking levels/budgets and thought inclusion, portable penalties/logprobs/service tiers, returned static/streamed logprob and tier metadata, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
@@ -187,7 +187,7 @@ Status:
 - [ ] MCP client capability and MCP toolset.
 - [ ] Web search, web fetch, X search, and provider-native tools.
 - [x] Portable thinking configuration through common model settings, including per-run and dynamic setting layers.
-- [~] Provider-neutral compaction boundaries and stateful OpenAI Responses/Anthropic compaction capabilities are complete. Stateless `/responses/compact`, reusable token/message history processors, and summarization helpers remain.
+- [~] Provider-neutral compaction boundaries, stateful OpenAI Responses/Anthropic compaction, OpenAI stateless message/custom triggers, direct compaction requests, durable history replacement, and usage-limit accounting are complete. Reusable token-based history processors, model-wrapper unwrapping, dedicated compaction tracing, and provider-neutral summarization helpers remain.
 - [~] Local tool search is available as a composable toolset; deferred capability loading remains.
 - [x] Prefix, rename, filter, prepare, combine, and set-tool-metadata helpers through composable toolsets.
 - [ ] Reinjected system prompts and content-filter error handling.
@@ -234,6 +234,6 @@ Status:
 1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
 2. Add transparent wrapper-capability composition without exposing graph internals; grouped composition and ordering constraints are complete.
 3. Add provider-managed search for Anthropic and OpenAI Responses; OpenAI Responses client search already uses native wire items in streaming and non-streaming requests.
-4. Add OpenAI stateless `/responses/compact` triggering and reusable history processors; stateful OpenAI/Anthropic compaction settings, mapping, trimming, and visibility reset are complete.
+4. Add reusable token/message history processors and provider-neutral summarization helpers; provider-native compaction settings, triggering, mapping, trimming, visibility reset, and usage accounting are complete.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
 6. Extend upstream message fixtures as remaining persisted part types land.

@@ -12,6 +12,10 @@ type ModelRequestContext struct {
 	Messages  []ModelMessage
 	Params    ModelRequestParams
 	Streaming bool
+	// ReplaceHistory commits Messages as the run history before the request.
+	ReplaceHistory bool
+	// AdditionalUsage counts side requests performed by a hook.
+	AdditionalUsage Usage
 }
 
 // Clone returns a request context detached from mutable messages, settings, schemas, and tools.
@@ -26,6 +30,7 @@ func (request ModelRequestContext) Clone() ModelRequestContext {
 	}
 	request.Params.OutputSchema = cloneSchemaMap(request.Params.OutputSchema)
 	request.Params.Settings = request.Params.Settings.Clone()
+	request.AdditionalUsage = request.AdditionalUsage.Clone()
 	return request
 }
 

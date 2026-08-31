@@ -340,3 +340,76 @@ func TestBeforeModelRequestCanSelectModelAndCloneContext(t *testing.T) {
 		t.Fatalf("replacement model metadata was lost: %+v", response)
 	}
 }
+
+func TestModelHookCanReplaceHistoryAndRecordAdditionalUsage(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if len(messages) != 1 {
+			t.Fatalf("model received %d replaced messages: %#v", len(messages), messages)
+		}
+		return &ai.ModelResponse{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}},
+			Usage: ai.Usage{Requests: 1, InputTokens: 3, OutputTokens: 1},
+		}, nil
+	})
+	hook := ai.BeforeModelRequestFunc(func(
+		_ context.Context, _ *ai.RunInfo, request ai.ModelRequestContext,
+	) (ai.ModelRequestContext, error) {
+		request.Messages = []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "replacement"},
+		}}}
+		request.ReplaceHistory = true
+		request.AdditionalUsage = ai.Usage{
+			Requests: 1, InputTokens: 7, OutputTokens: 2,
+			Details: map[string]int{"compaction_tokens": 9},
+		}
+		clone := request.Clone()
+		clone.AdditionalUsage.Details["compaction_tokens"] = 0
+		if request.AdditionalUsage.Details["compaction_tokens"] != 9 {
+			t.Fatal("additional usage clone aliases the request")
+		}
+		return request, nil
+	})
+	history := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "old"}}}}
+	result, err := ai.NewAgent[deps, string](model, ai.WithCapabilities(hook)).Run(
+		t.Context(), "new", deps{}, ai.WithMessageHistory(history),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := result.Messages()
+	if len(messages) != 2 || messages[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart).Content != "replacement" {
+		t.Fatalf("history replacement was not persisted: %#v", messages)
+	}
+	usage := result.Usage()
+	if usage.Requests != 2 || usage.InputTokens != 10 || usage.OutputTokens != 3 ||
+		usage.Details["compaction_tokens"] != 9 {
+		t.Fatalf("additional usage was not accumulated: %+v", usage)
+	}
+}
+
+func TestModelHookAdditionalUsageIsCheckedBeforeRequest(t *testing.T) {
+	called := false
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		called = true
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "unexpected"}}}, nil
+	})
+	hook := ai.BeforeModelRequestFunc(func(
+		_ context.Context, _ *ai.RunInfo, request ai.ModelRequestContext,
+	) (ai.ModelRequestContext, error) {
+		request.AdditionalUsage = ai.Usage{InputTokens: 2}
+		return request, nil
+	})
+	_, err := ai.NewAgent[deps, string](
+		model, ai.WithCapabilities(hook), ai.WithUsageLimits(ai.UsageLimits{InputTokenLimit: 1}),
+	).Run(t.Context(), "go", deps{})
+	if !errors.Is(err, ai.ErrUsageLimitExceeded) {
+		t.Fatalf("unexpected usage error: %v", err)
+	}
+	if called {
+		t.Fatal("model was called after additional usage exceeded the limit")
+	}
+}

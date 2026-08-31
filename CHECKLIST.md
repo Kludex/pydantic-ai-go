@@ -187,7 +187,7 @@ Status:
 
 ### Built-in capabilities
 
-- [~] The `mcp` package provides reusable run-isolated toolsets for custom, Streamable HTTP, SSE, and stdio transports through the official Go SDK. It imports tools, schemas, annotations, metadata, structured/text/binary results, server instructions, timeout policy, configurable tool-error handling, and composes with existing toolset wrappers. The standard `mcpServers` JSON loader adds deterministic server-name prefixes, HTTP headers, stdio environment/cwd settings, and `${NAME}` / `${NAME:-default}` expansion. A higher-level MCP capability, shared explicit sessions, prompts/resources, sampling, elicitation, task extension, and OAuth examples remain.
+- [~] The `mcp` package provides reusable run-isolated toolsets and caller-managed shared `Session` values for custom, Streamable HTTP, SSE, and stdio transports through the official Go SDK. Toolsets import schemas, annotations, metadata, structured/text/binary results, and server instructions with timeout and error policies. Shared sessions expose detached initialization state plus direct ping, paginated tool/prompt/resource discovery, prompt rendering, resource reads, protocol-level tool calls, and `SessionToolset` reuse across concurrent agent runs without run-owned cleanup. The standard `mcpServers` JSON loader adds deterministic prefixes, headers, stdio environment/cwd settings, and recursive environment expansion. A higher-level MCP capability, model-backed sampling, elicitation, task extension/input-required retries, OAuth helpers, and authorization examples remain.
 - [ ] Web search, web fetch, X search, and provider-native tools.
 - [x] Portable thinking configuration through common model settings, including per-run and dynamic setting layers.
 - [~] Provider-neutral compaction boundaries, composable message history processors, stateful OpenAI Responses/Anthropic compaction, OpenAI stateless message/custom triggers, direct compaction requests, durable history replacement, model-wrapper unwrapping, and usage-limit accounting are complete. Token-based trimming, dedicated compaction tracing, and provider-neutral summarization helpers remain.
@@ -225,7 +225,7 @@ Status:
 - [ ] Record Google Gemini cassettes when credentials are available.
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
-- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Dedicated multimodal, capability, MCP, and per-provider examples remain.
+- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. A focused MCP guide covers run-scoped and explicit shared sessions, direct prompts/resources/tools, transports, and trusted config loading. Dedicated multimodal, capability, and per-provider examples remain.
 - [ ] Split focused advanced guides out of the README without turning it back into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
@@ -238,6 +238,6 @@ Status:
 
 1. Complete remaining OpenTelemetry event shapes, output/deferred metadata, message-fragment caching/mutation diagnostics, and any required legacy instrumentation formats.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
-3. Extend MCP with explicit shared sessions, prompts/resources, sampling, elicitation, task extension, and OAuth examples.
+3. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
 4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.
 5. Extend upstream message fixtures as remaining persisted part types land.

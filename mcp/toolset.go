@@ -1,4 +1,4 @@
-// Package mcp connects Model Context Protocol servers as agent toolsets.
+// Package mcp connects Model Context Protocol servers as agent toolsets or caller-managed sessions.
 package mcp
 
 import (
@@ -38,7 +38,7 @@ type TransportFactory[Deps any] func(
 	ctx context.Context, rc *ai.RunContext[Deps],
 ) (mcpsdk.Transport, error)
 
-// Option configures an MCP toolset.
+// Option configures MCP sessions and toolsets.
 type Option func(*config)
 
 type config struct {
@@ -115,18 +115,25 @@ func NewToolset[Deps any](factory TransportFactory[Deps], opts ...Option) *Tools
 	if factory == nil {
 		panic("ai/mcp: transport factory must not be nil")
 	}
-	cfg := config{initTimeout: 5 * time.Second, readTimeout: 5 * time.Minute, errorBehavior: ToolErrorRetry}
-	for _, option := range opts {
-		option(&cfg)
-	}
-	implementation := cfg.implementation
-	if implementation == nil {
-		implementation = &mcpsdk.Implementation{Name: "pydantic-ai-go", Version: "dev"}
-	}
+	cfg := newConfig(opts)
 	return &Toolset[Deps]{
 		factory: factory, config: cfg,
-		client: mcpsdk.NewClient(implementation, cfg.clientOptions),
+		client: mcpsdk.NewClient(cfg.implementation, cfg.clientOptions),
 	}
+}
+
+func newConfig(options []Option) config {
+	cfg := config{
+		implementation: &mcpsdk.Implementation{Name: "pydantic-ai-go", Version: "dev"},
+		initTimeout:    5 * time.Second, readTimeout: 5 * time.Minute, errorBehavior: ToolErrorRetry,
+	}
+	for _, option := range options {
+		option(&cfg)
+	}
+	if cfg.implementation == nil {
+		cfg.implementation = &mcpsdk.Implementation{Name: "pydantic-ai-go", Version: "dev"}
+	}
+	return cfg
 }
 
 // NewStreamableHTTPToolset creates an MCP toolset for the recommended HTTP transport.

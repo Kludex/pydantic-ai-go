@@ -27,13 +27,14 @@ Status:
 - [x] Per-tool sequential execution barrier via `WithSequential()`.
 - [x] Agent-wide sequential tool execution via `WithSequentialToolExecution()`.
 - [x] Output-tool end strategies via `WithEndStrategy`: `graceful` default, `early`, and `exhaustive`, including retry-wins.
-- [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history, drained concurrent tools, completed sibling results, and resumable interrupted history.
+- [x] Run cancellation through idempotent `RunContext.Cancel`, terminal `RunCancelledError`, retained usage/history/application metadata, drained concurrent tools, completed sibling results, and resumable interrupted history.
 - [x] Per-run overrides cover fixed/adaptive model selection, static and per-step settings/instructions, type-safe output specialization, output mode/tool configuration, usage limits, retry limits, history, reusable tools/toolsets, and additive capabilities with setup contributions.
 - [x] Typed agent/run and untyped capability model selectors run before every logical request with step, completed-history, prior-model, model-ID, deps, and usage context.
 - [x] Application model IDs resolve through ordered agent/capability resolvers, cache once per run, preserve the selection token across steps, and fail with inspectable `UnknownModelIDError`.
 - [x] Model-less agents can bootstrap through agent/capability selectors or model IDs, return `ErrNoModel` when unresolved, and attribute selected models on request and outer run spans.
 - [x] Optional `ModelOpener` lifecycle runs once per distinct selected model, closes in reverse selection order before toolsets, uses a non-canceled cleanup context, and propagates open/close failures across ordinary and streamed runs.
 - [x] Fresh run and conversation IDs populate all generated requests/responses; explicit run IDs reject history collisions, while conversation IDs inherit from history or reset through `WithConversationID("new")`.
+- [x] Static and dynamic application run metadata through `WithMetadata`, `AddMetadataFunc`, `WithRunMetadata`, and `WithRunMetadataFunc`, with ordered field merging, startup/final recomputation, prompt/current-usage context, tool/capability/manual-run visibility, typed dependency checks, detached nested values, concurrent snapshots, result access, and OpenTelemetry run attribution.
 - [x] Usage includes requests, successful function-tool calls, inclusive input/output totals, cache read/write, audio, reasoning, prediction, arbitrary integer details, and optional USD cost. `genai-prices` calculates each model request automatically, preserves provider costs, exposes explicit `ModelResponse.Price()` diagnostics, contributes to tracing and cost limits, and keeps unknown cost distinct from zero.
 - [x] Optional context-scoped automatic-pricing diagnostics report unavailable prices, unexpected failures, and successful-calculation warnings once per response without making pricing fatal.
 - [x] `StreamedRun.Usage()` returns detached live usage, including provider token snapshots, successful tool-call counts, and best-effort current-request cost before terminal completion.
@@ -200,7 +201,7 @@ Status:
 ### Integrations
 
 - [ ] First-class `pydantic-evals-go` task adapter.
-- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, successful deferral metadata, and output-function spans with validated arguments, converted results, tool/function identity, privacy controls, errors, middleware nesting, and version 2 legacy naming. Richer run metadata, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
+- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, successful deferral metadata, application run metadata, and output-function spans with validated arguments, converted results, tool/function identity, privacy controls, errors, middleware nesting, and version 2 legacy naming. Agent descriptions, variable-instruction diagnostics, richer Logfire schemas/messages, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
 - [ ] Logfire guidance and examples.
 - [ ] AG-UI adapter.
 - [ ] Vercel AI protocol adapter.
@@ -237,7 +238,7 @@ Status:
 
 ## Next work
 
-1. Complete OpenTelemetry richer run metadata, remaining event shapes, and message-fragment caching/mutation diagnostics; output-function spans are complete for implemented output functions.
+1. Complete OpenTelemetry agent descriptions, variable-instruction diagnostics, richer Logfire schemas/messages, remaining event shapes, and message-fragment caching/mutation diagnostics; run metadata and output-function spans are complete.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
 4. Extend upstream message fixtures as remaining persisted part types land.

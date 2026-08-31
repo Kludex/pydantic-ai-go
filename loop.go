@@ -175,6 +175,8 @@ func (a *Agent[Deps, Output]) newRun(
 		runSettings: cfg.settings, usageLimits: limits,
 		tools: slices.Clone(a.tools), toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
+		runMetadata: cloneSchemaMap(cfg.metadata), runMetadataFuncs: slices.Clone(cfg.metadataFuncs),
+		prompt:           cloneUserPromptPart(prompt),
 		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
 		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
 		pendingMessages: &pendingMessageQueue{},
@@ -293,15 +295,19 @@ func (a *Agent[Deps, Output]) newRun(
 	settings := mergeModelSettings(a.settings, cfg.settings)
 	r.resumeSeed = resumeSeed
 	r.rc = &RunContext[Deps]{
-		Deps: deps, MaxRetries: r.outputMaxRetries, RunID: runID, ConversationID: conversationID,
-		Model: model, ModelSettings: settings, UsageLimits: limits,
+		Deps: deps, Prompt: cloneUserPromptPart(prompt), MaxRetries: r.outputMaxRetries,
+		RunID: runID, ConversationID: conversationID, Model: model, ModelSettings: settings, UsageLimits: limits,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
 		revealedTools: &r.revealedTools, pendingMessages: r.pendingMessages, cancellation: cancellation,
 	}
 	r.info = &RunInfo{
-		RunID: runID, ConversationID: conversationID,
+		RunID: runID, ConversationID: conversationID, prompt: cloneUserPromptPart(prompt),
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, newMessages: r.newMessages,
-		model: func() Model { return r.model },
+		metadata: &r.metadata, model: func() Model { return r.model },
+	}
+	if err := r.resolveMetadata(runCtx); err != nil {
+		cancellation.finish()
+		return nil, err
 	}
 	r.staticInstructions = a.staticInstructions(cfg.instructions, runCapabilityInstructions)
 	outputMode := a.outputMode
@@ -574,6 +580,10 @@ type run[Deps, Output any] struct {
 	messages                   []ModelMessage
 	newMessages                int
 	usage                      Usage
+	prompt                     UserPromptPart
+	metadata                   runMetadataState
+	runMetadata                map[string]any
+	runMetadataFuncs           []erasedRunMetadataFunc
 	toolCalls                  atomic.Int64
 	retryLimits                RetryLimits
 	outputTool                 OutputToolConfig
@@ -626,7 +636,7 @@ func (r *run[Deps, Output]) openToolsets(ctx context.Context) error {
 	resolved := make([]Toolset[Deps], len(r.toolsets))
 	for index, toolset := range r.toolsets {
 		var err error
-		resolved[index], err = toolsetForRun(ctx, r.rc, toolset)
+		resolved[index], err = toolsetForRun(ctx, r.rc.clone(), toolset)
 		if err != nil {
 			return fmt.Errorf("ai: toolset for run: %w", err)
 		}
@@ -635,7 +645,7 @@ func (r *run[Deps, Output]) openToolsets(ctx context.Context) error {
 	for index, toolset := range resolved {
 		var closeFunc ToolsetCloseFunc
 		var err error
-		opened[index], closeFunc, err = openToolset(ctx, r.rc, toolset)
+		opened[index], closeFunc, err = openToolset(ctx, r.rc.clone(), toolset)
 		if err != nil {
 			closeErr := closeToolsetFuncs(context.WithoutCancel(ctx), r.toolsetClosers)
 			r.toolsetClosers = nil
@@ -812,6 +822,11 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 		}
 	}
 	return cloned
+}
+
+func cloneUserPromptPart(part UserPromptPart) UserPromptPart {
+	part.Contents = cloneUserContents(part.Contents)
+	return part
 }
 
 func revealedToolNames(messages []ModelMessage) map[string]struct{} {
@@ -1605,20 +1620,20 @@ func toolSearchResultNames(content any) []string {
 
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
 	params := r.baseParams
-	rc := *r.rc
+	rc := r.rc.clone()
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.outputMaxRetries
-	settings, err := r.prepareModelSettings(ctx, &rc)
+	settings, err := r.prepareModelSettings(ctx, rc)
 	if err != nil {
 		return ModelRequestParams{}, err
 	}
-	if err := r.prepareToolsetsForStep(ctx, &rc); err != nil {
+	if err := r.prepareToolsetsForStep(ctx, rc); err != nil {
 		return ModelRequestParams{}, err
 	}
-	if err := r.prepareSystemPrompts(ctx, &rc); err != nil {
+	if err := r.prepareSystemPrompts(ctx, rc); err != nil {
 		return ModelRequestParams{}, err
 	}
-	instructionParts, err := r.prepareInstructions(ctx, &rc)
+	instructionParts, err := r.prepareInstructions(ctx, rc)
 	if err != nil {
 		return ModelRequestParams{}, err
 	}
@@ -1629,7 +1644,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		instructions = append(instructions, part.Content)
 	}
 	params.Instructions = strings.Join(instructions, "\n\n")
-	params, err = r.prepareOutputParams(ctx, &rc, params)
+	params, err = r.prepareOutputParams(ctx, rc, params)
 	if err != nil {
 		return ModelRequestParams{}, err
 	}
@@ -1639,7 +1654,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		stepEntries[entry.def.Name] = entry
 	}
 	for _, toolset := range r.toolsets {
-		resolved, err := resolveToolsetTools(ctx, &rc, toolset)
+		resolved, err := resolveToolsetTools(ctx, rc, toolset)
 		if err != nil {
 			return ModelRequestParams{}, fmt.Errorf("ai: resolve toolset: %w", err)
 		}
@@ -1662,7 +1677,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		prepared := cloneToolDefinition(def)
 		entry, _ := r.findTool(def.Name)
 		if entry.prepare != nil {
-			result, err := entry.prepare(ctx, &rc, prepared)
+			result, err := entry.prepare(ctx, rc, prepared)
 			if err != nil {
 				return ModelRequestParams{}, fmt.Errorf("ai: prepare tool %q: %w", def.Name, err)
 			}
@@ -1674,7 +1689,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		tools = append(tools, prepared)
 	}
 	for _, prepare := range r.agent.toolsPrepareFuncs {
-		tools, err = prepare(ctx, &rc, tools)
+		tools, err = prepare(ctx, rc, tools)
 		if err != nil {
 			return ModelRequestParams{}, fmt.Errorf("ai: prepare tools: %w", err)
 		}
@@ -2848,13 +2863,13 @@ func (r *run[Deps, Output]) executeCall(
 			}
 		}
 	}
-	toolRC := *r.rc
+	toolRC := r.rc.clone()
 	toolRC.ToolName = call.ToolName
 	toolRC.ToolCallID = call.ToolCallID
 	toolRC.ToolCallApproved = resolving && resolution.kind == deferredCallApproval
 	toolRC.ToolCallMetadata = cloneSchemaMap(resolution.metadata)
 	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)
-	call, validated, err := r.validateToolCall(ctx, &toolRC, entry, call)
+	call, validated, err := r.validateToolCall(ctx, toolRC, entry, call)
 	var schemaValidation *toolArgsSchemaValidationError
 	var validationFailed *ToolFailedError
 	var validationRetry *RetryError
@@ -2902,7 +2917,7 @@ func (r *run[Deps, Output]) executeCall(
 	if entry.def.timeout > 0 {
 		toolCtx, cancel = context.WithTimeout(spanCtx, entry.def.timeout)
 	}
-	content, err := r.callTool(toolCtx, &toolRC, entry, call, validated)
+	content, err := r.callTool(toolCtx, toolRC, entry, call, validated)
 	if ctx.Err() == nil && errors.Is(toolCtx.Err(), context.DeadlineExceeded) {
 		err = Retryf("Timed out after %s.", entry.def.timeout)
 	}
@@ -3251,12 +3266,49 @@ func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) {
 	r.appendRequest([]RequestPart{part}, RequestStateComplete)
 }
 
+func (r *run[Deps, Output]) resolveMetadata(ctx context.Context) error {
+	metadata := cloneSchemaMap(r.agent.metadata)
+	merge := func(values map[string]any) {
+		if values == nil {
+			return
+		}
+		if metadata == nil {
+			metadata = make(map[string]any, len(values))
+		}
+		for key, value := range cloneSchemaMap(values) {
+			metadata[key] = value
+		}
+	}
+	for _, function := range r.agent.metadataFuncs {
+		runContext := r.rc.clone()
+		runContext.Metadata = cloneSchemaMap(metadata)
+		values, err := function(ctx, runContext)
+		if err != nil {
+			return fmt.Errorf("ai: metadata: %w", err)
+		}
+		merge(values)
+	}
+	merge(r.runMetadata)
+	for _, function := range r.runMetadataFuncs {
+		runContext := r.rc.clone()
+		runContext.Metadata = cloneSchemaMap(metadata)
+		values, err := function(ctx, runContext)
+		if err != nil {
+			return fmt.Errorf("ai: run metadata: %w", err)
+		}
+		merge(values)
+	}
+	r.metadata.set(metadata)
+	r.rc.Metadata = cloneSchemaMap(metadata)
+	return nil
+}
+
 func (r *run[Deps, Output]) outputRunContext(toolCallID string) *RunContext[Deps] {
-	rc := *r.rc
+	rc := r.rc.clone()
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.outputMaxRetries
 	rc.ToolCallID = toolCallID
-	return &rc
+	return rc
 }
 
 func (r *run[Deps, Output]) countToolRetry(name string) error {
@@ -3303,7 +3355,10 @@ func (r *run[Deps, Output]) outputRetryCount() int {
 func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
 	usage := r.usage
 	usage.ToolCalls = int(r.toolCalls.Load())
-	return &RunResult[Output]{Output: out, usage: usage, messages: r.messages, newMessages: r.newMessages}
+	return &RunResult[Output]{
+		Output: out, usage: usage, messages: r.messages, newMessages: r.newMessages,
+		metadata: r.metadata.snapshot(),
+	}
 }
 
 func (r *run[Deps, Output]) deferredResult(requests DeferredToolRequests) (*RunResult[Output], error) {
@@ -3314,7 +3369,8 @@ func (r *run[Deps, Output]) deferredResult(requests DeferredToolRequests) (*RunR
 	usage.ToolCalls = int(r.toolCalls.Load())
 	requests = requests.Clone()
 	return &RunResult[Output]{
-		usage: usage, messages: r.messages, newMessages: r.newMessages, deferred: &requests,
+		usage: usage, messages: r.messages, newMessages: r.newMessages,
+		metadata: r.metadata.snapshot(), deferred: &requests,
 	}, nil
 }
 
@@ -3560,6 +3616,10 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 		if err != nil {
 			return RunOutcome{}, err
 		}
+		if err := r.resolveMetadata(ctx); err != nil {
+			return RunOutcome{}, err
+		}
+		result.metadata = r.metadata.snapshot()
 		return runOutcomeFromResult(result), nil
 	})
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
@@ -3600,7 +3660,9 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 	if errors.Is(cause, ErrRunCancelled) {
 		usage := r.usage
 		usage.ToolCalls = int(r.toolCalls.Load())
-		cancelled := &RunCancelledError{messages: slices.Clone(r.messages), usage: usage}
+		cancelled := &RunCancelledError{
+			messages: slices.Clone(r.messages), usage: usage, metadata: r.metadata.snapshot(),
+		}
 		if persistErr := persistPendingMessages(r.messages, r.pendingMessages); persistErr != nil {
 			return nil, errors.Join(cancelled, persistErr)
 		}

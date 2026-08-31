@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"slices"
+	"sync"
 	"sync/atomic"
 )
 
@@ -46,6 +47,23 @@ func (r *CapabilityRegistry) AddModelSettings(settings ModelSettings) {
 	r.modelSettings = append(r.modelSettings, settings)
 }
 
+type runMetadataState struct {
+	mu    sync.RWMutex
+	value map[string]any
+}
+
+func (state *runMetadataState) set(value map[string]any) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.value = cloneSchemaMap(value)
+}
+
+func (state *runMetadataState) snapshot() map[string]any {
+	state.mu.RLock()
+	defer state.mu.RUnlock()
+	return cloneSchemaMap(state.value)
+}
+
 // RunInfo is the untyped view of a run that capabilities receive. It is the
 // erased counterpart of RunContext.
 type RunInfo struct {
@@ -56,6 +74,8 @@ type RunInfo struct {
 	toolCalls   *atomic.Int64
 	messages    *[]ModelMessage
 	newMessages int
+	prompt      UserPromptPart
+	metadata    *runMetadataState
 	model       func() Model
 }
 
@@ -68,6 +88,19 @@ func (ri *RunInfo) Usage() Usage {
 
 // Messages returns a detached snapshot of the conversation so far.
 func (ri *RunInfo) Messages() []ModelMessage { return cloneModelMessages(*ri.messages) }
+
+// Prompt returns the text or multimodal prompt that started the run.
+func (ri *RunInfo) Prompt() UserPromptPart {
+	return cloneUserPromptPart(ri.prompt)
+}
+
+// Metadata returns detached application metadata resolved for the run.
+func (ri *RunInfo) Metadata() map[string]any {
+	if ri.metadata == nil {
+		return nil
+	}
+	return ri.metadata.snapshot()
+}
 
 // Model returns the model selected for the current request, or nil before selection.
 func (ri *RunInfo) Model() Model {

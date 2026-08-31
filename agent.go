@@ -20,10 +20,12 @@ type Agent[Deps, Output any] struct {
 	systemPrompts      []string
 	systemPromptFuncs  []systemPromptRunner[Deps]
 	modelSettingsFuncs []ModelSettingsFunc[Deps]
+	metadataFuncs      []RunMetadataFunc[Deps]
 	modelSelectors     []ModelSelectorFunc[Deps]
 	modelIDResolvers   []ModelIDResolverFunc[Deps]
 	toolsPrepareFuncs  []ToolsPrepareFunc[Deps]
 	settings           ModelSettings
+	metadata           map[string]any
 	usageLimits        UsageLimits
 	retryLimits        RetryLimits
 	outputMode         OutputMode
@@ -77,6 +79,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 	a.instructions = cfg.instructions
 	a.systemPrompts = slices.Clone(cfg.systemPrompts)
 	a.settings = cfg.settings.Clone()
+	a.metadata = cloneSchemaMap(cfg.metadata)
 	a.usageLimits = cfg.limits
 	if cfg.outputMode != nil {
 		a.outputMode = *cfg.outputMode
@@ -171,11 +174,27 @@ func (a *Agent[Deps, Output]) AddDynamicSystemPromptFunc(id string, fn Instructi
 // earlier layers for one model-request step.
 type ModelSettingsFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps]) (ModelSettings, error)
 
+// RunMetadataFunc computes detached application metadata at run startup and
+// again after successful completion. Concurrent runs may call it concurrently.
+type RunMetadataFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps]) (map[string]any, error)
+
 // AddModelSettingsFunc registers dynamic model settings evaluated before
 // every model request. Each callback sees prior layers in rc.ModelSettings.
 func (a *Agent[Deps, Output]) AddModelSettingsFunc(fn ModelSettingsFunc[Deps]) {
 	a.checkNotStarted()
 	a.modelSettingsFuncs = append(a.modelSettingsFuncs, fn)
+}
+
+// AddMetadataFunc appends dynamic run metadata. Functions run in registration
+// order and later values override earlier keys. Keep functions free of side
+// effects because successful runs evaluate them at startup and completion.
+// Synchronize shared mutable state because concurrent runs share these functions.
+func (a *Agent[Deps, Output]) AddMetadataFunc(fn RunMetadataFunc[Deps]) {
+	if fn == nil {
+		panic("ai: metadata function must not be nil")
+	}
+	a.checkNotStarted()
+	a.metadataFuncs = append(a.metadataFuncs, fn)
 }
 
 // AddModelSelector registers an adaptive model layer evaluated before every
@@ -255,6 +274,7 @@ type config struct {
 	instructions     string
 	systemPrompts    []string
 	settings         ModelSettings
+	metadata         map[string]any
 	limits           UsageLimits
 	retryLimits      *RetryLimits
 	outputMode       *OutputMode
@@ -360,6 +380,13 @@ type RetryLimits struct {
 	Output int
 }
 
+// WithMetadata sets static application metadata for every run. Metadata is
+// not sent to the model and is copied before callbacks or results expose it.
+func WithMetadata(metadata map[string]any) Option {
+	metadata = cloneSchemaMap(metadata)
+	return func(config *config) { config.metadata = cloneSchemaMap(metadata) }
+}
+
 // WithRetryLimits sets independent agent-wide retry budgets.
 func WithRetryLimits(limits RetryLimits) Option {
 	return func(c *config) { c.retryLimits = &limits }
@@ -383,6 +410,7 @@ type RunOption func(*runConfig)
 type erasedModelSettingsFunc func(context.Context, any) (ModelSettings, error)
 type erasedInstructionsFunc func(context.Context, any) (string, error)
 type erasedModelSelectorFunc func(context.Context, any) (ModelSelection, error)
+type erasedRunMetadataFunc func(context.Context, any) (map[string]any, error)
 
 type erasedTool struct {
 	entry any
@@ -401,6 +429,8 @@ type runConfig struct {
 	modelID           string
 	runID             string
 	conversationID    *string
+	metadata          map[string]any
+	metadataFuncs     []erasedRunMetadataFunc
 	settingsFuncs     []erasedModelSettingsFunc
 	instructionsFuncs []erasedInstructionsFunc
 	modelSelectors    []erasedModelSelectorFunc
@@ -506,6 +536,29 @@ func WithConversationID(conversationID string) RunOption {
 	return func(c *runConfig) { c.conversationID = &conversationID }
 }
 
+// WithRunMetadata merges application metadata over agent metadata for one run.
+func WithRunMetadata(metadata map[string]any) RunOption {
+	metadata = cloneSchemaMap(metadata)
+	return func(config *runConfig) { config.metadata = cloneSchemaMap(metadata) }
+}
+
+// WithRunMetadataFunc appends dynamic metadata for one run. Later metadata
+// layers override earlier keys.
+func WithRunMetadataFunc[Deps any](fn RunMetadataFunc[Deps]) RunOption {
+	if fn == nil {
+		panic("ai: run metadata function must not be nil")
+	}
+	return func(config *runConfig) {
+		config.metadataFuncs = append(config.metadataFuncs, func(ctx context.Context, value any) (map[string]any, error) {
+			runContext, ok := value.(*RunContext[Deps])
+			if !ok {
+				return nil, fmt.Errorf("ai: run metadata dependencies do not match agent")
+			}
+			return fn(ctx, runContext)
+		})
+	}
+}
+
 // WithRunModelSettings merges settings over the agent defaults for one run.
 // Non-zero scalar values, non-nil pointers, and non-nil slices override the
 // corresponding defaults.
@@ -598,8 +651,12 @@ type RunResult[Output any] struct {
 	usage       Usage
 	messages    []ModelMessage
 	newMessages int
+	metadata    map[string]any
 	deferred    *DeferredToolRequests
 }
+
+// Metadata returns detached application metadata resolved after the run.
+func (r *RunResult[Output]) Metadata() map[string]any { return cloneSchemaMap(r.metadata) }
 
 // Deferred returns pending external calls and approvals, or nil when Output
 // contains the completed result.

@@ -24,7 +24,7 @@ func TestRunContextCancelDrainsConcurrentTools(t *testing.T) {
 			Usage: ai.Usage{Requests: 1, InputTokens: 2},
 		}, nil
 	})
-	agent := ai.NewAgent[deps, string](model)
+	agent := ai.NewAgent[deps, string](model, ai.WithMetadata(map[string]any{"run": "cancelled"}))
 	started := make(chan struct{})
 	drained := make(chan struct{})
 	ai.AddSimpleTool(agent, "fast", func(context.Context, struct{}) (string, error) {
@@ -58,8 +58,16 @@ func TestRunContextCancelDrainsConcurrentTools(t *testing.T) {
 	if !errors.As(err, &cancelled) {
 		t.Fatalf("expected RunCancelledError, got %T", err)
 	}
-	if len(cancelled.Messages()) != 3 || cancelled.Usage().InputTokens != 2 {
-		t.Fatalf("cancellation snapshot lost state: messages=%v usage=%+v", cancelled.Messages(), cancelled.Usage())
+	if len(cancelled.Messages()) != 3 || cancelled.Usage().InputTokens != 2 ||
+		cancelled.Metadata()["run"] != "cancelled" {
+		t.Fatalf(
+			"cancellation snapshot lost state: messages=%v usage=%+v metadata=%+v",
+			cancelled.Messages(), cancelled.Usage(), cancelled.Metadata(),
+		)
+	}
+	cancelled.Metadata()["run"] = "mutated"
+	if cancelled.Metadata()["run"] != "cancelled" {
+		t.Fatal("cancellation metadata aliases caller mutation")
 	}
 	interrupted := cancelled.Messages()[2].(ai.ModelRequest)
 	if interrupted.State != ai.RequestStateInterrupted || len(interrupted.Parts) != 1 {

@@ -60,10 +60,15 @@ func TestInstrumentationCapabilityRecordsRunRequestsAndTools(t *testing.T) {
 			Usage: ai.Usage{Requests: 1, InputTokens: 2, OutputTokens: 1, CostUSD: &cost},
 		}, nil
 	})
-	agent := ai.NewAgent[struct{}, string](model, ai.WithCapabilities(
-		instrumentation,
-		ai.NewInstrumentation(ai.WithInstrumentationTracerProvider(tracerProvider)),
-	))
+	agent := ai.NewAgent[struct{}, string](model,
+		ai.WithMetadata(map[string]any{
+			"tenant": "acme", "attachment": ai.BinaryContent{Data: []byte("secret"), MediaType: "image/png"},
+		}),
+		ai.WithCapabilities(
+			instrumentation,
+			ai.NewInstrumentation(ai.WithInstrumentationTracerProvider(tracerProvider)),
+		),
+	)
 	ai.AddSimpleTool(agent, "lookup", func(ctx context.Context, _ struct {
 		Query string `json:"query"`
 	}) (ai.ToolReturn, error) {
@@ -127,6 +132,10 @@ func TestInstrumentationCapabilityRecordsRunRequestsAndTools(t *testing.T) {
 	}
 	if allMessages, _ := runAttributes["pydantic_ai.all_messages"].(string); !strings.Contains(allMessages, "done") {
 		t.Fatalf("run messages missing output: %s", allMessages)
+	}
+	metadata, _ := runAttributes["metadata"].(string)
+	if !strings.Contains(metadata, "acme") || !strings.Contains(metadata, "image/png") || strings.Contains(metadata, "secret") {
+		t.Fatalf("run metadata was not recorded safely: %s", metadata)
 	}
 	toolResult, _ := toolAttributes["gen_ai.tool.call.result"].(string)
 	if !strings.Contains(toolResult, "image/png") || !strings.Contains(toolResult, "audio/wav") ||

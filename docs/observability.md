@@ -32,6 +32,7 @@ func main() {
 
 	agent := ai.NewAgent[struct{}, string](
 		openai.NewModel("gpt-5-mini"),
+		ai.WithMetadata(map[string]any{"service": "support"}),
 		ai.WithCapabilities(ai.NewInstrumentation(
 			ai.WithInstrumentationAgentName("support"),
 		)),
@@ -62,7 +63,7 @@ Use an OTLP exporter instead when you send traces to an observability service. T
 - One `execute_tool <name>` span for each user output function.
 - One failed `execute_tool <name>` span for a tool call rejected during argument validation.
 
-The run span records cumulative usage and cost. Request spans record provider, model, request settings, response details, tool definitions, messages, usage, cost, and streaming time to first chunk.
+The run span records cumulative usage, cost, and application metadata from `WithMetadata` or `WithRunMetadata`. Request spans record provider, model, request settings, response details, tool definitions, messages, usage, cost, and streaming time to first chunk.
 
 Output-function spans include the validated model value as their arguments and the converted final value as their result. They use the output-tool name in tool mode and the registered function name in native or prompted mode. Plain validation and output validators do not create output-function spans.
 
@@ -73,6 +74,8 @@ Tool deferrals are control flow in the default format. Their spans remain succes
 Disable content before you send telemetry outside your trust boundary. Pass `WithInstrumentationContent(false)`, `WithInstrumentationBinaryContent(false)`, and `WithInstrumentationModelRequestParameters(false)` to `NewInstrumentation`.
 
 `WithInstrumentationContent(false)` keeps message roles and part types but removes prompts, completions, tool arguments, tool results, and final output. This preserves trace structure without exporting user content.
+
+Application run metadata is still exported in the `metadata` attribute because it is intended for trace filtering and evaluation. Do not put secrets in metadata. `WithInstrumentationBinaryContent(false)` redacts `BinaryContent` values nested inside metadata.
 
 `WithInstrumentationBinaryContent(false)` keeps media types but removes inline bytes. It follows maps, slices, `ToolReturn`, and deferred metadata. It does not inspect fields inside your own struct types.
 

@@ -260,6 +260,7 @@ func TestAgent(t *testing.T) {
 | You need to | Use |
 | --- | --- |
 | Change one run without mutating the agent | `WithRunModelSettings`, `WithRunInstructions`, and other `RunOption` values |
+| Attach application metadata to a run | `WithMetadata`, `AddMetadataFunc`, and `WithRunMetadata` |
 | Transform structured data or plain text | [`NewOutputFunction` or `NewTextOutputFunction`](docs/outputs.md) |
 | Return one of several typed outputs | [`NewUnionOutput` and `NewUnionAgent`](docs/outputs.md) |
 | Reuse or combine tools | `NewTool`, `NewFunctionToolset`, and the toolset wrappers |

@@ -93,6 +93,11 @@ func (instrumentation *Instrumentation) WrapRun(
 		if newMessageIndex > 0 {
 			span.SetAttributes(attribute.Int("pydantic_ai.new_message_index", newMessageIndex))
 		}
+		if metadata := info.Metadata(); metadata != nil {
+			span.SetAttributes(attribute.String(
+				"metadata", telemetryJSON(telemetryOutputValue(metadata, instrumentation.runtime.includeBinaryContent)),
+			))
+		}
 		if instrumentation.runtime.includeContent {
 			if instructions := latestTelemetryInstructions(messages); instructions != "" {
 				span.SetAttributes(attribute.String("gen_ai.system_instructions", telemetryJSON([]map[string]any{{

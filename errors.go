@@ -66,6 +66,7 @@ func (e *UnknownModelIDError) Unwrap() error { return ErrUnknownModelID }
 type RunCancelledError struct {
 	messages []ModelMessage
 	usage    Usage
+	metadata map[string]any
 }
 
 func (e *RunCancelledError) Error() string { return ErrRunCancelled.Error() }
@@ -80,6 +81,9 @@ func (e *RunCancelledError) Messages() []ModelMessage {
 
 // Usage returns usage accumulated before cancellation.
 func (e *RunCancelledError) Usage() Usage { return e.usage.Clone() }
+
+// Metadata returns application metadata resolved before cancellation.
+func (e *RunCancelledError) Metadata() map[string]any { return cloneSchemaMap(e.metadata) }
 
 // UnexpectedModelBehaviorError is returned when the model produces a
 // response the loop cannot interpret or recover from.

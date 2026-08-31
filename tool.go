@@ -18,6 +18,8 @@ import (
 // context.Context argument remains the cancellation signal carrier.
 type RunContext[Deps any] struct {
 	Deps             Deps
+	Prompt           UserPromptPart
+	Metadata         map[string]any
 	Retry            int
 	MaxRetries       int
 	RunID            string
@@ -49,7 +51,18 @@ func (rc *RunContext[Deps]) Usage() Usage {
 }
 
 // Messages returns the conversation so far in this run.
-func (rc *RunContext[Deps]) Messages() []ModelMessage { return *rc.messages }
+func (rc *RunContext[Deps]) Messages() []ModelMessage { return cloneModelMessages(*rc.messages) }
+
+func (rc *RunContext[Deps]) clone() *RunContext[Deps] {
+	cloned := *rc
+	cloned.Prompt = cloneUserPromptPart(rc.Prompt)
+	cloned.Metadata = cloneSchemaMap(rc.Metadata)
+	cloned.ToolCallMetadata = cloneSchemaMap(rc.ToolCallMetadata)
+	cloned.ModelSettings = rc.ModelSettings.Clone()
+	cloned.UsageLimits.ToolCallLimit = clonePointer(rc.UsageLimits.ToolCallLimit)
+	cloned.UsageLimits.CostLimitUSD = clonePointer(rc.UsageLimits.CostLimitUSD)
+	return &cloned
+}
 
 // RevealedTools returns model-facing deferred tool names revealed in this run
 // or its resumed history, sorted for deterministic inspection.

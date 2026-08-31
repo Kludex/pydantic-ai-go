@@ -204,6 +204,14 @@ func (r *AgentRun[Deps, Output]) EnqueueWithPriority(
 // ErrRunCancelled after in-flight work has drained.
 func (r *AgentRun[Deps, Output]) Cancel() { r.run.cancellation.cancelRun() }
 
+// Metadata returns detached application metadata resolved for the run.
+func (r *AgentRun[Deps, Output]) Metadata() map[string]any {
+	if r.run == nil || r.run.info == nil {
+		return nil
+	}
+	return r.run.info.Metadata()
+}
+
 // Usage returns a detached snapshot accumulated through the current event.
 func (r *AgentRun[Deps, Output]) Usage() Usage {
 	r.stateMu.RLock()

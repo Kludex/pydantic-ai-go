@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -117,7 +118,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	response, err := parseResponse(data, m.providerName)
+	response, err := parseResponse(data, m.providerName, hasGoogleFileSearch(params.NativeTools))
 	if response != nil {
 		response.ProviderName = m.providerName
 		response.ProviderURL = m.baseURL
@@ -227,6 +228,8 @@ type part struct {
 	FunctionResponse    *functionResponse    `json:"functionResponse,omitempty"`
 	ExecutableCode      *executableCode      `json:"executableCode,omitempty"`
 	CodeExecutionResult *codeExecutionResult `json:"codeExecutionResult,omitempty"`
+	ToolCall            *googleToolCall      `json:"toolCall,omitempty"`
+	ToolResponse        *googleToolResponse  `json:"toolResponse,omitempty"`
 	Thought             bool                 `json:"thought,omitempty"`
 	ThoughtSignature    string               `json:"thoughtSignature,omitempty"`
 }
@@ -239,6 +242,18 @@ type executableCode struct {
 type codeExecutionResult struct {
 	Outcome string `json:"outcome"`
 	Output  string `json:"output"`
+}
+
+type googleToolCall struct {
+	ID       string         `json:"id,omitempty"`
+	ToolType string         `json:"toolType"`
+	Args     map[string]any `json:"args"`
+}
+
+type googleToolResponse struct {
+	ID       string `json:"id,omitempty"`
+	ToolType string `json:"toolType"`
+	Response any    `json:"response"`
 }
 
 type inlineData struct {
@@ -302,6 +317,11 @@ type toolsParam struct {
 	GoogleSearch         *struct{}             `json:"googleSearch,omitempty"`
 	URLContext           *struct{}             `json:"urlContext,omitempty"`
 	CodeExecution        *struct{}             `json:"codeExecution,omitempty"`
+	FileSearch           *fileSearchConfig     `json:"fileSearch,omitempty"`
+}
+
+type fileSearchConfig struct {
+	FileSearchStoreNames []string `json:"fileSearchStoreNames"`
 }
 
 type functionDeclaration struct {
@@ -312,9 +332,12 @@ type functionDeclaration struct {
 }
 
 type toolConfig struct {
-	FunctionCallingConfig struct {
-		Mode string `json:"mode"`
-	} `json:"functionCallingConfig"`
+	FunctionCallingConfig            *functionCallingConfig `json:"functionCallingConfig,omitempty"`
+	IncludeServerSideToolInvocations bool                   `json:"includeServerSideToolInvocations,omitempty"`
+}
+
+type functionCallingConfig struct {
+	Mode string `json:"mode"`
 }
 
 type generationConfig struct {
@@ -363,6 +386,14 @@ func googleNativeTools(
 			tools = append(tools, toolsParam{URLContext: &struct{}{}})
 		case ai.CodeExecutionTool, *ai.CodeExecutionTool:
 			tools = append(tools, toolsParam{CodeExecution: &struct{}{}})
+		case ai.FileSearchTool:
+			tools = append(tools, toolsParam{FileSearch: &fileSearchConfig{
+				FileSearchStoreNames: slices.Clone(tool.FileStoreIDs),
+			}})
+		case *ai.FileSearchTool:
+			tools = append(tools, toolsParam{FileSearch: &fileSearchConfig{
+				FileSearchStoreNames: slices.Clone(tool.FileStoreIDs),
+			}})
 		case ai.ImageGenerationTool:
 			config, err := googleImageGenerationConfig(tool, modelName, transport)
 			if err != nil {
@@ -388,6 +419,17 @@ func googleNativeTools(
 		}
 	}
 	return tools, generatedImageConfig, nil
+}
+
+func hasGoogleServerNativeTool(tools []ai.NativeTool) bool {
+	for _, tool := range tools {
+		switch tool.(type) {
+		case ai.WebSearchTool, *ai.WebSearchTool, ai.WebFetchTool, *ai.WebFetchTool,
+			ai.CodeExecutionTool, *ai.CodeExecutionTool, ai.FileSearchTool, *ai.FileSearchTool:
+			return true
+		}
+	}
+	return false
 }
 
 func googleImageGenerationConfig(
@@ -423,6 +465,16 @@ func googleImageGenerationConfig(
 		}
 	}
 	return config, nil
+}
+
+func hasGoogleFileSearch(tools []ai.NativeTool) bool {
+	for _, tool := range tools {
+		switch tool.(type) {
+		case ai.FileSearchTool, *ai.FileSearchTool:
+			return true
+		}
+	}
+	return false
 }
 
 func supportsImageOutput(modelName string) bool {
@@ -493,18 +545,15 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		declarations = append(declarations, convertTool(*params.OutputTool))
 		strictDisabled = strictDisabled || params.OutputTool.Strict != nil && !*params.OutputTool.Strict
 		if !params.AllowText {
-			tc := &toolConfig{}
-			tc.FunctionCallingConfig.Mode = "ANY"
-			req.ToolConfig = tc
+			req.ToolConfig = &toolConfig{FunctionCallingConfig: &functionCallingConfig{Mode: "ANY"}}
 		}
 	}
 	if req.ToolConfig == nil && len(declarations) > 0 {
-		tc := &toolConfig{}
-		tc.FunctionCallingConfig.Mode = "AUTO"
+		mode := "AUTO"
 		if m.strictToolSupport && !strictDisabled {
-			tc.FunctionCallingConfig.Mode = "VALIDATED"
+			mode = "VALIDATED"
 		}
-		req.ToolConfig = tc
+		req.ToolConfig = &toolConfig{FunctionCallingConfig: &functionCallingConfig{Mode: mode}}
 	}
 	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		if req.GenerationConfig == nil {
@@ -515,6 +564,13 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	}
 	if len(declarations) > 0 {
 		req.Tools = append(req.Tools, toolsParam{FunctionDeclarations: declarations})
+	}
+	if m.transport == TransportGeminiAPI && strings.Contains(strings.ToLower(m.name), "gemini-3") &&
+		hasGoogleServerNativeTool(params.NativeTools) {
+		if req.ToolConfig == nil {
+			req.ToolConfig = &toolConfig{}
+		}
+		req.ToolConfig.IncludeServerSideToolInvocations = true
 	}
 	return req, nil
 }
@@ -667,6 +723,30 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 				},
 				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
 			})
+		case ai.NativeToolCallPart:
+			toolType := googleNativeToolType(rp.ToolKind)
+			if rp.ProviderName != model.providerName || toolType == "" {
+				continue
+			}
+			args := map[string]any{}
+			if len(rp.Args) > 0 {
+				if err := json.Unmarshal(rp.Args, &args); err != nil {
+					return nil, fmt.Errorf("google: native tool call args: %w", err)
+				}
+			}
+			parts = append(parts, part{
+				ToolCall:         &googleToolCall{ID: rp.ToolCallID, ToolType: toolType, Args: args},
+				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
+			})
+		case ai.NativeToolReturnPart:
+			toolType := googleNativeToolType(rp.ToolKind)
+			if rp.ProviderName != model.providerName || toolType == "" {
+				continue
+			}
+			parts = append(parts, part{
+				ToolResponse:     &googleToolResponse{ID: rp.ToolCallID, ToolType: toolType, Response: rp.Content},
+				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
+			})
 		case ai.ToolCallPart:
 			var args map[string]any
 			if len(rp.Args) > 0 {
@@ -681,6 +761,26 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 		}
 	}
 	return []content{{Role: "model", Parts: parts}}, nil
+}
+
+func googleNativeToolType(kind ai.ToolPartKind) string {
+	return map[ai.ToolPartKind]string{
+		ai.ToolPartKindWebSearch:  "GOOGLE_SEARCH_WEB",
+		ai.ToolPartKindWebFetch:   "URL_CONTEXT",
+		ai.ToolPartKindFileSearch: "FILE_SEARCH",
+	}[kind]
+}
+
+func googleNativeToolIdentity(toolType string) (string, ai.ToolPartKind, bool) {
+	identity, ok := map[string]struct {
+		name string
+		kind ai.ToolPartKind
+	}{
+		"GOOGLE_SEARCH_WEB": {name: "web_search", kind: ai.ToolPartKindWebSearch},
+		"URL_CONTEXT":       {name: "web_fetch", kind: ai.ToolPartKindWebFetch},
+		"FILE_SEARCH":       {name: "file_search", kind: ai.ToolPartKindFileSearch},
+	}[toolType]
+	return identity.name, identity.kind, ok
 }
 
 func googlePartMetadata(signature, providerName string) (string, map[string]any) {
@@ -948,7 +1048,110 @@ func googleWebFetchParts(
 		}
 }
 
-func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) {
+func cloneGoogleMap(source map[string]any) map[string]any {
+	encoded, _ := json.Marshal(source)
+	var cloned map[string]any
+	_ = json.Unmarshal(encoded, &cloned)
+	return cloned
+}
+
+func googleFileSearchContexts(metadata map[string]any) []map[string]any {
+	rawChunks, ok := metadata["groundingChunks"].([]any)
+	if !ok {
+		return nil
+	}
+	var contexts []map[string]any
+	for _, rawChunk := range rawChunks {
+		chunk, ok := rawChunk.(map[string]any)
+		if !ok {
+			continue
+		}
+		rawContext, ok := chunk["retrievedContext"].(map[string]any)
+		if !ok {
+			continue
+		}
+		context := cloneGoogleMap(rawContext)
+		if store, exists := context["fileSearchStore"]; exists {
+			delete(context, "fileSearchStore")
+			context["file_search_store"] = store
+		}
+		if custom, exists := context["customMetadata"]; exists {
+			delete(context, "customMetadata")
+			context["custom_metadata"] = custom
+		}
+		contexts = append(contexts, context)
+	}
+	return contexts
+}
+
+func googleFileSearchParts(
+	metadata map[string]any, responseID, providerName string, timestamp time.Time,
+) (*ai.NativeToolCallPart, *ai.NativeToolReturnPart) {
+	contexts := googleFileSearchContexts(metadata)
+	if len(contexts) == 0 {
+		return nil, nil
+	}
+	callID := responseID + ":file_search"
+	if responseID == "" {
+		callID = "file_search"
+	}
+	return &ai.NativeToolCallPart{
+			ToolName: "file_search", Args: json.RawMessage(`{}`), ToolCallID: callID,
+			ToolKind: ai.ToolPartKindFileSearch, ProviderName: providerName,
+		}, &ai.NativeToolReturnPart{
+			ToolName: "file_search", ToolCallID: callID, ToolKind: ai.ToolPartKindFileSearch,
+			Content: contexts, Timestamp: timestamp, ProviderName: providerName,
+		}
+}
+
+func googleNativeCallID(id, responseID, toolType string, index int) string {
+	if id != "" {
+		return id
+	}
+	prefix := responseID
+	if prefix != "" {
+		prefix += ":"
+	}
+	return fmt.Sprintf("%s%s:%d", prefix, strings.ToLower(toolType), index)
+}
+
+func googleFileSearchQuery(code string) (string, bool) {
+	for _, quote := range []byte{'"', '\''} {
+		prefix := "file_search.query(query=" + string(quote)
+		start := strings.Index(code, prefix)
+		if start < 0 {
+			continue
+		}
+		start += len(prefix)
+		var query strings.Builder
+		escaped := false
+		for index := start; index < len(code); index++ {
+			character := code[index]
+			if escaped {
+				switch character {
+				case '\\', '"', '\'':
+					query.WriteByte(character)
+				default:
+					query.WriteByte('\\')
+					query.WriteByte(character)
+				}
+				escaped = false
+				continue
+			}
+			if character == '\\' {
+				escaped = true
+				continue
+			}
+			if character == quote {
+				return query.String(), true
+			}
+			query.WriteByte(character)
+		}
+	}
+	return "", false
+}
+
+func parseResponse(data []byte, providerName string, fileSearchEnabled bool) (*ai.ModelResponse, error) {
 	var gr generateResponse
 	if err := json.Unmarshal(data, &gr); err != nil {
 		return nil, fmt.Errorf("google: parse response: %w", err)
@@ -997,21 +1200,53 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 		ProviderDetails: providerDetails, ProviderResponseID: gr.ResponseID,
 		FinishReason: googleFinishReason(gr.Candidates[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
-	if call, returned := googleWebSearchParts(
-		gr.Candidates[0].GroundingMetadata, gr.ResponseID, providerName, resp.Timestamp,
-	); call != nil {
-		resp.Parts = append(resp.Parts, *call, *returned)
+	hasExplicitNativeTools := false
+	for _, candidatePart := range gr.Candidates[0].Content.Parts {
+		if candidatePart.ToolCall != nil || candidatePart.ToolResponse != nil {
+			hasExplicitNativeTools = true
+			break
+		}
 	}
-	if call, returned := googleWebFetchParts(
-		gr.Candidates[0].URLContextMetadata, gr.ResponseID, providerName, resp.Timestamp,
-	); call != nil {
-		resp.Parts = append(resp.Parts, *call, *returned)
+	fileSearchReconstructed := false
+	if !hasExplicitNativeTools {
+		if call, returned := googleWebSearchParts(
+			gr.Candidates[0].GroundingMetadata, gr.ResponseID, providerName, resp.Timestamp,
+		); call != nil {
+			resp.Parts = append(resp.Parts, *call, *returned)
+		}
+		if fileSearchEnabled {
+			if call, returned := googleFileSearchParts(
+				gr.Candidates[0].GroundingMetadata, gr.ResponseID, providerName, resp.Timestamp,
+			); call != nil {
+				resp.Parts = append(resp.Parts, *call, *returned)
+				fileSearchReconstructed = true
+			}
+		}
+		if call, returned := googleWebFetchParts(
+			gr.Candidates[0].URLContextMetadata, gr.ResponseID, providerName, resp.Timestamp,
+		); call != nil {
+			resp.Parts = append(resp.Parts, *call, *returned)
+		}
 	}
 	lastCodeCallID := ""
+	lastServerCallIDs := map[ai.ToolPartKind]string{}
 	for index, p := range gr.Candidates[0].Content.Parts {
 		partProviderName, providerDetails := googlePartMetadata(p.ThoughtSignature, providerName)
 		switch {
 		case p.ExecutableCode != nil:
+			if fileSearchEnabled {
+				if query, ok := googleFileSearchQuery(p.ExecutableCode.Code); ok {
+					if !fileSearchReconstructed {
+						callID := googleNativeCallID("", gr.ResponseID, "FILE_SEARCH", index)
+						args, _ := json.Marshal(map[string]any{"query": query})
+						resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
+							ToolName: "file_search", Args: args, ToolCallID: callID,
+							ToolKind: ai.ToolPartKindFileSearch, ProviderName: providerName,
+						})
+					}
+					continue
+				}
+			}
 			lastCodeCallID = fmt.Sprintf("%s:code_execution:%d", gr.ResponseID, index)
 			if gr.ResponseID == "" {
 				lastCodeCallID = fmt.Sprintf("code_execution:%d", index)
@@ -1038,6 +1273,38 @@ func parseResponse(data []byte, providerName string) (*ai.ModelResponse, error) 
 				Timestamp: resp.Timestamp, ProviderName: providerName,
 			})
 			lastCodeCallID = ""
+		case p.ToolCall != nil:
+			name, kind, ok := googleNativeToolIdentity(p.ToolCall.ToolType)
+			if !ok {
+				return nil, fmt.Errorf("google: unknown native tool type %q", p.ToolCall.ToolType)
+			}
+			callID := googleNativeCallID(p.ToolCall.ID, gr.ResponseID, p.ToolCall.ToolType, index)
+			args, _ := json.Marshal(p.ToolCall.Args)
+			resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
+				ToolName: name, Args: args, ToolCallID: callID, ToolKind: kind,
+				ProviderName: providerName, ProviderDetails: providerDetails,
+			})
+			lastServerCallIDs[kind] = callID
+		case p.ToolResponse != nil:
+			name, kind, ok := googleNativeToolIdentity(p.ToolResponse.ToolType)
+			if !ok {
+				return nil, fmt.Errorf("google: unknown native tool type %q", p.ToolResponse.ToolType)
+			}
+			callID := p.ToolResponse.ID
+			if callID == "" {
+				callID = lastServerCallIDs[kind]
+			}
+			callID = googleNativeCallID(callID, gr.ResponseID, p.ToolResponse.ToolType, index)
+			response := p.ToolResponse.Response
+			if kind == ai.ToolPartKindFileSearch && response == nil {
+				if contexts := googleFileSearchContexts(gr.Candidates[0].GroundingMetadata); len(contexts) > 0 {
+					response = contexts
+				}
+			}
+			resp.Parts = append(resp.Parts, ai.NativeToolReturnPart{
+				ToolName: name, ToolCallID: callID, ToolKind: kind, Content: response,
+				Timestamp: resp.Timestamp, ProviderName: providerName, ProviderDetails: providerDetails,
+			})
 		case p.InlineData != nil:
 			if p.Thought {
 				continue

@@ -161,6 +161,243 @@ func TestGoogleStreamGeneratedImageErrorsAndStopping(t *testing.T) {
 	}
 }
 
+func TestGoogleStreamLegacyFileSearch(t *testing.T) {
+	model := newServer(t, googleSSE(t, []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"print(file_search.query(query=\"Capital of France\"))"}}]}}]}`,
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"Paris"}]}}]}`,
+		`{"responseId":"response","candidates":[{"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"text":"Paris context","fileSearchStore":"fileSearchStores/store"}}]}}]}`,
+	}))
+	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start ai.ToolCallStartEvent
+	var delta ai.ToolCallDeltaEvent
+	var returned ai.NativeToolReturnEvent
+	var finish ai.FinishEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			start = event
+		case ai.ToolCallDeltaEvent:
+			delta = event
+		case ai.NativeToolReturnEvent:
+			returned = event
+		case ai.FinishEvent:
+			finish = event
+		}
+	}
+	contexts := returned.Part.Content.([]map[string]any)
+	if start.ToolKind != ai.ToolPartKindFileSearch || start.ToolCallID != "response:file_search:0" ||
+		delta.ArgsDelta != `{"query":"Capital of France"}` || returned.Part.ToolCallID != start.ToolCallID ||
+		contexts[0]["file_search_store"] != "fileSearchStores/store" ||
+		finish.ProviderDetails["grounding_metadata"] == nil {
+		t.Fatalf("unexpected legacy file search stream: %#v", events)
+	}
+}
+
+func TestGoogleStreamExplicitFileSearch(t *testing.T) {
+	model := newNamedServer(t, "gemini-3-flash", googleSSE(t, []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"thoughtSignature":"call-signature","toolCall":{"id":"search","toolType":"FILE_SEARCH"}},{"thoughtSignature":"return-signature","toolResponse":{"id":"search","toolType":"FILE_SEARCH"}},{"toolCall":{"id":"search-2","toolType":"FILE_SEARCH","args":{"query":"landmark"}}},{"toolResponse":{"id":"search-2","toolType":"FILE_SEARCH"}}]}}]}`,
+		`{"responseId":"response","candidates":[{"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"text":"Paris","customMetadata":{"source_url":"https://example.com"}}}]}}]}`,
+	}))
+	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var starts, returns int
+	var start ai.ToolCallStartEvent
+	var returned ai.NativeToolReturnEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			starts++
+			start = event
+		case ai.NativeToolReturnEvent:
+			returns++
+			returned = event
+		}
+	}
+	contexts := returned.Part.Content.([]map[string]any)
+	if starts != 2 || returns != 2 || start.ToolCallID != "search-2" ||
+		returned.Part.ToolCallID != "search-2" ||
+		returned.Part.ProviderDetails["thought_signature"] != nil ||
+		contexts[0]["custom_metadata"].(map[string]any)["source_url"] != "https://example.com" {
+		t.Fatalf("unexpected explicit file search stream: %#v", events)
+	}
+	firstStart := events[0].(ai.ToolCallStartEvent)
+	firstReturn := events[4].(ai.NativeToolReturnEvent)
+	if firstStart.ProviderDetails["thought_signature"] != "call-signature" ||
+		firstReturn.Part.ToolCallID != "search" ||
+		firstReturn.Part.ProviderDetails["thought_signature"] != "return-signature" {
+		t.Fatalf("explicit file search metadata was lost: %#v", events)
+	}
+}
+
+func TestGoogleStreamFileSearchFallbacks(t *testing.T) {
+	t.Run("metadata only", func(t *testing.T) {
+		model := newServer(t, googleSSE(t, []string{
+			`{"candidates":[{"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"text":"context"}}]}}]}`,
+		}))
+		events, err := collectGoogleStream(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+			ai.FileSearchTool{FileStoreIDs: []string{"store"}},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if events[0].(ai.ToolCallStartEvent).ToolKind != ai.ToolPartKindFileSearch ||
+			events[2].(ai.NativeToolReturnEvent).Part.ToolCallID != "file_search" {
+			t.Fatalf("unexpected reconstructed file search: %#v", events)
+		}
+	})
+	t.Run("explicit response", func(t *testing.T) {
+		model := newNamedServer(t, "gemini-3", googleSSE(t, []string{
+			`{"candidates":[{"content":{"parts":[{"toolCall":{"toolType":"FILE_SEARCH","args":{}}},{"toolResponse":{"toolType":"FILE_SEARCH","response":{"matches":1}}}]},"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"text":"duplicate"}}]}}]}`,
+		}))
+		events, err := collectGoogleStream(t, model, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		returns := 0
+		for _, event := range events {
+			if returned, ok := event.(ai.NativeToolReturnEvent); ok {
+				returns++
+				if returned.Part.Content.(map[string]any)["matches"] != float64(1) {
+					t.Fatalf("unexpected explicit return: %+v", returned)
+				}
+			}
+		}
+		if returns != 1 {
+			t.Fatalf("explicit response was duplicated: %#v", events)
+		}
+	})
+	t.Run("pending empty response", func(t *testing.T) {
+		model := newNamedServer(t, "gemini-3", googleSSE(t, []string{
+			`{"candidates":[{"content":{"parts":[{"toolCall":{"id":"search","toolType":"FILE_SEARCH","args":{}}},{"toolResponse":{"id":"search","toolType":"FILE_SEARCH"}}]}}]}`,
+		}))
+		events, err := collectGoogleStream(t, model, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		returned := events[len(events)-2].(ai.NativeToolReturnEvent)
+		if returned.Part.ToolCallID != "search" || returned.Part.Content != nil {
+			t.Fatalf("unexpected empty pending return: %+v", returned)
+		}
+	})
+	for name, nativePart := range map[string]string{
+		"call":     `{"toolCall":{"toolType":"FUTURE","args":{}}}`,
+		"response": `{"toolResponse":{"toolType":"FUTURE"}}`,
+	} {
+		t.Run("unknown "+name, func(t *testing.T) {
+			model := newNamedServer(t, "gemini-3", googleSSE(t, []string{
+				`{"candidates":[{"content":{"parts":[` + nativePart + `]}}]}`,
+			}))
+			if _, err := collectGoogleStream(t, model, ai.ModelRequestParams{}); err == nil ||
+				!strings.Contains(err.Error(), "unknown native tool type") {
+				t.Fatalf("unexpected native stream error: %v", err)
+			}
+		})
+	}
+}
+
+func TestGoogleStreamFileSearchCanStop(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"content":{"parts":[{"toolCall":{"id":"search","toolType":"FILE_SEARCH","args":{}}},{"toolResponse":{"id":"search","toolType":"FILE_SEARCH","response":[]}}]}}]}`,
+	}
+	for breakAfter := 1; breakAfter <= 3; breakAfter++ {
+		t.Run(fmt.Sprintf("event %d", breakAfter), func(t *testing.T) {
+			model := newNamedServer(t, "gemini-3", googleSSE(t, chunks))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen++
+				if seen == breakAfter {
+					break
+				}
+			}
+			if seen != breakAfter {
+				t.Fatalf("stream ended after %d events", seen)
+			}
+		})
+	}
+}
+
+func TestGoogleStreamFileSearchCancellationEdges(t *testing.T) {
+	tests := []struct {
+		name   string
+		chunks []string
+		stop   func(ai.ModelStreamEvent) bool
+	}{
+		{
+			name: "legacy call without response ID",
+			chunks: []string{
+				`{"candidates":[{"content":{"parts":[{"executableCode":{"code":"file_search.query(query=\"q\")"}}]}}]}`,
+			},
+			stop: func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.ToolCallStartEvent); return ok },
+		},
+		{
+			name: "pending response filled from context",
+			chunks: []string{
+				`{"candidates":[{"content":{"parts":[{"toolCall":{"id":"search","toolType":"FILE_SEARCH","args":{}}},{"toolResponse":{"id":"search","toolType":"FILE_SEARCH"}}]}}]}`,
+				`{"candidates":[{"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"text":"context"}}]}}]}`,
+			},
+			stop: func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.NativeToolReturnEvent); return ok },
+		},
+		{
+			name: "legacy context return",
+			chunks: []string{
+				`{"candidates":[{"content":{"parts":[{"executableCode":{"code":"file_search.query(query=\"q\")"}}]}}]}`,
+				`{"candidates":[{"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"text":"context"}}]}}]}`,
+			},
+			stop: func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.NativeToolReturnEvent); return ok },
+		},
+		{
+			name: "metadata reconstruction",
+			chunks: []string{
+				`{"candidates":[{"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"text":"context"}}]}}]}`,
+			},
+			stop: func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.ToolCallStartEvent); return ok },
+		},
+		{
+			name: "pending response at end",
+			chunks: []string{
+				`{"candidates":[{"content":{"parts":[{"toolCall":{"id":"search","toolType":"FILE_SEARCH","args":{}}},{"toolResponse":{"id":"search","toolType":"FILE_SEARCH"}}]}}]}`,
+			},
+			stop: func(event ai.ModelStreamEvent) bool { _, ok := event.(ai.NativeToolReturnEvent); return ok },
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := newServer(t, googleSSE(t, test.chunks))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+				ai.FileSearchTool{FileStoreIDs: []string{"store"}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if test.stop(event) {
+					return
+				}
+			}
+			t.Fatal("target event was not emitted")
+		})
+	}
+}
+
 func TestGoogleStreamCodeExecution(t *testing.T) {
 	model := newServer(t, googleSSE(t, []string{
 		`{"responseId":"response","candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"print(1)"}}]}}]}`,

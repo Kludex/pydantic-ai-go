@@ -720,6 +720,215 @@ func TestGoogleWebFetchURLContextMetadata(t *testing.T) {
 	}
 }
 
+func TestGoogleFileSearchGroundingMetadata(t *testing.T) {
+	responses := []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"Paris"}]},"groundingMetadata":{"groundingChunks":[1,{"retrievedContext":{"text":"Paris is the capital.","fileSearchStore":"fileSearchStores/store","customMetadata":{"source_url":"https://example.com/paris"}}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"text":"none"}]},"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.com"}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"text":"none"}]},"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://example.com"}}]}}]}`,
+	}
+	index := 0
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(responses[index]))
+		index++
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 3 || response.ProviderDetails["grounding_metadata"] == nil {
+		t.Fatalf("unexpected file search response: %+v", response)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	contexts := returned.Content.([]map[string]any)
+	custom := contexts[0]["custom_metadata"].(map[string]any)
+	if call.ToolKind != ai.ToolPartKindFileSearch || call.ToolCallID != "response:file_search" ||
+		string(call.Args) != `{}` || returned.ToolCallID != call.ToolCallID || returned.Timestamp.IsZero() ||
+		contexts[0]["text"] != "Paris is the capital." ||
+		contexts[0]["file_search_store"] != "fileSearchStores/store" ||
+		custom["source_url"] != "https://example.com/paris" {
+		t.Fatalf("unexpected normalized file search: call=%+v return=%+v", call, returned)
+	}
+	custom["source_url"] = "changed"
+	metadata := response.ProviderDetails["grounding_metadata"].(map[string]any)
+	rawContext := metadata["groundingChunks"].([]any)[1].(map[string]any)["retrievedContext"].(map[string]any)
+	if rawContext["customMetadata"].(map[string]any)["source_url"] != "https://example.com/paris" {
+		t.Fatal("normalized file-search result aliases provider metadata")
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{&ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	parts := body["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	if parts[0].(map[string]any)["toolCall"].(map[string]any)["toolType"] != "FILE_SEARCH" ||
+		parts[1].(map[string]any)["toolResponse"].(map[string]any)["toolType"] != "FILE_SEARCH" {
+		t.Fatalf("unexpected file search replay: %#v", parts)
+	}
+	if response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}},
+	}}); err != nil || len(response.Parts) != 1 {
+		t.Fatalf("irrelevant grounding created file search parts: response=%+v err=%v", response, err)
+	}
+}
+
+func TestGoogleExplicitFileSearchParts(t *testing.T) {
+	var body map[string]any
+	model := newNamedServer(t, "gemini-3-flash", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"responseId":"response","candidates":[{"content":{"parts":[
+			{"thoughtSignature":"call-signature","toolCall":{"id":"search","toolType":"FILE_SEARCH","args":{"query":"capital"}}},
+			{"thoughtSignature":"return-signature","toolResponse":{"id":"search","toolType":"FILE_SEARCH"}},
+			{"text":"Paris"}
+		]},"groundingMetadata":{"webSearchQueries":["duplicate"],"groundingChunks":[{"retrievedContext":{"text":"Paris context","fileSearchStore":"fileSearchStores/store"}}]},"urlContextMetadata":{"urlMetadata":[{"retrievedUrl":"https://example.com"}]}}]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 3 {
+		t.Fatalf("explicit native parts were duplicated: %#v", response.Parts)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if call.ToolCallID != "search" || string(call.Args) != `{"query":"capital"}` ||
+		call.ProviderDetails["thought_signature"] != "call-signature" || returned.ToolCallID != "search" ||
+		returned.ProviderDetails["thought_signature"] != "return-signature" ||
+		returned.Content.([]map[string]any)[0]["file_search_store"] != "fileSearchStores/store" {
+		t.Fatalf("unexpected explicit file search: call=%+v return=%+v", call, returned)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	parts := body["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	if parts[0].(map[string]any)["thoughtSignature"] != "call-signature" ||
+		parts[1].(map[string]any)["thoughtSignature"] != "return-signature" {
+		t.Fatalf("explicit file search signatures were not replayed: %#v", parts)
+	}
+}
+
+func TestGoogleLegacyFileSearchExecutableCode(t *testing.T) {
+	responses := []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"print(file_search.query(query=\"capital of \\\"France\\\"\"))"}},{"text":"Paris"}]},"groundingMetadata":{"groundingChunks":[{"retrievedContext":{"text":"Paris"}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"file_search.query(query='Eiffel\\'s location')"}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"file_search.query(query=\"line\\nfeed\")"}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"executableCode":{"language":"PYTHON","code":"print(1)"}}]}}]}`,
+	}
+	index := 0
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(responses[index]))
+		index++
+	})
+	params := ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}},
+	}}
+	response, err := model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 3 {
+		t.Fatalf("legacy file search was duplicated: %#v", response.Parts)
+	}
+	response, err = model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	if call.ToolKind != ai.ToolPartKindFileSearch || string(call.Args) != `{"query":"Eiffel's location"}` {
+		t.Fatalf("unexpected legacy file search query: %+v", call)
+	}
+	response, err = model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call = response.Parts[0].(ai.NativeToolCallPart); string(call.Args) != `{"query":"line\\nfeed"}` {
+		t.Fatalf("unexpected unknown query escape: %+v", call)
+	}
+	response, err = model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if call = response.Parts[0].(ai.NativeToolCallPart); call.ToolKind != ai.ToolPartKindCodeExecution {
+		t.Fatalf("ordinary executable code became file search: %+v", call)
+	}
+}
+
+func TestGoogleNativeToolPartErrors(t *testing.T) {
+	for name, nativePart := range map[string]string{
+		"call":     `{"toolCall":{"toolType":"FUTURE","args":{}}}`,
+		"response": `{"toolResponse":{"toolType":"FUTURE","response":{}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[` + nativePart + `]}}]}`))
+			})
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
+				!strings.Contains(err.Error(), "unknown native tool type") {
+				t.Fatalf("unexpected native tool part error: %v", err)
+			}
+		})
+	}
+	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"responseId":"response","candidates":[{"content":{"parts":[
+			{"toolCall":{"toolType":"FILE_SEARCH","args":{}}},
+			{"toolResponse":{"toolType":"FILE_SEARCH","response":[]}}
+		]}}]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	if call.ToolCallID != returned.ToolCallID || call.ToolCallID != "response:file_search:0" {
+		t.Fatalf("generated native IDs did not pair: call=%+v return=%+v", call, returned)
+	}
+
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{
+			ToolName: "file_search", ToolCallID: "empty", ToolKind: ai.ToolPartKindFileSearch,
+			ProviderName: "google",
+		},
+		ai.NativeToolReturnPart{
+			ToolName: "file_search", ToolCallID: "empty", ToolKind: ai.ToolPartKindFileSearch,
+			ProviderName: "google", Content: []map[string]any{},
+		},
+		ai.NativeToolCallPart{
+			ToolName: "foreign", ToolKind: ai.ToolPartKindFileSearch, ProviderName: "openai",
+		},
+		ai.NativeToolCallPart{
+			ToolName: "unknown", ProviderName: "google",
+		},
+		ai.NativeToolReturnPart{
+			ToolName: "foreign", ToolKind: ai.ToolPartKindFileSearch, ProviderName: "openai",
+		},
+		ai.NativeToolReturnPart{
+			ToolName: "unknown", ProviderName: "google",
+		},
+	}}}
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	history = []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.NativeToolCallPart{
+		ToolName: "file_search", ToolKind: ai.ToolPartKindFileSearch, ProviderName: "google",
+		Args: json.RawMessage(`{`),
+	}}}}
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err == nil ||
+		!strings.Contains(err.Error(), "native tool call args") {
+		t.Fatalf("unexpected malformed native history error: %v", err)
+	}
+}
+
 func TestGoogleCodeExecutionResponse(t *testing.T) {
 	responses := []string{
 		`{"responseId":"response","candidates":[{"content":{"parts":[
@@ -962,15 +1171,20 @@ func TestErrors(t *testing.T) {
 		}
 		model := newServer(t, handler)
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-			NativeTools: []ai.NativeTool{ai.WebSearchTool{}, ai.WebFetchTool{}, ai.CodeExecutionTool{}},
+			NativeTools: []ai.NativeTool{
+				ai.WebSearchTool{}, ai.WebFetchTool{}, ai.CodeExecutionTool{},
+				ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}},
+			},
 		}); err != nil {
 			t.Fatal(err)
 		}
 		tools := body["tools"].([]any)
-		if len(tools) != 3 || tools[0].(map[string]any)["googleSearch"] == nil ||
+		if len(tools) != 4 || tools[0].(map[string]any)["googleSearch"] == nil ||
 			tools[0].(map[string]any)["functionDeclarations"] != nil ||
 			tools[1].(map[string]any)["urlContext"] == nil ||
-			tools[2].(map[string]any)["codeExecution"] == nil {
+			tools[2].(map[string]any)["codeExecution"] == nil ||
+			tools[3].(map[string]any)["fileSearch"].(map[string]any)["fileSearchStoreNames"].([]any)[0] !=
+				"fileSearchStores/store" {
 			t.Fatalf("unexpected Google web-search tool: %#v", tools)
 		}
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
@@ -1001,8 +1215,9 @@ func TestErrors(t *testing.T) {
 		if _, err := gemini3.Request(t.Context(), nil, combined); err != nil {
 			t.Fatalf("Gemini 3 combined tools failed: %v", err)
 		}
-		if len(body["tools"].([]any)) != 2 {
-			t.Fatalf("Gemini 3 omitted combined tools: %#v", body["tools"])
+		if len(body["tools"].([]any)) != 2 ||
+			body["toolConfig"].(map[string]any)["includeServerSideToolInvocations"] != true {
+			t.Fatalf("Gemini 3 omitted combined tools or invocation context: %#v", body)
 		}
 	})
 	t.Run("api error", func(t *testing.T) {

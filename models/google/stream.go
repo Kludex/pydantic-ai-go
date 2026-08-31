@@ -49,10 +49,14 @@ func (m *Model) StreamRequest(
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return m.eventStream(resp.Body, resp.Header.Get("x-gemini-service-tier")), nil
+	return m.eventStream(
+		resp.Body, resp.Header.Get("x-gemini-service-tier"), hasGoogleFileSearch(params.NativeTools),
+	), nil
 }
 
-func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai.ModelStreamEvent, error] {
+func (m *Model) eventStream(
+	body io.ReadCloser, serviceTier string, fileSearchEnabled bool,
+) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
 		usage := ai.Usage{Requests: 1}
@@ -69,8 +73,13 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 		var groundingMetadata map[string]any
 		var urlContextMetadata map[string]any
 		webFetchEmitted := false
+		fileSearchEmitted := false
+		explicitNativeTools := false
 		lastCodeCallID := ""
+		lastFileSearchCallID := ""
+		var pendingFileSearchReturns []ai.NativeToolReturnPart
 		codeCallIndex := 0
+		fileSearchIndex := 0
 		fileIndex := 0
 		received := false
 		scanner := bufio.NewScanner(body)
@@ -121,7 +130,13 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 			if chunk.Candidates[0].URLContextMetadata != nil {
 				urlContextMetadata = chunk.Candidates[0].URLContextMetadata
 			}
-			if !webSearchEmitted {
+			for _, candidatePart := range chunk.Candidates[0].Content.Parts {
+				if candidatePart.ToolCall != nil || candidatePart.ToolResponse != nil {
+					explicitNativeTools = true
+					break
+				}
+			}
+			if !explicitNativeTools && !webSearchEmitted {
 				call, returned := googleWebSearchParts(
 					chunk.Candidates[0].GroundingMetadata, responseID, m.providerName, responseTimestamp,
 				)
@@ -132,7 +147,7 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 					webSearchEmitted = true
 				}
 			}
-			if !webFetchEmitted {
+			if !explicitNativeTools && !webFetchEmitted {
 				call, returned := googleWebFetchParts(
 					chunk.Candidates[0].URLContextMetadata, responseID, m.providerName, responseTimestamp,
 				)
@@ -145,6 +160,59 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 			}
 			for index, part := range chunk.Candidates[0].Content.Parts {
 				switch {
+				case part.ToolCall != nil:
+					name, kind, ok := googleNativeToolIdentity(part.ToolCall.ToolType)
+					if !ok {
+						yield(nil, fmt.Errorf("google: unknown native tool type %q", part.ToolCall.ToolType))
+						return
+					}
+					callID := googleNativeCallID(
+						part.ToolCall.ID, responseID, part.ToolCall.ToolType, fileSearchIndex,
+					)
+					fileSearchIndex++
+					args := part.ToolCall.Args
+					if args == nil {
+						args = map[string]any{}
+					}
+					encoded, _ := json.Marshal(args)
+					_, providerDetails := googlePartMetadata(part.ThoughtSignature, m.providerName)
+					call := ai.NativeToolCallPart{
+						ToolName: name, Args: encoded, ToolCallID: callID, ToolKind: kind,
+						ProviderName: m.providerName, ProviderDetails: providerDetails,
+					}
+					if !emitGoogleNativeCall(yield, &call) {
+						return
+					}
+					if kind == ai.ToolPartKindFileSearch {
+						lastFileSearchCallID = callID
+					}
+				case part.ToolResponse != nil:
+					name, kind, ok := googleNativeToolIdentity(part.ToolResponse.ToolType)
+					if !ok {
+						yield(nil, fmt.Errorf("google: unknown native tool type %q", part.ToolResponse.ToolType))
+						return
+					}
+					callID := part.ToolResponse.ID
+					if callID == "" && kind == ai.ToolPartKindFileSearch && lastFileSearchCallID != "" {
+						callID = lastFileSearchCallID
+					} else {
+						callID = googleNativeCallID(callID, responseID, part.ToolResponse.ToolType, fileSearchIndex)
+					}
+					_, providerDetails := googlePartMetadata(part.ThoughtSignature, m.providerName)
+					returned := ai.NativeToolReturnPart{
+						ToolName: name, ToolCallID: callID, ToolKind: kind, Content: part.ToolResponse.Response,
+						Timestamp: responseTimestamp, ProviderName: m.providerName, ProviderDetails: providerDetails,
+					}
+					if kind == ai.ToolPartKindFileSearch && returned.Content == nil {
+						pendingFileSearchReturns = append(pendingFileSearchReturns, returned)
+						continue
+					}
+					if !yield(ai.NativeToolReturnEvent{PartID: "return:" + callID, Part: returned}, nil) {
+						return
+					}
+					if kind == ai.ToolPartKindFileSearch {
+						fileSearchEmitted = true
+					}
 				case part.InlineData != nil:
 					if part.Thought {
 						continue
@@ -161,6 +229,24 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 						return
 					}
 				case part.ExecutableCode != nil:
+					if fileSearchEnabled {
+						if query, ok := googleFileSearchQuery(part.ExecutableCode.Code); ok {
+							lastFileSearchCallID = fmt.Sprintf("%s:file_search:%d", responseID, fileSearchIndex)
+							if responseID == "" {
+								lastFileSearchCallID = fmt.Sprintf("file_search:%d", fileSearchIndex)
+							}
+							fileSearchIndex++
+							args, _ := json.Marshal(map[string]any{"query": query})
+							call := ai.NativeToolCallPart{
+								ToolName: "file_search", Args: args, ToolCallID: lastFileSearchCallID,
+								ToolKind: ai.ToolPartKindFileSearch, ProviderName: m.providerName,
+							}
+							if !emitGoogleNativeCall(yield, &call) {
+								return
+							}
+							continue
+						}
+					}
 					lastCodeCallID = fmt.Sprintf("%s:code_execution:%d", responseID, codeCallIndex)
 					if responseID == "" {
 						lastCodeCallID = fmt.Sprintf("code_execution:%d", codeCallIndex)
@@ -202,10 +288,52 @@ func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai
 					}
 				}
 			}
+			contexts := googleFileSearchContexts(chunk.Candidates[0].GroundingMetadata)
+			switch {
+			case len(pendingFileSearchReturns) > 0 && len(contexts) > 0:
+				for index := range pendingFileSearchReturns {
+					pendingFileSearchReturns[index].Content = contexts
+					if !yield(ai.NativeToolReturnEvent{
+						PartID: "return:" + pendingFileSearchReturns[index].ToolCallID,
+						Part:   pendingFileSearchReturns[index],
+					}, nil) {
+						return
+					}
+				}
+				pendingFileSearchReturns = nil
+				fileSearchEmitted = true
+			case lastFileSearchCallID != "" && len(contexts) > 0 && !fileSearchEmitted:
+				returned := ai.NativeToolReturnPart{
+					ToolName: "file_search", ToolCallID: lastFileSearchCallID,
+					ToolKind: ai.ToolPartKindFileSearch, Content: contexts,
+					Timestamp: responseTimestamp, ProviderName: m.providerName,
+				}
+				if !yield(ai.NativeToolReturnEvent{
+					PartID: "return:" + lastFileSearchCallID, Part: returned,
+				}, nil) {
+					return
+				}
+				fileSearchEmitted = true
+			case fileSearchEnabled && !explicitNativeTools && !fileSearchEmitted && len(contexts) > 0:
+				call, returned := googleFileSearchParts(
+					chunk.Candidates[0].GroundingMetadata, responseID, m.providerName, responseTimestamp,
+				)
+				if call != nil && !emitGoogleNativeTool(yield, call, returned) {
+					return
+				}
+				fileSearchEmitted = call != nil
+			}
 		}
 		if err := scanner.Err(); err != nil {
 			yield(nil, fmt.Errorf("google: read stream: %w", err))
 			return
+		}
+		for _, pending := range pendingFileSearchReturns {
+			if !yield(ai.NativeToolReturnEvent{
+				PartID: "return:" + pending.ToolCallID, Part: pending,
+			}, nil) {
+				return
+			}
 		}
 		if !received {
 			yield(nil, fmt.Errorf("google: stream ended without a response"))
@@ -256,12 +384,19 @@ func emitGoogleNativeTool(
 	call *ai.NativeToolCallPart,
 	returned *ai.NativeToolReturnPart,
 ) bool {
+	return emitGoogleNativeCall(yield, call) &&
+		yield(ai.NativeToolReturnEvent{PartID: "return:" + call.ToolCallID, Part: *returned}, nil)
+}
+
+func emitGoogleNativeCall(
+	yield func(ai.ModelStreamEvent, error) bool, call *ai.NativeToolCallPart,
+) bool {
 	partID := string(call.ToolKind) + ":" + call.ToolCallID
 	return yield(ai.ToolCallStartEvent{
 		PartID: partID, ToolName: call.ToolName, ToolCallID: call.ToolCallID,
-		ToolKind: call.ToolKind, ProviderName: call.ProviderName, Native: true,
-	}, nil) && yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(call.Args)}, nil) &&
-		yield(ai.NativeToolReturnEvent{PartID: "return:" + call.ToolCallID, Part: *returned}, nil)
+		ToolKind: call.ToolKind, ProviderName: call.ProviderName,
+		ProviderDetails: call.ProviderDetails, Native: true,
+	}, nil) && yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(call.Args)}, nil)
 }
 
 func emitPart(yield func(ai.ModelStreamEvent, error) bool, part part, index int, modelProviderName string) bool {

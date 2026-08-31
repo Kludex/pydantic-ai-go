@@ -202,7 +202,9 @@ func main() {
 
 `FileSearchTool` references managed vector stores. OpenAI Responses sends `FileStoreIDs` as vector-store IDs. `WithResponsesFileSearchResults` requests the matched chunks in each normalized `NativeToolReturnPart`; leave it disabled when you only need the model's answer.
 
-`MaxNumResults`, `Instructions`, and `RetrievalMode` are portable fields reserved for providers that expose those controls. OpenAI ignores them. Google and xAI file-search rendering remain provider-parity work.
+Google sends the same IDs as Gemini file-search store names. Older Gemini responses are reconstructed from executable queries and grounding contexts. Gemini 3 responses preserve explicit provider call IDs and fill empty tool responses from later grounding metadata. Same-provider histories replay through Google `toolCall` and `toolResponse` parts.
+
+`MaxNumResults`, `Instructions`, and `RetrievalMode` are portable fields reserved for providers that expose those controls. OpenAI and Google ignore them. xAI collections-search rendering remains provider-parity work.
 
 ## Execute code
 

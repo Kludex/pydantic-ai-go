@@ -9,6 +9,8 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -18,6 +20,17 @@ import (
 func (m *ResponsesModel) StreamRequest(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+	if responseID, ok := suspendedResponsesID(msgs); ok {
+		sequence, hasSequence := suspendedResponsesSequence(msgs)
+		if !hasSequence {
+			response, err := m.retrieveResponse(ctx, responseID)
+			if err != nil {
+				return nil, err
+			}
+			return staticResponsesEventStream(response), nil
+		}
+		return m.retrieveResponseStream(ctx, responseID, sequence)
+	}
 	payload, err := m.buildResponsesPayload(msgs, params, true)
 	if err != nil {
 		return nil, err
@@ -50,14 +63,55 @@ func (m *ResponsesModel) StreamRequest(
 	return m.responsesEventStream(resp.Body), nil
 }
 
+func (m *ResponsesModel) retrieveResponseStream(
+	ctx context.Context, responseID string, sequence int,
+) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+	query := url.Values{"stream": {"true"}, "starting_after": {strconv.Itoa(sequence)}}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet,
+		m.baseURL+"/responses/"+url.PathEscape(responseID)+"?"+query.Encode(), nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: retrieve background response stream: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		data, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("openai: read error response: %w", err)
+		}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	return m.responsesEventStream(resp.Body), nil
+}
+
+func suspendedResponsesSequence(messages []ai.ModelMessage) (int, bool) {
+	response := messages[len(messages)-1].(ai.ModelResponse)
+	switch sequence := response.ProviderDetails["sequence_number"].(type) {
+	case int:
+		return sequence, true
+	case float64:
+		return int(sequence), true
+	default:
+		return 0, false
+	}
+}
+
 type responsesStreamEvent struct {
-	Type         string `json:"type"`
-	Delta        string `json:"delta"`
-	ItemID       string `json:"item_id"`
-	OutputIndex  int    `json:"output_index"`
-	ContentIndex int    `json:"content_index"`
-	SummaryIndex int    `json:"summary_index"`
-	Item         struct {
+	Type           string `json:"type"`
+	SequenceNumber *int   `json:"sequence_number"`
+	Delta          string `json:"delta"`
+	ItemID         string `json:"item_id"`
+	OutputIndex    int    `json:"output_index"`
+	ContentIndex   int    `json:"content_index"`
+	SummaryIndex   int    `json:"summary_index"`
+	Item           struct {
 		ID               string          `json:"id"`
 		Type             string          `json:"type"`
 		CallID           string          `json:"call_id"`
@@ -70,20 +124,8 @@ type responsesStreamEvent struct {
 	Part struct {
 		Text string `json:"text"`
 	} `json:"part"`
-	Response struct {
-		ID                string             `json:"id"`
-		Model             string             `json:"model"`
-		CreatedAt         float64            `json:"created_at"`
-		Status            string             `json:"status"`
-		Background        bool               `json:"background"`
-		IncompleteDetails *incompleteDetails `json:"incomplete_details"`
-		Error             *struct {
-			Code    string `json:"code"`
-			Message string `json:"message"`
-		} `json:"error"`
-		Usage responsesUsage `json:"usage"`
-	} `json:"response"`
-	Error struct {
+	Response responsesResponse `json:"response"`
+	Error    struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
@@ -94,6 +136,9 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 		defer func() { _ = body.Close() }()
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		var latest *responsesStreamEvent
+		var lastSequence *int
+		emittedParts := false
 		for scanner.Scan() {
 			data, ok := strings.CutPrefix(scanner.Text(), "data:")
 			if !ok {
@@ -108,8 +153,17 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 				yield(nil, fmt.Errorf("openai: parse Responses stream event: %w", err))
 				return
 			}
+			if event.SequenceNumber != nil {
+				sequence := *event.SequenceNumber
+				lastSequence = &sequence
+			}
+			if event.Response.ID != "" {
+				snapshot := event
+				latest = &snapshot
+			}
 			switch event.Type {
 			case "response.output_text.delta":
+				emittedParts = true
 				partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
 				providerName := ""
 				if event.ItemID != "" {
@@ -121,6 +175,7 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 					return
 				}
 			case "response.reasoning_summary_text.delta", "response.reasoning_text.delta":
+				emittedParts = true
 				partID := responsesThinkingPartID(event)
 				if !yield(ai.ThinkingDeltaEvent{
 					PartID: partID, Delta: event.Delta, ID: event.ItemID, ProviderName: "openai",
@@ -129,6 +184,9 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 				}
 			case "response.reasoning_summary_part.added":
 				partID := responsesThinkingPartID(event)
+				if event.Part.Text != "" {
+					emittedParts = true
+				}
 				if event.Part.Text != "" && !yield(ai.ThinkingDeltaEvent{
 					PartID: partID, Delta: event.Part.Text, ID: event.ItemID, ProviderName: "openai",
 				}, nil) {
@@ -137,6 +195,7 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 			case "response.output_item.added":
 				switch event.Item.Type {
 				case "function_call":
+					emittedParts = true
 					partID := responsesToolPartID(event)
 					var providerDetails map[string]any
 					if event.Item.Namespace != "" {
@@ -159,6 +218,7 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 						}
 					}
 				case "tool_search_call":
+					emittedParts = true
 					if event.Item.Execution != "client" {
 						yield(nil, fmt.Errorf("openai: server-executed tool search is not supported yet"))
 						return
@@ -171,6 +231,9 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 						return
 					}
 				case "reasoning":
+					if event.Item.EncryptedContent != "" {
+						emittedParts = true
+					}
 					if event.Item.EncryptedContent != "" && !yield(ai.ThinkingDeltaEvent{
 						PartID: responsesThinkingPartID(event), ID: event.Item.ID,
 						SignatureDelta: event.Item.EncryptedContent, ProviderName: "openai",
@@ -200,6 +263,18 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 					}
 				}
 			case "response.completed":
+				var snapshotParts []ai.ResponsePart
+				if len(event.Response.Output) > 0 {
+					response, err := modelResponseFromResponses(event.Response)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					snapshotParts = response.Parts
+					if !emittedParts && !yieldStaticResponsesParts(response, yield) {
+						return
+					}
+				}
 				modelName := event.Response.Model
 				if modelName == "" {
 					modelName = m.name
@@ -208,8 +283,14 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 					event.Response.Status, event.Response.IncompleteDetails,
 					event.Response.CreatedAt, event.Response.Background,
 				)
+				if lastSequence != nil {
+					if providerDetails == nil {
+						providerDetails = map[string]any{}
+					}
+					providerDetails["sequence_number"] = *lastSequence
+				}
 				yield(ai.FinishEvent{
-					Usage: event.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					Parts: snapshotParts, Usage: event.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
 					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: event.Response.ID,
 					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
@@ -239,8 +320,92 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 			yield(nil, fmt.Errorf("openai: read Responses stream: %w", err))
 			return
 		}
+		if latest != nil {
+			var snapshotParts []ai.ResponsePart
+			if len(latest.Response.Output) > 0 {
+				response, err := modelResponseFromResponses(latest.Response)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				snapshotParts = response.Parts
+				if !emittedParts && !yieldStaticResponsesParts(response, yield) {
+					return
+				}
+			}
+			rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
+				latest.Response.Status, latest.Response.IncompleteDetails,
+				latest.Response.CreatedAt, latest.Response.Background,
+			)
+			if state == ai.ModelResponseStateSuspended {
+				if lastSequence != nil {
+					providerDetails["sequence_number"] = *lastSequence
+				}
+				modelName := latest.Response.Model
+				if modelName == "" {
+					modelName = m.name
+				}
+				yield(ai.FinishEvent{
+					Parts: snapshotParts, Usage: latest.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderResponseID: latest.Response.ID,
+					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
+				}, nil)
+				return
+			}
+		}
 		yield(nil, fmt.Errorf("openai: Responses stream ended without response.completed"))
 	}
+}
+
+func staticResponsesEventStream(response *ai.ModelResponse) iter.Seq2[ai.ModelStreamEvent, error] {
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
+		if !yieldStaticResponsesParts(response, yield) {
+			return
+		}
+		yield(ai.FinishEvent{
+			Usage: response.Usage, ModelName: response.ModelName, Timestamp: response.Timestamp,
+			ProviderName: response.ProviderName, ProviderURL: response.ProviderURL,
+			ProviderDetails: response.ProviderDetails, ProviderResponseID: response.ProviderResponseID,
+			FinishReason: response.FinishReason, State: response.State,
+		}, nil)
+	}
+}
+
+func yieldStaticResponsesParts(
+	response *ai.ModelResponse, yield func(ai.ModelStreamEvent, error) bool,
+) bool {
+	for index, part := range response.Parts {
+		partID := "static:" + strconv.Itoa(index)
+		switch part := part.(type) {
+		case ai.TextPart:
+			if !yield(ai.TextDeltaEvent{
+				PartID: partID, Delta: part.Content, ID: part.ID,
+				ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+			}, nil) {
+				return false
+			}
+		case ai.ThinkingPart:
+			if !yield(ai.ThinkingDeltaEvent{
+				PartID: partID, Delta: part.Content, ID: part.ID, SignatureDelta: part.Signature,
+				ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+			}, nil) {
+				return false
+			}
+		case ai.ToolCallPart:
+			if !yield(ai.ToolCallStartEvent{
+				PartID: partID, ToolName: part.ToolName, ToolCallID: part.ToolCallID,
+				ToolKind: part.ToolKind, ID: part.ID,
+				ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+			}, nil) {
+				return false
+			}
+			if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(part.Args)}, nil) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func responsesToolPartID(event responsesStreamEvent) string {

@@ -8,7 +8,8 @@ import (
 )
 
 // Model is the provider contract. A provider package implements Model;
-// the agent calls Request once per loop iteration.
+// the agent calls Request for each response segment. Suspended responses may
+// require multiple segments within one logical loop iteration.
 //
 // Generics never cross this boundary: providers deal only in messages
 // and schemas, which keeps adding a provider trivial.

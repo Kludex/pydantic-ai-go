@@ -385,6 +385,7 @@ type runConfig struct {
 	toolsets          []any
 	capabilities      []Capability
 	deferredResults   *DeferredToolResults
+	resumeSuspended   bool
 }
 
 // WithRunToolsets adds composable toolsets for one run without modifying the agent.

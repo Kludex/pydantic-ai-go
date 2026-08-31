@@ -8,6 +8,7 @@ import (
 	"io"
 	"math"
 	"net/http"
+	"net/url"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -16,13 +17,15 @@ import (
 // ResponsesModel calls the OpenAI Responses API, the successor to Chat
 // Completions. Create one with NewResponsesModel.
 type ResponsesModel struct {
-	name                string
-	apiKey              string
-	baseURL             string
-	httpClient          *http.Client
-	strictToolSupport   bool
-	deferredToolSupport bool
-	defaultSettings     ai.ModelSettings
+	name                   string
+	apiKey                 string
+	baseURL                string
+	httpClient             *http.Client
+	strictToolSupport      bool
+	deferredToolSupport    bool
+	defaultSettings        ai.ModelSettings
+	background             *bool
+	backgroundPollInterval time.Duration
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
@@ -32,7 +35,8 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 	return &ResponsesModel{
 		name: m.name, apiKey: m.apiKey, baseURL: m.baseURL, httpClient: m.httpClient,
 		strictToolSupport: m.strictToolSupport, deferredToolSupport: m.deferredToolSupport,
-		defaultSettings: m.defaultSettings,
+		defaultSettings: m.defaultSettings, background: m.background,
+		backgroundPollInterval: m.backgroundPollInterval,
 	}
 }
 
@@ -44,6 +48,9 @@ func (m *ResponsesModel) DefaultModelSettings() ai.ModelSettings { return m.defa
 
 // Request implements ai.Model.
 func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
+	if responseID, ok := suspendedResponsesID(msgs); ok {
+		return m.retrieveResponse(ctx, responseID)
+	}
 	payload, err := m.buildResponsesPayload(msgs, params, true)
 	if err != nil {
 		return nil, err
@@ -79,6 +86,88 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 	return response, err
 }
 
+// ContinuationDelay implements ai.ModelContinuationDelayer.
+func (m *ResponsesModel) ContinuationDelay(response ai.ModelResponse) time.Duration {
+	if response.State == ai.ModelResponseStateSuspended && providerBool(response.ProviderDetails, "background") {
+		return m.backgroundPollInterval
+	}
+	return 0
+}
+
+// CancelSuspendedResponse implements ai.SuspendedResponseCanceler.
+func (m *ResponsesModel) CancelSuspendedResponse(ctx context.Context, response ai.ModelResponse) error {
+	if response.ProviderName != "openai" || response.ProviderResponseID == "" ||
+		!providerBool(response.ProviderDetails, "background") {
+		return nil
+	}
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodPost,
+		m.baseURL+"/responses/"+url.PathEscape(response.ProviderResponseID)+"/cancel", nil,
+	)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("openai: cancel background response: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("openai: read cancel response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	return nil
+}
+
+func (m *ResponsesModel) retrieveResponse(ctx context.Context, responseID string) (*ai.ModelResponse, error) {
+	req, err := http.NewRequestWithContext(
+		ctx, http.MethodGet, m.baseURL+"/responses/"+url.PathEscape(responseID), nil,
+	)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("openai: retrieve background response: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("openai: read response: %w", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	response, err := parseResponsesResponse(data)
+	if response != nil {
+		response.ProviderName = "openai"
+		response.ProviderURL = m.baseURL
+	}
+	return response, err
+}
+
+func suspendedResponsesID(messages []ai.ModelMessage) (string, bool) {
+	if len(messages) == 0 {
+		return "", false
+	}
+	response, ok := messages[len(messages)-1].(ai.ModelResponse)
+	if !ok || response.State != ai.ModelResponseStateSuspended || response.ProviderName != "openai" ||
+		response.ProviderResponseID == "" || !providerBool(response.ProviderDetails, "background") {
+		return "", false
+	}
+	return response.ProviderResponseID, true
+}
+
+func providerBool(details map[string]any, key string) bool {
+	value, _ := details[key].(bool)
+	return value
+}
+
 type responsesRequest struct {
 	Model             string           `json:"model"`
 	Instructions      string           `json:"instructions,omitempty"`
@@ -90,6 +179,7 @@ type responsesRequest struct {
 	Temperature       *float64         `json:"temperature,omitempty"`
 	TopP              *float64         `json:"top_p,omitempty"`
 	Stream            bool             `json:"stream,omitempty"`
+	Background        *bool            `json:"background,omitempty"`
 }
 
 type responsesInput struct {
@@ -129,6 +219,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		MaxTokens:    params.Settings.MaxTokens,
 		Temperature:  params.Settings.Temperature,
 		TopP:         params.Settings.TopP,
+		Background:   m.background,
 	}
 	var searchTool *ai.ToolDefinition
 	if nativeDeferred && m.deferredToolSupport && len(params.DeferredTools) > 0 {
@@ -218,7 +309,11 @@ type responsesResponse struct {
 	Status            string             `json:"status"`
 	Background        bool               `json:"background"`
 	IncompleteDetails *incompleteDetails `json:"incomplete_details"`
-	Output            []struct {
+	Error             *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+	Output []struct {
 		ID      string `json:"id"`
 		Type    string `json:"type"`
 		Content []struct {
@@ -310,11 +405,15 @@ func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
 	if err := json.Unmarshal(data, &rr); err != nil {
 		return nil, fmt.Errorf("openai: parse response: %w", err)
 	}
-	rawFinishReason, providerDetails, _, state := responsesMetadata(
+	return modelResponseFromResponses(rr)
+}
+
+func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error) {
+	rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
 		rr.Status, rr.IncompleteDetails, rr.CreatedAt, rr.Background,
 	)
 	resp := &ai.ModelResponse{
-		ModelName: rr.Model, Usage: rr.Usage.usage(), ProviderDetails: providerDetails,
+		ModelName: rr.Model, Usage: rr.Usage.usage(), Timestamp: timestamp, ProviderDetails: providerDetails,
 		ProviderResponseID: rr.ID, FinishReason: openAIResponsesFinishReason(rawFinishReason), State: state,
 	}
 	for _, item := range rr.Output {
@@ -392,4 +491,8 @@ func normalizeResponsesArguments(raw json.RawMessage) (json.RawMessage, error) {
 	return json.RawMessage(arguments), nil
 }
 
-var _ ai.Model = (*ResponsesModel)(nil)
+var (
+	_ ai.Model                     = (*ResponsesModel)(nil)
+	_ ai.ModelContinuationDelayer  = (*ResponsesModel)(nil)
+	_ ai.SuspendedResponseCanceler = (*ResponsesModel)(nil)
+)

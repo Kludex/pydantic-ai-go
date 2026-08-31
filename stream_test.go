@@ -69,6 +69,24 @@ func TestRunStreamFillsToolCallIDFromDelta(t *testing.T) {
 	}
 }
 
+func TestRunStreamUsesAuthoritativeFinishParts(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.TextDeltaEvent{Delta: "suffix"},
+			ai.FinishEvent{Parts: []ai.ResponsePart{ai.TextPart{Content: "full output"}}},
+		}
+	})
+	stream := ai.NewAgent[deps, string](model).RunStream(t.Context(), "go", deps{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if result := stream.Result(); result == nil || result.Output != "full output" {
+		t.Fatalf("finish snapshot was not authoritative: %+v", result)
+	}
+}
+
 func TestRunStreamRejectsChangedDeltaToolCallID(t *testing.T) {
 	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
 		return []ai.ModelStreamEvent{

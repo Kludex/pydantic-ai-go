@@ -90,6 +90,269 @@ func TestResponsesStreamEvents(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamUsesAuthoritativeCompletedSnapshot(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_text.delta","item_id":"message","delta":"suffix"}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","status":"completed","output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"full output"}]}],"usage":{}}}`,
+	}))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "go", struct{}{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if result := stream.Result(); result == nil || result.Output != "full output" {
+		t.Fatalf("completed snapshot did not replace partial deltas: %+v", result)
+	}
+}
+
+func TestResponsesCompletedSnapshotErrorsAndConsumerStop(t *testing.T) {
+	t.Run("invalid snapshot", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.completed","response":{"status":"completed","output":[{"type":"function_call","name":"work","arguments":"bad"}]}}`,
+		}))
+		if _, err := collect(t, model, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected completed snapshot error")
+		}
+	})
+
+	t.Run("consumer stop", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.completed","response":{"status":"completed","output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}]}}`,
+		}))
+		stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range stream {
+			break
+		}
+	})
+
+	t.Run("invalid pending snapshot", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.created","response":{"id":"job","status":"queued","background":true,"output":[{"type":"function_call","name":"work","arguments":"bad"}]}}`,
+		}))
+		if _, err := collect(t, model, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected pending snapshot error")
+		}
+	})
+
+	t.Run("pending consumer stop", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.created","response":{"id":"job","status":"queued","background":true,"output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"partial"}]}]}}`,
+		}))
+		stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range stream {
+			break
+		}
+	})
+}
+
+func TestResponsesStreamContinuesBackgroundJob(t *testing.T) {
+	var methods []string
+	var queries []string
+	model := newResponsesServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		queries = append(queries, r.URL.RawQuery)
+		if r.Method == http.MethodPost {
+			sseHandler(t, []string{
+				`{"type":"response.created","sequence_number":4,"response":{"id":"job","status":"queued","background":true,"output":[{"id":"partial","type":"message","content":[{"type":"output_text","text":"partial"}]}],"usage":{"input_tokens":1}}}`,
+			})(w, r)
+			return
+		}
+		sseHandler(t, []string{
+			`{"type":"response.output_text.delta","sequence_number":5,"item_id":"message","delta":"done"}`,
+			`{"type":"response.completed","sequence_number":8,"response":{"id":"job","model":"gpt-5","status":"completed","background":true,"usage":{"input_tokens":1,"output_tokens":1}}}`,
+		})(w, r)
+	}, openai.WithBackgroundPollInterval(0))
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "go", struct{}{})
+	var finishes []ai.FinishEvent
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event, ok := event.(ai.FinishEvent); ok {
+			finishes = append(finishes, event)
+		}
+	}
+	result := stream.Result()
+	if result == nil || result.Output != "done" || result.Usage().Requests != 1 || len(finishes) != 2 {
+		t.Fatalf("unexpected streamed background result=%+v finishes=%+v", result, finishes)
+	}
+	if len(methods) != 2 || methods[0] != http.MethodPost || methods[1] != http.MethodGet ||
+		!strings.Contains(queries[1], "starting_after=4") || !strings.Contains(queries[1], "stream=true") {
+		t.Fatalf("unexpected stream retrieval methods=%v queries=%v", methods, queries)
+	}
+	if finishes[0].State != ai.ModelResponseStateSuspended || finishes[0].ProviderDetails["sequence_number"] != 4 {
+		t.Fatalf("pending stream metadata was not retained: %+v", finishes[0])
+	}
+}
+
+func TestResponsesStreamRetrievesWithoutSequenceAsStaticEvents(t *testing.T) {
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/responses/job" {
+			t.Fatalf("unexpected static retrieval %s %s", r.Method, r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"job","model":"gpt-5","status":"completed","background":true,
+			"output":[
+				{"id":"reason","type":"reasoning","encrypted_content":"signature","summary":[{"text":"thinking"}]},
+				{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]},
+				{"id":"call","type":"function_call","call_id":"call","name":"work","arguments":{"x":1}}
+			],
+			"usage":{"input_tokens":1,"output_tokens":2}
+		}`))
+	})
+	messages := []ai.ModelMessage{ai.ModelResponse{
+		ProviderName: "openai", ProviderResponseID: "job", State: ai.ModelResponseStateSuspended,
+		ProviderDetails: map[string]any{"background": true},
+	}}
+	events, err := model.StreamRequest(t.Context(), messages, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []ai.ModelStreamEvent
+	for event, err := range events {
+		if err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, event)
+	}
+	if len(got) != 5 {
+		t.Fatalf("unexpected static event count: %d (%+v)", len(got), got)
+	}
+	if _, ok := got[0].(ai.ThinkingDeltaEvent); !ok {
+		t.Fatalf("missing static thinking event: %+v", got)
+	}
+	if _, ok := got[1].(ai.TextDeltaEvent); !ok {
+		t.Fatalf("missing static text event: %+v", got)
+	}
+	if _, ok := got[2].(ai.ToolCallStartEvent); !ok {
+		t.Fatalf("missing static tool start: %+v", got)
+	}
+	if finish, ok := got[4].(ai.FinishEvent); !ok || finish.State != ai.ModelResponseStateComplete {
+		t.Fatalf("missing static finish: %+v", got)
+	}
+}
+
+func TestResponsesStaticStreamSupportsEarlyConsumerStops(t *testing.T) {
+	for stopAt := 1; stopAt <= 4; stopAt++ {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"id":"job","model":"gpt-5","status":"completed",
+				"output":[
+					{"id":"reason","type":"reasoning","summary":[{"text":"thinking"}]},
+					{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]},
+					{"id":"call","type":"function_call","call_id":"call","name":"work","arguments":{}}
+				]
+			}`))
+		})
+		messages := []ai.ModelMessage{ai.ModelResponse{
+			ProviderName: "openai", ProviderResponseID: "job", State: ai.ModelResponseStateSuspended,
+			ProviderDetails: map[string]any{"background": true},
+		}}
+		stream, err := model.StreamRequest(t.Context(), messages, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for range stream {
+			count++
+			if count == stopAt {
+				break
+			}
+		}
+	}
+}
+
+func TestResponsesStreamAcceptsSerializedSequenceNumber(t *testing.T) {
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("starting_after") != "7" {
+			t.Fatalf("unexpected sequence query: %s", r.URL.RawQuery)
+		}
+		sseHandler(t, []string{
+			`{"type":"response.completed","sequence_number":8,"response":{"id":"job","model":"gpt-5","background":false,"output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}],"usage":{}}}`,
+		})(w, r)
+	})
+	messages := []ai.ModelMessage{ai.ModelResponse{
+		ProviderName: "openai", ProviderResponseID: "job", State: ai.ModelResponseStateSuspended,
+		ProviderDetails: map[string]any{"background": true, "sequence_number": float64(7)},
+	}}
+	stream, err := model.StreamRequest(t.Context(), messages, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event, ok := event.(ai.TextDeltaEvent); ok {
+			text += event.Delta
+		}
+	}
+	if text != "done" {
+		t.Fatalf("completed retrieval output was not replayed: %q", text)
+	}
+}
+
+func TestResponsesBackgroundStreamRequestFailures(t *testing.T) {
+	messages := func(sequence bool) []ai.ModelMessage {
+		details := map[string]any{"background": true}
+		if sequence {
+			details["sequence_number"] = 1
+		}
+		return []ai.ModelMessage{ai.ModelResponse{
+			ProviderName: "openai", ProviderResponseID: "job", State: ai.ModelResponseStateSuspended,
+			ProviderDetails: details,
+		}}
+	}
+	t.Run("static retrieve", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "missing", http.StatusNotFound)
+		})
+		if _, err := model.StreamRequest(t.Context(), messages(false), ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected static retrieve error")
+		}
+	})
+	t.Run("invalid URL", func(t *testing.T) {
+		model := openai.NewResponsesModel("gpt-5", openai.WithBaseURL("http://[::1"))
+		if _, err := model.StreamRequest(t.Context(), messages(true), ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected stream retrieve URL error")
+		}
+	})
+	t.Run("transport", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		server.Close()
+		model := openai.NewResponsesModel("gpt-5", openai.WithBaseURL(server.URL))
+		if _, err := model.StreamRequest(t.Context(), messages(true), ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected stream retrieve transport error")
+		}
+	})
+	t.Run("HTTP", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "bad", http.StatusBadRequest)
+		})
+		if _, err := model.StreamRequest(t.Context(), messages(true), ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected stream retrieve API error")
+		}
+	})
+	t.Run("truncated HTTP", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte("short"))
+		})
+		if _, err := model.StreamRequest(t.Context(), messages(true), ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected stream retrieve read error")
+		}
+	})
+}
+
 func TestResponsesStreamUsesNativeDeferredToolSearch(t *testing.T) {
 	var gotBody map[string]any
 	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {

@@ -21,6 +21,10 @@ var ErrUnknownModelID = errors.New("ai: unknown model ID")
 // ErrNoModel is returned when no default or selector supplies a model.
 var ErrNoModel = errors.New("ai: no model selected")
 
+// ErrNoSuspendedResponse is returned when Resume receives history that does
+// not end with a suspended model response.
+var ErrNoSuspendedResponse = errors.New("ai: message history does not end with a suspended model response")
+
 // ErrOutputTypeOverrideWithValidators is returned when RunAs or RunStreamAs
 // would replace the type expected by an agent-level output validator.
 var ErrOutputTypeOverrideWithValidators = errors.New(

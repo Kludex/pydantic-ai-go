@@ -40,6 +40,23 @@ func (a *Agent[Deps, Output]) RunParts(ctx context.Context, contents []UserConte
 	return a.runPrompt(ctx, UserPromptPart{Contents: contents}, deps, opts)
 }
 
+// Resume continues a provider response left suspended in history without
+// adding a new user prompt. History must end with ModelResponseStateSuspended.
+func (a *Agent[Deps, Output]) Resume(
+	ctx context.Context, history []ModelMessage, deps Deps, opts ...RunOption,
+) (*RunResult[Output], error) {
+	return a.runPrompt(ctx, UserPromptPart{}, deps, suspendedRunOptions(history, opts))
+}
+
+func suspendedRunOptions(history []ModelMessage, opts []RunOption) []RunOption {
+	options := slices.Clone(opts)
+	options = append(options, func(cfg *runConfig) {
+		cfg.history = cloneModelMessages(history)
+		cfg.resumeSuspended = true
+	})
+	return options
+}
+
 func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (result *RunResult[Output], err error) {
 	cfg := buildRunConfig(opts)
 	capabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
@@ -205,9 +222,20 @@ func (a *Agent[Deps, Output]) newRun(
 		})
 		toolNames[tool.def.Name] = struct{}{}
 	}
-	history, interruptedReturns := repairDanglingToolCalls(
-		dropOrphanedToolResults(cfg.history), cfg.deferredResults != nil,
-	)
+	history := dropOrphanedToolResults(cfg.history)
+	var interruptedReturns []RequestPart
+	var resumeSeed *ModelResponse
+	if cfg.resumeSuspended {
+		history = cloneModelMessages(history)
+		if !historyEndsSuspended(history) {
+			cancellation.finish()
+			return nil, ErrNoSuspendedResponse
+		}
+		seed := history[len(history)-1].(ModelResponse)
+		resumeSeed = cloneModelResponse(&seed)
+	} else {
+		history, interruptedReturns = repairDanglingToolCalls(history, cfg.deferredResults != nil)
+	}
 	runID := cfg.runID
 	if runID == "" {
 		runID = newRunID()
@@ -225,11 +253,15 @@ func (a *Agent[Deps, Output]) newRun(
 	if conversationID == "" {
 		conversationID = newRunID()
 	}
+	if resumeSeed != nil {
+		history = history[:len(history)-1]
+	}
 	history = mergeConsecutiveMessages(history)
 	r.revealedTools = revealedToolNames(history)
 	r.messages = append(r.messages, history...)
 	r.newMessages = len(r.messages)
 	settings := mergeModelSettings(a.settings, cfg.settings)
+	r.resumeSeed = resumeSeed
 	r.rc = &RunContext[Deps]{
 		Deps: deps, MaxRetries: r.outputMaxRetries, RunID: runID, ConversationID: conversationID,
 		Model: model, ModelSettings: settings, UsageLimits: limits,
@@ -262,13 +294,23 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, err
 	}
-	requestParts := slices.Clone(interruptedReturns)
-	requestParts = append(requestParts, prompt)
-	requestParts = stampRequestParts(requestParts, time.Now().UTC())
-	r.messages = append(r.messages, ModelRequest{
-		Parts: requestParts, RunID: runID, ConversationID: conversationID,
-	})
+	if !cfg.resumeSuspended {
+		requestParts := slices.Clone(interruptedReturns)
+		requestParts = append(requestParts, prompt)
+		requestParts = stampRequestParts(requestParts, time.Now().UTC())
+		r.messages = append(r.messages, ModelRequest{
+			Parts: requestParts, RunID: runID, ConversationID: conversationID,
+		})
+	}
 	return r, nil
+}
+
+func historyEndsSuspended(messages []ModelMessage) bool {
+	if len(messages) == 0 {
+		return false
+	}
+	response, ok := messages[len(messages)-1].(ModelResponse)
+	return ok && response.State == ModelResponseStateSuspended
 }
 
 func historyContainsRunID(messages []ModelMessage, runID string) bool {
@@ -528,6 +570,7 @@ type run[Deps, Output any] struct {
 	staticModelID          string
 	runModelSelectors      []erasedModelSelectorFunc
 	resolvedModels         map[string]Model
+	resumeSeed             *ModelResponse
 	enteredModels          []Model
 	modelClosers           []ModelCloseFunc
 	deferredResults        *DeferredToolResults
@@ -861,16 +904,13 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	}
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 		setLatestRequestContext(msgs, params.Instructions, r.rc.RunID, r.rc.ConversationID)
-		setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
+		if r.resumeSeed == nil {
+			setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
+		}
 		r.setCurrentTools(params)
 		reqCtx, reqSpan := startRequestSpan(ctx, r.model.Name())
 		resp, err := r.doModelRequest(reqCtx, msgs, params)
 		if err != nil {
-			endSpan(reqSpan, err)
-			return nil, err
-		}
-		if resp == nil {
-			err := &UnexpectedModelBehaviorError{Message: "model returned no response"}
 			endSpan(reqSpan, err)
 			return nil, err
 		}
@@ -885,9 +925,6 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		if resp.ConversationID == "" {
 			resp.ConversationID = r.rc.ConversationID
 		}
-		if resp.State == "" {
-			resp.State = ModelResponseStateComplete
-		}
 		if resp.ModelName == "" {
 			resp.ModelName = r.model.Name()
 		}
@@ -897,7 +934,9 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	if err != nil {
 		return nil, err
 	}
-	setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
+	if r.resumeSeed == nil {
+		setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
+	}
 	next := inner
 	for i := len(r.capabilities) - 1; i >= 0; i-- {
 		if wrapper, ok := r.capabilities[i].(ModelRequestWrapper); ok {
@@ -934,31 +973,40 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			return nil, err
 		}
 	}
-	return next(ctx, r.messages, params)
+	requestMessages := r.messages
+	if r.resumeSeed != nil {
+		requestMessages = append(slices.Clone(requestMessages), *cloneModelResponse(r.resumeSeed))
+	}
+	response, err := next(ctx, requestMessages, params)
+	if err == nil && response != nil {
+		r.resumeSeed = nil
+	}
+	return response, err
 }
 
 func setLatestRequestContext(messages []ModelMessage, instructions, runID, conversationID string) {
-	for index := len(messages) - 1; index >= 0; index-- {
-		request, ok := messages[index].(ModelRequest)
-		if !ok {
-			continue
-		}
-		request.Instructions = instructions
-		if request.Timestamp.IsZero() {
-			request.Timestamp = time.Now().UTC()
-		}
-		if request.RunID == "" {
-			request.RunID = runID
-		}
-		if request.ConversationID == "" {
-			request.ConversationID = conversationID
-		}
-		if request.State == "" {
-			request.State = RequestStateComplete
-		}
-		messages[index] = request
+	if len(messages) == 0 {
 		return
 	}
+	index := len(messages) - 1
+	request, ok := messages[index].(ModelRequest)
+	if !ok {
+		return
+	}
+	request.Instructions = instructions
+	if request.Timestamp.IsZero() {
+		request.Timestamp = time.Now().UTC()
+	}
+	if request.RunID == "" {
+		request.RunID = runID
+	}
+	if request.ConversationID == "" {
+		request.ConversationID = conversationID
+	}
+	if request.State == "" {
+		request.State = RequestStateComplete
+	}
+	messages[index] = request
 }
 
 func (r *run[Deps, Output]) prependLatestRequestParts(parts []RequestPart) {
@@ -1552,10 +1600,108 @@ func cloneSchemaValue(value any) any {
 	}
 }
 
-// doModelRequest streams when the run has an emit callback and the model
-// supports it; otherwise it falls back to a plain request, replaying the
-// response as events so RunStream works with every Model.
-func (r *run[Deps, Output]) doModelRequest(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+// doModelRequest resolves all suspended continuation segments as one logical
+// request. Usage is merged and committed once after the final segment.
+func (r *run[Deps, Output]) doModelRequest(
+	ctx context.Context, msgs []ModelMessage, params ModelRequestParams,
+) (*ModelResponse, error) {
+	baseMessages := slices.Clone(msgs)
+	var response *ModelResponse
+	if historyEndsSuspended(baseMessages) {
+		seed := baseMessages[len(baseMessages)-1].(ModelResponse)
+		response = cloneModelResponse(&seed)
+		baseMessages = baseMessages[:len(baseMessages)-1]
+	}
+	lastMode := continuationAccumulate
+	generationCount := 0
+	pollCount := 0
+	lastSegmentOffset := 0
+	for {
+		segmentMessages := baseMessages
+		if response != nil {
+			if response.State != ModelResponseStateSuspended {
+				return response, nil
+			}
+			if err := continuationLimitError(response, lastMode, &generationCount, &pollCount); err != nil {
+				r.cancelSuspendedResponse(response)
+				return nil, err
+			}
+			if err := r.waitForContinuation(ctx, response); err != nil {
+				r.cancelSuspendedResponse(response)
+				return nil, err
+			}
+			segmentMessages = append(slices.Clone(baseMessages), *cloneModelResponse(response))
+		}
+
+		var buffered []StreamEvent
+		emit := r.emitStreamEvent
+		if response != nil && r.emit != nil {
+			emit = func(event StreamEvent) bool {
+				buffered = append(buffered, event)
+				return true
+			}
+		}
+		segment, err := r.requestModelSegment(ctx, segmentMessages, params, emit)
+		if err != nil {
+			suspended := response
+			if segment != nil {
+				if segment.State == "" {
+					segment.State = ModelResponseStateComplete
+				}
+				if suspended == nil {
+					suspended = segment
+				} else {
+					suspended, _ = mergeModelResponses(suspended, segment)
+				}
+			}
+			r.cancelSuspendedResponse(suspended)
+			return nil, err
+		}
+		if segment == nil {
+			err := &UnexpectedModelBehaviorError{Message: "model returned no response"}
+			if response != nil {
+				r.cancelSuspendedResponse(response)
+			}
+			return nil, err
+		}
+		if segment.State == "" {
+			segment.State = ModelResponseStateComplete
+		}
+		if response == nil {
+			response = segment
+		} else {
+			var mode continuationMergeMode
+			response, mode = mergeModelResponses(response, segment)
+			offset := 0
+			switch mode {
+			case continuationAccumulate:
+				offset = len(response.Parts) - len(segment.Parts)
+			case continuationReplaceSameID:
+				offset = lastSegmentOffset
+			}
+			for _, event := range buffered {
+				if !r.emitStreamEvent(reindexContinuationEvent(event, offset)) {
+					r.cancelSuspendedResponse(response)
+					return nil, context.Canceled
+				}
+			}
+			lastMode = mode
+			lastSegmentOffset = offset
+		}
+		if response.State == ModelResponseStateSuspended {
+			projected := r.usage.Clone()
+			projected.Add(response.Usage)
+			if err := r.rc.UsageLimits.check(projected); err != nil {
+				r.cancelSuspendedResponse(response)
+				return nil, err
+			}
+		}
+	}
+}
+
+func (r *run[Deps, Output]) requestModelSegment(
+	ctx context.Context, msgs []ModelMessage, params ModelRequestParams, emit func(StreamEvent) bool,
+) (*ModelResponse, error) {
 	if params.Settings.RequestTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, params.Settings.RequestTimeout)
@@ -1569,13 +1715,40 @@ func (r *run[Deps, Output]) doModelRequest(ctx context.Context, msgs []ModelMess
 		if err != nil {
 			return nil, err
 		}
-		return accumulate(events, params, r.emitStreamEvent)
+		return accumulate(events, params, emit)
 	}
 	resp, err := r.model.Request(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
-	return accumulate(replayAsEvents(resp), params, r.emitStreamEvent)
+	return accumulate(replayAsEvents(resp), params, emit)
+}
+
+func (r *run[Deps, Output]) waitForContinuation(ctx context.Context, response *ModelResponse) error {
+	delayer, ok := r.model.(ModelContinuationDelayer)
+	if !ok {
+		return nil
+	}
+	delay := delayer.ContinuationDelay(*cloneModelResponse(response))
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return context.Cause(ctx)
+	case <-timer.C:
+		return nil
+	}
+}
+
+func (r *run[Deps, Output]) cancelSuspendedResponse(response *ModelResponse) {
+	canceler, ok := r.model.(SuspendedResponseCanceler)
+	if !ok || response == nil || response.State != ModelResponseStateSuspended {
+		return
+	}
+	_ = canceler.CancelSuspendedResponse(context.WithoutCancel(r.ctx), *cloneModelResponse(response))
 }
 
 func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error) {

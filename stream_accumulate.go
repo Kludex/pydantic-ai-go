@@ -249,6 +249,10 @@ func accumulate(
 				return nil, err
 			}
 			materialize()
+			if event.Parts != nil {
+				snapshot := cloneModelResponse(&ModelResponse{Parts: event.Parts})
+				response.Parts = snapshot.Parts
+			}
 			response.Usage = event.Usage
 			response.ModelName = event.ModelName
 			response.Timestamp = event.Timestamp
@@ -259,7 +263,7 @@ func accumulate(
 			response.FinishReason = event.FinishReason
 			response.State = event.State
 			if err := emitEvent(event); err != nil {
-				return nil, err
+				return response, err
 			}
 			return response, nil
 		default:

@@ -166,6 +166,16 @@ func (a *Agent[Deps, Output]) RunStreamParts(
 	return a.runStreamPrompt(ctx, UserPromptPart{Contents: contents}, deps, opts, true)
 }
 
+// ResumeStream continues a provider response left suspended in history without
+// adding a new user prompt. Setup failures are yielded from StreamedRun.Events.
+func (a *Agent[Deps, Output]) ResumeStream(
+	ctx context.Context, history []ModelMessage, deps Deps, opts ...RunOption,
+) *StreamedRun[Output] {
+	return a.runStreamPrompt(
+		ctx, UserPromptPart{}, deps, suspendedRunOptions(history, opts), true,
+	)
+}
+
 func (a *Agent[Deps, Output]) runStreamPrompt(
 	ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption, commitFirstOutput bool,
 ) *StreamedRun[Output] {

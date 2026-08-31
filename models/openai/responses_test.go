@@ -3,12 +3,15 @@ package openai_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
@@ -151,6 +154,172 @@ func TestResponsesPendingStateMetadata(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestResponsesAgentContinuesBackgroundResponse(t *testing.T) {
+	var methods, paths []string
+	var initialBody map[string]any
+	model := newResponsesServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+		methods = append(methods, r.Method)
+		paths = append(paths, r.URL.Path)
+		if r.Header.Get("Authorization") != "Bearer test-key" {
+			t.Errorf("missing authorization header: %q", r.Header.Get("Authorization"))
+		}
+		if r.Method == http.MethodPost {
+			if err := json.NewDecoder(r.Body).Decode(&initialBody); err != nil {
+				t.Error(err)
+			}
+			_, _ = w.Write([]byte(`{
+				"id":"job","model":"gpt-5","created_at":1735689600,
+				"status":"queued","background":true,"usage":{"input_tokens":2}
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"job","model":"gpt-5","created_at":1735689601,
+			"status":"completed","background":true,
+			"output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}],
+			"usage":{"input_tokens":2,"output_tokens":1}
+		}`))
+	}, openai.WithBackgroundMode(true), openai.WithBackgroundPollInterval(0))
+	result, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "go", struct{}{})
+	if err != nil || result.Output != "done" {
+		t.Fatalf("unexpected background result=%+v err=%v", result, err)
+	}
+	if !slices.Equal(methods, []string{http.MethodPost, http.MethodGet}) ||
+		!slices.Equal(paths, []string{"/responses", "/responses/job"}) || initialBody["background"] != true {
+		t.Fatalf("unexpected background requests methods=%v paths=%v body=%v", methods, paths, initialBody)
+	}
+	if usage := result.Usage(); usage.Requests != 1 || usage.InputTokens != 2 || usage.OutputTokens != 1 {
+		t.Fatalf("background usage was double counted: %+v", usage)
+	}
+	response := result.NewMessages()[1].(ai.ModelResponse)
+	if response.Timestamp.IsZero() {
+		t.Fatalf("retrieved response timestamp was lost: %+v", response)
+	}
+}
+
+func TestResponsesBackgroundLifecycle(t *testing.T) {
+	t.Run("delay", func(t *testing.T) {
+		model := openai.NewResponsesModel("gpt-5", openai.WithBackgroundPollInterval(time.Millisecond))
+		if delay := model.ContinuationDelay(ai.ModelResponse{
+			State: ai.ModelResponseStateSuspended, ProviderDetails: map[string]any{"background": true},
+		}); delay != time.Millisecond {
+			t.Fatalf("unexpected background delay: %s", delay)
+		}
+		if delay := model.ContinuationDelay(ai.ModelResponse{State: ai.ModelResponseStateComplete}); delay != 0 {
+			t.Fatalf("completed response had delay: %s", delay)
+		}
+	})
+
+	t.Run("cancel", func(t *testing.T) {
+		calls := 0
+		model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			if r.Method != http.MethodPost || r.URL.Path != "/responses/job/cancel" {
+				t.Fatalf("unexpected cancellation request %s %s", r.Method, r.URL.Path)
+			}
+			_, _ = w.Write([]byte(`{"id":"job","status":"cancelled"}`))
+		})
+		if err := model.CancelSuspendedResponse(t.Context(), ai.ModelResponse{
+			ProviderName: "openai", ProviderResponseID: "job", ProviderDetails: map[string]any{"background": true},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := model.CancelSuspendedResponse(t.Context(), ai.ModelResponse{ProviderName: "other"}); err != nil {
+			t.Fatal(err)
+		}
+		if calls != 1 {
+			t.Fatalf("unexpected cancellation calls: %d", calls)
+		}
+	})
+
+	t.Run("cancel error", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "cannot cancel", http.StatusConflict)
+		})
+		err := model.CancelSuspendedResponse(t.Context(), ai.ModelResponse{
+			ProviderName: "openai", ProviderResponseID: "job", ProviderDetails: map[string]any{"background": true},
+		})
+		var apiErr *openai.APIError
+		if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict {
+			t.Fatalf("unexpected cancel error: %v", err)
+		}
+	})
+}
+
+func TestResponsesBackgroundRequestFailures(t *testing.T) {
+	messages := []ai.ModelMessage{ai.ModelResponse{
+		ProviderName: "openai", ProviderResponseID: "job", State: ai.ModelResponseStateSuspended,
+		ProviderDetails: map[string]any{"background": true},
+	}}
+	t.Run("invalid retrieve URL", func(t *testing.T) {
+		model := openai.NewResponsesModel("gpt-5", openai.WithBaseURL("http://[::1"))
+		if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected retrieve URL error")
+		}
+	})
+	t.Run("retrieve transport", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		server.Close()
+		model := openai.NewResponsesModel("gpt-5", openai.WithBaseURL(server.URL))
+		if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected retrieve transport error")
+		}
+	})
+	t.Run("retrieve read", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			_, _ = w.Write([]byte("short"))
+		})
+		if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected retrieve read error")
+		}
+	})
+	t.Run("retrieve HTTP", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, "missing", http.StatusNotFound)
+		})
+		if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err == nil {
+			t.Fatal("expected retrieve API error")
+		}
+	})
+
+	response := ai.ModelResponse{
+		ProviderName: "openai", ProviderResponseID: "job", ProviderDetails: map[string]any{"background": true},
+	}
+	t.Run("invalid cancel URL", func(t *testing.T) {
+		model := openai.NewResponsesModel("gpt-5", openai.WithBaseURL("http://[::1"))
+		if err := model.CancelSuspendedResponse(t.Context(), response); err == nil {
+			t.Fatal("expected cancel URL error")
+		}
+	})
+	t.Run("cancel transport", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+		server.Close()
+		model := openai.NewResponsesModel("gpt-5", openai.WithBaseURL(server.URL))
+		if err := model.CancelSuspendedResponse(t.Context(), response); err == nil {
+			t.Fatal("expected cancel transport error")
+		}
+	})
+	t.Run("cancel read", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Length", "100")
+			_, _ = w.Write([]byte("short"))
+		})
+		if err := model.CancelSuspendedResponse(t.Context(), response); err == nil {
+			t.Fatal("expected cancel read error")
+		}
+	})
+}
+
+func TestBackgroundPollIntervalRejectsNegativeValues(t *testing.T) {
+	defer func() {
+		if recovered := recover(); recovered != "openai: background poll interval must not be negative" {
+			t.Fatalf("unexpected panic: %v", recovered)
+		}
+	}()
+	_ = openai.WithBackgroundPollInterval(-time.Second)
 }
 
 func TestResponsesToolCallRoundTrip(t *testing.T) {

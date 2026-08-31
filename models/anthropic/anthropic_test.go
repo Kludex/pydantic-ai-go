@@ -120,6 +120,45 @@ func TestPauseTurnResponseIsSuspended(t *testing.T) {
 	}
 }
 
+func TestAgentAutomaticallyContinuesPauseTurn(t *testing.T) {
+	var bodies []map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if len(bodies) == 1 {
+			_, _ = w.Write([]byte(`{
+				"id":"paused","model":"claude-sonnet-4-5","stop_reason":"pause_turn",
+				"content":[{"type":"text","text":"partial "}],
+				"usage":{"input_tokens":2,"output_tokens":1}
+			}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"complete","model":"claude-sonnet-4-5","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"done"}],
+			"usage":{"input_tokens":3,"output_tokens":1}
+		}`))
+	})
+	result, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "go", struct{}{})
+	if err != nil || result.Output != "partial done" || result.Usage().Requests != 2 {
+		t.Fatalf("unexpected pause continuation result=%+v err=%v", result, err)
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("expected two Anthropic requests, got %d", len(bodies))
+	}
+	messages := bodies[1]["messages"].([]any)
+	if len(messages) != 2 || messages[1].(map[string]any)["role"] != "assistant" {
+		t.Fatalf("paused response was not echoed to Anthropic: %+v", messages)
+	}
+	content := messages[1].(map[string]any)["content"].([]any)
+	if content[0].(map[string]any)["text"] != "partial " {
+		t.Fatalf("paused content was not preserved: %+v", content)
+	}
+}
+
 func TestRequestToolUseRoundTrip(t *testing.T) {
 	var gotBody map[string]any
 	first := true

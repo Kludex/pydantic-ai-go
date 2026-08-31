@@ -17,13 +17,15 @@ import (
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
 type Model struct {
-	name                string
-	apiKey              string
-	baseURL             string
-	httpClient          *http.Client
-	strictToolSupport   bool
-	deferredToolSupport bool
-	defaultSettings     ai.ModelSettings
+	name                   string
+	apiKey                 string
+	baseURL                string
+	httpClient             *http.Client
+	strictToolSupport      bool
+	deferredToolSupport    bool
+	defaultSettings        ai.ModelSettings
+	background             *bool
+	backgroundPollInterval time.Duration
 }
 
 // Option configures a Model.
@@ -56,15 +58,31 @@ func WithDeferredToolSupport(enabled bool) Option {
 	return func(m *Model) { m.deferredToolSupport = enabled }
 }
 
+// WithBackgroundMode enables server-side execution for Responses API requests.
+// Pending responses are polled automatically by the agent.
+func WithBackgroundMode(enabled bool) Option {
+	return func(m *Model) { m.background = &enabled }
+}
+
+// WithBackgroundPollInterval sets the delay between Responses API background
+// retrievals. The default is two seconds. Zero polls immediately.
+func WithBackgroundPollInterval(interval time.Duration) Option {
+	if interval < 0 {
+		panic("openai: background poll interval must not be negative")
+	}
+	return func(m *Model) { m.backgroundPollInterval = interval }
+}
+
 // NewModel creates a Model for the named OpenAI model, e.g. "gpt-5".
 func NewModel(name string, opts ...Option) *Model {
 	m := &Model{
-		name:                name,
-		apiKey:              os.Getenv("OPENAI_API_KEY"),
-		baseURL:             "https://api.openai.com/v1",
-		httpClient:          http.DefaultClient,
-		strictToolSupport:   true,
-		deferredToolSupport: true,
+		name:                   name,
+		apiKey:                 os.Getenv("OPENAI_API_KEY"),
+		baseURL:                "https://api.openai.com/v1",
+		httpClient:             http.DefaultClient,
+		strictToolSupport:      true,
+		deferredToolSupport:    true,
+		backgroundPollInterval: 2 * time.Second,
 	}
 	for _, opt := range opts {
 		opt(m)

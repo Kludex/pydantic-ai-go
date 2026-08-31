@@ -107,7 +107,7 @@ func (d ToolCallPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 
 func mergeProviderDetails(base, update map[string]any) map[string]any {
 	if len(update) == 0 {
-		return base
+		return cloneSchemaMap(base)
 	}
 	merged := cloneSchemaMap(base)
 	if merged == nil {

@@ -147,6 +147,55 @@ func TestPauseTurnStreamIsSuspended(t *testing.T) {
 	}
 }
 
+func TestAgentStreamAutomaticallyContinuesPauseTurn(t *testing.T) {
+	requests := 0
+	var secondBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			anthropicSSE(t, []string{
+				`{"type":"message_start","message":{"id":"paused","model":"claude","usage":{"input_tokens":1}}}`,
+				`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+				`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial "}}`,
+				`{"type":"message_delta","delta":{"stop_reason":"pause_turn"},"usage":{"output_tokens":1}}`,
+				`{"type":"message_stop"}`,
+			})(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&secondBody); err != nil {
+			t.Error(err)
+		}
+		anthropicSSE(t, []string{
+			`{"type":"message_start","message":{"id":"complete","model":"claude","usage":{"input_tokens":2}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"done"}}`,
+			`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+			`{"type":"message_stop"}`,
+		})(w, r)
+	})
+	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "go", struct{}{})
+	var text string
+	var starts []int
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		text += normalizedAnthropicText(event)
+		if event, ok := event.(ai.PartStartEvent); ok {
+			starts = append(starts, event.Index)
+		}
+	}
+	result := stream.Result()
+	if result == nil || result.Output != "partial done" || result.Usage().Requests != 2 ||
+		text != "partial done" || len(starts) != 2 || starts[0] != 0 || starts[1] != 1 {
+		t.Fatalf("unexpected pause stream result=%+v text=%q starts=%v", result, text, starts)
+	}
+	messages := secondBody["messages"].([]any)
+	if len(messages) != 2 || messages[1].(map[string]any)["role"] != "assistant" {
+		t.Fatalf("paused stream response was not echoed: %+v", messages)
+	}
+}
+
 func TestStreamEndToEnd(t *testing.T) {
 	model := newServer(t, anthropicSSE(t, []string{
 		`{"type":"message_start","message":{"model":"claude","usage":{"input_tokens":2,"output_tokens":0}}}`,

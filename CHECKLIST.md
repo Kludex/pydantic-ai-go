@@ -96,7 +96,7 @@ Status:
 - [x] Static and dynamic approval through `WithApprovalRequired`, `WithDynamicApproval`, and explicit `RequestToolApproval` return values, including validated pending calls and local execution after resume.
 - [x] Static and dynamic external execution through typed/raw constructors, `WithExternalExecution`, `WithDynamicExternalExecution`, and explicit `RequestExternalToolExecution` values, including rich, failed, or retrying results.
 - [x] Explicit `DeferredToolRequests` / `DeferredToolResults` values, detached pending results, preserved partial history, all-result validation, `WithDeferredToolResults` pause/resume, and ordered inline partial resolution.
-- [ ] Automatically continue provider responses in `suspended` state, including Anthropic `pause_turn` and OpenAI background responses.
+- [x] Suspended provider responses continue automatically as one logical turn in ordinary and streamed runs, with accumulate/same-ID/fresh-replacement merge modes, early usage checks, separate generation/poll ceilings, context-aware delays, and best-effort cancellation. `Resume` and `ResumeStream` continue persisted suspended history without injecting a prompt or retaining the stale suspended snapshot. Anthropic `pause_turn` reissues immediately; OpenAI Responses background mode supports create, retrieve, streamed cursor resume, static retrieval fallback, polling configuration, and cancel.
 - [x] Ordered `DeferredToolCallHandler` capability hook plus `DeferredToolHandlerFunc`, with partial resolution and unresolved-call bubbling.
 - [x] Approved/denied results, validated argument overrides, and detached approval metadata through `RunContext.ToolCallApproved` and `ToolCallMetadata`.
 - [x] Preserve intended deferred gaps while repairing unrelated incomplete tool-call histories on ordinary resume; completed siblings are not re-executed.
@@ -120,14 +120,15 @@ Status:
 - [x] `FunctionToolCallEvent`, `FunctionToolResultEvent`, `OutputToolCallEvent`, and `OutputToolResultEvent`, with concurrent results emitted in completion order.
 - [x] `DeferredToolRequestsEvent` after individual call events and `DeferredToolResultsEvent` for each inline handler result batch, without duplicate call events.
 - [x] `EnqueuedMessagesEvent` is emitted once per delivered enqueue group and participates in ordinary event capability ordering and consumer cancellation.
+- [ ] Preserve a resumable suspended snapshot when a stream consumer deliberately detaches, distinct from explicit run cancellation that cancels the provider job.
 
 ## P1 - Providers and model behavior
 
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: text/reasoning/function-call streaming plus response/item IDs, encrypted reasoning, function namespaces, status, timestamps, background metadata, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; provider-managed search, native output, multimodal content, other builtin tools, and background continuation remain.
-- [~] Anthropic Messages: text/thinking/function-tool streaming, signed-thinking round trips, multimodal input, response IDs, stop reasons, suspended `pause_turn` state, and provider-native deferred-definition/reveal rendering; automatic pause continuation, native server search, citations, and other native tools remain.
+- [~] OpenAI Responses: text/reasoning/function-call streaming plus response/item IDs, encrypted reasoning, function namespaces, status, timestamps, configurable background create/poll/retrieve/cancel continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; provider-managed search, native output, multimodal content, and other builtin tools remain.
+- [~] Anthropic Messages: text/thinking/function-tool streaming, signed-thinking round trips, multimodal input, response IDs, stop reasons, automatic ordinary/streamed `pause_turn` continuation, and provider-native deferred-definition/reveal rendering; native server search, citations, and other native tools remain.
 - [~] Google Gemini: text/thinking/function-tool streaming, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.

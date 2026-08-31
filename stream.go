@@ -90,6 +90,9 @@ func (ToolCallDeltaEvent) modelStreamEventKind() string { return "tool-call-delt
 // FinishEvent ends one streamed model response and carries its usage. It is
 // both the provider completion marker and the final normalized response event.
 type FinishEvent struct {
+	// Parts is an optional authoritative final snapshot. Providers use it when
+	// a terminal event contains more complete content than preceding deltas.
+	Parts              []ResponsePart
 	Usage              Usage
 	ModelName          string
 	Timestamp          time.Time

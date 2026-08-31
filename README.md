@@ -132,6 +132,42 @@ Resolvers run in registration order, and each ID is resolved once per run. An un
 
 A model can implement `ModelOpener` when it owns run-scoped resources. `OpenModel` runs once for each distinct selected model. Its `ModelCloseFunc` runs with a non-canceled context in reverse selection order, including failed, canceled, deferred, and partially consumed streamed runs. Models close before toolsets because model selection happens after toolset acquisition.
 
+## Suspended responses
+
+Use OpenAI background mode for model requests that may take a long time:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	model := openai.NewResponsesModel(
+		"gpt-5",
+		openai.WithBackgroundMode(true),
+	)
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Solve the problem.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+The agent polls an OpenAI background response until it completes. It also resumes Anthropic `pause_turn` responses immediately. Continuation segments form one response in history and contribute usage once. Fresh generations stop after `MaxGenerationContinuations`; polls of one response ID stop after `MaxBackgroundPolls`. A model can implement `ModelContinuationDelayer` and `SuspendedResponseCanceler` to control polling and best-effort cleanup.
+
+Use `agent.Resume(ctx, history, deps)` or `agent.ResumeStream(ctx, history, deps)` when persisted history ends with a suspended response. These methods do not add a user prompt. They replace the suspended history entry with the final merged response. Invalid history returns `ErrNoSuspendedResponse`.
+
+`RunStream` emits part events from every segment. Accumulated segments receive continuous part indexes. Repeated snapshots for one response ID reuse their index space. Each segment emits its own `FinishEvent`, while `RunResult.Usage()` contains the merged usage.
+
 ## Concurrent tools
 
 Independent tool calls from one model response run concurrently. Results still go back to the model in the order it requested them.

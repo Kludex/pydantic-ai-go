@@ -11,6 +11,10 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go"
 )
 
+type alternateLifecycleModel struct {
+	*lifecycleModel
+}
+
 type lifecycleModel struct {
 	name      string
 	request   func([]ai.ModelMessage) (*ai.ModelResponse, error)
@@ -72,6 +76,33 @@ func TestSelectedModelsOpenOnceAndCloseInReverseOrder(t *testing.T) {
 	}
 	if !slices.Equal(log, []string{"open:a", "open:b", "close:b", "close:a"}) {
 		t.Fatalf("unexpected model lifecycle order: %v", log)
+	}
+}
+
+func TestDifferentSelectedModelTypesHaveIndependentLifecycles(t *testing.T) {
+	var log []string
+	first := &lifecycleModel{
+		name: "first", log: &log,
+		request: func([]ai.ModelMessage) (*ai.ModelResponse, error) { return lifecycleToolCall(), nil },
+	}
+	second := &alternateLifecycleModel{&lifecycleModel{
+		name: "second", log: &log,
+		request: func([]ai.ModelMessage) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+		},
+	}}
+	agent := ai.NewAgent[deps, string](first)
+	agent.AddModelSelector(func(_ context.Context, selection ai.ModelSelectionContext[deps]) (ai.ModelSelection, error) {
+		if selection.Step == 1 {
+			return ai.ModelSelection{Model: first}, nil
+		}
+		return ai.ModelSelection{Model: second}, nil
+	})
+	ai.AddSimpleTool(agent, "next", func(context.Context, struct{}) (string, error) { return "next", nil })
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil || result.Output != "done" ||
+		!slices.Equal(log, []string{"open:first", "open:second", "close:second", "close:first"}) {
+		t.Fatalf("unexpected mixed model lifecycle result=%+v err=%v log=%v", result, err, log)
 	}
 }
 

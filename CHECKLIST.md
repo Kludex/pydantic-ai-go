@@ -207,7 +207,7 @@ Status:
 
 ## P2 - Broader PydanticAI surface
 
-- [ ] Iterative/manual agent run driver, including external `AgentRun.Enqueue`; run-context enqueue is complete.
+- [x] `AgentRun` provides manual normalized-event progression through `StartRun`, `StartRunParts`, and `ResumeRun`, with external enqueue, idle enqueue, cancellation, live usage, deterministic cleanup, and no public graph internals.
 - [ ] Direct model API without an agent loop.
 - [ ] Embeddings API and provider implementations.
 - [ ] Realtime voice/audio API and providers.

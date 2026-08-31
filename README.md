@@ -693,6 +693,39 @@ Each non-empty call returns an ID. Streams emit `EnqueuedMessagesEvent` with tha
 
 If the run pauses for approval or external execution, undelivered groups are stored in response metadata under `PendingMessagesMetadataKey`. They survive `MarshalMessages` and `UnmarshalMessages`, including repeated deferred pauses and resumable cancellation histories. On resume, deferred results are applied before `asap` groups are delivered. `when_idle` groups remain queued until the resumed run can finish.
 
+### Drive a run manually
+
+Use `StartRun` when code outside a tool or capability needs to enqueue messages or control progression:
+
+```go
+run, err := agent.StartRun(ctx, "Investigate the incident.", deps)
+if err != nil {
+	return err
+}
+defer run.Close()
+
+for {
+	event, ok, err := run.Next()
+	if err != nil {
+		return err
+	}
+	if !ok {
+		break
+	}
+	if _, ok := event.(ai.FunctionToolCallEvent); ok {
+		_, err = run.EnqueueWhenIdle(ai.TextContent{Text: "Include a remediation plan."})
+		if err != nil {
+			return err
+		}
+	}
+}
+fmt.Println(run.Result().Output)
+```
+
+`Next` advances through the same normalized events as `RunStream`. The worker pauses after every event, so you can inspect usage or enqueue content before execution continues. `Events` provides a range-over-function view when explicit calls to `Next` are unnecessary. `Cancel` ends the run, and `Close` cancels unfinished work, drains it, and releases model and toolset resources. Use `StartRunParts` for multimodal input and `ResumeRun` for a suspended provider response.
+
+The driver exposes semantic events instead of internal graph nodes. Hooks remain the API for changing request, tool, output, and run behavior.
+
 ## Multimodal input
 
 `RunParts` sends images and files alongside text:
@@ -754,7 +787,7 @@ The agent run is a plain loop: call the model, execute tool calls, and repeat. Y
 | Tool-call node | separate tool validation, tool execution, and output lifecycles |
 | End or redirect | run lifecycle hooks, `RunOutcome`, retries, deferred results, and queued messages |
 
-These hooks can short-circuit or recover the same operations without exposing internal node types. Public node replacement and manual graph advancement are intentionally unsupported. A future iterative run driver will expose manual progression and external enqueue without introducing a graph abstraction.
+These hooks can short-circuit or recover the same operations without exposing internal node types. `AgentRun` adds manual event-by-event progression, external enqueue, cancellation, and live usage. Public internal-node replacement remains intentionally unsupported.
 
 ## Testing your agents
 

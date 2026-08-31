@@ -56,7 +56,13 @@ func (rc *RunContext[Deps]) EnqueueWhenIdle(items ...EnqueueItem) (string, error
 func (rc *RunContext[Deps]) EnqueueWithPriority(
 	priority PendingMessagePriority, items ...EnqueueItem,
 ) (string, error) {
-	if rc.pendingMessages == nil {
+	return enqueuePendingMessage(rc.pendingMessages, priority, items)
+}
+
+func enqueuePendingMessage(
+	queue *pendingMessageQueue, priority PendingMessagePriority, items []EnqueueItem,
+) (string, error) {
+	if queue == nil {
 		return "", fmt.Errorf("ai: enqueue is only available during an agent run")
 	}
 	if priority != PendingMessageASAP && priority != PendingMessageWhenIdle {
@@ -70,7 +76,7 @@ func (rc *RunContext[Deps]) EnqueueWithPriority(
 		return "", nil
 	}
 	id := newRunID()
-	rc.pendingMessages.add(pendingMessage{id: id, priority: priority, messages: messages})
+	queue.add(pendingMessage{id: id, priority: priority, messages: messages})
 	return id, nil
 }
 

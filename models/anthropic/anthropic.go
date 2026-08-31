@@ -164,6 +164,12 @@ type messagesRequest struct {
 	Stop          []string         `json:"stop_sequences,omitempty"`
 	Stream        bool             `json:"stream,omitempty"`
 	ToolAdditions bool             `json:"-"`
+	Thinking      *thinkingParam   `json:"thinking,omitempty"`
+}
+
+type thinkingParam struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens"`
 }
 
 type messageParam struct {
@@ -245,6 +251,10 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*messagesRequest, error) {
+	thinking, err := anthropicThinking(params.Settings.Thinking)
+	if err != nil {
+		return nil, err
+	}
 	req := &messagesRequest{
 		Model:       m.name,
 		MaxTokens:   params.Settings.MaxTokens,
@@ -252,6 +262,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		Temperature: params.Settings.Temperature,
 		TopP:        params.Settings.TopP,
 		Stop:        params.Settings.StopSequences,
+		Thinking:    thinking,
 	}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens
@@ -292,6 +303,9 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		}
 	}
 	if params.OutputTool != nil {
+		if thinking != nil && !params.AllowText {
+			return nil, fmt.Errorf("anthropic: extended thinking and forced output tools cannot be used together")
+		}
 		converted, err := prepareAnthropicTool(*params.OutputTool, m.strictToolSupport, m.schemaWarning)
 		if err != nil {
 			return nil, err
@@ -312,6 +326,36 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")
 	}
 	return req, nil
+}
+
+func anthropicThinking(settings *ai.ThinkingSettings) (*thinkingParam, error) {
+	if settings == nil || settings.Level == ai.ThinkingLevelDisabled ||
+		settings.Level == "" && settings.TokenBudget == nil {
+		return nil, nil
+	}
+	budget := 0
+	if settings.TokenBudget != nil {
+		budget = *settings.TokenBudget
+	} else {
+		switch settings.Level {
+		case "", ai.ThinkingLevelEnabled, ai.ThinkingLevelMedium:
+			budget = 10000
+		case ai.ThinkingLevelMinimal:
+			budget = 1024
+		case ai.ThinkingLevelLow:
+			budget = 2048
+		case ai.ThinkingLevelHigh:
+			budget = 16384
+		case ai.ThinkingLevelXHigh:
+			budget = 32768
+		default:
+			return nil, fmt.Errorf("anthropic: invalid thinking level %q", settings.Level)
+		}
+	}
+	if budget <= 0 {
+		return nil, fmt.Errorf("anthropic: thinking token budget must be positive, got %d", budget)
+	}
+	return &thinkingParam{Type: "enabled", BudgetTokens: budget}, nil
 }
 
 func hasAnthropicToolAdditions(msgs []ai.ModelMessage, deferredNames map[string]struct{}) bool {

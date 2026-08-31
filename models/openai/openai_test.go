@@ -43,6 +43,48 @@ func TestDefaultSettingsAreDetached(t *testing.T) {
 	}
 }
 
+func TestChatThinkingSettings(t *testing.T) {
+	for name, test := range map[string]struct {
+		level ai.ThinkingLevel
+		want  string
+	}{
+		"disabled": {level: ai.ThinkingLevelDisabled, want: "none"},
+		"enabled":  {level: ai.ThinkingLevelEnabled, want: "medium"},
+		"effort":   {level: ai.ThinkingLevelHigh, want: "high"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
+			})
+			temperature := 0.5
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: &ai.ThinkingSettings{Level: test.level}, Temperature: &temperature,
+			}})
+			if err != nil || body["reasoning_effort"] != test.want {
+				t.Fatalf("unexpected thinking payload body=%v err=%v", body, err)
+			}
+			if test.level == ai.ThinkingLevelDisabled && body["temperature"] != temperature {
+				t.Fatalf("disabled reasoning removed sampling settings: %v", body)
+			}
+			if test.level != ai.ThinkingLevelDisabled && body["temperature"] != nil {
+				t.Fatalf("active reasoning retained incompatible sampling settings: %v", body)
+			}
+		})
+	}
+
+	model := openai.NewModel("gpt-5")
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		Thinking: &ai.ThinkingSettings{Level: "extreme"},
+	}})
+	if err == nil || err.Error() != `openai: invalid thinking level "extreme"` {
+		t.Fatalf("unexpected invalid thinking error: %v", err)
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotAuth string

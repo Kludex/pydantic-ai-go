@@ -46,6 +46,95 @@ func TestDefaultSettingsAreDetached(t *testing.T) {
 	}
 }
 
+func TestThinkingSettings(t *testing.T) {
+	for name, test := range map[string]struct {
+		model      string
+		settings   *ai.ThinkingSettings
+		budget     *int
+		level      string
+		include    bool
+		hasInclude bool
+	}{
+		"disabled budget": {
+			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			budget: func() *int { value := 0; return &value }(),
+		},
+		"enabled": {
+			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled},
+			include: true, hasInclude: true,
+		},
+		"effort budget": {
+			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			budget: func() *int { value := 24576; return &value }(), include: true, hasInclude: true,
+		},
+		"explicit budget": {
+			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{
+				TokenBudget: func() *int { value := 99; return &value }(),
+			},
+			budget: func() *int { value := 99; return &value }(), include: true, hasInclude: true,
+		},
+		"include override": {
+			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{
+				Level: ai.ThinkingLevelEnabled, IncludeThoughts: func() *bool { value := false; return &value }(),
+			},
+			hasInclude: true,
+		},
+		"disabled level": {
+			model: "gemini-3-pro", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			level: "MINIMAL",
+		},
+		"disabled explicit include": {
+			model: "gemini-3-pro", settings: &ai.ThinkingSettings{
+				Level: ai.ThinkingLevelDisabled, IncludeThoughts: func() *bool { value := false; return &value }(),
+			},
+			level: "MINIMAL", hasInclude: true,
+		},
+		"effort level": {
+			model: "gemini-3-pro", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelXHigh},
+			level: "HIGH", include: true, hasInclude: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			model := newNamedServer(t, test.model, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+			})
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: test.settings,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			thinking := body["generationConfig"].(map[string]any)["thinkingConfig"].(map[string]any)
+			include, hasInclude := thinking["includeThoughts"]
+			if hasInclude != test.hasInclude || hasInclude && include != test.include {
+				t.Fatalf("unexpected includeThoughts: %v", thinking)
+			}
+			if test.budget != nil && int(thinking["thinkingBudget"].(float64)) != *test.budget {
+				t.Fatalf("unexpected thinking budget: %v", thinking)
+			}
+			if test.level != "" && thinking["thinkingLevel"] != test.level {
+				t.Fatalf("unexpected thinking level: %v", thinking)
+			}
+		})
+	}
+
+	for name, modelName := range map[string]string{"budget model": "gemini-2.5-flash", "level model": "gemini-3-pro"} {
+		t.Run("invalid "+name, func(t *testing.T) {
+			model := google.NewModel(modelName)
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: &ai.ThinkingSettings{Level: "extreme"},
+			}})
+			if err == nil || !strings.Contains(err.Error(), "invalid thinking level") {
+				t.Fatalf("unexpected invalid thinking error: %v", err)
+			}
+		})
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotKey, gotPath string

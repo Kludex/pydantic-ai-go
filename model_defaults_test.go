@@ -78,9 +78,14 @@ func TestModelSettingsCloneIsDetached(t *testing.T) {
 	topP := 0.2
 	seed := 3
 	parallel := true
+	budget := 2048
+	includeThoughts := true
 	original := ai.ModelSettings{
 		Temperature: &temperature, TopP: &topP, Seed: &seed,
 		StopSequences: []string{"stop"}, ParallelToolCalls: &parallel,
+		Thinking: &ai.ThinkingSettings{
+			Level: ai.ThinkingLevelLow, TokenBudget: &budget, IncludeThoughts: &includeThoughts,
+		},
 	}
 	cloned := original.Clone()
 	*cloned.Temperature = 1
@@ -88,8 +93,44 @@ func TestModelSettingsCloneIsDetached(t *testing.T) {
 	*cloned.Seed = 10
 	cloned.StopSequences[0] = "changed"
 	*cloned.ParallelToolCalls = false
+	cloned.Thinking.Level = ai.ThinkingLevelHigh
+	*cloned.Thinking.TokenBudget = 1
+	*cloned.Thinking.IncludeThoughts = false
 	if *original.Temperature != 0.1 || *original.TopP != 0.2 || *original.Seed != 3 ||
-		original.StopSequences[0] != "stop" || !*original.ParallelToolCalls {
+		original.StopSequences[0] != "stop" || !*original.ParallelToolCalls ||
+		original.Thinking.Level != ai.ThinkingLevelLow || *original.Thinking.TokenBudget != 2048 ||
+		!*original.Thinking.IncludeThoughts {
 		t.Fatalf("clone mutated original settings: %+v", original)
+	}
+}
+
+func TestRunThinkingSettingsOverrideAgentSettings(t *testing.T) {
+	var requested ai.ModelSettings
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requested = params.Settings.Clone()
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model, ai.WithModelSettings(ai.ModelSettings{
+		Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow},
+	}))
+	result, err := agent.Run(t.Context(), "go", deps{}, ai.WithRunModelSettings(ai.ModelSettings{
+		Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+	}))
+	if err != nil || result.Output != "done" || requested.Thinking == nil ||
+		requested.Thinking.Level != ai.ThinkingLevelHigh {
+		t.Fatalf("unexpected thinking override result=%+v err=%v settings=%+v", result, err, requested)
+	}
+}
+
+func TestInvalidThinkingLevelFailsBeforeRequest(t *testing.T) {
+	model := fakes.NewTestModel()
+	agent := ai.NewAgent[deps, string](model, ai.WithModelSettings(ai.ModelSettings{
+		Thinking: &ai.ThinkingSettings{Level: "extreme"},
+	}))
+	_, err := agent.Run(t.Context(), "go", deps{})
+	if err == nil || err.Error() != `ai: invalid thinking level "extreme"` {
+		t.Fatalf("unexpected thinking validation error: %v", err)
 	}
 }

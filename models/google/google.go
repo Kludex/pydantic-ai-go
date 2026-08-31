@@ -204,12 +204,19 @@ type toolConfig struct {
 }
 
 type generationConfig struct {
-	MaxOutputTokens  int            `json:"maxOutputTokens,omitempty"`
-	Temperature      *float64       `json:"temperature,omitempty"`
-	TopP             *float64       `json:"topP,omitempty"`
-	StopSequences    []string       `json:"stopSequences,omitempty"`
-	ResponseMimeType string         `json:"responseMimeType,omitempty"`
-	ResponseSchema   map[string]any `json:"responseJsonSchema,omitempty"`
+	MaxOutputTokens  int             `json:"maxOutputTokens,omitempty"`
+	Temperature      *float64        `json:"temperature,omitempty"`
+	TopP             *float64        `json:"topP,omitempty"`
+	StopSequences    []string        `json:"stopSequences,omitempty"`
+	ResponseMimeType string          `json:"responseMimeType,omitempty"`
+	ResponseSchema   map[string]any  `json:"responseJsonSchema,omitempty"`
+	ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
+}
+
+type thinkingConfig struct {
+	IncludeThoughts *bool  `json:"includeThoughts,omitempty"`
+	ThinkingBudget  *int   `json:"thinkingBudget,omitempty"`
+	ThinkingLevel   string `json:"thinkingLevel,omitempty"`
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*generateRequest, error) {
@@ -218,12 +225,18 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.SystemInstruction = &content{Parts: []part{{Text: params.Instructions}}}
 	}
 	settings := params.Settings
-	if settings.MaxTokens != 0 || settings.Temperature != nil || settings.TopP != nil || len(settings.StopSequences) > 0 {
+	thinking, err := googleThinking(m.name, settings.Thinking)
+	if err != nil {
+		return nil, err
+	}
+	if settings.MaxTokens != 0 || settings.Temperature != nil || settings.TopP != nil ||
+		len(settings.StopSequences) > 0 || thinking != nil {
 		req.GenerationConfig = &generationConfig{
 			MaxOutputTokens: settings.MaxTokens,
 			Temperature:     settings.Temperature,
 			TopP:            settings.TopP,
 			StopSequences:   settings.StopSequences,
+			ThinkingConfig:  thinking,
 		}
 	}
 	for _, msg := range msgs {
@@ -267,6 +280,62 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Tools = []toolsParam{{FunctionDeclarations: declarations}}
 	}
 	return req, nil
+}
+
+func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingConfig, error) {
+	if settings == nil || settings.Level == "" && settings.TokenBudget == nil && settings.IncludeThoughts == nil {
+		return nil, nil
+	}
+	config := &thinkingConfig{}
+	gemini3 := strings.Contains(strings.ToLower(modelName), "gemini-3")
+	if settings.Level == ai.ThinkingLevelDisabled {
+		if settings.IncludeThoughts != nil {
+			include := *settings.IncludeThoughts
+			config.IncludeThoughts = &include
+		}
+		if gemini3 {
+			config.ThinkingLevel = "MINIMAL"
+		} else {
+			budget := 0
+			config.ThinkingBudget = &budget
+		}
+		return config, nil
+	}
+	include := true
+	if settings.IncludeThoughts != nil {
+		include = *settings.IncludeThoughts
+	}
+	config.IncludeThoughts = &include
+	if settings.TokenBudget != nil {
+		budget := *settings.TokenBudget
+		config.ThinkingBudget = &budget
+		return config, nil
+	}
+	if settings.Level == ai.ThinkingLevelEnabled || settings.Level == "" {
+		return config, nil
+	}
+	if gemini3 {
+		levels := map[ai.ThinkingLevel]string{
+			ai.ThinkingLevelMinimal: "MINIMAL", ai.ThinkingLevelLow: "LOW",
+			ai.ThinkingLevelMedium: "MEDIUM", ai.ThinkingLevelHigh: "HIGH", ai.ThinkingLevelXHigh: "HIGH",
+		}
+		level, ok := levels[settings.Level]
+		if !ok {
+			return nil, fmt.Errorf("google: invalid thinking level %q", settings.Level)
+		}
+		config.ThinkingLevel = level
+		return config, nil
+	}
+	budgets := map[ai.ThinkingLevel]int{
+		ai.ThinkingLevelMinimal: 128, ai.ThinkingLevelLow: 2048, ai.ThinkingLevelMedium: 8192,
+		ai.ThinkingLevelHigh: 24576, ai.ThinkingLevelXHigh: 24576,
+	}
+	budget, ok := budgets[settings.Level]
+	if !ok {
+		return nil, fmt.Errorf("google: invalid thinking level %q", settings.Level)
+	}
+	config.ThinkingBudget = &budget
+	return config, nil
 }
 
 func convertMessage(msg ai.ModelMessage) ([]content, error) {

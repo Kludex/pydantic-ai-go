@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"slices"
 	"time"
@@ -134,6 +135,28 @@ type InstructionPart struct {
 	Dynamic bool
 }
 
+// ThinkingLevel configures provider reasoning with a portable effort level.
+type ThinkingLevel string
+
+const (
+	ThinkingLevelDisabled ThinkingLevel = "disabled"
+	ThinkingLevelEnabled  ThinkingLevel = "enabled"
+	ThinkingLevelMinimal  ThinkingLevel = "minimal"
+	ThinkingLevelLow      ThinkingLevel = "low"
+	ThinkingLevelMedium   ThinkingLevel = "medium"
+	ThinkingLevelHigh     ThinkingLevel = "high"
+	ThinkingLevelXHigh    ThinkingLevel = "xhigh"
+)
+
+// ThinkingSettings configures reasoning generation. Level maps to the closest
+// provider effort. TokenBudget and IncludeThoughts override that provider's
+// defaults when supported.
+type ThinkingSettings struct {
+	Level           ThinkingLevel
+	TokenBudget     *int
+	IncludeThoughts *bool
+}
+
 // ModelSettings tunes a model request. The zero value uses provider defaults.
 type ModelSettings struct {
 	MaxTokens         int
@@ -143,6 +166,7 @@ type ModelSettings struct {
 	Seed              *int
 	StopSequences     []string
 	ParallelToolCalls *bool
+	Thinking          *ThinkingSettings
 }
 
 // Clone returns settings detached from pointer and slice fields.
@@ -152,7 +176,26 @@ func (s ModelSettings) Clone() ModelSettings {
 	s.Seed = clonePointer(s.Seed)
 	s.StopSequences = slices.Clone(s.StopSequences)
 	s.ParallelToolCalls = clonePointer(s.ParallelToolCalls)
+	if s.Thinking != nil {
+		thinking := *s.Thinking
+		thinking.TokenBudget = clonePointer(thinking.TokenBudget)
+		thinking.IncludeThoughts = clonePointer(thinking.IncludeThoughts)
+		s.Thinking = &thinking
+	}
 	return s
+}
+
+func validateThinkingSettings(settings *ThinkingSettings) error {
+	if settings == nil || settings.Level == "" {
+		return nil
+	}
+	switch settings.Level {
+	case ThinkingLevelDisabled, ThinkingLevelEnabled, ThinkingLevelMinimal, ThinkingLevelLow,
+		ThinkingLevelMedium, ThinkingLevelHigh, ThinkingLevelXHigh:
+		return nil
+	default:
+		return fmt.Errorf("ai: invalid thinking level %q", settings.Level)
+	}
 }
 
 func clonePointer[T any](value *T) *T {
@@ -188,6 +231,10 @@ func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettin
 	}
 	if override.ParallelToolCalls != nil {
 		base.ParallelToolCalls = clonePointer(override.ParallelToolCalls)
+	}
+	if override.Thinking != nil {
+		thinking := ModelSettings{Thinking: override.Thinking}.Clone()
+		base.Thinking = thinking.Thinking
 	}
 	return base
 }

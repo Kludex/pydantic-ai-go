@@ -61,15 +61,22 @@ func TestResponsesTextResponse(t *testing.T) {
 		}`))
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}
-	resp, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{Instructions: "be brief", AllowText: true})
+	temperature := 0.5
+	resp, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{
+		Instructions: "be brief", AllowText: true,
+		Settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, Temperature: &temperature,
+		},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/responses" {
 		t.Fatalf("unexpected path %q", gotPath)
 	}
-	if gotBody["instructions"] != "be brief" {
-		t.Fatalf("instructions not sent: %v", gotBody)
+	if gotBody["instructions"] != "be brief" || gotBody["temperature"] != nil ||
+		gotBody["reasoning"].(map[string]any)["effort"] != "high" {
+		t.Fatalf("instructions or reasoning not sent: %v", gotBody)
 	}
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
@@ -92,6 +99,16 @@ func TestResponsesTextResponse(t *testing.T) {
 		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 ||
 		resp.Usage.Details["reasoning_tokens"] != 2 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
+	}
+}
+
+func TestResponsesRejectInvalidThinkingLevel(t *testing.T) {
+	model := openai.NewResponsesModel("gpt-5")
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		Thinking: &ai.ThinkingSettings{Level: "extreme"},
+	}})
+	if err == nil || err.Error() != `openai: invalid thinking level "extreme"` {
+		t.Fatalf("unexpected invalid thinking error: %v", err)
 	}
 }
 

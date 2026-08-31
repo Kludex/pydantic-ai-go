@@ -194,6 +194,23 @@ agent := ai.NewAgent[Deps, string](
 )
 ```
 
+Configure portable reasoning with `ThinkingSettings`:
+
+```go
+budget := 8_192
+includeThoughts := true
+agent := ai.NewAgent[Deps, string](
+	model,
+	ai.WithModelSettings(ai.ModelSettings{Thinking: &ai.ThinkingSettings{
+		Level:           ai.ThinkingLevelHigh,
+		TokenBudget:     &budget,
+		IncludeThoughts: &includeThoughts,
+	}}),
+)
+```
+
+`Level` maps to OpenAI reasoning effort, an Anthropic token budget, and Gemini thinking levels or budgets. `ThinkingLevelEnabled` uses the provider default. `ThinkingLevelDisabled` requests no reasoning where the provider supports it. An explicit `TokenBudget` overrides the portable effort mapping on Anthropic and Gemini. Gemini also forwards `IncludeThoughts`.
+
 A tool can stop its run through `RunContext.Cancel`. Cancellation reaches sibling tools through `context.Context`, waits for their cleanup, and returns an error matching `ai.ErrRunCancelled`:
 
 ```go

@@ -157,6 +157,7 @@ type chatRequest struct {
 	Stream            bool            `json:"stream,omitempty"`
 	StreamOptions     *streamOptions  `json:"stream_options,omitempty"`
 	ResponseFormat    *responseFormat `json:"response_format,omitempty"`
+	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
 }
 
 type chatMessage struct {
@@ -200,13 +201,22 @@ type chatFunction struct {
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*chatRequest, error) {
+	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
+	if err != nil {
+		return nil, err
+	}
 	req := &chatRequest{
-		Model:       m.name,
-		MaxTokens:   params.Settings.MaxTokens,
-		Temperature: params.Settings.Temperature,
-		TopP:        params.Settings.TopP,
-		Seed:        params.Settings.Seed,
-		Stop:        params.Settings.StopSequences,
+		Model:           m.name,
+		MaxTokens:       params.Settings.MaxTokens,
+		Temperature:     params.Settings.Temperature,
+		TopP:            params.Settings.TopP,
+		Seed:            params.Settings.Seed,
+		Stop:            params.Settings.StopSequences,
+		ReasoningEffort: reasoningEffort,
+	}
+	if openAIReasoningActive(reasoningEffort) {
+		req.Temperature = nil
+		req.TopP = nil
 	}
 	if params.Instructions != "" {
 		req.Messages = append(req.Messages, chatMessage{Role: "system", Content: params.Instructions})
@@ -265,6 +275,27 @@ type jsonSchemaFormat struct {
 	Name   string         `json:"name"`
 	Schema map[string]any `json:"schema"`
 	Strict *bool          `json:"strict,omitempty"`
+}
+
+func openAIThinkingEffort(settings *ai.ThinkingSettings) (string, error) {
+	if settings == nil || settings.Level == "" {
+		return "", nil
+	}
+	switch settings.Level {
+	case ai.ThinkingLevelDisabled:
+		return "none", nil
+	case ai.ThinkingLevelEnabled:
+		return "medium", nil
+	case ai.ThinkingLevelMinimal, ai.ThinkingLevelLow, ai.ThinkingLevelMedium,
+		ai.ThinkingLevelHigh, ai.ThinkingLevelXHigh:
+		return string(settings.Level), nil
+	default:
+		return "", fmt.Errorf("openai: invalid thinking level %q", settings.Level)
+	}
+}
+
+func openAIReasoningActive(effort string) bool {
+	return effort != "" && effort != "none"
 }
 
 func convertMessage(msg ai.ModelMessage) ([]chatMessage, error) {

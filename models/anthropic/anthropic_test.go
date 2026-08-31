@@ -51,6 +51,92 @@ func TestDefaultSettingsAreDetached(t *testing.T) {
 	}
 }
 
+func TestThinkingSettings(t *testing.T) {
+	for name, test := range map[string]struct {
+		level  ai.ThinkingLevel
+		budget *int
+		want   int
+	}{
+		"enabled": {level: ai.ThinkingLevelEnabled, want: 10000},
+		"minimal": {level: ai.ThinkingLevelMinimal, want: 1024},
+		"low":     {level: ai.ThinkingLevelLow, want: 2048},
+		"medium":  {level: ai.ThinkingLevelMedium, want: 10000},
+		"high":    {level: ai.ThinkingLevelHigh, want: 16384},
+		"xhigh":   {level: ai.ThinkingLevelXHigh, want: 32768},
+		"budget":  {budget: func() *int { value := 777; return &value }(), want: 777},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"model":"claude","stop_reason":"end_turn","content":[{"type":"text","text":"done"}],"usage":{}}`))
+			})
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: &ai.ThinkingSettings{Level: test.level, TokenBudget: test.budget},
+			}})
+			thinking := body["thinking"].(map[string]any)
+			if err != nil || thinking["type"] != "enabled" || int(thinking["budget_tokens"].(float64)) != test.want {
+				t.Fatalf("unexpected thinking payload body=%v err=%v", body, err)
+			}
+		})
+	}
+
+	t.Run("disabled and empty", func(t *testing.T) {
+		requests := 0
+		model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+			requests++
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			if body["thinking"] != nil {
+				t.Fatalf("disabled thinking was sent: %v", body)
+			}
+			_, _ = w.Write([]byte(`{"model":"claude","content":[],"usage":{}}`))
+		})
+		include := false
+		for _, thinking := range []*ai.ThinkingSettings{
+			{Level: ai.ThinkingLevelDisabled}, {IncludeThoughts: &include},
+		} {
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+				Settings: ai.ModelSettings{Thinking: thinking},
+			}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if requests != 2 {
+			t.Fatalf("unexpected request count: %d", requests)
+		}
+	})
+
+	for name, thinking := range map[string]*ai.ThinkingSettings{
+		"invalid level": {Level: "extreme"},
+		"zero budget":   {TokenBudget: func() *int { value := 0; return &value }()},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := anthropic.NewModel("claude")
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+				Settings: ai.ModelSettings{Thinking: thinking},
+			}); err == nil {
+				t.Fatal("expected thinking error")
+			}
+		})
+	}
+
+	t.Run("forced output", func(t *testing.T) {
+		model := anthropic.NewModel("claude")
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			Settings:   ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled}},
+			OutputTool: &ai.ToolDefinition{Name: "final", Schema: map[string]any{"type": "object"}},
+		})
+		if err == nil || !strings.Contains(err.Error(), "extended thinking and forced output tools") {
+			t.Fatalf("unexpected forced output error: %v", err)
+		}
+	})
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotKey, gotVersion string

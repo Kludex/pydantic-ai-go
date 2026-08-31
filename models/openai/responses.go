@@ -169,17 +169,22 @@ func providerBool(details map[string]any, key string) bool {
 }
 
 type responsesRequest struct {
-	Model             string           `json:"model"`
-	Instructions      string           `json:"instructions,omitempty"`
-	Input             []responsesInput `json:"input"`
-	Tools             []responsesTool  `json:"tools,omitempty"`
-	ToolChoice        any              `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool            `json:"parallel_tool_calls,omitempty"`
-	MaxTokens         int              `json:"max_output_tokens,omitempty"`
-	Temperature       *float64         `json:"temperature,omitempty"`
-	TopP              *float64         `json:"top_p,omitempty"`
-	Stream            bool             `json:"stream,omitempty"`
-	Background        *bool            `json:"background,omitempty"`
+	Model             string              `json:"model"`
+	Instructions      string              `json:"instructions,omitempty"`
+	Input             []responsesInput    `json:"input"`
+	Tools             []responsesTool     `json:"tools,omitempty"`
+	ToolChoice        any                 `json:"tool_choice,omitempty"`
+	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
+	MaxTokens         int                 `json:"max_output_tokens,omitempty"`
+	Temperature       *float64            `json:"temperature,omitempty"`
+	TopP              *float64            `json:"top_p,omitempty"`
+	Stream            bool                `json:"stream,omitempty"`
+	Background        *bool               `json:"background,omitempty"`
+	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
+}
+
+type responsesReasoning struct {
+	Effort string `json:"effort,omitempty"`
 }
 
 type responsesInput struct {
@@ -213,6 +218,10 @@ type responsesTool struct {
 func (m *ResponsesModel) buildResponsesPayload(
 	msgs []ai.ModelMessage, params ai.ModelRequestParams, nativeDeferred bool,
 ) (*responsesRequest, error) {
+	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
+	if err != nil {
+		return nil, err
+	}
 	req := &responsesRequest{
 		Model:        m.name,
 		Instructions: params.Instructions,
@@ -220,6 +229,13 @@ func (m *ResponsesModel) buildResponsesPayload(
 		Temperature:  params.Settings.Temperature,
 		TopP:         params.Settings.TopP,
 		Background:   m.background,
+	}
+	if reasoningEffort != "" {
+		req.Reasoning = &responsesReasoning{Effort: reasoningEffort}
+	}
+	if openAIReasoningActive(reasoningEffort) {
+		req.Temperature = nil
+		req.TopP = nil
 	}
 	var searchTool *ai.ToolDefinition
 	if nativeDeferred && m.deferredToolSupport && len(params.DeferredTools) > 0 {

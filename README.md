@@ -654,6 +654,31 @@ Use `ai.WithToolTimeout(5 * time.Second)` to give one tool call a deadline. The 
 
 The agent calculates `Usage.CostUSD` with the pricing data embedded by [`genai-prices`](https://github.com/pydantic/genai-prices). It prices each provider request separately before summing continuation usage. A provider-supplied cost remains authoritative. Unknown models, providers, or inconsistent usage leave the cost nil and never fail a run.
 
+Use `WithPricingDiagnosticSink` when your application needs to observe unavailable prices, unexpected pricing failures, or warnings from a successful calculation:
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+)
+
+func main() {
+	ctx := ai.WithPricingDiagnosticSink(context.Background(), func(
+		ctx context.Context,
+		diagnostic ai.PricingDiagnostic,
+	) {
+		log.Printf("pricing %s for %s: %s", diagnostic.Kind, diagnostic.ModelName, diagnostic.Message)
+	})
+	_ = ctx
+}
+```
+
+The sink is observational. It cannot make pricing failures fatal, and each response reports at most once. `PricingDiagnosticUnavailable` covers unsupported models, providers, or usage. `PricingDiagnosticFailed` identifies unexpected failures. `PricingDiagnosticWarning` preserves warnings returned with a successful price.
+
 Call `ModelResponse.Price()` when you need the matched model, separate input and output prices, warnings, or an explicit lookup error:
 
 ```go

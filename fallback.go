@@ -154,7 +154,7 @@ func (fallback *FallbackModel) Request(
 			return nil, predicateErr
 		}
 		if reject {
-			fillResponseCost(response)
+			fillResponseCost(ctx, response)
 			if response.Usage.CostUSD != nil {
 				rejectedCost += *response.Usage.CostUSD
 				hasRejectedCost = true
@@ -163,7 +163,7 @@ func (fallback *FallbackModel) Request(
 			continue
 		}
 		if hasRejectedCost {
-			fillResponseCost(response)
+			fillResponseCost(ctx, response)
 			cost := rejectedCost
 			if response.Usage.CostUSD != nil {
 				cost += *response.Usage.CostUSD

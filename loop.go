@@ -1816,7 +1816,7 @@ func (r *run[Deps, Output]) doModelRequest(
 	if historyEndsSuspended(baseMessages) {
 		seed := baseMessages[len(baseMessages)-1].(ModelResponse)
 		response = cloneModelResponse(&seed)
-		fillResponseCost(response)
+		fillResponseCost(ctx, response)
 		baseMessages = baseMessages[:len(baseMessages)-1]
 	}
 	lastMode := continuationAccumulate
@@ -1940,7 +1940,7 @@ func (r *run[Deps, Output]) requestModelSegment(
 	}
 	if r.emit == nil {
 		response, err := r.model.Request(ctx, msgs, params)
-		fillResponseCost(response)
+		fillResponseCost(ctx, response)
 		if response != nil {
 			observe(response)
 		}
@@ -1952,7 +1952,7 @@ func (r *run[Deps, Output]) requestModelSegment(
 			return nil, err
 		}
 		response, err := accumulate(events, params, emit, observe)
-		fillResponseCost(response)
+		fillResponseCost(ctx, response)
 		return response, err
 	}
 	resp, err := r.model.Request(ctx, msgs, params)
@@ -1960,7 +1960,7 @@ func (r *run[Deps, Output]) requestModelSegment(
 		return nil, err
 	}
 	response, err := accumulate(replayAsEvents(resp), params, emit, observe)
-	fillResponseCost(response)
+	fillResponseCost(ctx, response)
 	return response, err
 }
 
@@ -1974,7 +1974,7 @@ func (r *run[Deps, Output]) publishUsage(response *ModelResponse) {
 	usage.ToolCalls = int(r.toolCalls.Load())
 	if response != nil {
 		priced := cloneModelResponse(response)
-		fillResponseCost(priced)
+		fillResponseCost(r.ctx, priced)
 		usage.Add(priced.Usage)
 	}
 	r.observeUsage(usage)
@@ -2019,7 +2019,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 				return nil, err
 			}
 			if resp != nil {
-				fillResponseCost(resp)
+				fillResponseCost(ctx, resp)
 				r.usage.Add(resp.Usage)
 				r.publishUsage(nil)
 				if applyErr := r.applyResponseToolKinds(resp); applyErr != nil {
@@ -2036,7 +2036,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			}
 			return nil, &UnexpectedModelBehaviorError{Message: "model request returned no response"}
 		}
-		fillResponseCost(resp)
+		fillResponseCost(ctx, resp)
 		r.usage.Add(resp.Usage)
 		r.publishUsage(nil)
 		if err := r.applyResponseToolKinds(resp); err != nil {

@@ -112,6 +112,117 @@ func TestAutomaticCostParticipatesInUsageLimits(t *testing.T) {
 	}
 }
 
+func TestAutomaticPricingDiagnostics(t *testing.T) {
+	for name, test := range map[string]struct {
+		response  ai.ModelResponse
+		wantKind  ai.PricingDiagnosticKind
+		wantError error
+	}{
+		"unknown model": {
+			response: ai.ModelResponse{
+				ModelName: "not-a-real-model", ProviderName: "unknown",
+				Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}},
+			},
+			wantKind:  ai.PricingDiagnosticUnavailable,
+			wantError: genaiprices.ErrProviderNotFound,
+		},
+		"invalid usage": {
+			response: ai.ModelResponse{
+				ModelName: "gpt-5", ProviderName: "openai",
+				Usage: ai.Usage{InputTokens: 1, CacheReadTokens: 2},
+				Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}},
+			},
+			wantKind:  ai.PricingDiagnosticUnavailable,
+			wantError: genaiprices.ErrInvalidUsage,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			diagnostics := make([]ai.PricingDiagnostic, 0, 1)
+			ctx := ai.WithPricingDiagnosticSink(t.Context(), func(_ context.Context, diagnostic ai.PricingDiagnostic) {
+				diagnostics = append(diagnostics, diagnostic)
+			})
+			model := fakes.NewFunctionModel(func(
+				context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				cloned := test.response
+				cloned.Usage = test.response.Usage.Clone()
+				return &cloned, nil
+			})
+			result, err := ai.NewAgent[deps, string](model).Run(ctx, "go", deps{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Usage().CostUSD != nil || len(diagnostics) != 1 {
+				t.Fatalf("unexpected pricing result: usage=%+v diagnostics=%+v", result.Usage(), diagnostics)
+			}
+			diagnostic := diagnostics[0]
+			if diagnostic.Kind != test.wantKind || !errors.Is(diagnostic.Err, test.wantError) || diagnostic.Message == "" ||
+				diagnostic.ModelName != test.response.ModelName || diagnostic.ProviderName != test.response.ProviderName {
+				t.Fatalf("unexpected diagnostic: %+v", diagnostic)
+			}
+		})
+	}
+}
+
+func TestAutomaticPricingReportsCalculationWarnings(t *testing.T) {
+	diagnostics := make([]ai.PricingDiagnostic, 0, 1)
+	ctx := ai.WithPricingDiagnosticSink(t.Context(), func(callbackContext context.Context, diagnostic ai.PricingDiagnostic) {
+		if callbackContext == nil {
+			t.Fatal("diagnostic context is nil")
+		}
+		diagnostics = append(diagnostics, diagnostic)
+	})
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{
+			ModelName: "gpt-5", ProviderName: "openai", ProviderURL: "https://api.openai.com/v1",
+			Usage: ai.Usage{InputTokens: 1, Details: map[string]int{"custom_tokens": 1}},
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}},
+		}, nil
+	})
+	result, err := ai.NewAgent[deps, string](model).Run(ctx, "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Usage().CostUSD == nil || len(diagnostics) != 1 {
+		t.Fatalf("unexpected pricing result: usage=%+v diagnostics=%+v", result.Usage(), diagnostics)
+	}
+	diagnostic := diagnostics[0]
+	if diagnostic.Kind != ai.PricingDiagnosticWarning || diagnostic.Err != nil ||
+		diagnostic.Message != "Unsupported usage key for standard pricing: custom_tokens" ||
+		diagnostic.ProviderURL != "https://api.openai.com/v1" {
+		t.Fatalf("unexpected diagnostic: %+v", diagnostic)
+	}
+}
+
+func TestPricingDiagnosticSinkCanBeDisabled(t *testing.T) {
+	ctx := ai.WithPricingDiagnosticSink(t.Context(), nil)
+	if ctx != t.Context() {
+		t.Fatal("nil diagnostic sink changed the context")
+	}
+}
+
+func TestAutomaticPricingReportsMissingModelName(t *testing.T) {
+	var diagnostic ai.PricingDiagnostic
+	ctx := ai.WithPricingDiagnosticSink(t.Context(), func(_ context.Context, got ai.PricingDiagnostic) {
+		diagnostic = got
+	})
+	model := requestModel{name: "", request: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	}}
+	response, err := ai.RequestModel(ctx, model, nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Usage.CostUSD != nil || diagnostic.Kind != ai.PricingDiagnosticUnavailable ||
+		!errors.Is(diagnostic.Err, genaiprices.ErrModelNotFound) || diagnostic.Message != "model name is unavailable" {
+		t.Fatalf("unexpected diagnostic: %+v", diagnostic)
+	}
+}
+
 func TestContinuationPricesEachRequest(t *testing.T) {
 	request := 0
 	model := fakes.NewFunctionModel(func(

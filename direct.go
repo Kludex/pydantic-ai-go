@@ -261,7 +261,7 @@ func requestModelDirect(
 	if historyEndsSuspended(baseMessages) {
 		seed := baseMessages[len(baseMessages)-1].(ModelResponse)
 		response = cloneModelResponse(&seed)
-		fillResponseCost(response)
+		fillResponseCost(ctx, response)
 		baseMessages = baseMessages[:len(baseMessages)-1]
 		if observe != nil {
 			observe(response)
@@ -303,7 +303,7 @@ func requestModelDirect(
 		segmentObserve := func(segment *ModelResponse) {
 			segment = cloneModelResponse(segment)
 			stampDirectResponse(model, segment)
-			fillResponseCost(segment)
+			fillResponseCost(ctx, segment)
 			current := segment
 			if response != nil {
 				current, _ = mergeModelResponses(response, segment)
@@ -317,7 +317,7 @@ func requestModelDirect(
 		)
 		if segment != nil {
 			stampDirectResponse(model, segment)
-			fillResponseCost(segment)
+			fillResponseCost(ctx, segment)
 		}
 		if err != nil {
 			partial := response

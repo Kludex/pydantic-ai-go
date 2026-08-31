@@ -15,7 +15,7 @@ func (c usageLimitsCapability) WrapModelRequest(ctx context.Context, ri *RunInfo
 	if err != nil {
 		return nil, err
 	}
-	fillResponseCost(resp)
+	fillResponseCost(ctx, resp)
 	projected := ri.Usage()
 	projected.Add(resp.Usage)
 	if err := c.limits.check(projected); err != nil {

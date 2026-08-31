@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"errors"
 
 	genaiprices "github.com/pydantic/genai-prices/packages/go"
@@ -8,6 +9,46 @@ import (
 
 // PriceCalculation contains the best matching input, output, and total prices in US dollars.
 type PriceCalculation = genaiprices.PriceCalculation
+
+// PricingDiagnosticKind classifies a best-effort pricing diagnostic.
+type PricingDiagnosticKind string
+
+const (
+	// PricingDiagnosticUnavailable means pricing data or compatible usage was unavailable.
+	PricingDiagnosticUnavailable PricingDiagnosticKind = "unavailable"
+	// PricingDiagnosticWarning reports a non-fatal warning from a successful calculation.
+	PricingDiagnosticWarning PricingDiagnosticKind = "warning"
+	// PricingDiagnosticFailed reports an unexpected calculation failure.
+	PricingDiagnosticFailed PricingDiagnosticKind = "failed"
+)
+
+// PricingDiagnostic describes why automatic pricing was incomplete or noteworthy.
+type PricingDiagnostic struct {
+	Kind         PricingDiagnosticKind
+	ModelName    string
+	ProviderName string
+	ProviderURL  string
+	Message      string
+	Err          error
+}
+
+// PricingDiagnosticSink receives optional best-effort pricing diagnostics.
+type PricingDiagnosticSink func(ctx context.Context, diagnostic PricingDiagnostic)
+
+type pricingDiagnosticContextKey struct{}
+
+type pricingDiagnosticReporter struct {
+	sink PricingDiagnosticSink
+}
+
+// WithPricingDiagnosticSink returns a context that reports automatic-pricing diagnostics.
+// A nil sink disables diagnostics without changing pricing behavior.
+func WithPricingDiagnosticSink(ctx context.Context, sink PricingDiagnosticSink) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, pricingDiagnosticContextKey{}, pricingDiagnosticReporter{sink: sink})
+}
 
 // Price calculates this response's price using the bundled genai-prices snapshot.
 // It returns lookup and usage errors to callers that need explicit pricing diagnostics.
@@ -30,15 +71,45 @@ func (response ModelResponse) Price() (PriceCalculation, error) {
 	return genaiprices.Calculate(request)
 }
 
-func fillResponseCost(response *ModelResponse) {
-	if response == nil || response.Usage.CostUSD != nil || response.ModelName == "" {
+func fillResponseCost(ctx context.Context, response *ModelResponse) {
+	if response == nil || response.Usage.CostUSD != nil || response.pricingAttempted {
+		return
+	}
+	response.pricingAttempted = true
+	if response.ModelName == "" {
+		reportPricingDiagnostic(ctx, response, PricingDiagnostic{
+			Kind: PricingDiagnosticUnavailable, Err: genaiprices.ErrModelNotFound,
+			Message: "model name is unavailable",
+		})
 		return
 	}
 	calculation, err := response.Price()
 	if err != nil {
+		kind := PricingDiagnosticFailed
+		if errors.Is(err, genaiprices.ErrProviderNotFound) || errors.Is(err, genaiprices.ErrModelNotFound) ||
+			errors.Is(err, genaiprices.ErrExtractorNotFound) || errors.Is(err, genaiprices.ErrInvalidUsage) {
+			kind = PricingDiagnosticUnavailable
+		}
+		reportPricingDiagnostic(ctx, response, PricingDiagnostic{Kind: kind, Err: err, Message: err.Error()})
 		return
 	}
 	response.Usage.CostUSD = &calculation.TotalPrice
+	for _, warning := range calculation.Warnings {
+		reportPricingDiagnostic(ctx, response, PricingDiagnostic{
+			Kind: PricingDiagnosticWarning, Message: warning,
+		})
+	}
+}
+
+func reportPricingDiagnostic(ctx context.Context, response *ModelResponse, diagnostic PricingDiagnostic) {
+	reporter, ok := ctx.Value(pricingDiagnosticContextKey{}).(pricingDiagnosticReporter)
+	if !ok {
+		return
+	}
+	diagnostic.ModelName = response.ModelName
+	diagnostic.ProviderName = response.ProviderName
+	diagnostic.ProviderURL = response.ProviderURL
+	reporter.sink(ctx, diagnostic)
 }
 
 func usageForPricing(usage Usage) genaiprices.Usage {

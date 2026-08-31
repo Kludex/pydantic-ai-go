@@ -76,6 +76,8 @@ type ModelResponse struct {
 	ConversationID     string
 	Metadata           map[string]any
 	State              ModelResponseState
+
+	pricingAttempted bool
 }
 
 func (ModelResponse) messageKind() string     { return "response" }

@@ -221,6 +221,149 @@ func TestOpenAIChatCompatibility(t *testing.T) {
 	}
 }
 
+func TestOpenAIExtendedChatCompatibility(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if request.Header.Get("Accept") == "text/event-stream" {
+			response.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(response, "data: "+`{"id":"stream","model":"routed","provider":"vendor",`+
+				`"choices":[{"delta":{"reasoning":"think","annotations":[{"type":"url_citation"}]},`+
+				`"finish_reason":"stop","native_finish_reason":"end_turn"}],`+
+				`"usage":{"prompt_tokens":4,"completion_tokens":2,"cost":0.02,`+
+				`"prompt_tokens_details":{"cache_write_tokens":1},"is_byok":false,`+
+				`"server_tool_use_details":{"web_search_requests":1}}}`+"\n\n")
+			_, _ = io.WriteString(response, "data: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(response, `{
+			"id":"static","model":"routed","provider":"vendor",
+			"choices":[{"message":{"reasoning":"reason","content":"answer","annotations":[{"type":"file"}]},
+			"finish_reason":"stop","native_finish_reason":"end_turn"}],
+			"usage":{"prompt_tokens":5,"completion_tokens":3,"cost":0.03,"is_byok":true,
+			"prompt_tokens_details":{"cache_write_tokens":2},
+			"cost_details":{"upstream_inference_cost":0.01,"upstream_inference_prompt_cost":0.004,
+			"upstream_inference_completions_cost":0.006},
+			"server_tool_use_details":{"tool_calls_requested":2,"tool_calls_executed":1}}
+		}`)
+	}))
+	defer server.Close()
+	mapper := func(tool ai.NativeTool) (openai.ChatNativeTool, bool, error) {
+		if _, ok := tool.(ai.WebSearchTool); ok {
+			return openai.ChatNativeTool{Type: "provider:web", Parameters: map[string]any{"context": "high"}}, true, nil
+		}
+		return openai.ChatNativeTool{}, false, nil
+	}
+	model := openai.NewModel("routed", openai.WithProvider(openai.ProviderConfig{
+		Name: "gateway", BaseURL: server.URL, HTTPClient: server.Client(),
+	}), openai.WithChatCompatibility(openai.ChatCompatibility{
+		Reasoning: true, LegacyMaxTokens: true, ExtendedMetadata: true, NativeToolFunc: mapper,
+	}))
+	history := ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "kept", ProviderName: "gateway"},
+		ai.ThinkingPart{Content: "dropped", ProviderName: "other"},
+	}}
+	static, err := model.Request(t.Context(), []ai.ModelMessage{history}, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{Name: "local", Schema: map[string]any{"type": "object"}}},
+		NativeTools: []ai.NativeTool{
+			ai.WebSearchTool{}, ai.CodeExecutionTool{Optional: true},
+		},
+		Settings: ai.ModelSettings{MaxTokens: 20},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := bodies[0]["tools"].([]any)
+	if bodies[0]["max_tokens"] != float64(20) || bodies[0]["max_completion_tokens"] != nil ||
+		len(tools) != 2 || tools[0].(map[string]any)["type"] != "function" ||
+		tools[1].(map[string]any)["type"] != "provider:web" ||
+		bodies[0]["messages"].([]any)[0].(map[string]any)["reasoning"] != "kept" {
+		t.Fatalf("unexpected extended request: %#v", bodies[0])
+	}
+	if len(static.Parts) != 2 || static.Parts[0].(ai.ThinkingPart).Content != "reason" ||
+		static.Usage.CacheWriteTokens != 2 || static.Usage.CostUSD == nil || *static.Usage.CostUSD != 0.03 ||
+		static.ProviderDetails["downstream_provider"] != "vendor" ||
+		static.ProviderDetails["finish_reason"] != "end_turn" || static.ProviderDetails["cost"] != 0.03 ||
+		static.ProviderDetails["upstream_inference_cost"] != 0.01 ||
+		static.ProviderDetails["upstream_inference_prompt_cost"] != 0.004 ||
+		static.ProviderDetails["upstream_inference_completions_cost"] != 0.006 ||
+		static.ProviderDetails["is_byok"] != true || len(static.ProviderDetails["annotations"].([]map[string]any)) != 1 ||
+		static.ProviderDetails["server_tool_use"].(map[string]int)["tool_calls_requested"] != 2 {
+		t.Fatalf("unexpected extended response: %+v", static)
+	}
+
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawThinking bool
+	for event, streamErr := range stream {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		switch event := event.(type) {
+		case ai.ThinkingDeltaEvent:
+			sawThinking = event.Delta == "think"
+		case ai.FinishEvent:
+			if event.ProviderDetails["downstream_provider"] != "vendor" ||
+				event.ProviderDetails["finish_reason"] != "end_turn" ||
+				len(event.ProviderDetails["annotations"].([]map[string]any)) != 1 ||
+				event.ProviderDetails["is_byok"] != false || event.Usage.CacheWriteTokens != 1 ||
+				event.ProviderDetails["server_tool_use"].(map[string]int)["web_search_requests"] != 1 {
+				t.Fatalf("unexpected extended stream finish: %+v", event)
+			}
+		}
+	}
+	if !sawThinking {
+		t.Fatal("missing extended reasoning delta")
+	}
+	abandoned, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, streamErr := range abandoned {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		if _, ok := event.(ai.ThinkingDeltaEvent); ok {
+			break
+		}
+	}
+
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}}})
+	if err == nil || !strings.Contains(err.Error(), `gateway: Chat Completions does not support native tool "code_execution"`) {
+		t.Fatalf("unexpected unsupported native tool error: %v", err)
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.WebSearchTool{SearchContextSize: "huge"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "invalid web search context") {
+		t.Fatalf("unexpected native tool validation error: %v", err)
+	}
+	errorModel := openai.NewModel("routed", openai.WithChatCompatibility(openai.ChatCompatibility{
+		NativeToolFunc: func(ai.NativeTool) (openai.ChatNativeTool, bool, error) {
+			return openai.ChatNativeTool{}, false, errors.New("render failed")
+		},
+	}))
+	_, err = errorModel.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}})
+	if err == nil || err.Error() != "render failed" {
+		t.Fatalf("unexpected native mapper error: %v", err)
+	}
+	emptyModel := openai.NewModel("routed", openai.WithChatCompatibility(openai.ChatCompatibility{
+		NativeToolFunc: func(ai.NativeTool) (openai.ChatNativeTool, bool, error) {
+			return openai.ChatNativeTool{}, true, nil
+		},
+	}))
+	_, err = emptyModel.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}})
+	if err == nil || !strings.Contains(err.Error(), "rendered an empty type") {
+		t.Fatalf("unexpected empty native type error: %v", err)
+	}
+}
+
 func TestOpenAIChatCompatibilityValidation(t *testing.T) {
 	for name, compatibility := range map[string]openai.ChatCompatibility{
 		"empty reason":              {FinishReasons: map[string]ai.FinishReason{"": ai.FinishReasonStop}},

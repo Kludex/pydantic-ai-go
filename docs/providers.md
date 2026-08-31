@@ -92,6 +92,51 @@ func main() {
 
 The compatibility layer sends OpenAI wire formats. It cannot make an endpoint support OpenAI features that the endpoint does not implement.
 
+## OpenRouter
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openrouter"
+)
+
+func main() {
+	settings, err := (openrouter.Settings{
+		Provider: &openrouter.ProviderRouting{
+			Only:           []string{"anthropic"},
+			DataCollection: openrouter.DataCollectionDeny,
+		},
+		Usage: &openrouter.UsageConfig{Include: true},
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent := ai.NewAgent[struct{}, string](
+		openrouter.NewModel("anthropic/claude-sonnet-4.6"),
+		ai.WithModelSettings(settings),
+		ai.WithNativeTools(ai.WebSearchTool{}),
+	)
+	result, err := agent.Run(context.Background(), "Find the latest PydanticAI release.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `OPENROUTER_API_KEY`. Model names must use OpenRouter's `provider/model` form. The model uses `max_tokens`, sends portable thinking settings through OpenRouter's `reasoning` extension, and retains the routed provider, native finish reason, annotations, server-tool usage, and provider-reported cost.
+
+The OpenRouter model supports native web search and advisor declarations. OpenRouter ignores `AdvisorTool.MaxUses` and `AdvisorTool.Caching`; it maps `MaxTokens` to `max_completion_tokens`. Use `WithAppAttribution` or `OPENROUTER_APP_URL` and `OPENROUTER_APP_TITLE` to identify your application.
+
+Use `openrouter.Settings` for fallback models, provider routing, presets, context transforms, reasoning, and extended usage. `Settings.Build` validates conflicts with `ExtraBody` and returns a detached `ModelSettings` snapshot.
+
 ## Z.AI
 
 ```go

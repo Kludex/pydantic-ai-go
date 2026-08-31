@@ -59,14 +59,17 @@ type streamOptions struct {
 type chatChunk struct {
 	ID                string `json:"id"`
 	Model             string `json:"model"`
+	Provider          string `json:"provider"`
 	Created           int64  `json:"created"`
 	ServiceTier       string `json:"service_tier"`
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Delta struct {
-			Content          string `json:"content"`
-			Refusal          string `json:"refusal"`
-			ReasoningContent string `json:"reasoning_content"`
+			Content          string           `json:"content"`
+			Refusal          string           `json:"refusal"`
+			ReasoningContent string           `json:"reasoning_content"`
+			Reasoning        string           `json:"reasoning"`
+			Annotations      []map[string]any `json:"annotations"`
 			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -76,8 +79,9 @@ type chatChunk struct {
 				} `json:"function"`
 			} `json:"tool_calls"`
 		} `json:"delta"`
-		FinishReason string `json:"finish_reason"`
-		Logprobs     *struct {
+		FinishReason       string `json:"finish_reason"`
+		NativeFinishReason string `json:"native_finish_reason"`
+		Logprobs           *struct {
 			Content []map[string]any `json:"content"`
 		} `json:"logprobs"`
 	} `json:"choices"`
@@ -94,6 +98,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		finishReason := ""
 		refusal := ""
 		providerDetails := map[string]any{}
+		var annotations []map[string]any
 		startedTools := map[int]bool{}
 
 		scanner := bufio.NewScanner(body)
@@ -115,7 +120,9 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 					providerDetails["refusal"] = refusal
 					finishReason = "content_filter"
 				} else if finishReason != "" {
-					providerDetails["finish_reason"] = finishReason
+					if _, exists := providerDetails["finish_reason"]; !exists || !m.chatCompatibility.ExtendedMetadata {
+						providerDetails["finish_reason"] = finishReason
+					}
 				}
 				if len(providerDetails) == 0 {
 					providerDetails = nil
@@ -148,14 +155,23 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			if chunk.SystemFingerprint != "" {
 				providerDetails["system_fingerprint"] = chunk.SystemFingerprint
 			}
+			if m.chatCompatibility.ExtendedMetadata && chunk.Provider != "" {
+				providerDetails["downstream_provider"] = chunk.Provider
+			}
 			if chunk.Usage != nil {
 				usage = chunk.Usage.usage()
+				if m.chatCompatibility.ExtendedMetadata {
+					addExtendedChatUsageDetails(providerDetails, *chunk.Usage)
+				}
 			}
 			if len(chunk.Choices) == 0 {
 				continue
 			}
 			if chunk.Choices[0].FinishReason != "" {
 				finishReason = chunk.Choices[0].FinishReason
+			}
+			if m.chatCompatibility.ExtendedMetadata && chunk.Choices[0].NativeFinishReason != "" {
+				providerDetails["finish_reason"] = chunk.Choices[0].NativeFinishReason
 			}
 			if chunk.Choices[0].Logprobs != nil {
 				logprobs, _ := providerDetails["logprobs"].([]map[string]any)
@@ -172,6 +188,17 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				}, nil) {
 					return
 				}
+			}
+			if m.chatCompatibility.Reasoning && delta.Reasoning != "" {
+				if !yield(ai.ThinkingDeltaEvent{
+					PartID: "thinking", Delta: delta.Reasoning, ProviderName: m.providerName,
+				}, nil) {
+					return
+				}
+			}
+			if m.chatCompatibility.ExtendedMetadata && len(delta.Annotations) > 0 {
+				annotations = append(annotations, delta.Annotations...)
+				providerDetails["annotations"] = annotations
 			}
 			if delta.Content != "" {
 				if !yield(ai.TextDeltaEvent{

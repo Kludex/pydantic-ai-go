@@ -60,11 +60,25 @@ type ProviderConfig struct {
 	PrepareRequest RequestPreparationFunc
 }
 
+// ChatNativeTool is one provider-managed Chat Completions tool declaration.
+type ChatNativeTool struct {
+	Type       string         `json:"type"`
+	Parameters map[string]any `json:"parameters,omitempty"`
+}
+
+// ChatNativeToolFunc renders one provider-managed tool. The bool reports
+// whether the endpoint supports the tool. The function must be safe for concurrent calls.
+type ChatNativeToolFunc func(ai.NativeTool) (ChatNativeTool, bool, error)
+
 // ChatCompatibility configures documented extensions to the OpenAI Chat
-// Completions wire format. ReasoningContent preserves the Z.AI-compatible
-// reasoning_content field. FinishReasons extends or overrides normalization.
+// Completions wire format. The configuration is intended for provider packages;
+// applications should prefer a dedicated provider model.
 type ChatCompatibility struct {
 	ReasoningContent bool
+	Reasoning        bool
+	LegacyMaxTokens  bool
+	ExtendedMetadata bool
+	NativeToolFunc   ChatNativeToolFunc
 	FinishReasons    map[string]ai.FinishReason
 }
 
@@ -86,6 +100,10 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 	return func(model *Model) {
 		model.chatCompatibility = ChatCompatibility{
 			ReasoningContent: compatibility.ReasoningContent,
+			Reasoning:        compatibility.Reasoning,
+			LegacyMaxTokens:  compatibility.LegacyMaxTokens,
+			ExtendedMetadata: compatibility.ExtendedMetadata,
+			NativeToolFunc:   compatibility.NativeToolFunc,
 			FinishReasons:    maps.Clone(finishReasons),
 		}
 	}
@@ -273,10 +291,11 @@ func (*APIError) IsModelAPIError() bool { return true }
 type chatRequest struct {
 	Model             string          `json:"model"`
 	Messages          []chatMessage   `json:"messages"`
-	Tools             []chatTool      `json:"tools,omitempty"`
+	Tools             []any           `json:"tools,omitempty"`
 	ToolChoice        any             `json:"tool_choice,omitempty"`
 	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
 	MaxTokens         int             `json:"max_completion_tokens,omitempty"`
+	LegacyMaxTokens   int             `json:"max_tokens,omitempty"`
 	Temperature       *float64        `json:"temperature,omitempty"`
 	TopP              *float64        `json:"top_p,omitempty"`
 	Seed              *int            `json:"seed,omitempty"`
@@ -297,6 +316,7 @@ type chatMessage struct {
 	Role             string     `json:"role"`
 	Content          any        `json:"content,omitempty"` // string or []contentPart
 	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	Reasoning        string     `json:"reasoning,omitempty"`
 	ToolCalls        []toolCall `json:"tool_calls,omitempty"`
 	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
@@ -335,13 +355,17 @@ type chatFunction struct {
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*chatRequest, error) {
-	for _, nativeTool := range params.NativeTools {
-		if nativeToolIsNil(nativeTool) {
-			return nil, fmt.Errorf("openai: native tool must not be nil")
+	if m.chatCompatibility.NativeToolFunc == nil {
+		for _, nativeTool := range params.NativeTools {
+			if nativeToolIsNil(nativeTool) {
+				return nil, fmt.Errorf("openai: native tool must not be nil")
+			}
+			if !nativeTool.IsOptional() {
+				return nil, fmt.Errorf("openai: Chat Completions does not support native tool %q", nativeTool.Kind())
+			}
 		}
-		if !nativeTool.IsOptional() {
-			return nil, fmt.Errorf("openai: Chat Completions does not support native tool %q", nativeTool.Kind())
-		}
+	} else if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
+		return nil, err
 	}
 	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
 	if err != nil {
@@ -365,6 +389,10 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		Logprobs:         params.Settings.Logprobs,
 		TopLogprobs:      params.Settings.TopLogprobs,
 		ServiceTier:      serviceTier,
+	}
+	if m.chatCompatibility.LegacyMaxTokens {
+		req.LegacyMaxTokens = req.MaxTokens
+		req.MaxTokens = 0
 	}
 	if openAIReasoningActive(reasoningEffort) {
 		req.Temperature = nil
@@ -395,6 +423,26 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Tools = append(req.Tools, converted)
 		if !params.AllowText {
 			req.ToolChoice = "required"
+		}
+	}
+	if m.chatCompatibility.NativeToolFunc != nil {
+		for _, nativeTool := range params.NativeTools {
+			converted, supported, err := m.chatCompatibility.NativeToolFunc(nativeTool.CloneNativeTool())
+			if err != nil {
+				return nil, err
+			}
+			if !supported {
+				if nativeTool.IsOptional() {
+					continue
+				}
+				return nil, fmt.Errorf(
+					"%s: Chat Completions does not support native tool %q", m.providerName, nativeTool.Kind(),
+				)
+			}
+			if converted.Type == "" {
+				return nil, fmt.Errorf("%s: native tool %q rendered an empty type", m.providerName, nativeTool.Kind())
+			}
+			req.Tools = append(req.Tools, converted)
 		}
 	}
 	if len(req.Tools) > 0 {
@@ -518,9 +566,13 @@ func (model *Model) convertResponse(m ai.ModelResponse) []chatMessage {
 		case ai.TextPart:
 			msg.Content = p.Content
 		case ai.ThinkingPart:
-			if model.chatCompatibility.ReasoningContent &&
-				(p.ProviderName == "" || p.ProviderName == model.providerName) {
-				msg.ReasoningContent += p.Content
+			if p.ProviderName == "" || p.ProviderName == model.providerName {
+				if model.chatCompatibility.ReasoningContent {
+					msg.ReasoningContent += p.Content
+				}
+				if model.chatCompatibility.Reasoning {
+					msg.Reasoning += p.Content
+				}
 			}
 		case ai.ToolCallPart:
 			msg.ToolCalls = append(msg.ToolCalls, toolCall{
@@ -551,18 +603,22 @@ func convertTool(def ai.ToolDefinition, supportsStrict bool) (chatTool, error) {
 type chatResponse struct {
 	ID                string `json:"id"`
 	Model             string `json:"model"`
+	Provider          string `json:"provider"`
 	Created           int64  `json:"created"`
 	ServiceTier       string `json:"service_tier"`
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Message struct {
-			Content          string     `json:"content"`
-			Refusal          string     `json:"refusal"`
-			ReasoningContent string     `json:"reasoning_content"`
-			ToolCalls        []toolCall `json:"tool_calls"`
+			Content          string           `json:"content"`
+			Refusal          string           `json:"refusal"`
+			ReasoningContent string           `json:"reasoning_content"`
+			Reasoning        string           `json:"reasoning"`
+			Annotations      []map[string]any `json:"annotations"`
+			ToolCalls        []toolCall       `json:"tool_calls"`
 		} `json:"message"`
-		FinishReason string `json:"finish_reason"`
-		Logprobs     *struct {
+		FinishReason       string `json:"finish_reason"`
+		NativeFinishReason string `json:"native_finish_reason"`
+		Logprobs           *struct {
 			Content []map[string]any `json:"content"`
 		} `json:"logprobs"`
 	} `json:"choices"`
@@ -570,12 +626,25 @@ type chatResponse struct {
 }
 
 type chatUsage struct {
-	PromptTokens        int `json:"prompt_tokens"`
-	CompletionTokens    int `json:"completion_tokens"`
+	PromptTokens        int      `json:"prompt_tokens"`
+	CompletionTokens    int      `json:"completion_tokens"`
+	Cost                *float64 `json:"cost"`
+	IsBYOK              *bool    `json:"is_byok"`
 	PromptTokensDetails struct {
-		CachedTokens int `json:"cached_tokens"`
-		AudioTokens  int `json:"audio_tokens"`
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
+		AudioTokens      int `json:"audio_tokens"`
 	} `json:"prompt_tokens_details"`
+	CostDetails struct {
+		UpstreamInferenceCost            *float64 `json:"upstream_inference_cost"`
+		UpstreamInferencePromptCost      *float64 `json:"upstream_inference_prompt_cost"`
+		UpstreamInferenceCompletionsCost *float64 `json:"upstream_inference_completions_cost"`
+	} `json:"cost_details"`
+	ServerToolUseDetails struct {
+		ToolCallsRequested *int `json:"tool_calls_requested"`
+		ToolCallsExecuted  *int `json:"tool_calls_executed"`
+		WebSearchRequests  *int `json:"web_search_requests"`
+	} `json:"server_tool_use_details"`
 	CompletionTokensDetails struct {
 		ReasoningTokens          int `json:"reasoning_tokens"`
 		AudioTokens              int `json:"audio_tokens"`
@@ -587,18 +656,51 @@ type chatUsage struct {
 func (u chatUsage) usage() ai.Usage {
 	return ai.Usage{
 		Requests: 1, InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens,
+		CacheWriteTokens:         u.PromptTokensDetails.CacheWriteTokens,
 		CacheReadTokens:          u.PromptTokensDetails.CachedTokens,
 		InputAudioTokens:         u.PromptTokensDetails.AudioTokens,
 		OutputAudioTokens:        u.CompletionTokensDetails.AudioTokens,
 		ReasoningTokens:          u.CompletionTokensDetails.ReasoningTokens,
 		AcceptedPredictionTokens: u.CompletionTokensDetails.AcceptedPredictionTokens,
 		RejectedPredictionTokens: u.CompletionTokensDetails.RejectedPredictionTokens,
+		CostUSD:                  u.Cost,
 		Details: map[string]int{
 			"reasoning_tokens":           u.CompletionTokensDetails.ReasoningTokens,
 			"audio_tokens":               u.CompletionTokensDetails.AudioTokens,
 			"accepted_prediction_tokens": u.CompletionTokensDetails.AcceptedPredictionTokens,
 			"rejected_prediction_tokens": u.CompletionTokensDetails.RejectedPredictionTokens,
 		},
+	}
+}
+
+func addExtendedChatUsageDetails(details map[string]any, usage chatUsage) {
+	if usage.Cost != nil {
+		details["cost"] = *usage.Cost
+	}
+	if usage.CostDetails.UpstreamInferenceCost != nil {
+		details["upstream_inference_cost"] = *usage.CostDetails.UpstreamInferenceCost
+	}
+	if usage.CostDetails.UpstreamInferencePromptCost != nil {
+		details["upstream_inference_prompt_cost"] = *usage.CostDetails.UpstreamInferencePromptCost
+	}
+	if usage.CostDetails.UpstreamInferenceCompletionsCost != nil {
+		details["upstream_inference_completions_cost"] = *usage.CostDetails.UpstreamInferenceCompletionsCost
+	}
+	if usage.IsBYOK != nil {
+		details["is_byok"] = *usage.IsBYOK
+	}
+	serverToolUse := map[string]int{}
+	if usage.ServerToolUseDetails.ToolCallsRequested != nil {
+		serverToolUse["tool_calls_requested"] = *usage.ServerToolUseDetails.ToolCallsRequested
+	}
+	if usage.ServerToolUseDetails.ToolCallsExecuted != nil {
+		serverToolUse["tool_calls_executed"] = *usage.ServerToolUseDetails.ToolCallsExecuted
+	}
+	if usage.ServerToolUseDetails.WebSearchRequests != nil {
+		serverToolUse["web_search_requests"] = *usage.ServerToolUseDetails.WebSearchRequests
+	}
+	if len(serverToolUse) > 0 {
+		details["server_tool_use"] = serverToolUse
 	}
 }
 
@@ -613,6 +715,16 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 	providerDetails := map[string]any{}
 	if cr.Choices[0].FinishReason != "" {
 		providerDetails["finish_reason"] = cr.Choices[0].FinishReason
+	}
+	if model.chatCompatibility.ExtendedMetadata {
+		providerDetails["downstream_provider"] = cr.Provider
+		if cr.Choices[0].NativeFinishReason != "" {
+			providerDetails["finish_reason"] = cr.Choices[0].NativeFinishReason
+		}
+		addExtendedChatUsageDetails(providerDetails, cr.Usage)
+		if len(cr.Choices[0].Message.Annotations) > 0 {
+			providerDetails["annotations"] = cr.Choices[0].Message.Annotations
+		}
 	}
 	if cr.Created != 0 {
 		providerDetails["timestamp"] = time.Unix(cr.Created, 0).UTC()
@@ -646,6 +758,11 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 	if model.chatCompatibility.ReasoningContent && msg.ReasoningContent != "" {
 		resp.Parts = append(resp.Parts, ai.ThinkingPart{
 			Content: msg.ReasoningContent, ProviderName: model.providerName,
+		})
+	}
+	if model.chatCompatibility.Reasoning && msg.Reasoning != "" {
+		resp.Parts = append(resp.Parts, ai.ThinkingPart{
+			Content: msg.Reasoning, ProviderName: model.providerName,
 		})
 	}
 	if msg.Content != "" {

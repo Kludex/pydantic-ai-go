@@ -189,7 +189,10 @@ type ToolDefinition struct {
 	Strict *bool `json:"-"`
 	// Metadata is available to preparation and filtering hooks but is not sent
 	// to the model.
-	Metadata   map[string]any `json:"-"`
+	Metadata map[string]any `json:"-"`
+	// ToolsetID identifies the dynamic toolset that owns this definition. It is
+	// local lifecycle metadata and is not sent to providers.
+	ToolsetID  string `json:"-"`
 	maxRetries *int
 	timeout    time.Duration
 }

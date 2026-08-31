@@ -13,6 +13,36 @@ type Toolset[Deps any] interface {
 	Tools(ctx context.Context, rc *RunContext[Deps]) ([]Tool[Deps], error)
 }
 
+// ToolsetIDProvider optionally gives a toolset a stable application ID. The
+// ID is copied onto its tool definitions for durable execution and tracing.
+type ToolsetIDProvider interface {
+	ToolsetID() string
+}
+
+// ToolsetRunProvider optionally returns an isolated toolset for one run. It
+// is called once before the toolset is opened.
+type ToolsetRunProvider[Deps any] interface {
+	ForRun(ctx context.Context, rc *RunContext[Deps]) (Toolset[Deps], error)
+}
+
+// ToolsetStepProvider optionally replaces a toolset before one model request.
+// A provider returning a different open resource manages that transition.
+type ToolsetStepProvider[Deps any] interface {
+	ForRunStep(ctx context.Context, rc *RunContext[Deps]) (Toolset[Deps], error)
+}
+
+// ToolsetCloseFunc releases resources acquired by ToolsetOpener. It is called
+// exactly once, including when a later toolset fails to open.
+type ToolsetCloseFunc func(ctx context.Context) error
+
+// ToolsetOpener optionally acquires run-scoped resources and returns the
+// toolset used for the run plus its cleanup function.
+type ToolsetOpener[Deps any] interface {
+	OpenToolset(
+		ctx context.Context, rc *RunContext[Deps],
+	) (Toolset[Deps], ToolsetCloseFunc, error)
+}
+
 // ToolsetInstructionsProvider optionally contributes instructions before each
 // model request. Plain toolsets only need to implement Toolset.
 type ToolsetInstructionsProvider[Deps any] interface {
@@ -135,7 +165,7 @@ func (t combinedToolset[Deps]) Tools(
 	var combined []Tool[Deps]
 	seen := map[string]struct{}{}
 	for _, toolset := range t.toolsets {
-		tools, err := toolset.Tools(ctx, rc)
+		tools, err := resolveToolsetTools(ctx, rc, toolset)
 		if err != nil {
 			return nil, err
 		}
@@ -173,7 +203,7 @@ type filteredToolset[Deps any] struct {
 func (t filteredToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
-	tools, err := t.toolset.Tools(ctx, rc)
+	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
 	if err != nil {
 		return nil, err
 	}
@@ -204,7 +234,7 @@ type prefixedToolset[Deps any] struct {
 func (t prefixedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
-	tools, err := t.toolset.Tools(ctx, rc)
+	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
 	if err != nil {
 		return nil, err
 	}
@@ -228,7 +258,7 @@ type renamedToolset[Deps any] struct {
 func (t renamedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
-	tools, err := t.toolset.Tools(ctx, rc)
+	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +294,7 @@ type preparedToolset[Deps any] struct {
 func (t preparedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
-	tools, err := t.toolset.Tools(ctx, rc)
+	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +340,7 @@ type defaultedToolset[Deps any] struct {
 func (t defaultedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
-	tools, err := t.toolset.Tools(ctx, rc)
+	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
 	if err != nil {
 		return nil, err
 	}
@@ -341,7 +371,7 @@ type metadataToolset[Deps any] struct {
 func (t metadataToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
-	tools, err := t.toolset.Tools(ctx, rc)
+	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
 	if err != nil {
 		return nil, err
 	}
@@ -405,4 +435,27 @@ func resolveToolsetInstructions[Deps any](
 	cloned := make([]InstructionPart, len(parts))
 	copy(cloned, parts)
 	return cloned, nil
+}
+
+func resolveToolsetTools[Deps any](
+	ctx context.Context, rc *RunContext[Deps], toolset Toolset[Deps],
+) ([]Tool[Deps], error) {
+	tools, err := toolset.Tools(ctx, rc)
+	if err != nil {
+		return nil, err
+	}
+	provider, ok := toolset.(ToolsetIDProvider)
+	if !ok {
+		return tools, nil
+	}
+	id := provider.ToolsetID()
+	if id == "" {
+		return tools, nil
+	}
+	for index := range tools {
+		if tools[index].entry.def.ToolsetID == "" {
+			tools[index].entry.def.ToolsetID = id
+		}
+	}
+	return tools, nil
 }

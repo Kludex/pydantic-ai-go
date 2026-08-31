@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"errors"
 	"iter"
 	"slices"
 	"strconv"
@@ -190,7 +191,17 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 			yield(nil, err)
 			return
 		}
-		defer run.cancellation.finish()
+		closed := false
+		closeRun := func() error {
+			if closed {
+				return nil
+			}
+			closed = true
+			closeErr := run.closeToolsets(context.WithoutCancel(ctx))
+			run.cancellation.finish()
+			return closeErr
+		}
+		defer func() { _ = closeRun() }()
 		run.recordSelectedModel = func(name string) { recordRunModel(span, name) }
 		run.commitStreamedOutput = commitFirstOutput
 		streamedRun.partialOutput = func(raw, toolCallID string) (Output, bool, error) {
@@ -226,6 +237,11 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 			if !yield(event, err) {
 				return
 			}
+		}
+		if closeErr := closeRun(); closeErr != nil {
+			runErr = errors.Join(runErr, closeErr)
+			streamedRun.result = nil
+			yield(nil, closeErr)
 		}
 	}
 	return streamedRun

@@ -236,6 +236,44 @@ agent.AddToolset(ai.PrefixToolset(publicWeatherTools, "weather"))
 
 The model sees `weather_get_weather`, while the function receives `get_weather` through `RunContext.ToolName`. You can also use `CombineToolsets`, `RenameToolset`, `PrepareToolset`, and `SetToolsetMetadata`. `WithToolsetMaxRetries` and `WithToolsetTimeout` provide defaults without replacing explicit tool options. Toolsets list tools and contribute optional instructions before each model step. Pass them through `WithRunToolsets` to scope them to one run.
 
+Stateful toolsets can implement three small optional interfaces:
+
+```go
+func (t *RemoteTools) ToolsetID() string {
+	return "inventory"
+}
+
+func (t *RemoteTools) ForRun(
+	ctx context.Context,
+	rc *ai.RunContext[Deps],
+) (ai.Toolset[Deps], error) {
+	return &RemoteTools{endpoint: t.endpoint}, nil
+}
+
+func (t *RemoteTools) OpenToolset(
+	ctx context.Context,
+	rc *ai.RunContext[Deps],
+) (ai.Toolset[Deps], ai.ToolsetCloseFunc, error) {
+	client, err := connectInventory(ctx, t.endpoint)
+	if err != nil {
+		return nil, nil, err
+	}
+	opened := &RemoteTools{endpoint: t.endpoint, client: client}
+	return opened, func(ctx context.Context) error {
+		return client.Close(ctx)
+	}, nil
+}
+
+func (t *RemoteTools) ForRunStep(
+	ctx context.Context,
+	rc *ai.RunContext[Deps],
+) (ai.Toolset[Deps], error) {
+	return t.withRegion(rc.Deps.Region), nil
+}
+```
+
+`ForRun` creates isolated state once per run. `OpenToolset` acquires resources once and cleanup runs exactly once in reverse registration order. `ForRunStep` can replace the active view before each model request. Built-in combined and wrapper toolsets propagate all three hooks. `ToolsetID` is copied to `ToolDefinition.ToolsetID` as local lifecycle metadata.
+
 ## Dynamic tools
 
 Use `ai.AddPreparedTool` when one tool's availability or schema depends on the run:

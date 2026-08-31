@@ -66,7 +66,14 @@ func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPa
 		return nil, err
 	}
 	r.recordSelectedModel = func(name string) { recordRunModel(span, name) }
-	defer r.cancellation.finish()
+	defer func() {
+		closeErr := r.closeToolsets(context.WithoutCancel(ctx))
+		r.cancellation.finish()
+		if closeErr != nil {
+			result = nil
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	return r.wrappedLoop(r.ctx)
 }
 
@@ -227,6 +234,10 @@ func (a *Agent[Deps, Output]) newRun(
 	var err error
 	r.params, err = a.buildParams(r.staticInstructions, settings, outputMode, r.outputTool, r.tools)
 	if err != nil {
+		cancellation.finish()
+		return nil, err
+	}
+	if err := r.openToolsets(runCtx); err != nil {
 		cancellation.finish()
 		return nil, err
 	}
@@ -478,6 +489,7 @@ type run[Deps, Output any] struct {
 	currentOutputValidator *schema.Validator
 	tools                  []toolEntry[Deps]
 	toolsets               []Toolset[Deps]
+	toolsetClosers         []ToolsetCloseFunc
 	currentToolEntries     map[string]toolEntry[Deps]
 	staticInstructions     []InstructionPart
 	systemPromptsPrepared  bool
@@ -495,6 +507,53 @@ type run[Deps, Output any] struct {
 	emitMu               sync.Mutex
 	commitStreamedOutput bool
 	recordSelectedModel  func(string)
+}
+
+func (r *run[Deps, Output]) openToolsets(ctx context.Context) error {
+	resolved := make([]Toolset[Deps], len(r.toolsets))
+	for index, toolset := range r.toolsets {
+		var err error
+		resolved[index], err = toolsetForRun(ctx, r.rc, toolset)
+		if err != nil {
+			return fmt.Errorf("ai: toolset for run: %w", err)
+		}
+	}
+	opened := make([]Toolset[Deps], len(resolved))
+	for index, toolset := range resolved {
+		var closeFunc ToolsetCloseFunc
+		var err error
+		opened[index], closeFunc, err = openToolset(ctx, r.rc, toolset)
+		if err != nil {
+			closeErr := closeToolsetFuncs(context.WithoutCancel(ctx), r.toolsetClosers)
+			r.toolsetClosers = nil
+			return errors.Join(fmt.Errorf("ai: open toolset: %w", err), closeErr)
+		}
+		if closeFunc != nil {
+			r.toolsetClosers = append(r.toolsetClosers, closeFunc)
+		}
+	}
+	r.toolsets = opened
+	return nil
+}
+
+func (r *run[Deps, Output]) prepareToolsetsForStep(ctx context.Context, rc *RunContext[Deps]) error {
+	for index, toolset := range r.toolsets {
+		resolved, err := toolsetForRunStep(ctx, rc, toolset)
+		if err != nil {
+			return fmt.Errorf("ai: toolset for run step: %w", err)
+		}
+		r.toolsets[index] = resolved
+	}
+	return nil
+}
+
+func (r *run[Deps, Output]) closeToolsets(ctx context.Context) error {
+	closers := r.toolsetClosers
+	r.toolsetClosers = nil
+	if err := closeToolsetFuncs(ctx, closers); err != nil {
+		return fmt.Errorf("ai: close toolset: %w", err)
+	}
+	return nil
 }
 
 func (r *run[Deps, Output]) selectModel(ctx context.Context) error {
@@ -768,6 +827,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	if err != nil {
 		return ModelRequestParams{}, err
 	}
+	if err := r.prepareToolsetsForStep(ctx, &rc); err != nil {
+		return ModelRequestParams{}, err
+	}
 	if err := r.prepareSystemPrompts(ctx, &rc); err != nil {
 		return ModelRequestParams{}, err
 	}
@@ -806,7 +868,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		stepEntries[entry.def.Name] = entry
 	}
 	for _, toolset := range r.toolsets {
-		resolved, err := toolset.Tools(ctx, &rc)
+		resolved, err := resolveToolsetTools(ctx, &rc, toolset)
 		if err != nil {
 			return ModelRequestParams{}, fmt.Errorf("ai: resolve toolset: %w", err)
 		}

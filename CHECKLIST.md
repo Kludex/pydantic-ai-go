@@ -84,7 +84,7 @@ Status:
 - [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
 - [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
 - [ ] Approval-required toolset wrapper.
-- [ ] Toolset IDs plus per-run/per-step enter, exit, and replacement lifecycle for stateful remote toolsets.
+- [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.
 - [ ] Deferred/lazy tool loading and tool search.
 - [ ] Native/builtin tools distinct from function tools.
 
@@ -225,4 +225,4 @@ Status:
 3. Add revealed tools to rich tool returns, backed by deferred tool visibility and tool-availability delta history.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.
-6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.
+6. Add MCP now that raw/dynamic toolsets have run and step lifecycle support, after deferred calls define the pause/resume boundary.

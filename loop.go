@@ -926,9 +926,13 @@ func revealedToolNames(messages []ModelMessage) map[string]struct{} {
 func cloneUserContents(contents []UserContent) []UserContent {
 	cloned := slices.Clone(contents)
 	for index, content := range cloned {
-		if binary, ok := content.(BinaryContent); ok {
-			binary.Data = slices.Clone(binary.Data)
-			cloned[index] = binary
+		switch content := content.(type) {
+		case BinaryContent:
+			content.Data = slices.Clone(content.Data)
+			cloned[index] = content
+		case UploadedFile:
+			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
+			cloned[index] = content
 		}
 	}
 	return cloned

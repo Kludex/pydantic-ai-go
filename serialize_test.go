@@ -177,13 +177,14 @@ func TestUnmarshalUserContentForms(t *testing.T) {
 	msgs, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":[
 		{"kind":"text-content","content":"look at this"},
 		{"kind":"image-url","url":"https://example.com/cat.png"},
-		{"kind":"binary","data":"aGk=","media_type":"image/png"}
+		{"kind":"binary","data":"aGk=","media_type":"image/png"},
+		{"kind":"uploaded-file","file_id":"file-1","provider_name":"anthropic","media_type":"text/csv","identifier":"sales","vendor_metadata":{"purpose":"data"}}
 	]}]}]`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	part := msgs[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
-	if len(part.Contents) != 3 {
+	if len(part.Contents) != 4 {
 		t.Fatalf("unexpected contents %+v", part.Contents)
 	}
 	if part.Contents[1].(ai.ImageURL).URL != "https://example.com/cat.png" {
@@ -191,6 +192,11 @@ func TestUnmarshalUserContentForms(t *testing.T) {
 	}
 	if string(part.Contents[2].(ai.BinaryContent).Data) != "hi" {
 		t.Fatalf("unexpected binary %+v", part.Contents[2])
+	}
+	uploaded := part.Contents[3].(ai.UploadedFile)
+	if uploaded.FileID != "file-1" || uploaded.ProviderName != "anthropic" ||
+		uploaded.VendorMetadata["purpose"] != "data" {
+		t.Fatalf("unexpected uploaded file %+v", uploaded)
 	}
 
 	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":42}]}]`)); err == nil {
@@ -206,6 +212,10 @@ func TestMarshalUserContentRoundTrip(t *testing.T) {
 		ai.TextContent{Text: "what is this?"},
 		ai.ImageURL{URL: "https://example.com/cat.png"},
 		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
+		ai.UploadedFile{
+			FileID: "file-1", ProviderName: "openai", MediaType: "text/csv", Identifier: "sales",
+			VendorMetadata: map[string]any{"purpose": "data"},
+		},
 	}}}}}
 	data, err := ai.MarshalMessages(msgs)
 	if err != nil {
@@ -216,7 +226,7 @@ func TestMarshalUserContentRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	part := back[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
-	if len(part.Contents) != 3 {
+	if len(part.Contents) != 4 || part.Contents[3].(ai.UploadedFile).Identifier != "sales" {
 		t.Fatalf("round trip lost contents: %+v", part.Contents)
 	}
 }

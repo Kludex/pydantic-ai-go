@@ -86,6 +86,7 @@ func (tool WebSearchTool) CloneNativeTool() NativeTool { return cloneWebSearchTo
 
 // CodeExecutionTool asks a compatible provider to execute model-generated code.
 type CodeExecutionTool struct {
+	Files    []UploadedFile
 	Optional bool
 }
 
@@ -99,7 +100,13 @@ func (CodeExecutionTool) UniqueID() string { return "code_execution" }
 func (tool CodeExecutionTool) IsOptional() bool { return tool.Optional }
 
 // CloneNativeTool returns a detached definition.
-func (tool CodeExecutionTool) CloneNativeTool() NativeTool { return tool }
+func (tool CodeExecutionTool) CloneNativeTool() NativeTool {
+	tool.Files = slices.Clone(tool.Files)
+	for index := range tool.Files {
+		tool.Files[index].VendorMetadata = cloneSchemaMap(tool.Files[index].VendorMetadata)
+	}
+	return tool
+}
 
 // WebFetchTool asks a compatible provider to retrieve content from URLs.
 type WebFetchTool struct {

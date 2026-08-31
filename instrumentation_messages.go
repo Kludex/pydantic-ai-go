@@ -126,6 +126,15 @@ func telemetryUserContent(content UserContent, includeContent, includeBinary boo
 			value["mime_type"] = mediaType
 		}
 		return value
+	case UploadedFile:
+		value := map[string]any{"type": "file", "mime_type": content.MediaType}
+		if slash := strings.IndexByte(content.MediaType, '/'); slash > 0 {
+			value["modality"] = content.MediaType[:slash]
+		}
+		if includeContent {
+			value["file_id"] = content.FileID
+		}
+		return value
 	case BinaryContent:
 		if version <= 3 {
 			value := map[string]any{"type": "binary", "media_type": content.MediaType}

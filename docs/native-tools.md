@@ -194,6 +194,38 @@ func main() {
 }
 ```
 
-`CodeExecutionTool` lets Gemini run model-generated code. Executable code and its result become normalized call and return parts with `ToolPartKindCodeExecution`. The provider language, source, outcome, and output remain available in those parts.
+`CodeExecutionTool` lets Gemini and Anthropic run model-generated code. Executable code and its result become normalized call and return parts with `ToolPartKindCodeExecution`. The provider language, source, outcome, and output remain available in those parts.
 
-Uploaded execution files and Anthropic, OpenAI Responses, Bedrock, and xAI rendering remain provider-parity work.
+You can attach provider-hosted files through `CodeExecutionTool.Files`:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-6"),
+		ai.WithNativeTools(ai.CodeExecutionTool{Files: []ai.UploadedFile{
+			{FileID: "file_abc123", ProviderName: "anthropic", MediaType: "text/csv"},
+		}}),
+	)
+
+	result, err := agent.Run(context.Background(), "Calculate totals from the uploaded CSV.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Only files whose `ProviderName` matches the selected provider are attached. Anthropic places uploads on the first user message so the cacheable prefix stays stable. It also retains and reuses the response container ID through subsequent tool turns.
+
+OpenAI Responses, Bedrock, and xAI code-execution rendering remain provider-parity work.

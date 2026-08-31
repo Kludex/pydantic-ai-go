@@ -72,6 +72,7 @@ func TestInstrumentedModelRequest(t *testing.T) {
 			ai.UserPromptPart{Content: "plain user prompt"},
 			ai.UserPromptPart{Contents: []ai.UserContent{
 				ai.TextContent{Text: "hello"}, ai.ImageURL{URL: "https://example.com/image.png"},
+				ai.UploadedFile{FileID: "file-1", ProviderName: "openai", MediaType: "text/csv"},
 				ai.BinaryContent{Data: []byte("secret"), MediaType: "audio/wav"}, nil,
 			}},
 			ai.ToolReturnPart{ToolName: "prior", ToolCallID: "prior-id", Content: map[string]any{"ok": true}},

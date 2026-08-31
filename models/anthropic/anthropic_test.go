@@ -738,7 +738,11 @@ func TestErrors(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
 		})
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		messages := []ai.ModelMessage{
+			ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "earlier"}}},
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "use the files"}}},
+		}
+		if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{
 			NativeTools: []ai.NativeTool{ai.WebSearchTool{
 				UserLocation: &ai.WebSearchUserLocation{
 					City: "Paris", Country: "FR", Region: "IDF", Timezone: "Europe/Paris",
@@ -747,7 +751,10 @@ func TestErrors(t *testing.T) {
 			}, ai.WebFetchTool{
 				AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"example.com"}, MaxUses: 2,
 				EnableCitations: true, MaxContentTokens: 4096,
-			}},
+			}, ai.CodeExecutionTool{Files: []ai.UploadedFile{
+				{FileID: "file-anthropic", ProviderName: "anthropic"},
+				{FileID: "file-openai", ProviderName: "openai"},
+			}}},
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -764,6 +771,20 @@ func TestErrors(t *testing.T) {
 			fetch["max_uses"] != float64(2) || fetch["max_content_tokens"] != float64(4096) ||
 			fetch["citations"].(map[string]any)["enabled"] != true {
 			t.Fatalf("unexpected Anthropic web-fetch tool: %#v", fetch)
+		}
+		code := body["tools"].([]any)[2].(map[string]any)
+		var userContent []any
+		for _, rawMessage := range body["messages"].([]any) {
+			message := rawMessage.(map[string]any)
+			if message["role"] == "user" {
+				userContent = message["content"].([]any)
+				break
+			}
+		}
+		upload := userContent[len(userContent)-1].(map[string]any)
+		if code["type"] != "code_execution_20260120" || code["name"] != "code_execution" ||
+			upload["type"] != "container_upload" || upload["file_id"] != "file-anthropic" {
+			t.Fatalf("unexpected Anthropic code execution request: code=%#v content=%#v", code, userContent)
 		}
 		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
 			NativeTools: []ai.NativeTool{unsupportedNativeTool{}},
@@ -1210,7 +1231,7 @@ func TestAnthropicDynamicWebSearchVersion(t *testing.T) {
 		anthropic.WithHTTPClient(server.Client()),
 	)
 	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-		NativeTools: []ai.NativeTool{&ai.WebSearchTool{}, &ai.WebFetchTool{}},
+		NativeTools: []ai.NativeTool{&ai.WebSearchTool{}, &ai.WebFetchTool{}, &ai.CodeExecutionTool{}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -1221,6 +1242,9 @@ func TestAnthropicDynamicWebSearchVersion(t *testing.T) {
 	}
 	if tool := tools[1].(map[string]any); tool["type"] != "web_fetch_20260209" || tool["citations"] != nil {
 		t.Fatalf("unexpected dynamic web fetch tool: %#v", tool)
+	}
+	if tool := tools[2].(map[string]any); tool["type"] != "code_execution_20260120" {
+		t.Fatalf("unexpected latest code execution tool: %#v", tool)
 	}
 }
 
@@ -1279,6 +1303,103 @@ func TestAnthropicWebSearchResponseAndReplay(t *testing.T) {
 	content = body["messages"].([]any)[0].(map[string]any)["content"].([]any)
 	if len(content) != 2 || content[0].(map[string]any)["input"].(map[string]any) == nil {
 		t.Fatalf("unexpected empty or foreign web search replay: %#v", content)
+	}
+}
+
+func TestAnthropicLegacyCodeExecutionRequest(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+	}))
+	t.Cleanup(server.Close)
+	model := anthropic.NewModel(
+		"claude-haiku-4-5-20251001", anthropic.WithAPIKey("test"), anthropic.WithBaseURL(server.URL),
+		anthropic.WithHTTPClient(server.Client()),
+	)
+	history := []ai.ModelMessage{
+		ai.ModelResponse{ProviderName: "anthropic", Parts: []ai.ResponsePart{ai.NativeToolCallPart{
+			ToolName: "code_execution", ToolCallID: "code", ToolKind: ai.ToolPartKindCodeExecution,
+			ProviderName: "anthropic",
+		}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "continue"}}},
+	}
+	tool := &ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file-1", ProviderName: "anthropic"}}}
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{tool}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := body["tools"].([]any)[0].(map[string]any)["type"]; got != "code_execution_20250825" {
+		t.Fatalf("unexpected legacy code tool version: %v", got)
+	}
+	messages := body["messages"].([]any)
+	call := messages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	upload := messages[1].(map[string]any)["content"].([]any)[1].(map[string]any)
+	if input := call["input"].(map[string]any); len(input) != 0 || upload["file_id"] != "file-1" {
+		t.Fatalf("unexpected legacy code replay or upload: call=%#v upload=%#v", call, upload)
+	}
+}
+
+func TestAnthropicCodeExecutionResponseAndReplay(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"id":"response","container":{"id":"container-1"},"content":[
+			{"type":"server_tool_use","id":"bash-1","name":"bash_code_execution","input":{"command":"python x.py"},"caller":{"type":"code_execution_20260120","tool_id":"parent"}},
+			{"type":"bash_code_execution_tool_result","tool_use_id":"bash-1","content":{"type":"bash_code_execution_result","stdout":"ok"}},
+			{"type":"server_tool_use","id":"python-1","name":"code_execution","input":null,"caller":{"type":"code_execution_20250825","tool_id":"parent"}},
+			{"type":"code_execution_tool_result","tool_use_id":"python-1","content":{"type":"code_execution_result","stdout":"1"}},
+			{"type":"server_tool_use","id":"edit-1","name":"text_editor_code_execution","input":{"command":"view","path":"/tmp/x"}},
+			{"type":"text_editor_code_execution_tool_result","tool_use_id":"edit-1","content":{"type":"text_editor_code_execution_result","content":"file"}}
+		]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ProviderDetails["container_id"] != "container-1" || len(response.Parts) != 6 {
+		t.Fatalf("unexpected code execution response: %+v", response)
+	}
+	bashCall := response.Parts[0].(ai.NativeToolCallPart)
+	bashReturn := response.Parts[1].(ai.NativeToolReturnPart)
+	pythonCall := response.Parts[2].(ai.NativeToolCallPart)
+	editReturn := response.Parts[5].(ai.NativeToolReturnPart)
+	if bashCall.ToolKind != ai.ToolPartKindCodeExecution || bashCall.ToolName != "code_execution" ||
+		bashCall.ProviderDetails["anthropic_tool_name"] != "bash_code_execution" ||
+		bashCall.ProviderDetails["anthropic_caller"] == nil ||
+		bashReturn.ProviderDetails["anthropic_tool_name"] != "bash_code_execution" ||
+		string(pythonCall.Args) != `{}` || pythonCall.ProviderDetails["anthropic_tool_name"] != nil ||
+		pythonCall.ProviderDetails["anthropic_caller"] == nil || editReturn.ProviderDetails["anthropic_tool_name"] !=
+		"text_editor_code_execution" {
+		t.Fatalf("unexpected normalized code execution parts: %#v", response.Parts)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if body["container"] != "container-1" {
+		t.Fatalf("container was not reused: %#v", body["container"])
+	}
+	content := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	wantTypes := []string{
+		"server_tool_use", "bash_code_execution_tool_result", "server_tool_use",
+		"code_execution_tool_result", "server_tool_use", "text_editor_code_execution_tool_result",
+	}
+	for index, want := range wantTypes {
+		if content[index].(map[string]any)["type"] != want {
+			t.Fatalf("unexpected replay block %d: %#v", index, content[index])
+		}
+	}
+	if content[0].(map[string]any)["name"] != "bash_code_execution" ||
+		content[2].(map[string]any)["name"] != "code_execution" ||
+		content[4].(map[string]any)["name"] != "text_editor_code_execution" {
+		t.Fatalf("unexpected replay tool names: %#v", content)
 	}
 }
 

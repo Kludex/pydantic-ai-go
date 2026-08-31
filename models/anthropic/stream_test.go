@@ -371,6 +371,53 @@ func TestAnthropicStreamWebSearch(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamCodeExecutionConsumerBreak(t *testing.T) {
+	model := newServer(t, anthropicSSE(t, []string{
+		`{"type":"content_block_start","index":0,"content_block":{"type":"code_execution_tool_result","tool_use_id":"code","content":{"type":"code_execution_result"}}}`,
+		`{"type":"message_stop"}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		break
+	}
+}
+
+func TestAnthropicStreamCodeExecution(t *testing.T) {
+	model := newServer(t, anthropicSSE(t, []string{
+		`{"type":"message_start","message":{"id":"response","model":"claude-sonnet-4-6","container":{"id":"container-start"},"usage":{"input_tokens":3}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"bash","name":"bash_code_execution","input":{},"caller":{"type":"code_execution_20260120","tool_id":"parent"}}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"command\":\"python x.py\"}"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"bash_code_execution_tool_result","tool_use_id":"bash","content":{"type":"bash_code_execution_result","stdout":"ok"}}}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn","container":{"id":"container-final"}},"usage":{"output_tokens":4}}`,
+		`{"type":"message_stop"}`,
+	}))
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := events[0].(ai.ToolCallStartEvent)
+	delta := events[1].(ai.ToolCallDeltaEvent)
+	returned := events[2].(ai.NativeToolReturnEvent)
+	finish := events[3].(ai.FinishEvent)
+	if start.ToolName != "code_execution" || start.ToolKind != ai.ToolPartKindCodeExecution ||
+		start.ProviderDetails["anthropic_tool_name"] != "bash_code_execution" ||
+		start.ProviderDetails["anthropic_caller"] == nil ||
+		delta.ArgsDelta != `{"command":"python x.py"}` ||
+		returned.Part.ProviderDetails["anthropic_tool_name"] != "bash_code_execution" ||
+		finish.ProviderDetails["container_id"] != "container-final" || finish.Usage.OutputTokens != 4 {
+		t.Fatalf("unexpected streamed code execution events: %#v", events)
+	}
+}
+
 func TestAnthropicStreamWebFetch(t *testing.T) {
 	model := newServer(t, anthropicSSE(t, []string{
 		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"fetch","name":"web_fetch","input":{}}}`,

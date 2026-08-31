@@ -102,10 +102,14 @@ func TestUserContentKinds(t *testing.T) {
 		{TextContent{}, "text-content"},
 		{ImageURL{}, "image-url"},
 		{BinaryContent{}, "binary"},
+		{UploadedFile{}, "uploaded-file"},
 	}
 	for _, tc := range kinds {
 		if tc.c.userContentKind() != tc.want {
 			t.Fatalf("expected %q, got %q", tc.want, tc.c.userContentKind())
+		}
+		if tc.c.enqueueItemKind() != "user-content" {
+			t.Fatalf("unexpected enqueue item kind %q", tc.c.enqueueItemKind())
 		}
 	}
 }

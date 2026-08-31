@@ -55,9 +55,12 @@ type streamEvent struct {
 	Type    string `json:"type"`
 	Index   int    `json:"index"`
 	Message struct {
-		ID    string         `json:"id"`
-		Model string         `json:"model"`
-		Usage anthropicUsage `json:"usage"`
+		ID        string         `json:"id"`
+		Model     string         `json:"model"`
+		Usage     anthropicUsage `json:"usage"`
+		Container *struct {
+			ID string `json:"id"`
+		} `json:"container"`
 	} `json:"message"`
 	ContentBlock responseContentBlock `json:"content_block"`
 	Delta        struct {
@@ -67,6 +70,9 @@ type streamEvent struct {
 		Thinking    string `json:"thinking"`
 		PartialJSON string `json:"partial_json"`
 		Signature   string `json:"signature"`
+		Container   *struct {
+			ID string `json:"id"`
+		} `json:"container"`
 	} `json:"delta"`
 	Usage anthropicUsage `json:"usage"`
 	Error struct {
@@ -82,6 +88,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		modelName := m.name
 		responseID := ""
 		stopReason := ""
+		containerID := ""
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		searchCalls := make(map[int]responseContentBlock)
@@ -106,10 +113,16 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 					modelName = event.Message.Model
 				}
 				usage = event.Message.Usage.usage()
+				if event.Message.Container != nil {
+					containerID = event.Message.Container.ID
+				}
 			case "content_block_start":
 				_, toolSearch := anthropicToolSearchStrategy(event.ContentBlock.Name)
 				if event.ContentBlock.Type == "server_tool_use" &&
-					(event.ContentBlock.Name == "web_search" || event.ContentBlock.Name == "web_fetch" || toolSearch) {
+					(event.ContentBlock.Name == "web_search" || event.ContentBlock.Name == "web_fetch" ||
+						event.ContentBlock.Name == "code_execution" ||
+						event.ContentBlock.Name == "bash_code_execution" ||
+						event.ContentBlock.Name == "text_editor_code_execution" || toolSearch) {
 					searchCalls[event.Index] = event.ContentBlock
 					searchArgs[event.Index] = &strings.Builder{}
 					continue
@@ -123,6 +136,15 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 						kind = ai.ToolPartKindWebFetch
 					}
 					part := parseAnthropicWebResult(event.ContentBlock, toolName, kind)
+					if !yield(ai.NativeToolReturnEvent{PartID: strconv.Itoa(event.Index), Part: part}, nil) {
+						return
+					}
+					continue
+				}
+				if event.ContentBlock.Type == "code_execution_tool_result" ||
+					event.ContentBlock.Type == "bash_code_execution_tool_result" ||
+					event.ContentBlock.Type == "text_editor_code_execution_tool_result" {
+					part := parseAnthropicCodeExecutionResult(event.ContentBlock)
 					if !yield(ai.NativeToolReturnEvent{PartID: strconv.Itoa(event.Index), Part: part}, nil) {
 						return
 					}
@@ -152,6 +174,9 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				}
 			case "message_delta":
 				usage.OutputTokens = event.Usage.OutputTokens
+				if event.Delta.Container != nil {
+					containerID = event.Delta.Container.ID
+				}
 				if event.Delta.StopReason != "" {
 					stopReason = event.Delta.StopReason
 				}
@@ -159,6 +184,9 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				providerDetails := map[string]any{}
 				if stopReason != "" {
 					providerDetails["finish_reason"] = stopReason
+				}
+				if containerID != "" {
+					providerDetails["container_id"] = containerID
 				}
 				if len(providerDetails) == 0 {
 					providerDetails = nil
@@ -190,11 +218,20 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				toolKind := ai.ToolPartKindToolSearch
 				var details map[string]any
 				var args json.RawMessage
-				if block.Name == "web_search" || block.Name == "web_fetch" {
+				if block.Name == "web_search" || block.Name == "web_fetch" ||
+					block.Name == "code_execution" || block.Name == "bash_code_execution" ||
+					block.Name == "text_editor_code_execution" {
 					toolName = block.Name
 					toolKind = ai.ToolPartKindWebSearch
-					if block.Name == "web_fetch" {
+					switch block.Name {
+					case "web_fetch":
 						toolKind = ai.ToolPartKindWebFetch
+					case "code_execution", "bash_code_execution", "text_editor_code_execution":
+						toolName = "code_execution"
+						toolKind = ai.ToolPartKindCodeExecution
+						if block.Name != "code_execution" {
+							details = map[string]any{"anthropic_tool_name": block.Name}
+						}
 					}
 					args = slices.Clone(raw)
 					if len(args) == 0 || string(args) == "null" {

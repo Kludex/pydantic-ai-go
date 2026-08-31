@@ -251,6 +251,7 @@ type messagesRequest struct {
 	Thinking          *thinkingParam   `json:"thinking,omitempty"`
 	ServiceTier       string           `json:"service_tier,omitempty"`
 	ContextManagement map[string]any   `json:"context_management,omitempty"`
+	Container         any              `json:"container,omitempty"`
 }
 
 type thinkingParam struct {
@@ -282,6 +283,7 @@ type contentBlock struct {
 	Caller           map[string]any      `json:"caller,omitempty"`
 	IsError          bool                `json:"is_error,omitempty"`
 	Tool             *toolReferenceParam `json:"tool,omitempty"`
+	FileID           string              `json:"file_id,omitempty"`
 }
 
 type toolReferenceParam struct {
@@ -372,6 +374,12 @@ func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]tool
 			tools = append(tools, anthropicWebFetchTool(modelName, nativeTool))
 		case *ai.WebFetchTool:
 			tools = append(tools, anthropicWebFetchTool(modelName, *nativeTool))
+		case ai.CodeExecutionTool, *ai.CodeExecutionTool:
+			version := "code_execution_20250825"
+			if anthropicSupportsLatestCodeExecution(modelName) {
+				version = "code_execution_20260120"
+			}
+			tools = append(tools, toolParam{Type: version, Name: "code_execution"})
 		default:
 			if nativeTool.IsOptional() {
 				continue
@@ -417,6 +425,19 @@ func anthropicWebFetchTool(modelName string, webFetch ai.WebFetchTool) toolParam
 	return tool
 }
 
+func anthropicSupportsLatestCodeExecution(modelName string) bool {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-mythos-preview", "claude-sonnet-4-5",
+		"claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-4-5", "claude-opus-4-6",
+		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func anthropicSupportsDynamicFiltering(modelName string) bool {
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-mythos-preview", "claude-sonnet-4-6",
@@ -452,6 +473,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		Stop:        params.Settings.StopSequences,
 		Thinking:    thinking,
 		ServiceTier: serviceTier,
+		Container:   anthropicContainerFromHistory(msgs),
 	}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens
@@ -497,6 +519,19 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			return nil, err
 		}
 		req.Messages = append(req.Messages, converted...)
+	}
+	if uploads := anthropicContainerUploads(params.NativeTools); len(uploads) > 0 {
+		for index := range req.Messages {
+			if req.Messages[index].Role != "user" {
+				continue
+			}
+			for _, fileID := range uploads {
+				req.Messages[index].Content = append(req.Messages[index].Content, contentBlock{
+					Type: "container_upload", FileID: fileID,
+				})
+			}
+			break
+		}
 	}
 	for _, tool := range params.Tools {
 		if serverToolSearch && tool.Name == ai.ToolSearchName {
@@ -556,6 +591,40 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")
 	}
 	return req, nil
+}
+
+func anthropicContainerUploads(nativeTools []ai.NativeTool) []string {
+	var uploads []string
+	for _, nativeTool := range nativeTools {
+		var files []ai.UploadedFile
+		switch tool := nativeTool.(type) {
+		case ai.CodeExecutionTool:
+			files = tool.Files
+		case *ai.CodeExecutionTool:
+			if tool != nil {
+				files = tool.Files
+			}
+		}
+		for _, file := range files {
+			if file.ProviderName == "anthropic" {
+				uploads = append(uploads, file.FileID)
+			}
+		}
+	}
+	return uploads
+}
+
+func anthropicContainerFromHistory(messages []ai.ModelMessage) any {
+	for index := len(messages) - 1; index >= 0; index-- {
+		response, ok := messages[index].(ai.ModelResponse)
+		if !ok || response.ProviderName != "anthropic" {
+			continue
+		}
+		if containerID, _ := response.ProviderDetails["container_id"].(string); containerID != "" {
+			return containerID
+		}
+	}
+	return nil
 }
 
 func anthropicServiceTier(tier ai.ServiceTier) (string, error) {
@@ -789,6 +858,22 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			if p.ProviderName != "anthropic" {
 				continue
 			}
+			if p.ToolKind == ai.ToolPartKindCodeExecution {
+				wireName, _ := p.ProviderDetails["anthropic_tool_name"].(string)
+				if wireName != "bash_code_execution" && wireName != "text_editor_code_execution" {
+					wireName = "code_execution"
+				}
+				input := slices.Clone(p.Args)
+				if len(input) == 0 {
+					input = json.RawMessage(`{}`)
+				}
+				block := contentBlock{Type: "server_tool_use", ID: p.ToolCallID, Name: wireName, Input: input}
+				if caller, ok := p.ProviderDetails["anthropic_caller"].(map[string]any); ok {
+					block.Caller = caller
+				}
+				blocks = append(blocks, block)
+				continue
+			}
 			if p.ToolKind == ai.ToolPartKindWebSearch || p.ToolKind == ai.ToolPartKindWebFetch {
 				input := slices.Clone(p.Args)
 				if len(input) == 0 {
@@ -824,6 +909,17 @@ func convertResponse(m ai.ModelResponse, deferredNames map[string]struct{}) ([]m
 			blocks = append(blocks, block)
 		case ai.NativeToolReturnPart:
 			if p.ProviderName != "anthropic" {
+				continue
+			}
+			if p.ToolKind == ai.ToolPartKindCodeExecution {
+				wireName, _ := p.ProviderDetails["anthropic_tool_name"].(string)
+				resultType := "code_execution_tool_result"
+				if wireName == "bash_code_execution" || wireName == "text_editor_code_execution" {
+					resultType = wireName + "_tool_result"
+				}
+				blocks = append(blocks, contentBlock{
+					Type: resultType, ToolUseID: p.ToolCallID, Content: p.Content,
+				})
 				continue
 			}
 			if p.ToolKind == ai.ToolPartKindWebSearch || p.ToolKind == ai.ToolPartKindWebFetch {
@@ -924,6 +1020,9 @@ type messagesResponse struct {
 	ServiceTier string                 `json:"service_tier"`
 	Content     []responseContentBlock `json:"content"`
 	Usage       anthropicUsage         `json:"usage"`
+	Container   *struct {
+		ID string `json:"id"`
+	} `json:"container"`
 }
 
 type responseContentBlock struct {
@@ -974,6 +1073,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	if mr.ServiceTier != "" {
 		providerDetails["service_tier"] = mr.ServiceTier
 	}
+	if mr.Container != nil && mr.Container.ID != "" {
+		providerDetails["container_id"] = mr.Container.ID
+	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil
 	}
@@ -1004,6 +1106,28 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		case "tool_use":
 			resp.Parts = append(resp.Parts, ai.ToolCallPart{ToolName: block.Name, Args: block.Input, ToolCallID: block.ID})
 		case "server_tool_use":
+			if block.Name == "code_execution" || block.Name == "bash_code_execution" ||
+				block.Name == "text_editor_code_execution" {
+				args := slices.Clone(block.Input)
+				if len(args) == 0 || string(args) == "null" {
+					args = json.RawMessage(`{}`)
+				}
+				var details map[string]any
+				if block.Name != "code_execution" {
+					details = map[string]any{"anthropic_tool_name": block.Name}
+				}
+				if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
+					if details == nil {
+						details = map[string]any{}
+					}
+					details["anthropic_caller"] = block.Caller
+				}
+				resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
+					ToolName: "code_execution", Args: args, ToolCallID: block.ID,
+					ToolKind: ai.ToolPartKindCodeExecution, ProviderName: "anthropic", ProviderDetails: details,
+				})
+				continue
+			}
 			if block.Name == "web_search" || block.Name == "web_fetch" {
 				args := slices.Clone(block.Input)
 				if len(args) == 0 || string(args) == "null" {
@@ -1046,6 +1170,8 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 			resp.Parts = append(resp.Parts, parseAnthropicWebResult(block, "web_search", ai.ToolPartKindWebSearch))
 		case "web_fetch_tool_result":
 			resp.Parts = append(resp.Parts, parseAnthropicWebResult(block, "web_fetch", ai.ToolPartKindWebFetch))
+		case "code_execution_tool_result", "bash_code_execution_tool_result", "text_editor_code_execution_tool_result":
+			resp.Parts = append(resp.Parts, parseAnthropicCodeExecutionResult(block))
 		case "tool_search_tool_result":
 			part, err := parseAnthropicToolSearchResult(block)
 			if err != nil {
@@ -1094,6 +1220,21 @@ func normalizeAnthropicToolSearchArguments(raw json.RawMessage, strategy string)
 		queries = append(queries, query)
 	}
 	return json.Marshal(map[string]any{"queries": queries})
+}
+
+func parseAnthropicCodeExecutionResult(block responseContentBlock) ai.NativeToolReturnPart {
+	var content any
+	if len(block.Content) > 0 {
+		_ = json.Unmarshal(block.Content, &content)
+	}
+	var details map[string]any
+	if block.Type == "bash_code_execution_tool_result" || block.Type == "text_editor_code_execution_tool_result" {
+		details = map[string]any{"anthropic_tool_name": strings.TrimSuffix(block.Type, "_tool_result")}
+	}
+	return ai.NativeToolReturnPart{
+		ToolName: "code_execution", ToolCallID: block.ToolUseID, ToolKind: ai.ToolPartKindCodeExecution,
+		Content: content, ProviderName: "anthropic", ProviderDetails: details,
+	}
 }
 
 func parseAnthropicWebResult(

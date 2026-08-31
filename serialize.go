@@ -413,11 +413,15 @@ func stringContent(raw json.RawMessage) string {
 }
 
 type wireUserContent struct {
-	Kind      string `json:"kind"`
-	Content   string `json:"content,omitempty"`
-	URL       string `json:"url,omitempty"`
-	Data      []byte `json:"data,omitempty"`
-	MediaType string `json:"media_type,omitempty"`
+	Kind           string         `json:"kind"`
+	Content        string         `json:"content,omitempty"`
+	URL            string         `json:"url,omitempty"`
+	Data           []byte         `json:"data,omitempty"`
+	MediaType      string         `json:"media_type,omitempty"`
+	FileID         string         `json:"file_id,omitempty"`
+	ProviderName   string         `json:"provider_name,omitempty"`
+	Identifier     string         `json:"identifier,omitempty"`
+	VendorMetadata map[string]any `json:"vendor_metadata,omitempty"`
 }
 
 func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
@@ -433,6 +437,11 @@ func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
 			items = append(items, wireUserContent{Kind: "image-url", URL: item.URL})
 		case BinaryContent:
 			items = append(items, wireUserContent{Kind: "binary", Data: item.Data, MediaType: item.MediaType})
+		case UploadedFile:
+			items = append(items, wireUserContent{
+				Kind: "uploaded-file", FileID: item.FileID, ProviderName: item.ProviderName,
+				MediaType: item.MediaType, Identifier: item.Identifier, VendorMetadata: item.VendorMetadata,
+			})
 		default:
 			return nil, fmt.Errorf("ai: unknown user content type %T", c)
 		}
@@ -459,6 +468,11 @@ func unmarshalUserContent(raw json.RawMessage) (UserPromptPart, error) {
 			part.Contents = append(part.Contents, ImageURL{URL: item.URL})
 		case "binary":
 			part.Contents = append(part.Contents, BinaryContent{Data: item.Data, MediaType: item.MediaType})
+		case "uploaded-file":
+			part.Contents = append(part.Contents, UploadedFile{
+				FileID: item.FileID, ProviderName: item.ProviderName, MediaType: item.MediaType,
+				Identifier: item.Identifier, VendorMetadata: item.VendorMetadata,
+			})
 		default:
 			return UserPromptPart{}, fmt.Errorf("ai: unknown user content kind %q", item.Kind)
 		}

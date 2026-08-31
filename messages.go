@@ -165,6 +165,18 @@ type BinaryContent struct {
 func (BinaryContent) userContentKind() string { return "binary" }
 func (BinaryContent) enqueueItemKind() string { return "user-content" }
 
+// UploadedFile references a file already hosted by a model provider.
+type UploadedFile struct {
+	FileID         string
+	ProviderName   string
+	MediaType      string
+	Identifier     string
+	VendorMetadata map[string]any
+}
+
+func (UploadedFile) userContentKind() string { return "uploaded-file" }
+func (UploadedFile) enqueueItemKind() string { return "user-content" }
+
 // ToolReturnOutcome reports whether a tool completed successfully.
 type ToolReturnOutcome string
 

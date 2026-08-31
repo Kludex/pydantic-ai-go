@@ -439,7 +439,10 @@ func TestModelSelectionMessagesAreDetached(t *testing.T) {
 			ai.ToolReturnPart{
 				ToolName: "old", ToolCallID: "old-call", Content: "done", Metadata: map[string]any{"stable": true},
 			},
-			ai.UserPromptPart{Contents: []ai.UserContent{ai.BinaryContent{Data: []byte("data"), MediaType: "text/plain"}}},
+			ai.UserPromptPart{Contents: []ai.UserContent{
+				ai.BinaryContent{Data: []byte("data"), MediaType: "text/plain"},
+				ai.UploadedFile{FileID: "file-1", VendorMetadata: map[string]any{"stable": true}},
+			}},
 		}},
 	}
 	agent := ai.NewAgent[deps, string](textModel("selected", "done", nil))
@@ -454,6 +457,7 @@ func TestModelSelectionMessagesAreDetached(t *testing.T) {
 		result.Metadata["stable"] = false
 		prompt := request.Parts[1].(ai.UserPromptPart)
 		prompt.Contents[0].(ai.BinaryContent).Data[0] = 'X'
+		prompt.Contents[1].(ai.UploadedFile).VendorMetadata["stable"] = false
 		selection.Messages = nil
 		return ai.ModelSelection{}, nil
 	})
@@ -465,7 +469,8 @@ func TestModelSelectionMessagesAreDetached(t *testing.T) {
 	request := result.Messages()[1].(ai.ModelRequest)
 	if response.Parts[0].(ai.ToolCallPart).Args[0] != '{' ||
 		request.Parts[0].(ai.ToolReturnPart).Metadata["stable"] != true ||
-		request.Parts[1].(ai.UserPromptPart).Contents[0].(ai.BinaryContent).Data[0] != 'd' {
+		request.Parts[1].(ai.UserPromptPart).Contents[0].(ai.BinaryContent).Data[0] != 'd' ||
+		request.Parts[1].(ai.UserPromptPart).Contents[1].(ai.UploadedFile).VendorMetadata["stable"] != true {
 		t.Fatalf("selection context mutated history: %+v", result.Messages())
 	}
 }

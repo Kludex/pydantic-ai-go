@@ -383,10 +383,18 @@ func TestCloneCustomNativeTool(t *testing.T) {
 		!clonedFetch.IsOptional() || clonedFetch.Kind() != "web_fetch" || clonedFetch.UniqueID() != "web_fetch" {
 		t.Fatalf("web fetch clone or identity is invalid: %+v", clonedFetch)
 	}
-	code := ai.CodeExecutionTool{Optional: true}
+	code := ai.CodeExecutionTool{
+		Files: []ai.UploadedFile{{
+			FileID: "file-1", ProviderName: "anthropic", VendorMetadata: map[string]any{"purpose": "data"},
+		}},
+		Optional: true,
+	}
 	clonedCode := code.CloneNativeTool().(ai.CodeExecutionTool)
+	clonedCode.Files[0].FileID = "changed"
+	clonedCode.Files[0].VendorMetadata["purpose"] = "changed"
 	if !clonedCode.IsOptional() || clonedCode.Kind() != "code_execution" ||
-		clonedCode.UniqueID() != "code_execution" {
+		clonedCode.UniqueID() != "code_execution" || code.Files[0].FileID != "file-1" ||
+		code.Files[0].VendorMetadata["purpose"] != "data" {
 		t.Fatalf("code execution clone or identity is invalid: %+v", clonedCode)
 	}
 }

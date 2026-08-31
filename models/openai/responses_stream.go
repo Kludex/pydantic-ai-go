@@ -62,7 +62,7 @@ func (m *ResponsesModel) StreamRequest(
 		if err != nil {
 			return nil, fmt.Errorf("openai: read error response: %w", err)
 		}
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	return m.responsesEventStream(resp.Body, nil), nil
 }
@@ -92,7 +92,7 @@ func (m *ResponsesModel) retrieveResponseStream(
 		if err != nil {
 			return nil, fmt.Errorf("openai: read error response: %w", err)
 		}
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	return m.responsesEventStream(resp.Body, &ai.ResponseMetadataEvent{
 		ModelName: m.name, ProviderName: m.providerName, ProviderURL: m.baseURL,

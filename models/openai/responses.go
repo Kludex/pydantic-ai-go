@@ -104,7 +104,7 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 		return nil, fmt.Errorf("openai: read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	response, err := parseResponsesResponse(data)
 	if response != nil {
@@ -161,7 +161,7 @@ func (m *ResponsesModel) CountTokens(
 		return ai.Usage{}, fmt.Errorf("openai: read token count response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return ai.Usage{}, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return ai.Usage{}, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	var counted struct {
 		InputTokens int `json:"input_tokens"`
@@ -203,7 +203,7 @@ func (m *ResponsesModel) CompactMessages(
 		return nil, fmt.Errorf("openai: read compaction response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	compacted, err := parseResponsesResponse(data)
 	if err != nil {
@@ -256,7 +256,7 @@ func (m *ResponsesModel) CancelSuspendedResponse(ctx context.Context, response a
 		return fmt.Errorf("openai: read cancel response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	return nil
 }
@@ -283,7 +283,7 @@ func (m *ResponsesModel) retrieveResponse(
 		return nil, fmt.Errorf("openai: read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	response, err := parseResponsesResponse(data)
 	if response != nil {

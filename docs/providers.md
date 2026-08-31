@@ -133,6 +133,8 @@ func main() {
 
 Set `OPENROUTER_API_KEY`. Model names must use OpenRouter's `provider/model` form. The model uses `max_tokens`, sends portable thinking settings through OpenRouter's `reasoning` extension, and retains the routed provider, native finish reason, annotations, server-tool usage, and provider-reported cost.
 
+OpenRouter reasoning details become separate `ThinkingPart` values. Text, summaries, encrypted signatures, stable IDs, formats, and indexes survive same-provider history replay and streaming. Embedded provider errors, transient responses without a completion, and nested provider responses remain inspectable model API failures or normalized responses instead of decoding errors.
+
 The OpenRouter model supports native web search and advisor declarations. OpenRouter ignores `AdvisorTool.MaxUses` and `AdvisorTool.Caching`; it maps `MaxTokens` to `max_completion_tokens`. Use `WithAppAttribution` or `OPENROUTER_APP_URL` and `OPENROUTER_APP_TITLE` to identify your application.
 
 Use `openrouter.Settings` for fallback models, provider routing, presets, context transforms, reasoning, and extended usage. `Settings.Build` validates conflicts with `ExtraBody` and returns a detached `ModelSettings` snapshot.

@@ -76,6 +76,7 @@ type ChatNativeToolFunc func(ai.NativeTool) (ChatNativeTool, bool, error)
 type ChatCompatibility struct {
 	ReasoningContent bool
 	Reasoning        bool
+	ReasoningDetails bool
 	LegacyMaxTokens  bool
 	ExtendedMetadata bool
 	NativeToolFunc   ChatNativeToolFunc
@@ -101,6 +102,7 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 		model.chatCompatibility = ChatCompatibility{
 			ReasoningContent: compatibility.ReasoningContent,
 			Reasoning:        compatibility.Reasoning,
+			ReasoningDetails: compatibility.ReasoningDetails,
 			LegacyMaxTokens:  compatibility.LegacyMaxTokens,
 			ExtendedMetadata: compatibility.ExtendedMetadata,
 			NativeToolFunc:   compatibility.NativeToolFunc,
@@ -265,7 +267,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 		return nil, fmt.Errorf("openai: read response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	response, err := m.parseResponse(data)
 	if response != nil {
@@ -275,14 +277,23 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	return response, err
 }
 
-// APIError is a non-200 response from the OpenAI API.
+// APIError is a provider API failure. StatusCode is zero when an OpenAI-compatible
+// endpoint returns no completion and no explicit error envelope.
 type APIError struct {
-	StatusCode int
-	Body       string
+	StatusCode   int
+	Body         string
+	ProviderName string
 }
 
 func (e *APIError) Error() string {
-	return fmt.Sprintf("openai: API returned status %d: %s", e.StatusCode, e.Body)
+	providerName := e.ProviderName
+	if providerName == "" {
+		providerName = "openai"
+	}
+	if e.StatusCode == 0 {
+		return fmt.Sprintf("%s: %s", providerName, e.Body)
+	}
+	return fmt.Sprintf("%s: API returned status %d: %s", providerName, e.StatusCode, e.Body)
 }
 
 // IsModelAPIError marks provider API responses as eligible for default model fallback.
@@ -313,12 +324,13 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role             string     `json:"role"`
-	Content          any        `json:"content,omitempty"` // string or []contentPart
-	ReasoningContent string     `json:"reasoning_content,omitempty"`
-	Reasoning        string     `json:"reasoning,omitempty"`
-	ToolCalls        []toolCall `json:"tool_calls,omitempty"`
-	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	Role             string            `json:"role"`
+	Content          any               `json:"content,omitempty"` // string or []contentPart
+	ReasoningContent string            `json:"reasoning_content,omitempty"`
+	Reasoning        string            `json:"reasoning,omitempty"`
+	ReasoningDetails []reasoningDetail `json:"reasoning_details,omitempty"`
+	ToolCalls        []toolCall        `json:"tool_calls,omitempty"`
+	ToolCallID       string            `json:"tool_call_id,omitempty"`
 }
 
 type contentPart struct {
@@ -567,6 +579,12 @@ func (model *Model) convertResponse(m ai.ModelResponse) []chatMessage {
 			msg.Content = p.Content
 		case ai.ThinkingPart:
 			if p.ProviderName == "" || p.ProviderName == model.providerName {
+				if model.chatCompatibility.ReasoningDetails {
+					if detail, ok := reasoningDetailFromThinkingPart(p); ok {
+						msg.ReasoningDetails = append(msg.ReasoningDetails, detail)
+						continue
+					}
+				}
 				if model.chatCompatibility.ReasoningContent {
 					msg.ReasoningContent += p.Content
 				}
@@ -600,6 +618,11 @@ func convertTool(def ai.ToolDefinition, supportsStrict bool) (chatTool, error) {
 	}, nil
 }
 
+type chatError struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 type chatResponse struct {
 	ID                string `json:"id"`
 	Model             string `json:"model"`
@@ -609,12 +632,13 @@ type chatResponse struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Message struct {
-			Content          string           `json:"content"`
-			Refusal          string           `json:"refusal"`
-			ReasoningContent string           `json:"reasoning_content"`
-			Reasoning        string           `json:"reasoning"`
-			Annotations      []map[string]any `json:"annotations"`
-			ToolCalls        []toolCall       `json:"tool_calls"`
+			Content          string            `json:"content"`
+			Refusal          string            `json:"refusal"`
+			ReasoningContent string            `json:"reasoning_content"`
+			Reasoning        string            `json:"reasoning"`
+			ReasoningDetails []reasoningDetail `json:"reasoning_details"`
+			Annotations      []map[string]any  `json:"annotations"`
+			ToolCalls        []toolCall        `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason       string `json:"finish_reason"`
 		NativeFinishReason string `json:"native_finish_reason"`
@@ -622,7 +646,8 @@ type chatResponse struct {
 			Content []map[string]any `json:"content"`
 		} `json:"logprobs"`
 	} `json:"choices"`
-	Usage chatUsage `json:"usage"`
+	Usage chatUsage  `json:"usage"`
+	Error *chatError `json:"error"`
 }
 
 type chatUsage struct {
@@ -704,12 +729,57 @@ func addExtendedChatUsageDetails(details map[string]any, usage chatUsage) {
 	}
 }
 
+func normalizeNestedChatResponse(data []byte) []byte {
+	var envelope map[string]json.RawMessage
+	if json.Unmarshal(data, &envelope) != nil {
+		return data
+	}
+	provider := bytes.TrimSpace(envelope["provider"])
+	if len(provider) == 0 || provider[0] != '{' {
+		return data
+	}
+	var nested map[string]json.RawMessage
+	_ = json.Unmarshal(provider, &nested)
+	if len(nested["created"]) == 0 && len(envelope["created"]) > 0 {
+		nested["created"] = envelope["created"]
+	}
+	if value := bytes.TrimSpace(nested["provider"]); len(value) == 0 || bytes.Equal(value, []byte("null")) {
+		nested["provider"] = json.RawMessage(`"unknown"`)
+	}
+	normalized, _ := json.Marshal(nested)
+	return normalized
+}
+
 func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
+	noCompletion := false
+	if model.chatCompatibility.ExtendedMetadata {
+		data = normalizeNestedChatResponse(data)
+		var envelope struct {
+			Choices json.RawMessage `json:"choices"`
+		}
+		_ = json.Unmarshal(data, &envelope)
+		noCompletion = bytes.Equal(bytes.TrimSpace(envelope.Choices), []byte("null"))
+	}
 	var cr chatResponse
 	if err := json.Unmarshal(data, &cr); err != nil {
 		return nil, fmt.Errorf("openai: parse response: %w", err)
 	}
+	if model.chatCompatibility.ExtendedMetadata && cr.Error != nil {
+		return nil, &APIError{
+			StatusCode: cr.Error.Code, Body: cr.Error.Message, ProviderName: model.providerName,
+		}
+	}
 	if len(cr.Choices) == 0 {
+		if noCompletion {
+			modelName := cr.Model
+			if modelName == "" {
+				modelName = model.name
+			}
+			return nil, &APIError{
+				Body:         "returned a response with null choices and no error for model " + modelName,
+				ProviderName: model.providerName,
+			}
+		}
 		return nil, fmt.Errorf("openai: response has no choices")
 	}
 	providerDetails := map[string]any{}
@@ -755,15 +825,25 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		resp.FinishReason = ai.FinishReasonContentFilter
 		return resp, nil
 	}
-	if model.chatCompatibility.ReasoningContent && msg.ReasoningContent != "" {
-		resp.Parts = append(resp.Parts, ai.ThinkingPart{
-			Content: msg.ReasoningContent, ProviderName: model.providerName,
-		})
-	}
-	if model.chatCompatibility.Reasoning && msg.Reasoning != "" {
-		resp.Parts = append(resp.Parts, ai.ThinkingPart{
-			Content: msg.Reasoning, ProviderName: model.providerName,
-		})
+	if model.chatCompatibility.ReasoningDetails && len(msg.ReasoningDetails) > 0 {
+		for _, detail := range msg.ReasoningDetails {
+			part, err := thinkingPartFromReasoningDetail(detail, model.providerName)
+			if err != nil {
+				return nil, err
+			}
+			resp.Parts = append(resp.Parts, part)
+		}
+	} else {
+		if model.chatCompatibility.ReasoningContent && msg.ReasoningContent != "" {
+			resp.Parts = append(resp.Parts, ai.ThinkingPart{
+				Content: msg.ReasoningContent, ProviderName: model.providerName,
+			})
+		}
+		if model.chatCompatibility.Reasoning && msg.Reasoning != "" {
+			resp.Parts = append(resp.Parts, ai.ThinkingPart{
+				Content: msg.Reasoning, ProviderName: model.providerName,
+			})
+		}
 	}
 	if msg.Content != "" {
 		resp.Parts = append(resp.Parts, ai.TextPart{Content: msg.Content, ProviderName: model.providerName})

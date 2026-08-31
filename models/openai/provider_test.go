@@ -364,6 +364,232 @@ func TestOpenAIExtendedChatCompatibility(t *testing.T) {
 	}
 }
 
+func TestOpenAIReasoningDetailsCompatibility(t *testing.T) {
+	var bodies []map[string]any
+	var staticRequests int
+	var streamRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if request.Header.Get("Accept") == "text/event-stream" {
+			response.Header().Set("Content-Type", "text/event-stream")
+			streamRequests++
+			if streamRequests == 2 {
+				_, _ = io.WriteString(response, "data: "+`{"model":"routed","choices":[{"delta":{`+
+					`"reasoning_details":[{"type":"unknown"}]}}]}`+"\n\n")
+				return
+			}
+			_, _ = io.WriteString(response, "data: "+`{"model":"routed","choices":[{"delta":{`+
+				`"reasoning":"ignored","reasoning_details":[`+
+				`{"id":"encrypted","type":"reasoning.encrypted","format":"openai-responses-v1","index":2,"data":"opaque"},`+
+				`{"id":"summary","type":"reasoning.summary","summary":"brief"}]}}]}`+"\n\n")
+			_, _ = io.WriteString(response, "data: [DONE]\n\n")
+			return
+		}
+		staticRequests++
+		if staticRequests == 2 {
+			_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{
+				"reasoning_details":[{"type":"unknown"}]},"finish_reason":"stop"}],"usage":{}}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{
+			"reasoning":"ignored","reasoning_details":[
+				{"id":"text","type":"reasoning.text","format":"anthropic-claude-v1","index":0,
+				 "text":"detail","signature":"signed"},
+				{"id":"summary","type":"reasoning.summary","summary":"brief"},
+				{"id":"encrypted","type":"reasoning.encrypted","data":"opaque"}
+			],"content":"answer"},"finish_reason":"stop"}],"usage":{}}`))
+	}))
+	defer server.Close()
+	model := openai.NewModel("routed", openai.WithProvider(openai.ProviderConfig{
+		Name: "gateway", BaseURL: server.URL, HTTPClient: server.Client(),
+	}), openai.WithChatCompatibility(openai.ChatCompatibility{Reasoning: true, ReasoningDetails: true}))
+	history := ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{
+			ID: "text", Content: "prior", Signature: "signature", ProviderName: "gateway",
+			ProviderDetails: map[string]any{
+				"type": "reasoning.text", "format": "anthropic-claude-v1", "index": float64(1),
+			},
+		},
+		ai.ThinkingPart{
+			ID: "summary", Content: "summary", ProviderName: "gateway",
+			ProviderDetails: map[string]any{"type": "reasoning.summary", "index": 2},
+		},
+		ai.ThinkingPart{
+			ID: "encrypted", Signature: "encrypted", ProviderName: "gateway",
+			ProviderDetails: map[string]any{"type": "reasoning.encrypted"},
+		},
+		ai.ThinkingPart{Content: "fallback", ProviderName: "gateway"},
+		ai.ThinkingPart{
+			Content: "invalid index", ProviderName: "gateway",
+			ProviderDetails: map[string]any{"type": "reasoning.summary", "index": 1.5},
+		},
+		ai.ThinkingPart{
+			ProviderName: "gateway", ProviderDetails: map[string]any{"type": "reasoning.encrypted"},
+		},
+		ai.ThinkingPart{
+			Content: "unknown", ProviderName: "gateway", ProviderDetails: map[string]any{"type": "unknown"},
+		},
+	}}
+	response, err := model.Request(t.Context(), []ai.ModelMessage{history}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant := bodies[0]["messages"].([]any)[0].(map[string]any)
+	details := assistant["reasoning_details"].([]any)
+	if len(details) != 4 || details[0].(map[string]any)["text"] != "prior" ||
+		details[0].(map[string]any)["index"] != float64(1) ||
+		details[1].(map[string]any)["summary"] != "summary" ||
+		details[2].(map[string]any)["data"] != "encrypted" ||
+		details[3].(map[string]any)["id"] != nil || details[3].(map[string]any)["format"] != nil ||
+		details[3].(map[string]any)["index"] != nil || assistant["reasoning"] != "fallbackunknown" {
+		t.Fatalf("unexpected reasoning-detail replay: %#v", assistant)
+	}
+	if len(response.Parts) != 4 {
+		t.Fatalf("unexpected reasoning-detail response: %#v", response.Parts)
+	}
+	text := response.Parts[0].(ai.ThinkingPart)
+	summary := response.Parts[1].(ai.ThinkingPart)
+	encrypted := response.Parts[2].(ai.ThinkingPart)
+	if text.ID != "text" || text.Content != "detail" || text.Signature != "signed" ||
+		text.ProviderDetails["format"] != "anthropic-claude-v1" || text.ProviderDetails["index"] != 0 ||
+		summary.Content != "brief" || encrypted.Signature != "opaque" || encrypted.Content != "" {
+		t.Fatalf("unexpected normalized reasoning details: %#v", response.Parts)
+	}
+
+	stream, err := model.StreamRequest(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ai.ThinkingDeltaEvent
+	for event, streamErr := range stream {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		if event, ok := event.(ai.ThinkingDeltaEvent); ok {
+			events = append(events, event)
+		}
+	}
+	if len(events) != 2 || events[0].PartID != "reasoning_detail_reasoning.encrypted_2" ||
+		events[0].ID != "encrypted" || events[0].SignatureDelta != "opaque" ||
+		events[1].PartID != "reasoning_detail_reasoning.summary_1" || events[1].Delta != "brief" {
+		t.Fatalf("unexpected streamed reasoning details: %#v", events)
+	}
+
+	unknownStream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, streamErr := range unknownStream {
+		if streamErr == nil || !strings.Contains(streamErr.Error(), `unknown reasoning detail type "unknown"`) {
+			t.Fatalf("unexpected streamed reasoning detail error: %v", streamErr)
+		}
+		break
+	}
+	abandoned, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, streamErr := range abandoned {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		if _, ok := event.(ai.ThinkingDeltaEvent); ok {
+			break
+		}
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err == nil || !strings.Contains(err.Error(), `unknown reasoning detail type "unknown"`) {
+		t.Fatalf("unexpected unknown reasoning detail error: %v", err)
+	}
+}
+
+func TestOpenAIExtendedResponseVariants(t *testing.T) {
+	var staticRequests int
+	var streamRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Accept") == "text/event-stream" {
+			response.Header().Set("Content-Type", "text/event-stream")
+			streamRequests++
+			if streamRequests == 1 {
+				_, _ = io.WriteString(response, "data: "+`{"error":{"code":503,"message":"unavailable"}}`+"\n\n")
+			} else {
+				_, _ = io.WriteString(response, "data: "+`{"choices":null,"error":null}`+"\n\n")
+			}
+			return
+		}
+		staticRequests++
+		switch staticRequests {
+		case 1:
+			_, _ = response.Write([]byte(`{"created":10,"provider":{"id":"nested","model":"routed",
+				"provider":null,"choices":[{"message":{"content":"nested"},"finish_reason":"stop"}],"usage":{}}}`))
+		case 2:
+			_, _ = response.Write([]byte(`{"choices":null,"error":{"code":429,"message":"limited"}}`))
+		case 3:
+			_, _ = response.Write([]byte(`{"choices":null,"error":null}`))
+		case 4:
+			_, _ = response.Write([]byte(`{"choices":[],"error":null}`))
+		default:
+			_, _ = response.Write([]byte(`{"provider":`))
+		}
+	}))
+	defer server.Close()
+	model := openai.NewModel("routed", openai.WithProvider(openai.ProviderConfig{
+		Name: "gateway", BaseURL: server.URL, HTTPClient: server.Client(),
+	}), openai.WithChatCompatibility(openai.ChatCompatibility{ExtendedMetadata: true}))
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ProviderResponseID != "nested" || response.ProviderDetails["downstream_provider"] != "unknown" ||
+		response.Timestamp.Unix() != 10 {
+		t.Fatalf("unexpected nested response: %+v", response)
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	var apiError *openai.APIError
+	if !errors.As(err, &apiError) || apiError.StatusCode != 429 ||
+		apiError.Error() != "gateway: API returned status 429: limited" {
+		t.Fatalf("unexpected embedded error: %v", err)
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if !errors.As(err, &apiError) || apiError.StatusCode != 0 ||
+		apiError.Error() != "gateway: returned a response with null choices and no error for model routed" {
+		t.Fatalf("unexpected no-completion error: %v", err)
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err == nil || err.Error() != "openai: response has no choices" {
+		t.Fatalf("unexpected empty-choice error: %v", err)
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err == nil || !strings.Contains(err.Error(), "parse response") {
+		t.Fatalf("unexpected malformed response error: %v", err)
+	}
+
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, streamErr := range stream {
+		if !errors.As(streamErr, &apiError) || apiError.StatusCode != 503 {
+			t.Fatalf("unexpected streamed embedded error: %v", streamErr)
+		}
+		break
+	}
+	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, streamErr := range stream {
+		if !errors.As(streamErr, &apiError) || !strings.Contains(streamErr.Error(), "model routed") {
+			t.Fatalf("unexpected streamed no-completion error: %v", streamErr)
+		}
+		break
+	}
+}
+
 func TestOpenAIChatCompatibilityValidation(t *testing.T) {
 	for name, compatibility := range map[string]openai.ChatCompatibility{
 		"empty reason":              {FinishReasons: map[string]ai.FinishReason{"": ai.FinishReasonStop}},

@@ -40,7 +40,8 @@ func TestOpenRouterRequest(t *testing.T) {
 		if request.Header.Get("Accept") == "text/event-stream" {
 			response.Header().Set("Content-Type", "text/event-stream")
 			_, _ = io.WriteString(response, "data: "+`{"id":"stream","model":"anthropic/claude",`+
-				`"provider":"Anthropic","choices":[{"delta":{"reasoning":"think","content":"done"},`+
+				`"provider":"Anthropic","choices":[{"delta":{"reasoning_details":[`+
+				`{"id":"reason","type":"reasoning.summary","index":0,"summary":"think"}],"content":"done"},`+
 				`"finish_reason":"stop","native_finish_reason":"end_turn"}],`+
 				`"usage":{"prompt_tokens":3,"completion_tokens":2,"cost":0.002}}`+"\n\n")
 			_, _ = io.WriteString(response, "data: [DONE]\n\n")
@@ -48,7 +49,8 @@ func TestOpenRouterRequest(t *testing.T) {
 		}
 		_, _ = io.WriteString(response, `{
 			"id":"response","model":"anthropic/claude","provider":"Anthropic",
-			"choices":[{"message":{"reasoning":"consider","content":"answer"},
+			"choices":[{"message":{"reasoning_details":[{"id":"reason","type":"reasoning.text",
+			"format":"anthropic-claude-v1","index":0,"text":"consider","signature":"signed"}],"content":"answer"},
 			"finish_reason":"stop","native_finish_reason":"end_turn"}],
 			"usage":{"prompt_tokens":7,"completion_tokens":4,"cost":0.004}
 		}`)
@@ -122,6 +124,8 @@ func TestOpenRouterRequest(t *testing.T) {
 		t.Fatalf("unexpected OpenRouter settings: %#v", body)
 	}
 	if len(response.Parts) != 2 || response.Parts[0].(ai.ThinkingPart).Content != "consider" ||
+		response.Parts[0].(ai.ThinkingPart).Signature != "signed" ||
+		response.Parts[0].(ai.ThinkingPart).ProviderDetails["type"] != "reasoning.text" ||
 		response.ProviderDetails["downstream_provider"] != "Anthropic" || response.Usage.CostUSD == nil ||
 		*response.Usage.CostUSD != 0.004 {
 		t.Fatalf("unexpected OpenRouter response: %+v", response)
@@ -149,6 +153,10 @@ func TestOpenRouterRequest(t *testing.T) {
 	}
 	if !thinking || !text {
 		t.Fatalf("missing OpenRouter events: thinking=%v text=%v", thinking, text)
+	}
+	replayed := bodies[1]["messages"].([]any)[0].(map[string]any)["reasoning_details"].([]any)
+	if replayed[0].(map[string]any)["signature"] != "signed" || replayed[0].(map[string]any)["text"] != "consider" {
+		t.Fatalf("unexpected OpenRouter reasoning replay: %#v", replayed)
 	}
 }
 
@@ -205,6 +213,79 @@ func TestOpenRouterModelNameValidation(t *testing.T) {
 	}
 }
 
+func TestOpenRouterResponseVariants(t *testing.T) {
+	var staticRequests int
+	var streamRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Accept") == "text/event-stream" {
+			response.Header().Set("Content-Type", "text/event-stream")
+			streamRequests++
+			if streamRequests == 1 {
+				_, _ = io.WriteString(response, "data: "+`{"error":{"code":503,"message":"upstream unavailable"}}`+"\n\n")
+			} else {
+				_, _ = io.WriteString(response, "data: "+`{"model":"vendor/model","choices":null,"error":null}`+"\n\n")
+			}
+			return
+		}
+		staticRequests++
+		switch staticRequests {
+		case 1:
+			_, _ = response.Write([]byte(`{"created":10,"provider":{"id":"nested","model":"vendor/model",
+				"provider":null,"choices":[{"message":{"content":"nested"},"finish_reason":"stop"}],
+				"usage":{"prompt_tokens":1,"completion_tokens":1}}}`))
+		case 2:
+			_, _ = response.Write([]byte(`{"model":"vendor/model","choices":null,
+				"error":{"code":429,"message":"route limited"}}`))
+		default:
+			_, _ = response.Write([]byte(`{"model":"vendor/model","provider":null,"choices":null,"error":null}`))
+		}
+	}))
+	defer server.Close()
+	model := openrouter.NewModel(
+		"vendor/model", openrouter.WithBaseURL(server.URL), openrouter.WithHTTPClient(server.Client()),
+	)
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.ProviderResponseID != "nested" || response.Parts[0].(ai.TextPart).Content != "nested" ||
+		response.ProviderDetails["downstream_provider"] != "unknown" || response.Timestamp.Unix() != 10 {
+		t.Fatalf("unexpected nested response: %+v", response)
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	var apiError *openai.APIError
+	if !errors.As(err, &apiError) || apiError.StatusCode != 429 || apiError.ProviderName != "openrouter" ||
+		apiError.Body != "route limited" {
+		t.Fatalf("unexpected embedded error: %v", err)
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	var modelAPIError ai.ModelAPIError
+	if !errors.As(err, &modelAPIError) || !strings.Contains(err.Error(), "null choices") {
+		t.Fatalf("unexpected no-completion error: %v", err)
+	}
+
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, streamErr := range stream {
+		if !errors.As(streamErr, &apiError) || apiError.StatusCode != 503 {
+			t.Fatalf("unexpected streamed provider error: %v", streamErr)
+		}
+		break
+	}
+	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, streamErr := range stream {
+		if !errors.As(streamErr, &modelAPIError) || !strings.Contains(streamErr.Error(), "null choices") {
+			t.Fatalf("unexpected streamed no-completion error: %v", streamErr)
+		}
+		break
+	}
+}
+
 func TestOpenRouterProviderError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 		response.WriteHeader(http.StatusBadRequest)
@@ -217,7 +298,8 @@ func TestOpenRouterProviderError(t *testing.T) {
 	)
 	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
 	var apiError *openai.APIError
-	if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusBadRequest {
+	if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusBadRequest ||
+		apiError.ProviderName != "openrouter" || !strings.HasPrefix(err.Error(), "openrouter: API returned status 400") {
 		t.Fatalf("unexpected provider error: %v", err)
 	}
 }

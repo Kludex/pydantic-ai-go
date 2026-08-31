@@ -47,7 +47,7 @@ func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, param
 		if err != nil {
 			return nil, fmt.Errorf("openai: read error response: %w", err)
 		}
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	return m.eventStream(resp.Body), nil
 }
@@ -65,11 +65,12 @@ type chatChunk struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Delta struct {
-			Content          string           `json:"content"`
-			Refusal          string           `json:"refusal"`
-			ReasoningContent string           `json:"reasoning_content"`
-			Reasoning        string           `json:"reasoning"`
-			Annotations      []map[string]any `json:"annotations"`
+			Content          string            `json:"content"`
+			Refusal          string            `json:"refusal"`
+			ReasoningContent string            `json:"reasoning_content"`
+			Reasoning        string            `json:"reasoning"`
+			ReasoningDetails []reasoningDetail `json:"reasoning_details"`
+			Annotations      []map[string]any  `json:"annotations"`
 			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -86,6 +87,7 @@ type chatChunk struct {
 		} `json:"logprobs"`
 	} `json:"choices"`
 	Usage *chatUsage `json:"usage"`
+	Error *chatError `json:"error"`
 }
 
 func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
@@ -140,6 +142,30 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				yield(nil, fmt.Errorf("openai: parse stream chunk: %w", err))
 				return
 			}
+			if m.chatCompatibility.ExtendedMetadata {
+				if chunk.Error != nil {
+					yield(nil, &APIError{
+						StatusCode: chunk.Error.Code, Body: chunk.Error.Message, ProviderName: m.providerName,
+					})
+					return
+				}
+				var envelope struct {
+					Choices json.RawMessage `json:"choices"`
+					Model   string          `json:"model"`
+				}
+				_ = json.Unmarshal([]byte(data), &envelope)
+				if bytes.Equal(bytes.TrimSpace(envelope.Choices), []byte("null")) {
+					modelName := envelope.Model
+					if modelName == "" {
+						modelName = m.name
+					}
+					yield(nil, &APIError{
+						Body:         "returned a response with null choices and no error for model " + modelName,
+						ProviderName: m.providerName,
+					})
+					return
+				}
+			}
 			if chunk.ID != "" {
 				responseID = chunk.ID
 			}
@@ -182,18 +208,35 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				refusal += delta.Refusal
 				finishReason = "content_filter"
 			}
-			if m.chatCompatibility.ReasoningContent && delta.ReasoningContent != "" {
-				if !yield(ai.ThinkingDeltaEvent{
-					PartID: "thinking", Delta: delta.ReasoningContent, ProviderName: m.providerName,
-				}, nil) {
-					return
+			if m.chatCompatibility.ReasoningDetails && len(delta.ReasoningDetails) > 0 {
+				for index, detail := range delta.ReasoningDetails {
+					part, err := thinkingPartFromReasoningDetail(detail, m.providerName)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					if !yield(ai.ThinkingDeltaEvent{
+						PartID: reasoningDetailPartID(detail, index), Delta: part.Content, ID: part.ID,
+						SignatureDelta: part.Signature, ProviderName: part.ProviderName,
+						ProviderDetails: part.ProviderDetails,
+					}, nil) {
+						return
+					}
 				}
-			}
-			if m.chatCompatibility.Reasoning && delta.Reasoning != "" {
-				if !yield(ai.ThinkingDeltaEvent{
-					PartID: "thinking", Delta: delta.Reasoning, ProviderName: m.providerName,
-				}, nil) {
-					return
+			} else {
+				if m.chatCompatibility.ReasoningContent && delta.ReasoningContent != "" {
+					if !yield(ai.ThinkingDeltaEvent{
+						PartID: "thinking", Delta: delta.ReasoningContent, ProviderName: m.providerName,
+					}, nil) {
+						return
+					}
+				}
+				if m.chatCompatibility.Reasoning && delta.Reasoning != "" {
+					if !yield(ai.ThinkingDeltaEvent{
+						PartID: "thinking", Delta: delta.Reasoning, ProviderName: m.providerName,
+					}, nil) {
+						return
+					}
 				}
 			}
 			if m.chatCompatibility.ExtendedMetadata && len(delta.Annotations) > 0 {

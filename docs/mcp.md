@@ -123,6 +123,64 @@ Returned protocol values are detached copies. You can modify them without changi
 
 `CallTool` returns MCP tool failures through `CallToolResult.IsError`. It returns a Go error only when the protocol request fails. `SessionToolset` converts the same tool failure into the configured agent behavior: retry by default, a failed result with `ToolErrorFailed`, or a run error with `ToolErrorAbort`.
 
+## Handle sampling and elicitation
+
+Let the server call a model through your MCP client and request approved structured input:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+)
+
+func main() {
+	ctx := context.Background()
+	session, err := aimcp.Connect(
+		ctx,
+		&mcpsdk.StreamableClientTransport{Endpoint: "http://localhost:8000/mcp"},
+		aimcp.WithSamplingModel(openai.NewModel("gpt-5-mini")),
+		aimcp.WithElicitationHandler(func(
+			_ context.Context,
+			request *aimcp.ElicitationRequest,
+		) (*aimcp.ElicitationResult, error) {
+			fmt.Println(request.Params.Message)
+			return &aimcp.ElicitationResult{
+				Action:  "accept",
+				Content: map[string]any{"project": "pydantic-ai-go"},
+			}, nil
+		}),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer session.Close()
+
+	result, err := session.CallTool(ctx, "prepare_release", map[string]any{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Content)
+}
+```
+
+`WithSamplingModel` maps the server's system prompt, text, image, audio, token limit, temperature, and stop sequences to a direct model request. It returns text to the server and never exposes model reasoning. Use `WithSamplingHandler` when you need complete control over the sampling result.
+
+The SDK fulfills current-protocol multi-round-trip input requests and retries the original tool call automatically. This supports a server that pauses one operation for sampling or elicitation without storing client state.
+
+Elicitation is a trust boundary. Show the server's request to the user and obtain informed approval before returning personal, secret, or destructive input. Returning `Action: "decline"` or `Action: "cancel"` sends no content.
+
+Sampling models and handlers are mutually exclusive. Handler requests and results are detached, so a server cannot mutate application-owned values after the callback returns.
+
+> [!NOTE]
+> MCP deprecated sampling in protocol version 2026-07-28. The official SDK and this package keep it available during the protocol's compatibility window. Prefer a server-owned model integration for new systems.
+
 ## Choose a transport
 
 Use the transport that your server supports:

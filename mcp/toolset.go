@@ -45,6 +45,9 @@ type config struct {
 	id               string
 	implementation   *mcpsdk.Implementation
 	clientOptions    *mcpsdk.ClientOptions
+	samplingModel    ai.Model
+	samplingHandler  SamplingHandler
+	elicitation      ElicitationHandler
 	sessionOptions   *mcpsdk.ClientSessionOptions
 	initTimeout      time.Duration
 	readTimeout      time.Duration
@@ -64,7 +67,19 @@ func WithImplementation(implementation *mcpsdk.Implementation) Option {
 
 // WithClientOptions configures server-initiated MCP features and notifications.
 func WithClientOptions(options *mcpsdk.ClientOptions) Option {
-	return func(config *config) { config.clientOptions = options }
+	return func(config *config) {
+		if options == nil {
+			config.clientOptions = nil
+			return
+		}
+		cloned := *options
+		cloned.Capabilities = cloneProtocol(options.Capabilities)
+		if options.MultiRoundTrip != nil {
+			multiRoundTrip := *options.MultiRoundTrip
+			cloned.MultiRoundTrip = &multiRoundTrip
+		}
+		config.clientOptions = &cloned
+	}
 }
 
 // WithSessionOptions configures each MCP client session.
@@ -132,7 +147,14 @@ func newConfig(options []Option) config {
 	}
 	if cfg.implementation == nil {
 		cfg.implementation = &mcpsdk.Implementation{Name: "pydantic-ai-go", Version: "dev"}
+	} else {
+		cfg.implementation = cloneProtocol(cfg.implementation)
 	}
+	if cfg.sessionOptions != nil {
+		sessionOptions := *cfg.sessionOptions
+		cfg.sessionOptions = &sessionOptions
+	}
+	cfg.clientOptions = prepareClientOptions(cfg)
 	return cfg
 }
 

@@ -333,6 +333,7 @@ type imageSource struct {
 	MediaType string `json:"media_type,omitempty"`
 	Data      string `json:"data,omitempty"`
 	URL       string `json:"url,omitempty"`
+	FileID    string `json:"file_id,omitempty"`
 }
 
 func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
@@ -352,6 +353,22 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 			}})
 		case ai.ImageURL:
 			blocks = append(blocks, contentBlock{Type: "image", Source: &imageSource{Type: "url", URL: item.URL}})
+		case ai.UploadedFile:
+			if item.ProviderName != "anthropic" {
+				return nil, fmt.Errorf(
+					"anthropic: uploaded file %q belongs to provider %q", item.FileID, item.ProviderName,
+				)
+			}
+			blockType := "document"
+			if strings.HasPrefix(item.MediaType, "image/") {
+				blockType = "image"
+			} else if item.MediaType != "" && !strings.HasPrefix(item.MediaType, "text/") &&
+				!strings.HasPrefix(item.MediaType, "application/") {
+				return nil, fmt.Errorf("anthropic: unsupported uploaded file media type %q", item.MediaType)
+			}
+			blocks = append(blocks, contentBlock{
+				Type: blockType, Source: &imageSource{Type: "file", FileID: item.FileID},
+			})
 		default:
 			return nil, fmt.Errorf("anthropic: unsupported user content type %T", c)
 		}

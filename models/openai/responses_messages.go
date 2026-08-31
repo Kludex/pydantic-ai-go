@@ -99,7 +99,7 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 		case ai.SystemPromptPart:
 			out = append(out, responsesInput{Role: "system", Content: part.Content})
 		case ai.UserPromptPart:
-			content, err := responsesUserContent(part)
+			content, err := responsesUserContent(part, c.providerName)
 			if err != nil {
 				return nil, err
 			}
@@ -143,7 +143,7 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 	return out, nil
 }
 
-func responsesUserContent(prompt ai.UserPromptPart) (any, error) {
+func responsesUserContent(prompt ai.UserPromptPart, providerName string) (any, error) {
 	if len(prompt.Contents) == 0 {
 		return prompt.Content, nil
 	}
@@ -160,6 +160,21 @@ func responsesUserContent(prompt ai.UserPromptPart) (any, error) {
 			}
 			imageURL := "data:" + item.MediaType + ";base64," + base64.StdEncoding.EncodeToString(item.Data)
 			content = append(content, responsesInputContent{Type: "input_image", ImageURL: imageURL})
+		case ai.UploadedFile:
+			if item.ProviderName != providerName {
+				return nil, fmt.Errorf("openai: uploaded file %q belongs to provider %q", item.FileID, item.ProviderName)
+			}
+			if strings.HasPrefix(item.MediaType, "image/") {
+				detail, _ := item.VendorMetadata["detail"].(string)
+				if detail == "" {
+					detail = "auto"
+				}
+				content = append(content, responsesInputContent{
+					Type: "input_image", FileID: item.FileID, Detail: detail,
+				})
+			} else {
+				content = append(content, responsesInputContent{Type: "input_file", FileID: item.FileID})
+			}
 		default:
 			return nil, fmt.Errorf("openai: unsupported Responses user content type %T", item)
 		}

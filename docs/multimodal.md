@@ -81,8 +81,51 @@ Inline content increases request size. Prefer `ImageURL` when the provider can f
 > [!WARNING]
 > A URL can expose its host, path, query values, and access token to the model provider. Use short-lived signed URLs. Do not place long-lived credentials in the URL.
 
+## Reference an uploaded file
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](openai.NewResponsesModel("gpt-5.4"))
+	result, err := agent.RunParts(
+		context.Background(),
+		[]ai.UserContent{
+			ai.TextContent{Text: "Summarize the uploaded report."},
+			ai.UploadedFile{
+				FileID:       "file_abc123",
+				ProviderName: "openai",
+				MediaType:    "application/pdf",
+			},
+		},
+		struct{}{},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`UploadedFile` references bytes already stored by a provider. File IDs are not portable. `ProviderName` must match the selected provider or the request fails before transport.
+
+OpenAI Responses sends images as `input_image` and other files as `input_file`. Anthropic sends uploaded images and documents through file sources. Gemini Files API, Google Cloud Storage, OpenAI Chat Completions, Bedrock, and xAI mappings remain parity work.
+
+## Read generated files
+
+`FilePart` represents binary output from a model or provider-native tool. OpenAI code-interpreter images use this part in static and streamed responses. `FilePart.Content.Data`, provider details, histories, and stream events are detached before they reach consumers.
+
 ## Reuse multimodal history
 
 `Result.Messages()` contains the original `UserPromptPart.Contents`. You can pass those messages to `WithMessageHistory` on another run.
 
-The returned history is detached. Mutating its `BinaryContent.Data` or replacing a content item does not change the completed run.
+The returned history is detached. Mutating `BinaryContent.Data`, `UploadedFile.VendorMetadata`, `FilePart.Content.Data`, or replacing a content item does not change the completed run.

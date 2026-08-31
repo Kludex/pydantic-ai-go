@@ -993,12 +993,14 @@ func TestMultimodalUserPrompt(t *testing.T) {
 		ai.TextContent{Text: "what is this?"},
 		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
 		ai.ImageURL{URL: "https://example.com/cat.png"},
+		ai.UploadedFile{FileID: "file-image", ProviderName: "anthropic", MediaType: "image/png"},
+		ai.UploadedFile{FileID: "file-document", ProviderName: "anthropic", MediaType: "application/pdf"},
 	}}}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
 		t.Fatal(err)
 	}
 	blocks := gotBody["messages"].([]any)[0].(map[string]any)["content"].([]any)
-	if len(blocks) != 3 {
+	if len(blocks) != 5 {
 		t.Fatalf("unexpected blocks %v", blocks)
 	}
 	source := blocks[1].(map[string]any)["source"].(map[string]any)
@@ -1009,13 +1011,39 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	if urlSource["type"] != "url" || urlSource["url"] != "https://example.com/cat.png" {
 		t.Fatalf("unexpected url source %v", urlSource)
 	}
+	imageFile := blocks[3].(map[string]any)
+	documentFile := blocks[4].(map[string]any)
+	if imageFile["type"] != "image" || imageFile["source"].(map[string]any)["file_id"] != "file-image" ||
+		documentFile["type"] != "document" ||
+		documentFile["source"].(map[string]any)["file_id"] != "file-document" {
+		t.Fatalf("unexpected uploaded files: image=%#v document=%#v", imageFile, documentFile)
+	}
 }
 
 func TestMultimodalUnknownContent(t *testing.T) {
 	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
-	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{nil}}}}}
-	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err == nil {
-		t.Fatal("expected error")
+	for _, test := range []struct {
+		name    string
+		content ai.UserContent
+		want    string
+	}{
+		{name: "unknown", content: nil, want: "unsupported user content"},
+		{name: "foreign file", content: ai.UploadedFile{
+			FileID: "file", ProviderName: "openai", MediaType: "image/png",
+		}, want: "belongs to provider"},
+		{name: "unsupported file", content: ai.UploadedFile{
+			FileID: "file", ProviderName: "anthropic", MediaType: "audio/wav",
+		}, want: "unsupported uploaded file media type"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{test.content}},
+			}}}
+			if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err == nil ||
+				!strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected user content error: %v", err)
+			}
+		})
 	}
 }
 

@@ -410,16 +410,28 @@ func TestResponsesMultimodalInput(t *testing.T) {
 		ai.TextContent{Text: "describe"},
 		ai.ImageURL{URL: "https://example.com/image.png"},
 		ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
+		ai.UploadedFile{
+			FileID: "file-image", ProviderName: "openai", MediaType: "image/png",
+			VendorMetadata: map[string]any{"detail": "high"},
+		},
+		ai.UploadedFile{FileID: "file-document", ProviderName: "openai", MediaType: "application/pdf"},
+		ai.UploadedFile{FileID: "file-image-auto", ProviderName: "openai", MediaType: "image/jpeg"},
 	}, struct{}{})
 	if err != nil || result.Output != "done" {
 		t.Fatalf("unexpected multimodal result=%+v err=%v", result, err)
 	}
 	input := body["input"].([]any)
 	content := input[0].(map[string]any)["content"].([]any)
-	if len(content) != 3 || content[0].(map[string]any)["type"] != "input_text" ||
+	if len(content) != 6 || content[0].(map[string]any)["type"] != "input_text" ||
 		content[0].(map[string]any)["text"] != "describe" ||
 		content[1].(map[string]any)["image_url"] != "https://example.com/image.png" ||
-		content[2].(map[string]any)["image_url"] != "data:image/png;base64,aW1hZ2U=" {
+		content[2].(map[string]any)["image_url"] != "data:image/png;base64,aW1hZ2U=" ||
+		content[3].(map[string]any)["type"] != "input_image" ||
+		content[3].(map[string]any)["file_id"] != "file-image" ||
+		content[3].(map[string]any)["detail"] != "high" ||
+		content[4].(map[string]any)["type"] != "input_file" ||
+		content[4].(map[string]any)["file_id"] != "file-document" ||
+		content[5].(map[string]any)["detail"] != "auto" {
 		t.Fatalf("unexpected Responses multimodal content: %#v", content)
 	}
 }
@@ -435,6 +447,9 @@ func TestResponsesRejectsUnsupportedUserContent(t *testing.T) {
 		{name: "non-image binary", content: ai.BinaryContent{
 			Data: []byte("document"), MediaType: "application/pdf",
 		}, want: `Responses binary input requires an image media type, got "application/pdf"`},
+		{name: "foreign uploaded file", content: ai.UploadedFile{
+			FileID: "file", ProviderName: "anthropic", MediaType: "image/png",
+		}, want: `uploaded file "file" belongs to provider "anthropic"`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
@@ -1083,6 +1084,100 @@ func TestAnthropicCachePoints(t *testing.T) {
 	if len(wireMessages) != 1 ||
 		wireMessages[0].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
 		t.Fatalf("leading cache point did not attach to prior content: %#v", wireMessages)
+	}
+}
+
+func TestAnthropicPromptCacheSettings(t *testing.T) {
+	var bodies []map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if strings.HasSuffix(request.URL.Path, "/count_tokens") {
+			_, _ = response.Write([]byte(`{"input_tokens":42}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	settings, err := (anthropic.Settings{
+		Common:               ai.ModelSettings{ExtraBody: map[string]any{"custom": true}},
+		Cache:                anthropic.CacheTTL1Hour,
+		CacheInstructions:    anthropic.CacheTTL5Minutes,
+		CacheToolDefinitions: anthropic.CacheTTL1Hour,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
+		Contents: []ai.UserContent{
+			ai.TextContent{Text: "one"}, ai.CachePoint{},
+			ai.TextContent{Text: "two"}, ai.CachePoint{},
+			ai.TextContent{Text: "three"}, ai.CachePoint{},
+			ai.TextContent{Text: "four"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+		},
+	}}}}
+	params := ai.ModelRequestParams{
+		Instructions: "static\n\ndynamic",
+		InstructionParts: []ai.InstructionPart{
+			{Content: "static"}, {Content: "dynamic", Dynamic: true},
+		},
+		Tools:    []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		Settings: settings,
+	}
+	if _, err := model.Request(t.Context(), messages, params); err != nil {
+		t.Fatal(err)
+	}
+	counted, err := model.CountTokens(t.Context(), messages, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if counted.InputTokens != 42 || len(bodies) != 2 {
+		t.Fatalf("unexpected count result: %+v bodies=%d", counted, len(bodies))
+	}
+	for _, body := range bodies {
+		automatic := body["cache_control"].(map[string]any)
+		system := body["system"].([]any)
+		tools := body["tools"].([]any)
+		blocks := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+		if automatic["ttl"] != "1h" || body["custom"] != true ||
+			system[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" ||
+			system[1].(map[string]any)["cache_control"] != nil ||
+			tools[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
+			t.Fatalf("unexpected Anthropic cache settings: %#v", body)
+		}
+		for index, block := range blocks {
+			cache := block.(map[string]any)["cache_control"]
+			if (index == len(blocks)-1) != (cache != nil) {
+				t.Fatalf("automatic cache budget kept wrong message point: %#v", blocks)
+			}
+		}
+	}
+	if duration, ok := ai.ResolvePromptCacheRetention(model, &settings); !ok || duration != time.Hour {
+		t.Fatalf("unexpected Anthropic cache retention: %s %v", duration, ok)
+	}
+	if duration, ok := model.PromptCacheRetention(ai.ModelSettings{}); ok || duration != 0 {
+		t.Fatalf("unexpected empty Anthropic cache retention: %s %v", duration, ok)
+	}
+
+	messageSettings, err := (anthropic.Settings{CacheMessages: anthropic.CacheTTL5Minutes}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	params = ai.ModelRequestParams{Settings: messageSettings}
+	messages = []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
+		Contents: []ai.UserContent{ai.TextContent{Text: "stable"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour}},
+	}}}}
+	if _, err := model.Request(t.Context(), messages, params); err != nil {
+		t.Fatal(err)
+	}
+	blocks := bodies[2]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if blocks[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
+		t.Fatalf("message caching replaced an explicit marker: %#v", blocks)
+	}
+	if duration, ok := ai.ResolvePromptCacheRetention(model, &messageSettings); !ok || duration != 5*time.Minute {
+		t.Fatalf("unexpected message-cache retention: %s %v", duration, ok)
 	}
 }
 

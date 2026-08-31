@@ -321,6 +321,44 @@ func main() {
 
 Set `ANTHROPIC_API_KEY`. Use `anthropic.WithBaseURL` and `anthropic.WithHTTPClient` for a compatible gateway.
 
+### Prompt caching
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+func main() {
+	settings, err := (anthropic.Settings{
+		Cache:             anthropic.CacheTTL1Hour,
+		CacheInstructions: anthropic.CacheTTL5Minutes,
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-6"),
+		ai.WithInstructions("Use the product reference exactly."),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.Run(context.Background(), "Summarize the product.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`Cache` lets Anthropic move one automatic breakpoint forward as the conversation grows. `CacheInstructions`, `CacheMessages`, and `CacheToolDefinitions` place explicit boundaries. Static instructions are cached before dynamic instructions. Automatic and explicit message caching are mutually exclusive. Anthropic keeps at most four cache points and removes the oldest message boundaries after reserving instruction, tool, and automatic slots.
+
 ## Google Gemini
 
 ```go

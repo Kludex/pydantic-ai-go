@@ -12,6 +12,7 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -101,13 +102,32 @@ func (m *Model) ProviderURL() string { return m.baseURL }
 // DefaultModelSettings returns this model's request defaults.
 func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 
+// PromptCacheRetention reports the longest requested Anthropic cache lifetime.
+func (m *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	_, cache, err := extractCacheSettings(settings)
+	if err != nil {
+		return 0, false
+	}
+	for _, ttl := range []CacheTTL{cache.Automatic, cache.Instructions, cache.Messages, cache.ToolDefinitions} {
+		if ttl == CacheTTL1Hour {
+			return time.Hour, true
+		}
+	}
+	for _, ttl := range []CacheTTL{cache.Automatic, cache.Instructions, cache.Messages, cache.ToolDefinitions} {
+		if ttl == CacheTTL5Minutes {
+			return 5 * time.Minute, true
+		}
+	}
+	return 0, false
+}
+
 // Request implements ai.Model.
 func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 	payload, err := m.buildPayload(msgs, params)
 	if err != nil {
 		return nil, err
 	}
-	body, err := marshalRequest(payload, params.Settings.ExtraBody)
+	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}
@@ -164,18 +184,20 @@ func (m *Model) CountTokens(
 		}
 	}
 	countPayload := struct {
-		Model             string           `json:"model"`
-		System            string           `json:"system,omitempty"`
-		Messages          []messageParam   `json:"messages"`
-		Tools             []toolParam      `json:"tools,omitempty"`
-		ToolChoice        *toolChoiceParam `json:"tool_choice,omitempty"`
-		Thinking          *thinkingParam   `json:"thinking,omitempty"`
-		ContextManagement map[string]any   `json:"context_management,omitempty"`
+		Model             string                       `json:"model"`
+		System            any                          `json:"system,omitempty"`
+		Messages          []messageParam               `json:"messages"`
+		Tools             []toolParam                  `json:"tools,omitempty"`
+		ToolChoice        *toolChoiceParam             `json:"tool_choice,omitempty"`
+		Thinking          *thinkingParam               `json:"thinking,omitempty"`
+		ContextManagement map[string]any               `json:"context_management,omitempty"`
+		CacheControl      *anthropicPromptCacheControl `json:"cache_control,omitempty"`
 	}{
 		Model: payload.Model, System: payload.System, Messages: countMessages, Tools: countTools,
 		ToolChoice: payload.ToolChoice, Thinking: payload.Thinking, ContextManagement: payload.ContextManagement,
+		CacheControl: payload.CacheControl,
 	}
-	body, err := marshalRequest(countPayload, params.Settings.ExtraBody)
+	body, err := marshalRequest(countPayload, payload.ExtraBody)
 	if err != nil {
 		return ai.Usage{}, fmt.Errorf("anthropic: marshal token count request: %w", err)
 	}
@@ -261,24 +283,26 @@ func (e *APIError) Error() string {
 func (*APIError) IsModelAPIError() bool { return true }
 
 type messagesRequest struct {
-	Model             string               `json:"model"`
-	MaxTokens         int                  `json:"max_tokens"`
-	System            string               `json:"system,omitempty"`
-	Messages          []messageParam       `json:"messages"`
-	Tools             []toolParam          `json:"tools,omitempty"`
-	ToolChoice        *toolChoiceParam     `json:"tool_choice,omitempty"`
-	Temperature       *float64             `json:"temperature,omitempty"`
-	TopP              *float64             `json:"top_p,omitempty"`
-	Stop              []string             `json:"stop_sequences,omitempty"`
-	Stream            bool                 `json:"stream,omitempty"`
-	ToolAdditions     bool                 `json:"-"`
-	Compaction        bool                 `json:"-"`
-	Thinking          *thinkingParam       `json:"thinking,omitempty"`
-	ServiceTier       string               `json:"service_tier,omitempty"`
-	ContextManagement map[string]any       `json:"context_management,omitempty"`
-	Container         any                  `json:"container,omitempty"`
-	MCPServers        []anthropicMCPServer `json:"mcp_servers,omitempty"`
-	Betas             []string             `json:"-"`
+	Model             string                       `json:"model"`
+	MaxTokens         int                          `json:"max_tokens"`
+	System            any                          `json:"system,omitempty"`
+	Messages          []messageParam               `json:"messages"`
+	Tools             []toolParam                  `json:"tools,omitempty"`
+	ToolChoice        *toolChoiceParam             `json:"tool_choice,omitempty"`
+	Temperature       *float64                     `json:"temperature,omitempty"`
+	TopP              *float64                     `json:"top_p,omitempty"`
+	Stop              []string                     `json:"stop_sequences,omitempty"`
+	Stream            bool                         `json:"stream,omitempty"`
+	ToolAdditions     bool                         `json:"-"`
+	Compaction        bool                         `json:"-"`
+	Thinking          *thinkingParam               `json:"thinking,omitempty"`
+	ServiceTier       string                       `json:"service_tier,omitempty"`
+	ContextManagement map[string]any               `json:"context_management,omitempty"`
+	Container         any                          `json:"container,omitempty"`
+	MCPServers        []anthropicMCPServer         `json:"mcp_servers,omitempty"`
+	Betas             []string                     `json:"-"`
+	CacheControl      *anthropicPromptCacheControl `json:"cache_control,omitempty"`
+	ExtraBody         map[string]any               `json:"-"`
 }
 
 type anthropicMCPServer struct {
@@ -339,21 +363,22 @@ type toolReferenceContent struct {
 }
 
 type toolParam struct {
-	Type             string                      `json:"type,omitempty"`
-	Name             string                      `json:"name"`
-	Description      string                      `json:"description,omitempty"`
-	InputSchema      map[string]any              `json:"input_schema,omitempty"`
-	Strict           *bool                       `json:"strict,omitempty"`
-	DeferLoading     bool                        `json:"defer_loading,omitempty"`
-	MaxUses          *int                        `json:"max_uses,omitempty"`
-	AllowedDomains   []string                    `json:"allowed_domains,omitempty"`
-	BlockedDomains   []string                    `json:"blocked_domains,omitempty"`
-	UserLocation     *anthropicWebSearchLocation `json:"user_location,omitempty"`
-	Citations        *anthropicCitations         `json:"citations,omitempty"`
-	MaxContentTokens int                         `json:"max_content_tokens,omitempty"`
-	Model            string                      `json:"model,omitempty"`
-	MaxTokens        *int                        `json:"max_tokens,omitempty"`
-	Caching          *anthropicCacheControl      `json:"caching,omitempty"`
+	Type             string                       `json:"type,omitempty"`
+	Name             string                       `json:"name"`
+	Description      string                       `json:"description,omitempty"`
+	InputSchema      map[string]any               `json:"input_schema,omitempty"`
+	Strict           *bool                        `json:"strict,omitempty"`
+	CacheControl     *anthropicPromptCacheControl `json:"cache_control,omitempty"`
+	DeferLoading     bool                         `json:"defer_loading,omitempty"`
+	MaxUses          *int                         `json:"max_uses,omitempty"`
+	AllowedDomains   []string                     `json:"allowed_domains,omitempty"`
+	BlockedDomains   []string                     `json:"blocked_domains,omitempty"`
+	UserLocation     *anthropicWebSearchLocation  `json:"user_location,omitempty"`
+	Citations        *anthropicCitations          `json:"citations,omitempty"`
+	MaxContentTokens int                          `json:"max_content_tokens,omitempty"`
+	Model            string                       `json:"model,omitempty"`
+	MaxTokens        *int                         `json:"max_tokens,omitempty"`
+	Caching          *anthropicCacheControl       `json:"caching,omitempty"`
 }
 
 type anthropicCacheControl struct {
@@ -475,11 +500,51 @@ func resolveAnthropicCachePoints(messages *[]messageParam) error {
 	return nil
 }
 
-func limitAnthropicCachePoints(messages []messageParam, maximum int) {
-	remaining := maximum
-	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
-		for blockIndex := len(messages[messageIndex].Content) - 1; blockIndex >= 0; blockIndex-- {
-			block := &messages[messageIndex].Content[blockIndex]
+func addAnthropicMessageCachePoint(messages []messageParam, ttl CacheTTL) {
+	if len(messages) == 0 {
+		return
+	}
+	blocks := messages[len(messages)-1].Content
+	for index := len(blocks) - 1; index >= 0; index-- {
+		if blocks[index].CacheControl != nil {
+			return
+		}
+		switch blocks[index].Type {
+		case "text", "tool_use", "server_tool_use", "image", "tool_result", "document", "tool_addition":
+			blocks[index].CacheControl = promptCacheControl(ttl)
+			return
+		}
+	}
+}
+
+func limitAnthropicCachePoints(request *messagesRequest, automatic bool) error {
+	maximum := 4
+	if automatic {
+		maximum--
+	}
+	used := 0
+	if blocks, ok := request.System.([]contentBlock); ok {
+		for _, block := range blocks {
+			if block.CacheControl != nil {
+				used++
+			}
+		}
+	}
+	for _, tool := range request.Tools {
+		if tool.CacheControl != nil {
+			used++
+		}
+	}
+	if used > maximum {
+		return fmt.Errorf(
+			"anthropic: system and tool definitions use %d cache points, exceeding the maximum of %d",
+			used, maximum,
+		)
+	}
+	remaining := maximum - used
+	for messageIndex := len(request.Messages) - 1; messageIndex >= 0; messageIndex-- {
+		for blockIndex := len(request.Messages[messageIndex].Content) - 1; blockIndex >= 0; blockIndex-- {
+			block := &request.Messages[messageIndex].Content[blockIndex]
 			if block.CacheControl == nil {
 				continue
 			}
@@ -490,6 +555,7 @@ func limitAnthropicCachePoints(messages []messageParam, maximum int) {
 			}
 		}
 	}
+	return nil
 }
 
 func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]toolParam, error) {
@@ -637,6 +703,11 @@ func anthropicSupportsDynamicFiltering(modelName string) bool {
 }
 
 func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParams) (*messagesRequest, error) {
+	settings, cache, err := extractCacheSettings(params.Settings)
+	if err != nil {
+		return nil, err
+	}
+	params.Settings = settings
 	memoryEnabled := hasAnthropicMemoryTool(params.NativeTools)
 	if memoryEnabled {
 		memoryDefined := false
@@ -721,18 +792,41 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		return nil, err
 	}
 	req := &messagesRequest{
-		Model:       m.name,
-		Tools:       nativeTools,
-		MCPServers:  mcpServers,
-		Betas:       nativeBetas,
-		MaxTokens:   params.Settings.MaxTokens,
-		System:      params.Instructions,
-		Temperature: params.Settings.Temperature,
-		TopP:        params.Settings.TopP,
-		Stop:        params.Settings.StopSequences,
-		Thinking:    thinking,
-		ServiceTier: serviceTier,
-		Container:   anthropicContainerFromHistory(msgs),
+		Model:        m.name,
+		Tools:        nativeTools,
+		MCPServers:   mcpServers,
+		Betas:        nativeBetas,
+		MaxTokens:    params.Settings.MaxTokens,
+		Temperature:  params.Settings.Temperature,
+		TopP:         params.Settings.TopP,
+		Stop:         params.Settings.StopSequences,
+		Thinking:     thinking,
+		ServiceTier:  serviceTier,
+		Container:    anthropicContainerFromHistory(msgs),
+		CacheControl: promptCacheControl(cache.Automatic),
+		ExtraBody:    params.Settings.ExtraBody,
+	}
+	if params.Instructions != "" {
+		req.System = params.Instructions
+	}
+	if cache.Instructions != "" && params.Instructions != "" {
+		blocks := make([]contentBlock, 0, max(1, len(params.InstructionParts)))
+		cacheIndex := -1
+		if len(params.InstructionParts) == 0 {
+			blocks = append(blocks, contentBlock{Type: "text", Text: params.Instructions})
+			cacheIndex = 0
+		} else {
+			for _, instruction := range params.InstructionParts {
+				blocks = append(blocks, contentBlock{Type: "text", Text: instruction.Content})
+				if !instruction.Dynamic {
+					cacheIndex = len(blocks) - 1
+				}
+			}
+		}
+		if cacheIndex >= 0 {
+			blocks[cacheIndex].CacheControl = promptCacheControl(cache.Instructions)
+		}
+		req.System = blocks
 	}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens
@@ -795,7 +889,10 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if err := resolveAnthropicCachePoints(&req.Messages); err != nil {
 		return nil, err
 	}
-	limitAnthropicCachePoints(req.Messages, 4)
+	if cache.Messages != "" {
+		addAnthropicMessageCachePoint(req.Messages, cache.Messages)
+	}
+	lastFunctionToolIndex := -1
 	for _, tool := range params.Tools {
 		if memoryEnabled && tool.Name == "memory" {
 			continue
@@ -811,6 +908,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			return nil, err
 		}
 		req.Tools = append(req.Tools, converted)
+		lastFunctionToolIndex = len(req.Tools) - 1
 	}
 	if nativeDeferred {
 		for _, tool := range params.DeferredTools {
@@ -820,6 +918,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			}
 			converted.DeferLoading = true
 			req.Tools = append(req.Tools, converted)
+			lastFunctionToolIndex = len(req.Tools) - 1
 		}
 	}
 	if serverToolSearch {
@@ -842,9 +941,13 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			return nil, err
 		}
 		req.Tools = append(req.Tools, converted)
+		lastFunctionToolIndex = len(req.Tools) - 1
 		if !params.AllowText {
 			req.ToolChoice = &toolChoiceParam{Type: "any"}
 		}
+	}
+	if cache.ToolDefinitions != "" && lastFunctionToolIndex >= 0 {
+		req.Tools[lastFunctionToolIndex].CacheControl = promptCacheControl(cache.ToolDefinitions)
 	}
 	if len(req.Tools) > 0 && params.Settings.ParallelToolCalls != nil {
 		if req.ToolChoice == nil {
@@ -856,7 +959,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")
 	}
-	return req, nil
+	return req, limitAnthropicCachePoints(req, cache.Automatic != "")
 }
 
 func hasAnthropicMemoryTool(nativeTools []ai.NativeTool) bool {

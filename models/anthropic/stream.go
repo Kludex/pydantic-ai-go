@@ -25,7 +25,7 @@ func (m *Model) StreamRequest(
 		return nil, err
 	}
 	payload.Stream = true
-	body, err := marshalRequest(payload, params.Settings.ExtraBody)
+	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
 	}

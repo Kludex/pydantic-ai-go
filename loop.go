@@ -802,28 +802,7 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 			}
 			cloned[index] = message
 		case ModelResponse:
-			message.Parts = slices.Clone(message.Parts)
-			message.Metadata = cloneSchemaMap(message.Metadata)
-			message.ProviderDetails = cloneSchemaMap(message.ProviderDetails)
-			message.Usage = message.Usage.Clone()
-			for partIndex, part := range message.Parts {
-				switch part := part.(type) {
-				case TextPart:
-					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
-					message.Parts[partIndex] = part
-				case ToolCallPart:
-					part.Args = slices.Clone(part.Args)
-					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
-					message.Parts[partIndex] = part
-				case ThinkingPart:
-					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
-					message.Parts[partIndex] = part
-				case CompactionPart:
-					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
-					message.Parts[partIndex] = part
-				}
-			}
-			cloned[index] = message
+			cloned[index] = *cloneModelResponse(&message)
 		}
 	}
 	return cloned

@@ -189,6 +189,22 @@ func marshalResponsePart(p ResponsePart) (wirePart, error) {
 			ToolKind: part.ToolKind, ID: part.ID, ProviderName: part.ProviderName,
 			ProviderDetails: part.ProviderDetails,
 		}, nil
+	case NativeToolCallPart:
+		return wirePart{
+			PartKind: "builtin-tool-call", ToolName: part.ToolName, Args: part.Args, ToolCallID: part.ToolCallID,
+			ToolKind: part.ToolKind, ID: part.ID, ProviderName: part.ProviderName,
+			ProviderDetails: part.ProviderDetails,
+		}, nil
+	case NativeToolReturnPart:
+		content, err := json.Marshal(part.Content)
+		if err != nil {
+			return wirePart{}, fmt.Errorf("ai: marshal native tool return content: %w", err)
+		}
+		return wirePartWithTimestamp(wirePart{
+			PartKind: "builtin-tool-return", ToolName: part.ToolName, Content: content,
+			ToolCallID: part.ToolCallID, ToolKind: part.ToolKind, Metadata: part.Metadata,
+			Outcome: part.Outcome, ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+		}, part.Timestamp), nil
 	case ThinkingPart:
 		return wirePart{
 			PartKind: "thinking", Content: mustJSON(part.Content), ID: part.ID, Signature: part.Signature,
@@ -342,6 +358,25 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 			ToolName: wp.ToolName, Args: wp.Args, ToolCallID: wp.ToolCallID, ToolKind: wp.ToolKind,
 			ID: wp.ID, ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
 		}, nil
+	case "builtin-tool-call":
+		return NativeToolCallPart{
+			ToolName: wp.ToolName, Args: wp.Args, ToolCallID: wp.ToolCallID, ToolKind: wp.ToolKind,
+			ID: wp.ID, ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
+		}, nil
+	case "builtin-tool-return":
+		var content any
+		if err := json.Unmarshal(wp.Content, &content); err != nil {
+			return nil, fmt.Errorf("ai: unmarshal native tool return content: %w", err)
+		}
+		part := NativeToolReturnPart{
+			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID, ToolKind: wp.ToolKind,
+			Metadata: wp.Metadata, Outcome: wp.Outcome, ProviderName: wp.ProviderName,
+			ProviderDetails: wp.ProviderDetails,
+		}
+		if wp.Timestamp != nil {
+			part.Timestamp = *wp.Timestamp
+		}
+		return part, nil
 	case "thinking":
 		return ThinkingPart{
 			Content: stringContent(wp.Content), ID: wp.ID, Signature: wp.Signature,

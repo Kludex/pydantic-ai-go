@@ -750,7 +750,7 @@ agent := ai.NewAgent[Deps, string](fakes.NewTestModel())
 
 ## Interoperability
 
-Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. Text, thinking, tool-call, and compaction parts retain provider IDs and details.
+Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. Text, thinking, function-call, provider-native call/return, and compaction parts retain typed identities and provider details. Native parts serialize with PydanticAI's `builtin-tool-call` and `builtin-tool-return` discriminators and are never executed by the local function-tool loop.
 
 Use `openai.NewCompaction(openai.WithCompactionTokenThreshold(100_000))` for stateful Responses compaction. Use `openai.WithCompactionMessageCountThreshold(...)` or `openai.WithCompactionTrigger(...)` to infer stateless mode and call `/responses/compact` before the next request. The compact request retains standing instructions, replaces durable run history, and contributes its usage to limits and final totals. You can also call `ResponsesModel.CompactMessages(...)` directly.
 

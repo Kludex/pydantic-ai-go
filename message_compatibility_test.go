@@ -98,6 +98,47 @@ func TestUnmarshalUpstreamToolSearchFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamNativeToolFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_native_tools.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := messages[0].(ai.ModelResponse)
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	content := returned.Content.(map[string]any)
+	if call.ToolKind != ai.ToolPartKindToolSearch || call.ToolCallID != "search-1" ||
+		returned.ToolKind != ai.ToolPartKindToolSearch || returned.Outcome != ai.ToolReturnOutcomeSuccess ||
+		content["discovered_tools"].([]any)[0].(map[string]any)["name"] != "weather" {
+		t.Fatalf("unexpected native tool fixture: %+v", response)
+	}
+	cloned := (ai.ModelRequestContext{Messages: messages}).Clone()
+	clonedCall := cloned.Messages[0].(ai.ModelResponse).Parts[0].(ai.NativeToolCallPart)
+	clonedCall.Args[0] = '['
+	clonedCall.ProviderDetails["execution"] = "changed"
+	clonedReturn := cloned.Messages[0].(ai.ModelResponse).Parts[1].(ai.NativeToolReturnPart)
+	clonedReturn.Content.(map[string]any)["discovered_tools"] = nil
+	clonedReturn.Metadata["local"] = false
+	clonedReturn.ProviderDetails["execution"] = "changed"
+	if string(call.Args) == string(clonedCall.Args) || call.ProviderDetails["execution"] != "server" ||
+		content["discovered_tools"] == nil || returned.Metadata["local"] != true ||
+		returned.ProviderDetails["execution"] != "server" {
+		t.Fatalf("native tool clone aliases source: original=%+v clone=%+v", response, cloned.Messages[0])
+	}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"part_kind":"builtin-tool-call"`) ||
+		!strings.Contains(string(encoded), `"part_kind":"builtin-tool-return"`) {
+		t.Fatalf("native tool identity was not serialized: %s", encoded)
+	}
+}
+
 func TestUnmarshalUpstreamToolAvailabilityFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/messages/upstream_tool_availability.json")
 	if err != nil {

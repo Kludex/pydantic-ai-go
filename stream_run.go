@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"iter"
-	"slices"
 	"strconv"
 	"time"
 )
@@ -125,11 +124,7 @@ func (s *StreamedRun[Output]) outputs(interval time.Duration) iter.Seq2[Output, 
 }
 
 func cloneResponsePart(part ResponsePart) ResponsePart {
-	if call, ok := part.(ToolCallPart); ok {
-		call.Args = slices.Clone(call.Args)
-		return call
-	}
-	return part
+	return cloneModelResponse(&ModelResponse{Parts: []ResponsePart{part}}).Parts[0]
 }
 
 func (s *StreamedRun[Output]) yieldPartialOutput(

@@ -29,6 +29,8 @@ func TestKindMarkers(t *testing.T) {
 	}{
 		{TextPart{}, "text"},
 		{ToolCallPart{}, "tool-call"},
+		{NativeToolCallPart{}, "builtin-tool-call"},
+		{NativeToolReturnPart{}, "builtin-tool-return"},
 		{ThinkingPart{}, "thinking"},
 		{CompactionPart{}, "compaction"},
 	}

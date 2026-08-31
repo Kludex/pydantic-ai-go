@@ -84,6 +84,15 @@ func cloneModelResponse(response *ModelResponse) *ModelResponse {
 			part.Args = slices.Clone(part.Args)
 			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
 			cloned.Parts[index] = part
+		case NativeToolCallPart:
+			part.Args = slices.Clone(part.Args)
+			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
+			cloned.Parts[index] = part
+		case NativeToolReturnPart:
+			part.Content = cloneSchemaValue(part.Content)
+			part.Metadata = cloneSchemaMap(part.Metadata)
+			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
+			cloned.Parts[index] = part
 		case CompactionPart:
 			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
 			cloned.Parts[index] = part

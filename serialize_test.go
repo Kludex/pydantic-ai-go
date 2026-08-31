@@ -220,3 +220,16 @@ func TestMarshalUserContentRoundTrip(t *testing.T) {
 		t.Fatalf("round trip lost contents: %+v", part.Contents)
 	}
 }
+
+func TestNativeToolReturnSerializationErrors(t *testing.T) {
+	_, err := ai.MarshalMessages([]ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolReturnPart{ToolName: "native", Content: make(chan int)},
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "marshal native tool return content") {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+	_, err = ai.UnmarshalMessages([]byte(`[{"kind":"response","parts":[{"part_kind":"builtin-tool-return","tool_name":"native"}]}]`))
+	if err == nil || !strings.Contains(err.Error(), "unmarshal native tool return content") {
+		t.Fatalf("unexpected unmarshal error: %v", err)
+	}
+}

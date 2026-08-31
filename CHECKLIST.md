@@ -41,7 +41,7 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, compaction, tool-availability, typed tool-search, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, compaction, tool-availability, local and native typed tool-search, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
 - [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
 - [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
@@ -89,7 +89,7 @@ Status:
 - [x] Local `search_tools` discovery through `WithToolSearch`, with typed results, configurable detached search callbacks, word-bounded relevance, undiscovered-first ranking, result limits, and independent retries.
 - [~] Anthropic 4.5+ models render deferred definitions, local search results as `tool_reference` blocks, and other reveals as `tool_addition` blocks with the required beta header. OpenAI Responses maps local search to client-executed `tool_search` in streaming and non-streaming requests, preserves final streamed call IDs, replays `tool_search_output`, and sends other reveals through `additional_tools`. Provider-managed search remains.
 - [x] Reset derived deferred-tool discovery visibility at compaction part boundaries while allowing calls generated in the compacting response to use the request-time visibility snapshot; post-boundary reveals remain visible.
-- [ ] Native/builtin tools distinct from function tools.
+- [~] `NativeToolCallPart` and `NativeToolReturnPart` are distinct non-executable response parts with upstream `builtin-tool-call`/`builtin-tool-return` serialization, provider identity, typed tool kinds, outcomes, timestamps, metadata, and defensive cloning. Native-tool registration, provider rendering/parsing, and normalized stream lifecycle remain.
 
 ### Deferred execution and approval
 

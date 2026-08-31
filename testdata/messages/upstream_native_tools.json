@@ -1,0 +1,68 @@
+[
+  {
+    "parts": [
+      {
+        "tool_name": "tool_search",
+        "args": {
+          "queries": [
+            "weather"
+          ]
+        },
+        "tool_call_id": "search-1",
+        "tool_kind": "tool-search",
+        "id": "ts-1",
+        "provider_name": "openai",
+        "provider_details": {
+          "execution": "server"
+        },
+        "part_kind": "builtin-tool-call"
+      },
+      {
+        "tool_name": "tool_search",
+        "content": {
+          "discovered_tools": [
+            {
+              "name": "weather"
+            }
+          ]
+        },
+        "tool_call_id": "search-1",
+        "tool_kind": "tool-search",
+        "metadata": {
+          "local": true
+        },
+        "timestamp": "2025-01-01T00:00:00Z",
+        "outcome": "success",
+        "provider_name": "openai",
+        "provider_details": {
+          "id": "tso-1",
+          "execution": "server"
+        },
+        "part_kind": "builtin-tool-return"
+      }
+    ],
+    "usage": {
+      "input_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "input_audio_tokens": 0,
+      "cache_audio_read_tokens": 0,
+      "output_audio_tokens": 0,
+      "details": {},
+      "cost": null
+    },
+    "model_name": "gpt-5",
+    "timestamp": "2025-01-01T00:00:01Z",
+    "kind": "response",
+    "provider_name": "openai",
+    "provider_url": null,
+    "provider_details": null,
+    "provider_response_id": null,
+    "finish_reason": null,
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

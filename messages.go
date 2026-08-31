@@ -298,6 +298,35 @@ type ToolCallPart struct {
 
 func (ToolCallPart) responsePartKind() string { return "tool-call" }
 
+// NativeToolCallPart records a provider-executed tool call. The agent does not
+// execute it locally. ToolKind identifies a portable typed shape when available.
+type NativeToolCallPart struct {
+	ToolName        string
+	Args            json.RawMessage
+	ToolCallID      string
+	ToolKind        ToolPartKind
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
+}
+
+func (NativeToolCallPart) responsePartKind() string { return "builtin-tool-call" }
+
+// NativeToolReturnPart records the provider's result for a native tool call.
+type NativeToolReturnPart struct {
+	ToolName        string
+	Content         any
+	ToolCallID      string
+	ToolKind        ToolPartKind
+	Metadata        map[string]any
+	Timestamp       time.Time
+	Outcome         ToolReturnOutcome
+	ProviderName    string
+	ProviderDetails map[string]any
+}
+
+func (NativeToolReturnPart) responsePartKind() string { return "builtin-tool-return" }
+
 // ThinkingPart is reasoning content produced by the model.
 type ThinkingPart struct {
 	Content         string

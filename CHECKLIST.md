@@ -2,9 +2,9 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@b236678a8`.
+Audited upstream baseline: `pydantic/pydantic-ai@352ac7f674823973938cd13b4e1afd4a4c52fcd5`.
 
-The one commit after the previous `f711f5376` baseline only shortens upstream test-suite hot spots and requires no Go runtime change. The prior 22-commit audit mapped stable instruction IDs, durable-operation APIs, CLI MCP/tool streaming, Z.AI behavior, AG-UI event ordering, transport-based Google routing, realtime audio iterables, and `genai-prices` 0.1.5.
+The two commits after the previous `f711f5376` runtime audit only shorten upstream test-suite and coverage hot spots. They require no Go runtime change. The prior 22-commit audit mapped stable instruction IDs, durable-operation APIs, CLI MCP/tool streaming, Z.AI behavior, AG-UI event ordering, transport-based Google routing, realtime audio iterables, and `genai-prices` 0.1.5.
 
 Status:
 
@@ -142,7 +142,8 @@ Status:
 - [x] OpenAI-compatible Chat Completions and Responses configuration through detached `ProviderConfig`: stable provider identity, base URL, optional bearer authentication, provider headers/query values, dynamic request preparation, custom HTTP clients, per-request header precedence, environment base URLs, streamed identity, and explicit strict/deferred feature switches.
 - [x] Azure OpenAI and Azure AI Foundry configuration through `models/azure`: current `/v1`, serverless `.models.ai.azure.com`, and legacy deployment routes; API-key and per-request Microsoft Entra token authentication; environment defaults; API-version validation; Chat Completions and Responses models; and Azure provider attribution.
 - [ ] AWS Bedrock, including the legacy InvokeModel tool-search profile that defaults to regex and rejects explicit BM25.
-- [ ] Groq, Mistral, Cohere, Cerebras, xAI, OpenRouter, Ollama, Hugging Face, Z.AI, and other upstream providers. Z.AI parity includes GLM 5.3 Flash and its non-standard `finish_reason` normalization.
+- [x] Z.AI Chat Completions through `models/zai`, including `ZAI_API_KEY`, GLM 5.3 Flash, preserved `reasoning_content` across same-provider turns, static and streamed reasoning, typed `clear_thinking`, generation-specific effort translation, custom gateways, detached defaults, and normalization of `sensitive`, `model_context_window_exceeded`, and `network_error` finish reasons.
+- [ ] Groq, Mistral, Cohere, Cerebras, xAI, OpenRouter, Ollama, Hugging Face, and other upstream providers.
 - [~] `ModelProfile`, `ModelProfiler`, and transparent `NewProfiledModel` provide wrapper-safe model-specific structured-output defaults and prompted templates; bundled strict-tool, thinking, native-tool, and provider-setting support still relies on model-name checks and provider-local switches rather than one complete profile matrix.
 - [ ] Provider HTTP retries and configurable retry policy.
 - [x] Transparent `ModelWrapper` delegation and wrapper-aware provider compaction are complete. `FallbackModel` supports ordered models, default provider-API-error fallback, composable error/response predicates, detached diagnostics, rejected-response cost accounting, streaming-open fallback, pinned suspended continuations with rewind, combined strategy/native-history behavior, and reverse lifecycle cleanup. Shared concurrency-limited and OpenTelemetry-instrumented model wrappers preserve optional model capabilities.
@@ -237,7 +238,7 @@ Status:
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
 - [x] Use the tagged `genai-prices` Go `v0.1.5` module release instead of a commit pseudo-version.
-- [x] Audited and mapped the 22 upstream commits from `bf2fb0555` through `f711f5376` without treating unimplemented changes as complete.
+- [x] Audited and mapped upstream runtime changes through `352ac7f674823973938cd13b4e1afd4a4c52fcd5` without treating unimplemented changes as complete.
 - [ ] Pin `.upstream-sync.json` to the audited upstream commit.
 - [ ] After parity, add the daily `gh-aw` upstream-sync workflow described in `PLAN.md`.
 
@@ -247,4 +248,4 @@ Status:
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP shared sessions with task-extension-specific APIs; model-backed sampling, elicitation, current-protocol multi-round-trip input retries, OAuth transport attachment, and authorization guidance are complete.
 4. Extend upstream message fixtures as remaining persisted part types land.
-5. Add the remaining provider-native tools, richer content parts, and provider metadata.
+5. Add the remaining provider-native tools, richer content parts, provider metadata, and OpenAI-compatible providers after completing Z.AI Chat Completions.

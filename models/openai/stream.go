@@ -64,8 +64,9 @@ type chatChunk struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Delta struct {
-			Content   string `json:"content"`
-			ToolCalls []struct {
+			Content          string `json:"content"`
+			ReasoningContent string `json:"reasoning_content"`
+			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
@@ -116,7 +117,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				yield(ai.FinishEvent{
 					Usage: usage, ModelName: modelName, Timestamp: timestamp,
 					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
-					ProviderResponseID: responseID, FinishReason: openAIChatFinishReason(finishReason),
+					ProviderResponseID: responseID, FinishReason: m.chatFinishReason(finishReason),
 					State: ai.ModelResponseStateComplete,
 				}, nil)
 				return
@@ -155,8 +156,17 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				providerDetails["logprobs"] = append(logprobs, chunk.Choices[0].Logprobs.Content...)
 			}
 			delta := chunk.Choices[0].Delta
+			if m.chatCompatibility.ReasoningContent && delta.ReasoningContent != "" {
+				if !yield(ai.ThinkingDeltaEvent{
+					PartID: "thinking", Delta: delta.ReasoningContent, ProviderName: m.providerName,
+				}, nil) {
+					return
+				}
+			}
 			if delta.Content != "" {
-				if !yield(ai.TextDeltaEvent{PartID: "text", Delta: delta.Content}, nil) {
+				if !yield(ai.TextDeltaEvent{
+					PartID: "text", Delta: delta.Content, ProviderName: m.providerName,
+				}, nil) {
 					return
 				}
 			}
@@ -166,6 +176,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 					startedTools[call.Index] = true
 					if !yield(ai.ToolCallStartEvent{
 						PartID: partID, ToolName: call.Function.Name, ToolCallID: call.ID,
+						ProviderName: m.providerName,
 					}, nil) {
 						return
 					}

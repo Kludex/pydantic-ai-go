@@ -1,7 +1,9 @@
 package openai_test
 
 import (
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -55,6 +57,126 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 	}
 	if response.ProviderName != "local" || response.ProviderURL != server.URL+"/v1" {
 		t.Fatalf("unexpected provider identity: %+v", response)
+	}
+}
+
+func TestOpenAIChatCompatibility(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if request.Header.Get("Accept") == "text/event-stream" {
+			response.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(response, "data: "+`{"id":"stream","model":"compatible",`+
+				`"choices":[{"delta":{"reasoning_content":"think","tool_calls":[{"index":0,`+
+				`"id":"call","function":{"name":"tool","arguments":"{}"}}]},`+
+				`"finish_reason":"interrupted"}]}`+"\n\n")
+			_, _ = io.WriteString(response, "data: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(response, `{
+			"id":"static","model":"compatible",
+			"choices":[{"message":{"reasoning_content":"reason","content":"answer",
+			"tool_calls":[{"id":"call","type":"function","function":{"name":"tool","arguments":"{}"}}]},
+			"finish_reason":"interrupted"}]
+		}`)
+	}))
+	defer server.Close()
+	finishReasons := map[string]ai.FinishReason{"interrupted": ai.FinishReasonError}
+	model := openai.NewModel("compatible", openai.WithProvider(openai.ProviderConfig{
+		Name: "provider", BaseURL: server.URL, HTTPClient: server.Client(),
+	}), openai.WithChatCompatibility(openai.ChatCompatibility{
+		ReasoningContent: true, FinishReasons: finishReasons,
+	}))
+	finishReasons["interrupted"] = ai.FinishReasonStop
+	history := ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "kept", ProviderName: "provider"},
+		ai.ThinkingPart{Content: "dropped", ProviderName: "other"},
+		ai.TextPart{Content: "previous"},
+	}}
+	static, err := model.Request(t.Context(), []ai.ModelMessage{history}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if static.FinishReason != ai.FinishReasonError || len(static.Parts) != 3 {
+		t.Fatalf("unexpected compatible response: %+v", static)
+	}
+	for _, part := range static.Parts {
+		switch part := part.(type) {
+		case ai.ThinkingPart:
+			if part.Content != "reason" || part.ProviderName != "provider" {
+				t.Fatalf("unexpected reasoning part: %+v", part)
+			}
+		case ai.TextPart:
+			if part.ProviderName != "provider" {
+				t.Fatalf("unexpected text provider: %+v", part)
+			}
+		case ai.ToolCallPart:
+			if part.ProviderName != "provider" {
+				t.Fatalf("unexpected tool provider: %+v", part)
+			}
+		}
+	}
+	messages := bodies[0]["messages"].([]any)
+	assistant := messages[0].(map[string]any)
+	if assistant["reasoning_content"] != "kept" {
+		t.Fatalf("unexpected reasoning history: %v", assistant)
+	}
+
+	events, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sawThinking, sawTool bool
+	for event, streamErr := range events {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		switch event := event.(type) {
+		case ai.ThinkingDeltaEvent:
+			sawThinking = event.Delta == "think" && event.ProviderName == "provider"
+		case ai.ToolCallStartEvent:
+			sawTool = event.ProviderName == "provider"
+		case ai.FinishEvent:
+			if event.FinishReason != ai.FinishReasonError {
+				t.Fatalf("unexpected streamed finish reason: %+v", event)
+			}
+		}
+	}
+	if !sawThinking || !sawTool {
+		t.Fatalf("missing compatibility events: thinking=%v tool=%v", sawThinking, sawTool)
+	}
+
+	abandoned, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, streamErr := range abandoned {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		if _, ok := event.(ai.ThinkingDeltaEvent); ok {
+			break
+		}
+	}
+}
+
+func TestOpenAIChatCompatibilityValidation(t *testing.T) {
+	for name, compatibility := range map[string]openai.ChatCompatibility{
+		"empty reason":              {FinishReasons: map[string]ai.FinishReason{"": ai.FinishReasonStop}},
+		"invalid normalized reason": {FinishReasons: map[string]ai.FinishReason{"custom": "invalid"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			_ = openai.WithChatCompatibility(compatibility)
+		})
 	}
 }
 

@@ -90,6 +90,56 @@ func main() {
 
 The compatibility layer sends OpenAI wire formats. It cannot make an endpoint support OpenAI features that the endpoint does not implement.
 
+## Z.AI
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/zai"
+)
+
+func main() {
+	clearThinking := false
+	settings, err := (zai.Settings{
+		Common: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
+		},
+		ClearThinking: &clearThinking,
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent := ai.NewAgent[struct{}, string](
+		zai.NewModel("glm-5.3-flash"),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.Run(context.Background(), "Explain why the sky is blue.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `ZAI_API_KEY`.
+
+Z.AI returns reasoning in `reasoning_content`. The model stores it as `ThinkingPart`. Later turns send it back unchanged to the same provider.
+
+Thinking-capable GLM models use `clear_thinking: false` by default. This preserves earlier reasoning for multi-turn consistency. Set `Settings.ClearThinking` to `true` to clear it instead.
+
+GLM 5.2 accepts the portable effort names. GLM 5.3 only accepts `low`, `high`, and `max`. The model maps `minimal`, `medium`, and `xhigh` to the nearest supported value.
+
+The model normalizes the `sensitive`, `model_context_window_exceeded`, and `network_error` finish reasons.
+
+Use `zai.WithProvider` for a gateway. The configured name becomes the persisted provider identity. Z.AI reasoning and finish-reason behavior stays enabled.
+
 ## Azure OpenAI and Azure AI Foundry
 
 ```go

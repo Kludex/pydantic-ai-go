@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"os"
@@ -32,6 +33,7 @@ type Model struct {
 	defaultSettings        ai.ModelSettings
 	background             *bool
 	backgroundPollInterval time.Duration
+	chatCompatibility      ChatCompatibility
 }
 
 // Option configures a Model.
@@ -52,6 +54,37 @@ type ProviderConfig struct {
 	Headers        http.Header
 	Query          url.Values
 	PrepareRequest RequestPreparationFunc
+}
+
+// ChatCompatibility configures documented extensions to the OpenAI Chat
+// Completions wire format. ReasoningContent preserves the Z.AI-compatible
+// reasoning_content field. FinishReasons extends or overrides normalization.
+type ChatCompatibility struct {
+	ReasoningContent bool
+	FinishReasons    map[string]ai.FinishReason
+}
+
+// WithChatCompatibility configures OpenAI-compatible response and history
+// extensions. The configuration is detached and safe to reuse.
+func WithChatCompatibility(compatibility ChatCompatibility) Option {
+	finishReasons := maps.Clone(compatibility.FinishReasons)
+	for reason, normalized := range finishReasons {
+		if reason == "" {
+			panic("openai: compatibility finish reason must not be empty")
+		}
+		switch normalized {
+		case ai.FinishReasonStop, ai.FinishReasonLength, ai.FinishReasonContentFilter,
+			ai.FinishReasonToolCall, ai.FinishReasonError:
+		default:
+			panic(fmt.Sprintf("openai: invalid compatibility finish reason %q", normalized))
+		}
+	}
+	return func(model *Model) {
+		model.chatCompatibility = ChatCompatibility{
+			ReasoningContent: compatibility.ReasoningContent,
+			FinishReasons:    maps.Clone(finishReasons),
+		}
+	}
 }
 
 // WithProvider configures an OpenAI-compatible provider in one option.
@@ -190,7 +223,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	response, err := parseResponse(data)
+	response, err := m.parseResponse(data)
 	if response != nil {
 		response.ProviderName = m.providerName
 		response.ProviderURL = m.baseURL
@@ -235,10 +268,11 @@ type chatRequest struct {
 }
 
 type chatMessage struct {
-	Role       string     `json:"role"`
-	Content    any        `json:"content,omitempty"` // string or []contentPart
-	ToolCalls  []toolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
+	Role             string     `json:"role"`
+	Content          any        `json:"content,omitempty"` // string or []contentPart
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []toolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
 }
 
 type contentPart struct {
@@ -306,7 +340,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Messages = append(req.Messages, chatMessage{Role: "system", Content: params.Instructions})
 	}
 	for _, msg := range msgs {
-		converted, err := convertMessage(msg)
+		converted, err := m.convertMessage(msg)
 		if err != nil {
 			return nil, err
 		}
@@ -391,12 +425,12 @@ func openAIReasoningActive(effort string) bool {
 	return effort != "" && effort != "none"
 }
 
-func convertMessage(msg ai.ModelMessage) ([]chatMessage, error) {
-	switch m := msg.(type) {
+func (model *Model) convertMessage(msg ai.ModelMessage) ([]chatMessage, error) {
+	switch message := msg.(type) {
 	case ai.ModelRequest:
-		return convertRequest(m)
+		return convertRequest(message)
 	case ai.ModelResponse:
-		return convertResponse(m), nil
+		return model.convertResponse(message), nil
 	default:
 		return nil, fmt.Errorf("openai: unknown message type %T", msg)
 	}
@@ -435,12 +469,17 @@ func convertRequest(m ai.ModelRequest) ([]chatMessage, error) {
 	return out, nil
 }
 
-func convertResponse(m ai.ModelResponse) []chatMessage {
+func (model *Model) convertResponse(m ai.ModelResponse) []chatMessage {
 	msg := chatMessage{Role: "assistant"}
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.TextPart:
 			msg.Content = p.Content
+		case ai.ThinkingPart:
+			if model.chatCompatibility.ReasoningContent &&
+				(p.ProviderName == "" || p.ProviderName == model.providerName) {
+				msg.ReasoningContent += p.Content
+			}
 		case ai.ToolCallPart:
 			msg.ToolCalls = append(msg.ToolCalls, toolCall{
 				ID:       p.ToolCallID,
@@ -471,8 +510,9 @@ type chatResponse struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Message struct {
-			Content   string     `json:"content"`
-			ToolCalls []toolCall `json:"tool_calls"`
+			Content          string     `json:"content"`
+			ReasoningContent string     `json:"reasoning_content"`
+			ToolCalls        []toolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
 		Logprobs     *struct {
@@ -515,7 +555,7 @@ func (u chatUsage) usage() ai.Usage {
 	}
 }
 
-func parseResponse(data []byte) (*ai.ModelResponse, error) {
+func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 	var cr chatResponse
 	if err := json.Unmarshal(data, &cr); err != nil {
 		return nil, fmt.Errorf("openai: parse response: %w", err)
@@ -545,23 +585,32 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	resp := &ai.ModelResponse{
 		ModelName: cr.Model, Timestamp: time.Unix(cr.Created, 0).UTC(), Usage: cr.Usage.usage(),
 		ProviderDetails: providerDetails, ProviderResponseID: cr.ID,
-		FinishReason: openAIChatFinishReason(cr.Choices[0].FinishReason), State: ai.ModelResponseStateComplete,
+		FinishReason: model.chatFinishReason(cr.Choices[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
 	msg := cr.Choices[0].Message
+	if model.chatCompatibility.ReasoningContent && msg.ReasoningContent != "" {
+		resp.Parts = append(resp.Parts, ai.ThinkingPart{
+			Content: msg.ReasoningContent, ProviderName: model.providerName,
+		})
+	}
 	if msg.Content != "" {
-		resp.Parts = append(resp.Parts, ai.TextPart{Content: msg.Content})
+		resp.Parts = append(resp.Parts, ai.TextPart{Content: msg.Content, ProviderName: model.providerName})
 	}
 	for _, call := range msg.ToolCalls {
 		resp.Parts = append(resp.Parts, ai.ToolCallPart{
-			ToolName:   call.Function.Name,
-			Args:       json.RawMessage(call.Function.Arguments),
-			ToolCallID: call.ID,
+			ToolName:     call.Function.Name,
+			Args:         json.RawMessage(call.Function.Arguments),
+			ToolCallID:   call.ID,
+			ProviderName: model.providerName,
 		})
 	}
 	return resp, nil
 }
 
-func openAIChatFinishReason(reason string) ai.FinishReason {
+func (model *Model) chatFinishReason(reason string) ai.FinishReason {
+	if normalized, exists := model.chatCompatibility.FinishReasons[reason]; exists {
+		return normalized
+	}
 	return map[string]ai.FinishReason{
 		"stop": ai.FinishReasonStop, "length": ai.FinishReasonLength,
 		"content_filter": ai.FinishReasonContentFilter,

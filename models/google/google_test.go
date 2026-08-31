@@ -135,10 +135,36 @@ func TestThinkingSettings(t *testing.T) {
 	}
 }
 
+func TestServiceTierMapping(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ServiceTier: ai.ServiceTierFlex,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if body["generationConfig"].(map[string]any)["serviceTier"] != "flex" {
+		t.Fatalf("unexpected service tier payload: %v", body)
+	}
+
+	_, err := google.NewModel("gemini").Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ServiceTier: "expedited",
+	}})
+	if err == nil || err.Error() != `google: invalid service tier "expedited"` {
+		t.Fatalf("unexpected service tier error: %v", err)
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotKey, gotPath string
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-gemini-service-tier", "PRIORITY")
 		gotKey = r.Header.Get("x-goog-api-key")
 		gotPath = r.URL.Path
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
@@ -146,7 +172,11 @@ func TestRequestTextResponse(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{
 			"responseId": "response-1", "modelVersion": "gemini-2.5-flash",
-			"candidates": [{"content": {"parts": [{"text": "Hello!", "thoughtSignature": "signature"}]}, "finishReason": "STOP"}],
+			"candidates": [{
+				"content": {"parts": [{"text": "Hello!", "thoughtSignature": "signature"}]},
+				"finishReason": "STOP", "avgLogprobs": -0.25,
+				"logprobsResult": {"chosenCandidates": [{"token": "Hello", "logProbability": -0.25}]}
+			}],
 			"usageMetadata": {
 				"promptTokenCount": 12, "candidatesTokenCount": 3,
 				"cachedContentTokenCount": 4, "thoughtsTokenCount": 2,
@@ -166,10 +196,18 @@ func TestRequestTextResponse(t *testing.T) {
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}
 	temp := 0.5
+	presencePenalty := 0.2
+	frequencyPenalty := 0.3
+	logprobs := true
+	topLogprobs := 3
 	resp, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{
 		Instructions: "be brief",
 		AllowText:    true,
-		Settings:     ai.ModelSettings{MaxTokens: 100, Temperature: &temp},
+		Settings: ai.ModelSettings{
+			MaxTokens: 100, Temperature: &temp,
+			PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
+			Logprobs: &logprobs, TopLogprobs: &topLogprobs, ServiceTier: ai.ServiceTierDefault,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -184,7 +222,10 @@ func TestRequestTextResponse(t *testing.T) {
 		t.Fatal("system instruction not sent")
 	}
 	gen := gotBody["generationConfig"].(map[string]any)
-	if gen["maxOutputTokens"].(float64) != 100 || gen["temperature"].(float64) != 0.5 {
+	if gen["maxOutputTokens"].(float64) != 100 || gen["temperature"].(float64) != 0.5 ||
+		gen["presencePenalty"].(float64) != presencePenalty ||
+		gen["frequencyPenalty"].(float64) != frequencyPenalty || gen["responseLogprobs"] != true ||
+		gen["logprobs"].(float64) != float64(topLogprobs) || gen["serviceTier"] != "standard" {
 		t.Fatalf("generation config not sent: %v", gen)
 	}
 	if resp.Text() != "Hello!" {
@@ -206,7 +247,8 @@ func TestRequestTextResponse(t *testing.T) {
 	}
 	if resp.ModelName != "gemini-2.5-flash" || resp.ProviderName != "google" || resp.ProviderURL == "" ||
 		resp.ProviderResponseID != "response-1" || resp.FinishReason != ai.FinishReasonStop ||
-		resp.ProviderDetails["finish_reason"] != "STOP" {
+		resp.ProviderDetails["finish_reason"] != "STOP" || resp.ProviderDetails["service_tier"] != "priority" ||
+		resp.ProviderDetails["avg_logprobs"] != -0.25 || resp.ProviderDetails["logprobs"] == nil {
 		t.Fatalf("unexpected response metadata %+v", resp)
 	}
 }
@@ -215,6 +257,7 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 	var gotBody map[string]any
 	first := true
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-gemini-service-tier", "STANDARD")
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Error(err)
 		}
@@ -258,8 +301,8 @@ func TestRequestFunctionCallRoundTrip(t *testing.T) {
 		calls[0].ProviderDetails["thought_signature"] != "tool-signature" {
 		t.Fatalf("unexpected calls %+v", calls)
 	}
-	if _, ok := resp.Parts[0].(ai.ThinkingPart); !ok {
-		t.Fatalf("thought part lost: %+v", resp.Parts)
+	if _, ok := resp.Parts[0].(ai.ThinkingPart); !ok || resp.ProviderDetails["service_tier"] != "standard" {
+		t.Fatalf("thought part or service tier lost: %+v", resp)
 	}
 
 	msgs = append(msgs, *resp, ai.ModelRequest{Parts: []ai.RequestPart{

@@ -181,6 +181,9 @@ type responsesRequest struct {
 	Stream            bool                `json:"stream,omitempty"`
 	Background        *bool               `json:"background,omitempty"`
 	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
+	TopLogprobs       *int                `json:"top_logprobs,omitempty"`
+	Include           []string            `json:"include,omitempty"`
+	ServiceTier       ai.ServiceTier      `json:"service_tier,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -222,6 +225,10 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if err != nil {
 		return nil, err
 	}
+	serviceTier, err := openAIServiceTier(params.Settings.ServiceTier)
+	if err != nil {
+		return nil, err
+	}
 	req := &responsesRequest{
 		Model:        m.name,
 		Instructions: params.Instructions,
@@ -229,6 +236,11 @@ func (m *ResponsesModel) buildResponsesPayload(
 		Temperature:  params.Settings.Temperature,
 		TopP:         params.Settings.TopP,
 		Background:   m.background,
+		TopLogprobs:  params.Settings.TopLogprobs,
+		ServiceTier:  serviceTier,
+	}
+	if params.Settings.Logprobs != nil && *params.Settings.Logprobs {
+		req.Include = append(req.Include, "message.output_text.logprobs")
 	}
 	if reasoningEffort != "" {
 		req.Reasoning = &responsesReasoning{Effort: reasoningEffort}
@@ -324,6 +336,7 @@ type responsesResponse struct {
 	CreatedAt         float64            `json:"created_at"`
 	Status            string             `json:"status"`
 	Background        bool               `json:"background"`
+	ServiceTier       string             `json:"service_tier"`
 	IncompleteDetails *incompleteDetails `json:"incomplete_details"`
 	Error             *struct {
 		Code    string `json:"code"`
@@ -333,8 +346,9 @@ type responsesResponse struct {
 		ID      string `json:"id"`
 		Type    string `json:"type"`
 		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
+			Type     string           `json:"type"`
+			Text     string           `json:"text"`
+			Logprobs []map[string]any `json:"logprobs"`
 		} `json:"content"`
 		CallID           string          `json:"call_id"`
 		Name             string          `json:"name"`
@@ -428,6 +442,12 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 	rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
 		rr.Status, rr.IncompleteDetails, rr.CreatedAt, rr.Background,
 	)
+	if rr.ServiceTier != "" {
+		if providerDetails == nil {
+			providerDetails = map[string]any{}
+		}
+		providerDetails["service_tier"] = rr.ServiceTier
+	}
 	resp := &ai.ModelResponse{
 		ModelName: rr.Model, Usage: rr.Usage.usage(), Timestamp: timestamp, ProviderDetails: providerDetails,
 		ProviderResponseID: rr.ID, FinishReason: openAIResponsesFinishReason(rawFinishReason), State: state,
@@ -437,8 +457,12 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 		case "message":
 			for _, c := range item.Content {
 				if c.Type == "output_text" {
+					var details map[string]any
+					if c.Logprobs != nil {
+						details = map[string]any{"logprobs": c.Logprobs}
+					}
 					resp.Parts = append(resp.Parts, ai.TextPart{
-						Content: c.Text, ID: item.ID, ProviderName: "openai",
+						Content: c.Text, ID: item.ID, ProviderName: "openai", ProviderDetails: details,
 					})
 				}
 			}

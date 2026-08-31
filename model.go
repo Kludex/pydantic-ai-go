@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"time"
@@ -157,6 +158,16 @@ type ThinkingSettings struct {
 	IncludeThoughts *bool
 }
 
+// ServiceTier selects a provider's latency and capacity class.
+type ServiceTier string
+
+const (
+	ServiceTierAuto     ServiceTier = "auto"
+	ServiceTierDefault  ServiceTier = "default"
+	ServiceTierFlex     ServiceTier = "flex"
+	ServiceTierPriority ServiceTier = "priority"
+)
+
 // ModelSettings tunes a model request. The zero value uses provider defaults.
 type ModelSettings struct {
 	MaxTokens         int
@@ -164,6 +175,12 @@ type ModelSettings struct {
 	Temperature       *float64
 	TopP              *float64
 	Seed              *int
+	PresencePenalty   *float64
+	FrequencyPenalty  *float64
+	LogitBias         map[string]int
+	Logprobs          *bool
+	TopLogprobs       *int
+	ServiceTier       ServiceTier
 	StopSequences     []string
 	ParallelToolCalls *bool
 	Thinking          *ThinkingSettings
@@ -174,6 +191,11 @@ func (s ModelSettings) Clone() ModelSettings {
 	s.Temperature = clonePointer(s.Temperature)
 	s.TopP = clonePointer(s.TopP)
 	s.Seed = clonePointer(s.Seed)
+	s.PresencePenalty = clonePointer(s.PresencePenalty)
+	s.FrequencyPenalty = clonePointer(s.FrequencyPenalty)
+	s.LogitBias = maps.Clone(s.LogitBias)
+	s.Logprobs = clonePointer(s.Logprobs)
+	s.TopLogprobs = clonePointer(s.TopLogprobs)
 	s.StopSequences = slices.Clone(s.StopSequences)
 	s.ParallelToolCalls = clonePointer(s.ParallelToolCalls)
 	if s.Thinking != nil {
@@ -183,6 +205,23 @@ func (s ModelSettings) Clone() ModelSettings {
 		s.Thinking = &thinking
 	}
 	return s
+}
+
+func validateModelSettings(settings ModelSettings) error {
+	if settings.TopLogprobs != nil {
+		if *settings.TopLogprobs < 0 {
+			return fmt.Errorf("ai: top logprobs must be non-negative, got %d", *settings.TopLogprobs)
+		}
+		if settings.Logprobs == nil || !*settings.Logprobs {
+			return fmt.Errorf("ai: top logprobs requires logprobs to be enabled")
+		}
+	}
+	switch settings.ServiceTier {
+	case "", ServiceTierAuto, ServiceTierDefault, ServiceTierFlex, ServiceTierPriority:
+	default:
+		return fmt.Errorf("ai: invalid service tier %q", settings.ServiceTier)
+	}
+	return validateThinkingSettings(settings.Thinking)
 }
 
 func validateThinkingSettings(settings *ThinkingSettings) error {
@@ -225,6 +264,24 @@ func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettin
 	}
 	if override.Seed != nil {
 		base.Seed = clonePointer(override.Seed)
+	}
+	if override.PresencePenalty != nil {
+		base.PresencePenalty = clonePointer(override.PresencePenalty)
+	}
+	if override.FrequencyPenalty != nil {
+		base.FrequencyPenalty = clonePointer(override.FrequencyPenalty)
+	}
+	if override.LogitBias != nil {
+		base.LogitBias = maps.Clone(override.LogitBias)
+	}
+	if override.Logprobs != nil {
+		base.Logprobs = clonePointer(override.Logprobs)
+	}
+	if override.TopLogprobs != nil {
+		base.TopLogprobs = clonePointer(override.TopLogprobs)
+	}
+	if override.ServiceTier != "" {
+		base.ServiceTier = override.ServiceTier
 	}
 	if override.StopSequences != nil {
 		base.StopSequences = slices.Clone(override.StopSequences)

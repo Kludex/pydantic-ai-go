@@ -137,6 +137,41 @@ func TestThinkingSettings(t *testing.T) {
 	})
 }
 
+func TestServiceTierMapping(t *testing.T) {
+	for name, test := range map[string]struct {
+		tier ai.ServiceTier
+		want any
+	}{
+		"auto":         {tier: ai.ServiceTierAuto, want: "auto"},
+		"flex omitted": {tier: ai.ServiceTierFlex},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"model":"claude","content":[],"usage":{}}`))
+			})
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				ServiceTier: test.tier,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			if body["service_tier"] != test.want {
+				t.Fatalf("unexpected service tier payload: %v", body)
+			}
+		})
+	}
+
+	_, err := anthropic.NewModel("claude").Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ServiceTier: "expedited",
+	}})
+	if err == nil || err.Error() != `anthropic: invalid service tier "expedited"` {
+		t.Fatalf("unexpected service tier error: %v", err)
+	}
+}
+
 func TestRequestTextResponse(t *testing.T) {
 	var gotBody map[string]any
 	var gotKey, gotVersion string
@@ -148,6 +183,7 @@ func TestRequestTextResponse(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{
 			"id": "message-1", "model": "claude-sonnet-4-5", "stop_reason": "end_turn",
+			"service_tier": "standard",
 			"content": [{"type": "text", "text": "Hello!"}],
 			"usage": {
 				"input_tokens": 12, "output_tokens": 3,
@@ -159,6 +195,7 @@ func TestRequestTextResponse(t *testing.T) {
 	resp, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{
 		Instructions: "be brief",
 		AllowText:    true,
+		Settings:     ai.ModelSettings{ServiceTier: ai.ServiceTierDefault},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -169,15 +206,15 @@ func TestRequestTextResponse(t *testing.T) {
 	if gotBody["system"] != "be brief" {
 		t.Fatalf("system prompt not sent: %v", gotBody)
 	}
-	if gotBody["max_tokens"].(float64) != 4096 {
-		t.Fatalf("default max_tokens not applied: %v", gotBody["max_tokens"])
+	if gotBody["max_tokens"].(float64) != 4096 || gotBody["service_tier"] != "standard_only" {
+		t.Fatalf("default settings not applied: %v", gotBody)
 	}
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
 	}
 	if resp.ProviderName != "anthropic" || resp.ProviderURL == "" || resp.ProviderResponseID != "message-1" ||
 		resp.FinishReason != ai.FinishReasonStop || resp.ProviderDetails["finish_reason"] != "end_turn" ||
-		resp.State != ai.ModelResponseStateComplete {
+		resp.ProviderDetails["service_tier"] != "standard" || resp.State != ai.ModelResponseStateComplete {
 		t.Fatalf("unexpected response metadata %+v", resp)
 	}
 	if resp.Usage.InputTokens != 19 || resp.Usage.OutputTokens != 3 ||

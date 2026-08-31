@@ -80,8 +80,15 @@ func TestModelSettingsCloneIsDetached(t *testing.T) {
 	parallel := true
 	budget := 2048
 	includeThoughts := true
+	presencePenalty := 0.3
+	frequencyPenalty := 0.4
+	logprobs := true
+	topLogprobs := 5
 	original := ai.ModelSettings{
 		Temperature: &temperature, TopP: &topP, Seed: &seed,
+		PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
+		LogitBias: map[string]int{"42": 10}, Logprobs: &logprobs, TopLogprobs: &topLogprobs,
+		ServiceTier:   ai.ServiceTierPriority,
 		StopSequences: []string{"stop"}, ParallelToolCalls: &parallel,
 		Thinking: &ai.ThinkingSettings{
 			Level: ai.ThinkingLevelLow, TokenBudget: &budget, IncludeThoughts: &includeThoughts,
@@ -93,12 +100,20 @@ func TestModelSettingsCloneIsDetached(t *testing.T) {
 	*cloned.Seed = 10
 	cloned.StopSequences[0] = "changed"
 	*cloned.ParallelToolCalls = false
+	*cloned.PresencePenalty = 1
+	*cloned.FrequencyPenalty = 1
+	cloned.LogitBias["42"] = -10
+	*cloned.Logprobs = false
+	*cloned.TopLogprobs = 1
 	cloned.Thinking.Level = ai.ThinkingLevelHigh
 	*cloned.Thinking.TokenBudget = 1
 	*cloned.Thinking.IncludeThoughts = false
 	if *original.Temperature != 0.1 || *original.TopP != 0.2 || *original.Seed != 3 ||
 		original.StopSequences[0] != "stop" || !*original.ParallelToolCalls ||
-		original.Thinking.Level != ai.ThinkingLevelLow || *original.Thinking.TokenBudget != 2048 ||
+		*original.PresencePenalty != 0.3 || *original.FrequencyPenalty != 0.4 ||
+		original.LogitBias["42"] != 10 || !*original.Logprobs || *original.TopLogprobs != 5 ||
+		original.ServiceTier != ai.ServiceTierPriority || original.Thinking.Level != ai.ThinkingLevelLow ||
+		*original.Thinking.TokenBudget != 2048 ||
 		!*original.Thinking.IncludeThoughts {
 		t.Fatalf("clone mutated original settings: %+v", original)
 	}
@@ -115,12 +130,42 @@ func TestRunThinkingSettingsOverrideAgentSettings(t *testing.T) {
 	agent := ai.NewAgent[deps, string](model, ai.WithModelSettings(ai.ModelSettings{
 		Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow},
 	}))
+	presencePenalty := 0.3
+	frequencyPenalty := 0.4
+	logprobs := true
+	topLogprobs := 5
 	result, err := agent.Run(t.Context(), "go", deps{}, ai.WithRunModelSettings(ai.ModelSettings{
-		Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+		Thinking:        &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+		PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
+		LogitBias: map[string]int{"42": 10}, Logprobs: &logprobs, TopLogprobs: &topLogprobs,
+		ServiceTier: ai.ServiceTierPriority,
 	}))
 	if err != nil || result.Output != "done" || requested.Thinking == nil ||
-		requested.Thinking.Level != ai.ThinkingLevelHigh {
-		t.Fatalf("unexpected thinking override result=%+v err=%v settings=%+v", result, err, requested)
+		requested.Thinking.Level != ai.ThinkingLevelHigh || *requested.PresencePenalty != presencePenalty ||
+		*requested.FrequencyPenalty != frequencyPenalty || requested.LogitBias["42"] != 10 ||
+		!*requested.Logprobs || *requested.TopLogprobs != topLogprobs ||
+		requested.ServiceTier != ai.ServiceTierPriority {
+		t.Fatalf("unexpected settings override result=%+v err=%v settings=%+v", result, err, requested)
+	}
+}
+
+func TestInvalidAdvancedModelSettingsFailBeforeRequest(t *testing.T) {
+	enabled := true
+	disabled := false
+	negative := -1
+	one := 1
+	for name, settings := range map[string]ai.ModelSettings{
+		"negative top logprobs": {Logprobs: &enabled, TopLogprobs: &negative},
+		"missing logprobs":      {TopLogprobs: &one},
+		"disabled logprobs":     {Logprobs: &disabled, TopLogprobs: &one},
+		"invalid service tier":  {ServiceTier: "expedited"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			agent := ai.NewAgent[deps, string](fakes.NewTestModel(), ai.WithModelSettings(settings))
+			if _, err := agent.Run(t.Context(), "go", deps{}); err == nil {
+				t.Fatal("expected model settings validation error")
+			}
+		})
 	}
 }
 

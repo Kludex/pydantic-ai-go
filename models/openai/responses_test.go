@@ -48,10 +48,12 @@ func TestResponsesTextResponse(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{
 			"id": "response-1", "model": "gpt-5", "created_at": 1735689600.25,
-			"status": "completed",
+			"status": "completed", "service_tier": "default",
 			"output": [
 				{"id": "reasoning-1", "type": "reasoning", "encrypted_content": "signature", "summary": [{"text": "thinking"}]},
-				{"id": "message-1", "type": "message", "content": [{"type": "output_text", "text": "Hello!"}]}
+				{"id": "message-1", "type": "message", "content": [{
+					"type": "output_text", "text": "Hello!", "logprobs": [{"token": "Hello", "logprob": -0.1}]
+				}]}
 			],
 			"usage": {
 				"input_tokens": 12, "output_tokens": 5,
@@ -62,10 +64,13 @@ func TestResponsesTextResponse(t *testing.T) {
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}
 	temperature := 0.5
+	logprobs := true
+	topLogprobs := 3
 	resp, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{
 		Instructions: "be brief", AllowText: true,
 		Settings: ai.ModelSettings{
 			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, Temperature: &temperature,
+			Logprobs: &logprobs, TopLogprobs: &topLogprobs, ServiceTier: ai.ServiceTierPriority,
 		},
 	})
 	if err != nil {
@@ -75,7 +80,9 @@ func TestResponsesTextResponse(t *testing.T) {
 		t.Fatalf("unexpected path %q", gotPath)
 	}
 	if gotBody["instructions"] != "be brief" || gotBody["temperature"] != nil ||
-		gotBody["reasoning"].(map[string]any)["effort"] != "high" {
+		gotBody["reasoning"].(map[string]any)["effort"] != "high" ||
+		gotBody["top_logprobs"].(float64) != float64(topLogprobs) ||
+		gotBody["include"].([]any)[0] != "message.output_text.logprobs" || gotBody["service_tier"] != "priority" {
 		t.Fatalf("instructions or reasoning not sent: %v", gotBody)
 	}
 	if resp.Text() != "Hello!" {
@@ -87,12 +94,14 @@ func TestResponsesTextResponse(t *testing.T) {
 		t.Fatalf("reasoning metadata lost: %+v", resp.Parts)
 	}
 	text := resp.Parts[1].(ai.TextPart)
-	if text.ID != "message-1" || text.ProviderName != "openai" {
+	if text.ID != "message-1" || text.ProviderName != "openai" ||
+		len(text.ProviderDetails["logprobs"].([]map[string]any)) != 1 {
 		t.Fatalf("text metadata lost: %+v", text)
 	}
 	if resp.ProviderName != "openai" || resp.ProviderURL == "" || resp.ProviderResponseID != "response-1" ||
 		resp.FinishReason != ai.FinishReasonStop || resp.State != ai.ModelResponseStateComplete ||
-		resp.ProviderDetails["finish_reason"] != "completed" || resp.ProviderDetails["timestamp"] == nil {
+		resp.ProviderDetails["finish_reason"] != "completed" || resp.ProviderDetails["timestamp"] == nil ||
+		resp.ProviderDetails["service_tier"] != "default" {
 		t.Fatalf("unexpected response metadata %+v", resp)
 	}
 	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 ||
@@ -110,12 +119,18 @@ func TestResponsesRejectInvalidThinkingLevel(t *testing.T) {
 	if err == nil || err.Error() != `openai: invalid thinking level "extreme"` {
 		t.Fatalf("unexpected invalid thinking error: %v", err)
 	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ServiceTier: "expedited",
+	}})
+	if err == nil || err.Error() != `openai: invalid service tier "expedited"` {
+		t.Fatalf("unexpected invalid service tier error: %v", err)
+	}
 }
 
 func TestResponsesPreservesEncryptedReasoningWithoutSummary(t *testing.T) {
 	model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{
-			"model":"gpt-5","status":"completed",
+			"model":"gpt-5","service_tier":"priority",
 			"output":[{"id":"reasoning-1","type":"reasoning","encrypted_content":"signature"}]
 		}`))
 	})
@@ -125,7 +140,7 @@ func TestResponsesPreservesEncryptedReasoningWithoutSummary(t *testing.T) {
 	}
 	thinking := response.Parts[0].(ai.ThinkingPart)
 	if thinking.Content != "" || thinking.ID != "reasoning-1" || thinking.Signature != "signature" ||
-		thinking.ProviderName != "openai" {
+		thinking.ProviderName != "openai" || response.ProviderDetails["service_tier"] != "priority" {
 		t.Fatalf("encrypted reasoning was not retained: %+v", thinking)
 	}
 }

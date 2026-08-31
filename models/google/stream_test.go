@@ -57,11 +57,12 @@ func TestStreamEvents(t *testing.T) {
 	var path, query, accept string
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
 		path, query, accept = r.URL.Path, r.URL.RawQuery, r.Header.Get("Accept")
+		w.Header().Set("x-gemini-service-tier", "FLEX")
 		googleSSE(t, []string{
 			`{"responseId":"response-stream","modelVersion":"gemini-stream","candidates":[{"content":{"parts":[{"text":"Hel","thoughtSignature":"text-signature"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"thought":true,"text":"plan","thoughtSignature":"thinking-signature"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"c1","name":"work","args":{"x":1}},"thoughtSignature":"tool-signature"}]}}]}`,
-			`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
+			`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP","avgLogprobs":-0.25,"logprobsResult":{"chosenCandidates":[{"token":"lo"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
 		})(w, r)
 	})
 	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{})
@@ -110,7 +111,8 @@ func TestStreamEvents(t *testing.T) {
 	if finish.ModelName != "gemini-stream" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 ||
 		finish.Usage.OutputTokens != 3 || finish.ProviderName != "google" || finish.ProviderURL == "" ||
 		finish.ProviderResponseID != "response-stream" || finish.FinishReason != ai.FinishReasonStop ||
-		finish.ProviderDetails["finish_reason"] != "STOP" {
+		finish.ProviderDetails["finish_reason"] != "STOP" || finish.ProviderDetails["service_tier"] != "flex" ||
+		finish.ProviderDetails["avg_logprobs"] != -0.25 || finish.ProviderDetails["logprobs"] == nil {
 		t.Fatalf("unexpected finish %+v", finish)
 	}
 }

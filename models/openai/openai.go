@@ -158,6 +158,12 @@ type chatRequest struct {
 	StreamOptions     *streamOptions  `json:"stream_options,omitempty"`
 	ResponseFormat    *responseFormat `json:"response_format,omitempty"`
 	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
+	PresencePenalty   *float64        `json:"presence_penalty,omitempty"`
+	FrequencyPenalty  *float64        `json:"frequency_penalty,omitempty"`
+	LogitBias         map[string]int  `json:"logit_bias,omitempty"`
+	Logprobs          *bool           `json:"logprobs,omitempty"`
+	TopLogprobs       *int            `json:"top_logprobs,omitempty"`
+	ServiceTier       ai.ServiceTier  `json:"service_tier,omitempty"`
 }
 
 type chatMessage struct {
@@ -205,14 +211,24 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if err != nil {
 		return nil, err
 	}
+	serviceTier, err := openAIServiceTier(params.Settings.ServiceTier)
+	if err != nil {
+		return nil, err
+	}
 	req := &chatRequest{
-		Model:           m.name,
-		MaxTokens:       params.Settings.MaxTokens,
-		Temperature:     params.Settings.Temperature,
-		TopP:            params.Settings.TopP,
-		Seed:            params.Settings.Seed,
-		Stop:            params.Settings.StopSequences,
-		ReasoningEffort: reasoningEffort,
+		Model:            m.name,
+		MaxTokens:        params.Settings.MaxTokens,
+		Temperature:      params.Settings.Temperature,
+		TopP:             params.Settings.TopP,
+		Seed:             params.Settings.Seed,
+		Stop:             params.Settings.StopSequences,
+		ReasoningEffort:  reasoningEffort,
+		PresencePenalty:  params.Settings.PresencePenalty,
+		FrequencyPenalty: params.Settings.FrequencyPenalty,
+		LogitBias:        params.Settings.LogitBias,
+		Logprobs:         params.Settings.Logprobs,
+		TopLogprobs:      params.Settings.TopLogprobs,
+		ServiceTier:      serviceTier,
 	}
 	if openAIReasoningActive(reasoningEffort) {
 		req.Temperature = nil
@@ -275,6 +291,15 @@ type jsonSchemaFormat struct {
 	Name   string         `json:"name"`
 	Schema map[string]any `json:"schema"`
 	Strict *bool          `json:"strict,omitempty"`
+}
+
+func openAIServiceTier(tier ai.ServiceTier) (ai.ServiceTier, error) {
+	switch tier {
+	case "", ai.ServiceTierAuto, ai.ServiceTierDefault, ai.ServiceTierFlex, ai.ServiceTierPriority:
+		return tier, nil
+	default:
+		return "", fmt.Errorf("openai: invalid service tier %q", tier)
+	}
 }
 
 func openAIThinkingEffort(settings *ai.ThinkingSettings) (string, error) {
@@ -382,6 +407,9 @@ type chatResponse struct {
 			ToolCalls []toolCall `json:"tool_calls"`
 		} `json:"message"`
 		FinishReason string `json:"finish_reason"`
+		Logprobs     *struct {
+			Content []map[string]any `json:"content"`
+		} `json:"logprobs"`
 	} `json:"choices"`
 	Usage chatUsage `json:"usage"`
 }
@@ -439,6 +467,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	}
 	if cr.SystemFingerprint != "" {
 		providerDetails["system_fingerprint"] = cr.SystemFingerprint
+	}
+	if cr.Choices[0].Logprobs != nil {
+		providerDetails["logprobs"] = cr.Choices[0].Logprobs.Content
 	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil

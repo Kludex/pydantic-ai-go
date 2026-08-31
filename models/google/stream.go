@@ -47,16 +47,18 @@ func (m *Model) StreamRequest(
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return m.eventStream(resp.Body), nil
+	return m.eventStream(resp.Body, resp.Header.Get("x-gemini-service-tier")), nil
 }
 
-func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
+func (m *Model) eventStream(body io.ReadCloser, serviceTier string) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
 		usage := ai.Usage{Requests: 1}
 		modelName := m.name
 		responseID := ""
 		finishReason := ""
+		var logprobs map[string]any
+		var avgLogprobs *float64
 		received := false
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -86,6 +88,12 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			if chunk.Candidates[0].FinishReason != "" {
 				finishReason = chunk.Candidates[0].FinishReason
 			}
+			if chunk.Candidates[0].LogprobsResult != nil {
+				logprobs = chunk.Candidates[0].LogprobsResult
+			}
+			if chunk.Candidates[0].AvgLogprobs != nil {
+				avgLogprobs = chunk.Candidates[0].AvgLogprobs
+			}
 			for index, part := range chunk.Candidates[0].Content.Parts {
 				if !emitPart(yield, part, index) {
 					return
@@ -103,6 +111,15 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 		providerDetails := map[string]any{}
 		if finishReason != "" {
 			providerDetails["finish_reason"] = finishReason
+		}
+		if logprobs != nil {
+			providerDetails["logprobs"] = logprobs
+		}
+		if avgLogprobs != nil {
+			providerDetails["avg_logprobs"] = *avgLogprobs
+		}
+		if serviceTier != "" {
+			providerDetails["service_tier"] = strings.ToLower(serviceTier)
 		}
 		if len(providerDetails) == 0 {
 			providerDetails = nil

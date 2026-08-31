@@ -211,6 +211,25 @@ agent := ai.NewAgent[Deps, string](
 
 `Level` maps to OpenAI reasoning effort, an Anthropic token budget, and Gemini thinking levels or budgets. `ThinkingLevelEnabled` uses the provider default. `ThinkingLevelDisabled` requests no reasoning where the provider supports it. An explicit `TokenBudget` overrides the portable effort mapping on Anthropic and Gemini. Gemini also forwards `IncludeThoughts`.
 
+Configure portable sampling controls and service tiers on the same settings value:
+
+```go
+logprobs := true
+topLogprobs := 5
+presencePenalty := 0.2
+agent := ai.NewAgent[Deps, string](
+	model,
+	ai.WithModelSettings(ai.ModelSettings{
+		PresencePenalty: &presencePenalty,
+		Logprobs:         &logprobs,
+		TopLogprobs:      &topLogprobs,
+		ServiceTier:      ai.ServiceTierPriority,
+	}),
+)
+```
+
+OpenAI Chat and Gemini accept presence and frequency penalties. OpenAI Chat also accepts `LogitBias`. OpenAI Chat, OpenAI Responses, and Gemini return available log probabilities in provider details. Unified service tiers map to each provider's wire values, including Anthropic's `standard_only` and Gemini's `standard` values.
+
 A tool can stop its run through `RunContext.Cancel`. Cancellation reaches sibling tools through `context.Context`, waits for their cleanup, and returns an error matching `ai.ErrRunCancelled`:
 
 ```go

@@ -128,9 +128,9 @@ Status:
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: text/reasoning/function-call streaming plus authoritative terminal snapshots, response/item IDs, encrypted reasoning, function namespaces, portable reasoning effort, status, timestamps, configurable background create/poll/retrieve/cancel/detach continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; provider-managed search, native output, multimodal content, and other builtin tools remain.
-- [~] Anthropic Messages: text/thinking/function-tool streaming, portable effort-to-budget and explicit-budget thinking configuration, signed-thinking round trips, multimodal input, response IDs, stop reasons, automatic ordinary/streamed `pause_turn` continuation, and provider-native deferred-definition/reveal rendering; adaptive thinking profiles, native server search, citations, and other native tools remain.
-- [~] Google Gemini: text/thinking/function-tool streaming, generation-aware thinking levels/budgets and thought inclusion, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
+- [~] OpenAI Responses: text/reasoning/function-call streaming plus authoritative terminal snapshots, response/item IDs, encrypted reasoning, function namespaces, portable reasoning effort, logprob requests/static text metadata, service tiers, status, timestamps, configurable background create/poll/retrieve/cancel/detach continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; streamed logprob metadata, provider-managed search, native output, multimodal content, and other builtin tools remain.
+- [~] Anthropic Messages: text/thinking/function-tool streaming, portable effort-to-budget and explicit-budget thinking configuration, service-tier mapping and response metadata, signed-thinking round trips, multimodal input, response IDs, stop reasons, automatic ordinary/streamed `pause_turn` continuation, and provider-native deferred-definition/reveal rendering; adaptive thinking profiles, native server search, citations, and other native tools remain.
+- [~] Google Gemini: text/thinking/function-tool streaming, generation-aware thinking levels/budgets and thought inclusion, portable penalties/logprobs/service tiers, returned static/streamed logprob and tier metadata, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.
 - [ ] AWS Bedrock.
@@ -142,11 +142,11 @@ Status:
 ### Model settings
 
 - [x] Max tokens, temperature, top-p, seed, stop sequences, and a cooperative per-request timeout in the common settings type.
-- [~] Providers only forward settings they support; compatibility is not validated by profiles. OpenAI, Anthropic, and Gemini normalize their available cache, audio, reasoning, and prediction usage details.
+- [~] Providers only forward settings they support; compatibility is not validated by profiles. OpenAI, Anthropic, and Gemini normalize their available cache, audio, reasoning, prediction, log-probability, service-tier, and finish details.
 - [x] Static or per-step `RequestTimeout` bounds synchronous requests and full stream consumption while preserving earlier parent cancellation.
 - [x] `ParallelToolCalls` generation setting for OpenAI Chat/Responses and Anthropic; Gemini exposes no equivalent request setting.
 - [x] Detached `ThinkingSettings` with enabled/disabled and minimal through xhigh effort levels, explicit token budgets, and thought-inclusion control. OpenAI maps levels to reasoning effort, Anthropic maps levels or explicit budgets to extended thinking, and Gemini maps by generation to thinking levels or budgets.
-- [ ] Logprobs, penalties, service tier, response metadata, and provider-specific settings.
+- [~] Portable presence/frequency penalties, logit bias, logprobs/top-logprobs, and auto/default/flex/priority service tiers are detached and fieldwise merged. OpenAI Chat maps all supported fields; Responses maps logprobs and tiers; Gemini maps penalties, logprobs, and tier values; Anthropic maps compatible tiers. Static and streamed OpenAI Chat/Gemini responses preserve logprobs and service metadata, and static Responses preserves per-text logprobs. Extra headers/body, provider-specific overrides, and remaining streaming metadata remain.
 - [x] Fieldwise settings resolve per selected model in model-default, agent, capability, and run order, with prior layers visible to each callback; bundled providers expose detached defaults through `WithDefaultSettings`.
 
 ### Outputs

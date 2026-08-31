@@ -165,6 +165,7 @@ type messagesRequest struct {
 	Stream        bool             `json:"stream,omitempty"`
 	ToolAdditions bool             `json:"-"`
 	Thinking      *thinkingParam   `json:"thinking,omitempty"`
+	ServiceTier   string           `json:"service_tier,omitempty"`
 }
 
 type thinkingParam struct {
@@ -255,6 +256,10 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if err != nil {
 		return nil, err
 	}
+	serviceTier, err := anthropicServiceTier(params.Settings.ServiceTier)
+	if err != nil {
+		return nil, err
+	}
 	req := &messagesRequest{
 		Model:       m.name,
 		MaxTokens:   params.Settings.MaxTokens,
@@ -263,6 +268,7 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		TopP:        params.Settings.TopP,
 		Stop:        params.Settings.StopSequences,
 		Thinking:    thinking,
+		ServiceTier: serviceTier,
 	}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens
@@ -326,6 +332,19 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")
 	}
 	return req, nil
+}
+
+func anthropicServiceTier(tier ai.ServiceTier) (string, error) {
+	switch tier {
+	case "", ai.ServiceTierFlex, ai.ServiceTierPriority:
+		return "", nil
+	case ai.ServiceTierAuto:
+		return "auto", nil
+	case ai.ServiceTierDefault:
+		return "standard_only", nil
+	default:
+		return "", fmt.Errorf("anthropic: invalid service tier %q", tier)
+	}
 }
 
 func anthropicThinking(settings *ai.ThinkingSettings) (*thinkingParam, error) {
@@ -546,10 +565,11 @@ func supportsStrictTools(name string) bool {
 }
 
 type messagesResponse struct {
-	ID         string `json:"id"`
-	Model      string `json:"model"`
-	StopReason string `json:"stop_reason"`
-	Content    []struct {
+	ID          string `json:"id"`
+	Model       string `json:"model"`
+	StopReason  string `json:"stop_reason"`
+	ServiceTier string `json:"service_tier"`
+	Content     []struct {
 		Type      string          `json:"type"`
 		Text      string          `json:"text"`
 		Thinking  string          `json:"thinking"`
@@ -591,6 +611,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	providerDetails := map[string]any{}
 	if mr.StopReason != "" {
 		providerDetails["finish_reason"] = mr.StopReason
+	}
+	if mr.ServiceTier != "" {
+		providerDetails["service_tier"] = mr.ServiceTier
 	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil

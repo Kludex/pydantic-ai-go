@@ -83,6 +83,12 @@ func TestChatThinkingSettings(t *testing.T) {
 	if err == nil || err.Error() != `openai: invalid thinking level "extreme"` {
 		t.Fatalf("unexpected invalid thinking error: %v", err)
 	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ServiceTier: "expedited",
+	}})
+	if err == nil || err.Error() != `openai: invalid service tier "expedited"` {
+		t.Fatalf("unexpected invalid service tier error: %v", err)
+	}
 }
 
 func TestRequestTextResponse(t *testing.T) {
@@ -96,7 +102,10 @@ func TestRequestTextResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"id": "chat-1", "model": "gpt-5", "created": 1735689600,
 			"service_tier": "default", "system_fingerprint": "fp-1",
-			"choices": [{"message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop"}],
+			"choices": [{
+				"message": {"role": "assistant", "content": "Hello!"}, "finish_reason": "stop",
+				"logprobs": {"content": [{"token": "Hello", "logprob": -0.1, "top_logprobs": []}]}
+			}],
 			"usage": {
 				"prompt_tokens": 12, "completion_tokens": 9,
 				"prompt_tokens_details": {"cached_tokens": 4, "audio_tokens": 2},
@@ -112,10 +121,19 @@ func TestRequestTextResponse(t *testing.T) {
 		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}},
 	}
 	temp := 0.5
+	presencePenalty := 0.2
+	frequencyPenalty := 0.3
+	logprobs := true
+	topLogprobs := 3
 	resp, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{
 		Instructions: "be brief",
 		AllowText:    true,
-		Settings:     ai.ModelSettings{MaxTokens: 100, Temperature: &temp},
+		Settings: ai.ModelSettings{
+			MaxTokens: 100, Temperature: &temp,
+			PresencePenalty: &presencePenalty, FrequencyPenalty: &frequencyPenalty,
+			LogitBias: map[string]int{"42": 10}, Logprobs: &logprobs, TopLogprobs: &topLogprobs,
+			ServiceTier: ai.ServiceTierPriority,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -127,7 +145,11 @@ func TestRequestTextResponse(t *testing.T) {
 	if len(messages) != 2 {
 		t.Fatalf("expected system + user messages, got %v", messages)
 	}
-	if gotBody["max_completion_tokens"].(float64) != 100 || gotBody["temperature"].(float64) != 0.5 {
+	if gotBody["max_completion_tokens"].(float64) != 100 || gotBody["temperature"].(float64) != 0.5 ||
+		gotBody["presence_penalty"].(float64) != presencePenalty ||
+		gotBody["frequency_penalty"].(float64) != frequencyPenalty ||
+		gotBody["logit_bias"].(map[string]any)["42"].(float64) != 10 || gotBody["logprobs"] != true ||
+		gotBody["top_logprobs"].(float64) != float64(topLogprobs) || gotBody["service_tier"] != "priority" {
 		t.Fatalf("settings not sent: %v", gotBody)
 	}
 	if resp.Text() != "Hello!" {
@@ -145,7 +167,8 @@ func TestRequestTextResponse(t *testing.T) {
 	if resp.ModelName != "gpt-5" || resp.ProviderName != "openai" ||
 		resp.ProviderURL == "" || resp.ProviderResponseID != "chat-1" ||
 		resp.FinishReason != ai.FinishReasonStop || resp.ProviderDetails["finish_reason"] != "stop" ||
-		resp.ProviderDetails["service_tier"] != "default" || resp.ProviderDetails["system_fingerprint"] != "fp-1" {
+		resp.ProviderDetails["service_tier"] != "default" || resp.ProviderDetails["system_fingerprint"] != "fp-1" ||
+		len(resp.ProviderDetails["logprobs"].([]map[string]any)) != 1 {
 		t.Fatalf("unexpected response metadata %+v", resp)
 	}
 }

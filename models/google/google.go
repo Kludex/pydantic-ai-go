@@ -105,6 +105,12 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if response != nil {
 		response.ProviderName = "google"
 		response.ProviderURL = m.baseURL
+		if serviceTier := resp.Header.Get("x-gemini-service-tier"); serviceTier != "" {
+			if response.ProviderDetails == nil {
+				response.ProviderDetails = map[string]any{}
+			}
+			response.ProviderDetails["service_tier"] = strings.ToLower(serviceTier)
+		}
 	}
 	return response, err
 }
@@ -211,6 +217,11 @@ type generationConfig struct {
 	ResponseMimeType string          `json:"responseMimeType,omitempty"`
 	ResponseSchema   map[string]any  `json:"responseJsonSchema,omitempty"`
 	ThinkingConfig   *thinkingConfig `json:"thinkingConfig,omitempty"`
+	PresencePenalty  *float64        `json:"presencePenalty,omitempty"`
+	FrequencyPenalty *float64        `json:"frequencyPenalty,omitempty"`
+	ResponseLogprobs *bool           `json:"responseLogprobs,omitempty"`
+	Logprobs         *int            `json:"logprobs,omitempty"`
+	ServiceTier      string          `json:"serviceTier,omitempty"`
 }
 
 type thinkingConfig struct {
@@ -229,14 +240,24 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if err != nil {
 		return nil, err
 	}
+	serviceTier, err := googleServiceTier(settings.ServiceTier)
+	if err != nil {
+		return nil, err
+	}
 	if settings.MaxTokens != 0 || settings.Temperature != nil || settings.TopP != nil ||
-		len(settings.StopSequences) > 0 || thinking != nil {
+		settings.PresencePenalty != nil || settings.FrequencyPenalty != nil || settings.Logprobs != nil ||
+		settings.TopLogprobs != nil || serviceTier != "" || len(settings.StopSequences) > 0 || thinking != nil {
 		req.GenerationConfig = &generationConfig{
-			MaxOutputTokens: settings.MaxTokens,
-			Temperature:     settings.Temperature,
-			TopP:            settings.TopP,
-			StopSequences:   settings.StopSequences,
-			ThinkingConfig:  thinking,
+			MaxOutputTokens:  settings.MaxTokens,
+			Temperature:      settings.Temperature,
+			TopP:             settings.TopP,
+			StopSequences:    settings.StopSequences,
+			ThinkingConfig:   thinking,
+			PresencePenalty:  settings.PresencePenalty,
+			FrequencyPenalty: settings.FrequencyPenalty,
+			ResponseLogprobs: settings.Logprobs,
+			Logprobs:         settings.TopLogprobs,
+			ServiceTier:      serviceTier,
 		}
 	}
 	for _, msg := range msgs {
@@ -280,6 +301,19 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 		req.Tools = []toolsParam{{FunctionDeclarations: declarations}}
 	}
 	return req, nil
+}
+
+func googleServiceTier(tier ai.ServiceTier) (string, error) {
+	switch tier {
+	case "", ai.ServiceTierAuto:
+		return "", nil
+	case ai.ServiceTierDefault:
+		return "standard", nil
+	case ai.ServiceTierFlex, ai.ServiceTierPriority:
+		return string(tier), nil
+	default:
+		return "", fmt.Errorf("google: invalid service tier %q", tier)
+	}
 }
 
 func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingConfig, error) {
@@ -486,7 +520,9 @@ type generateResponse struct {
 		Content struct {
 			Parts []part `json:"parts"`
 		} `json:"content"`
-		FinishReason string `json:"finishReason"`
+		FinishReason   string         `json:"finishReason"`
+		LogprobsResult map[string]any `json:"logprobsResult"`
+		AvgLogprobs    *float64       `json:"avgLogprobs"`
 	} `json:"candidates"`
 	UsageMetadata googleUsage `json:"usageMetadata"`
 }
@@ -579,6 +615,12 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	providerDetails := map[string]any{}
 	if gr.Candidates[0].FinishReason != "" {
 		providerDetails["finish_reason"] = gr.Candidates[0].FinishReason
+	}
+	if gr.Candidates[0].LogprobsResult != nil {
+		providerDetails["logprobs"] = gr.Candidates[0].LogprobsResult
+	}
+	if gr.Candidates[0].AvgLogprobs != nil {
+		providerDetails["avg_logprobs"] = *gr.Candidates[0].AvgLogprobs
 	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil

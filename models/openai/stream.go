@@ -73,6 +73,9 @@ type chatChunk struct {
 			} `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
+		Logprobs     *struct {
+			Content []map[string]any `json:"content"`
+		} `json:"logprobs"`
 	} `json:"choices"`
 	Usage *chatUsage `json:"usage"`
 }
@@ -144,6 +147,10 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			}
 			if chunk.Choices[0].FinishReason != "" {
 				finishReason = chunk.Choices[0].FinishReason
+			}
+			if chunk.Choices[0].Logprobs != nil {
+				logprobs, _ := providerDetails["logprobs"].([]map[string]any)
+				providerDetails["logprobs"] = append(logprobs, chunk.Choices[0].Logprobs.Content...)
 			}
 			delta := chunk.Choices[0].Delta
 			if delta.Content != "" {

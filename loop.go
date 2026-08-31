@@ -2946,7 +2946,7 @@ func (r *run[Deps, Output]) prepareModelSettings(
 	if settings.RequestTimeout < 0 {
 		return ModelSettings{}, fmt.Errorf("ai: request timeout must be non-negative, got %s", settings.RequestTimeout)
 	}
-	if err := validateThinkingSettings(settings.Thinking); err != nil {
+	if err := validateModelSettings(settings); err != nil {
 		return ModelSettings{}, err
 	}
 	rc.ModelSettings = settings

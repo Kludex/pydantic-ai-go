@@ -48,6 +48,7 @@ type config struct {
 	samplingModel    ai.Model
 	samplingHandler  SamplingHandler
 	elicitation      ElicitationHandler
+	oauthHandler     OAuthHandler
 	sessionOptions   *mcpsdk.ClientSessionOptions
 	initTimeout      time.Duration
 	readTimeout      time.Duration
@@ -190,8 +191,12 @@ func (t *Toolset[Deps]) ForRun(
 	if err != nil {
 		return nil, fmt.Errorf("ai/mcp: create transport: %w", err)
 	}
-	if transport == nil {
+	if transportIsNil(transport) {
 		return nil, errors.New("ai/mcp: transport factory returned nil")
+	}
+	transport, err = applyOAuthHandler(transport, t.config.oauthHandler)
+	if err != nil {
+		return nil, err
 	}
 	return &runToolset[Deps]{owner: t, transport: transport}, nil
 }

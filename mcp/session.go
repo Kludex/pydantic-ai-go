@@ -49,6 +49,10 @@ func Connect(ctx context.Context, transport mcpsdk.Transport, options ...Option)
 		return nil, errors.New("ai/mcp: transport must not be nil")
 	}
 	cfg := newConfig(options)
+	transport, err := applyOAuthHandler(transport, cfg.oauthHandler)
+	if err != nil {
+		return nil, err
+	}
 	client := mcpsdk.NewClient(cfg.implementation, cfg.clientOptions)
 	connectCtx, cancel := context.WithTimeout(ctx, cfg.initTimeout)
 	defer cancel()

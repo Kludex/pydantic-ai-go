@@ -194,6 +194,65 @@ Use the transport that your server supports:
 
 Pass `WithClientOptions` to configure server-initiated MCP handlers and notifications from the official Go SDK. Pass `WithSessionOptions` to configure each protocol session.
 
+## Authorize Streamable HTTP with OAuth
+
+Use the official SDK's authorization-code handler:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
+	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
+	"github.com/modelcontextprotocol/go-sdk/oauthex"
+)
+
+func main() {
+	handler, err := mcpauth.NewAuthorizationCodeHandler(&mcpauth.AuthorizationCodeHandlerConfig{
+		PreregisteredClient: &oauthex.ClientCredentials{ClientID: "my-client"},
+		RedirectURL:         "http://127.0.0.1:8080/oauth/callback",
+		AuthorizationCodeFetcher: func(
+			_ context.Context,
+			arguments *mcpauth.AuthorizationArgs,
+		) (*mcpauth.AuthorizationResult, error) {
+			fmt.Println("Open this URL:", arguments.URL)
+			var code, state string
+			fmt.Print("Authorization code and state: ")
+			if _, err := fmt.Scanln(&code, &state); err != nil {
+				return nil, err
+			}
+			return &mcpauth.AuthorizationResult{Code: code, State: state}, nil
+		},
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	session, err := aimcp.Connect(
+		context.Background(),
+		&mcpsdk.StreamableClientTransport{Endpoint: "https://example.com/mcp"},
+		aimcp.WithOAuthHandler(handler),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer session.Close()
+
+	if err := session.Ping(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+`WithOAuthHandler` clones the Streamable HTTP transport before attaching the handler. It works with `Connect` and `NewStreamableHTTPToolset`. Other transports fail during setup because they cannot perform the MCP OAuth challenge flow.
+
+The callback must return the code, state, and optional issuer from the redirect without changing them. The SDK verifies the state and advertised issuer. Store refresh tokens with operating-system or cloud secret storage. Use `AuthorizationCodeHandlerConfig.NewTokenSource` to wrap token persistence. The SDK coordinates token refreshes, retries one failed authorization, and avoids repeating a canceled interactive flow.
+
 ## Load `.mcp.json`
 
 Load the `mcpServers` format used by Claude Desktop and Cursor:

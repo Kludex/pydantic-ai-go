@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"iter"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -117,7 +118,12 @@ func TestInstrumentedModelRequest(t *testing.T) {
 		"gen_ai.system": "provider", "server.address": "example.com", "server.port": int64(8443),
 		"gen_ai.response.id": "response-id", "gen_ai.usage.input_tokens": int64(10),
 		"gen_ai.usage.output_tokens": int64(5), "operation.cost": 0.25,
-		"gen_ai.request.max_tokens": int64(100), "gen_ai.request.temperature": 0.5,
+		"gen_ai.usage.cache_creation.input_tokens": int64(1),
+		"gen_ai.usage.cache_read.input_tokens":     int64(2),
+		"gen_ai.usage.details.cache_write_tokens":  int64(1),
+		"gen_ai.usage.details.cache_read_tokens":   int64(2),
+		"gen_ai.usage.details.reasoning_tokens":    int64(3),
+		"gen_ai.request.max_tokens":                int64(100), "gen_ai.request.temperature": 0.5,
 	} {
 		if got := attributes[key]; got != want {
 			t.Fatalf("attribute %q = %#v, want %#v", key, got, want)
@@ -179,14 +185,20 @@ func TestInstrumentedModelPrivacyControls(t *testing.T) {
 		ai.WithInstrumentationModelRequestParameters(false),
 	)
 	if _, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
-		ai.UserPromptPart{Content: "secret input"},
+		ai.UserPromptPart{Contents: []ai.UserContent{ai.TextContent{Text: "secret input"}, nil}},
 	}}}, ai.ModelRequestParams{Tools: []ai.ToolDefinition{{Name: "visible"}}}); err != nil {
 		t.Fatal(err)
 	}
 	attributes := instrumentationSpanAttributes(exporter.GetSpans()[0].Attributes)
-	for _, key := range []string{"gen_ai.input.messages", "gen_ai.output.messages", "gen_ai.system_instructions", "model_request_parameters"} {
+	for _, key := range []string{"gen_ai.system_instructions", "model_request_parameters"} {
 		if _, exists := attributes[key]; exists {
 			t.Fatalf("private attribute %q was emitted: %+v", key, attributes)
+		}
+	}
+	for _, key := range []string{"gen_ai.input.messages", "gen_ai.output.messages"} {
+		messages, _ := attributes[key].(string)
+		if strings.Contains(messages, "secret") || !strings.Contains(messages, `"type":"text"`) {
+			t.Fatalf("message structure was not redacted for %q: %s", key, messages)
 		}
 	}
 	if definitions, _ := attributes["gen_ai.tool.definitions"].(string); !strings.Contains(definitions, "visible") {
@@ -215,6 +227,104 @@ func TestInstrumentedModelPrivacyControls(t *testing.T) {
 	if _, ok := ai.InstrumentModel(base).(*ai.InstrumentedModel); !ok {
 		t.Fatal("plain model was not instrumented")
 	}
+}
+
+func TestInstrumentationMessageVersions(t *testing.T) {
+	for _, test := range []struct {
+		version       int
+		wantInput     []string
+		unwantedInput []string
+		wantOutput    []string
+		unwantedOut   []string
+	}{
+		{
+			version:       2,
+			wantInput:     []string{`"role":"user"`, `"type":"image-url"`, `"type":"binary"`},
+			unwantedInput: []string{`"role":"tool"`, `"type":"uri"`, `"type":"blob"`},
+			unwantedOut:   []string{`"type":"reasoning"`},
+		},
+		{
+			version:       3,
+			wantInput:     []string{`"role":"user"`, `"type":"image-url"`, `"type":"binary"`},
+			unwantedInput: []string{`"role":"tool"`, `"type":"uri"`, `"type":"blob"`},
+			wantOutput:    []string{`"type":"reasoning"`},
+		},
+		{
+			version:       4,
+			wantInput:     []string{`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"type":"blob"`},
+			unwantedInput: []string{`"role":"tool"`, `"type":"image-url"`},
+			wantOutput:    []string{`"type":"reasoning"`},
+		},
+		{
+			version:       5,
+			wantInput:     []string{`"role":"user"`, `"type":"uri"`, `"mime_type":"image/png"`, `"type":"blob"`},
+			unwantedInput: []string{`"role":"tool"`, `"type":"image-url"`},
+			wantOutput:    []string{`"type":"reasoning"`},
+		},
+		{
+			version:       6,
+			wantInput:     []string{`"role":"tool"`, `"type":"uri"`, `"type":"blob"`},
+			unwantedInput: []string{`"type":"image-url"`},
+			wantOutput:    []string{`"type":"reasoning"`},
+		},
+	} {
+		t.Run("v"+strconv.Itoa(test.version), func(t *testing.T) {
+			exporter := tracetest.NewInMemoryExporter()
+			provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+			t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
+			model := ai.NewInstrumentedModel(
+				requestModel{name: "versions", request: func(
+					context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+				) (*ai.ModelResponse, error) {
+					return &ai.ModelResponse{Parts: []ai.ResponsePart{
+						ai.ThinkingPart{Content: "private reasoning"}, ai.TextPart{Content: "done"},
+					}}, nil
+				}},
+				ai.WithInstrumentationTracerProvider(provider), ai.WithInstrumentationVersion(test.version),
+			)
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.ImageURL{URL: "https://example.com/image.png"}, ai.ImageURL{URL: "://invalid"},
+					ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
+				}},
+				ai.ToolReturnPart{ToolName: "lookup", ToolCallID: "call", Content: "result"},
+				ai.RetryPromptPart{ToolName: "lookup", ToolCallID: "retry", Content: "try again"},
+			}}}, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			attributes := instrumentationSpanAttributes(exporter.GetSpans()[0].Attributes)
+			input, _ := attributes["gen_ai.input.messages"].(string)
+			output, _ := attributes["gen_ai.output.messages"].(string)
+			for _, fragment := range test.wantInput {
+				if !strings.Contains(input, fragment) {
+					t.Fatalf("version %d input omitted %q: %s", test.version, fragment, input)
+				}
+			}
+			for _, fragment := range test.unwantedInput {
+				if strings.Contains(input, fragment) {
+					t.Fatalf("version %d input included %q: %s", test.version, fragment, input)
+				}
+			}
+			for _, fragment := range test.wantOutput {
+				if !strings.Contains(output, fragment) {
+					t.Fatalf("version %d output omitted %q: %s", test.version, fragment, output)
+				}
+			}
+			for _, fragment := range test.unwantedOut {
+				if strings.Contains(output, fragment) {
+					t.Fatalf("version %d output included %q: %s", test.version, fragment, output)
+				}
+			}
+		})
+	}
+
+	defer func() {
+		if recovered := recover(); recovered != "ai: instrumentation version must be between 2 and 6" {
+			t.Fatalf("unexpected instrumentation version panic: %v", recovered)
+		}
+	}()
+	ai.WithInstrumentationVersion(1)
 }
 
 func TestInstrumentedModelStream(t *testing.T) {

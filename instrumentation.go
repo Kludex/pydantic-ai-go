@@ -17,12 +17,36 @@ import (
 type InstrumentationOption func(*instrumentationConfig)
 
 type instrumentationConfig struct {
-	tracerProvider                trace.TracerProvider
-	meterProvider                 metric.MeterProvider
-	includeContent                bool
-	includeBinaryContent          bool
-	includeModelRequestParameters bool
-	agentName                     string
+	tracerProvider                   trace.TracerProvider
+	meterProvider                    metric.MeterProvider
+	includeContent                   bool
+	includeBinaryContent             bool
+	includeModelRequestParameters    bool
+	useAggregatedUsageAttributeNames bool
+	version                          int
+	agentName                        string
+}
+
+type instrumentationNames struct {
+	runSpan       func(string) string
+	toolSpan      func(string) string
+	toolArguments string
+	toolResult    string
+}
+
+func namesForInstrumentationVersion(version int) instrumentationNames {
+	if version == 2 {
+		return instrumentationNames{
+			runSpan:       func(string) string { return "agent run" },
+			toolSpan:      func(string) string { return "running tool" },
+			toolArguments: "tool_arguments", toolResult: "tool_response",
+		}
+	}
+	return instrumentationNames{
+		runSpan:       func(name string) string { return "invoke_agent " + name },
+		toolSpan:      func(name string) string { return "execute_tool " + name },
+		toolArguments: "gen_ai.tool.call.arguments", toolResult: "gen_ai.tool.call.result",
+	}
 }
 
 // WithInstrumentationTracerProvider selects a tracer provider instead of the global provider.
@@ -56,6 +80,21 @@ func WithInstrumentationAgentName(name string) InstrumentationOption {
 	return func(config *instrumentationConfig) { config.agentName = name }
 }
 
+// WithInstrumentationVersion selects an upstream-compatible telemetry format version.
+// Versions 2 through 6 are supported. Version 5 is the default.
+func WithInstrumentationVersion(version int) InstrumentationOption {
+	if version < 2 || version > 6 {
+		panic("ai: instrumentation version must be between 2 and 6")
+	}
+	return func(config *instrumentationConfig) { config.version = version }
+}
+
+// WithInstrumentationAggregatedUsageAttributeNames controls whether run-level token attributes
+// use gen_ai.aggregated_usage instead of gen_ai.usage. It is enabled by default.
+func WithInstrumentationAggregatedUsageAttributeNames(enabled bool) InstrumentationOption {
+	return func(config *instrumentationConfig) { config.useAggregatedUsageAttributeNames = enabled }
+}
+
 // InstrumentedModel emits OpenTelemetry spans and metrics around direct model requests.
 type InstrumentedModel struct {
 	*ModelWrapper
@@ -66,6 +105,8 @@ type InstrumentedModel struct {
 	includeContent                bool
 	includeBinaryContent          bool
 	includeModelRequestParameters bool
+	useAggregatedUsage            bool
+	version                       int
 }
 
 // NewInstrumentedModel creates a transparent model decorator. Content is included by default.
@@ -79,7 +120,7 @@ func newInstrumentationRuntime(options []InstrumentationOption) (*InstrumentedMo
 	config := instrumentationConfig{
 		tracerProvider: otel.GetTracerProvider(), meterProvider: otel.GetMeterProvider(),
 		includeContent: true, includeBinaryContent: true, includeModelRequestParameters: true,
-		agentName: "agent",
+		useAggregatedUsageAttributeNames: true, version: 5, agentName: "agent",
 	}
 	for _, option := range options {
 		option(&config)
@@ -107,6 +148,7 @@ func newInstrumentationRuntime(options []InstrumentationOption) (*InstrumentedMo
 		tokenHistogram: tokens, costHistogram: cost, firstChunkHistogram: firstChunk,
 		includeContent: config.includeContent, includeBinaryContent: config.includeBinaryContent,
 		includeModelRequestParameters: config.includeModelRequestParameters,
+		useAggregatedUsage:            config.useAggregatedUsageAttributeNames, version: config.version,
 	}, config.agentName
 }
 
@@ -218,22 +260,21 @@ func (request *instrumentedRequest) finish(
 		}
 		response = cloneModelResponse(response)
 		attributes := responseTelemetryAttributes(response)
-		if request.model.includeContent {
-			attributes = append(attributes,
-				attribute.String("gen_ai.input.messages", telemetryMessagesJSON(
-					request.messages, request.model.includeBinaryContent,
-				)),
-				attribute.String("gen_ai.output.messages", telemetryMessagesJSON(
-					[]ModelMessage{*response}, request.model.includeBinaryContent,
-				)),
-			)
-			if request.params.Instructions != "" {
-				attributes = append(attributes, attribute.String(
-					"gen_ai.system_instructions", telemetryJSON([]map[string]any{{
-						"type": "text", "content": request.params.Instructions,
-					}}),
-				))
-			}
+		attributes = append(attributes,
+			attribute.String("gen_ai.input.messages", telemetryMessagesJSON(
+				request.messages, request.model.includeContent, request.model.includeBinaryContent, request.model.version,
+			)),
+			attribute.String("gen_ai.output.messages", telemetryMessagesJSON(
+				[]ModelMessage{*response}, request.model.includeContent, request.model.includeBinaryContent,
+				request.model.version,
+			)),
+		)
+		if request.model.includeContent && request.params.Instructions != "" {
+			attributes = append(attributes, attribute.String(
+				"gen_ai.system_instructions", telemetryJSON([]map[string]any{{
+					"type": "text", "content": request.params.Instructions,
+				}}),
+			))
 		}
 		if firstChunk > 0 {
 			attributes = append(attributes, attribute.Float64(

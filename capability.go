@@ -52,10 +52,11 @@ type RunInfo struct {
 	RunID          string
 	ConversationID string
 
-	usage     *Usage
-	toolCalls *atomic.Int64
-	messages  *[]ModelMessage
-	model     func() Model
+	usage       *Usage
+	toolCalls   *atomic.Int64
+	messages    *[]ModelMessage
+	newMessages int
+	model       func() Model
 }
 
 // Usage returns the usage accumulated so far in this run.

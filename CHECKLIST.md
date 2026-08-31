@@ -199,7 +199,7 @@ Status:
 ### Integrations
 
 - [ ] First-class `pydantic-evals-go` task adapter.
-- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, aggregate usage, final output and full-history attributes, agent/run/conversation baggage, duplicate suppression, and the same privacy controls. Richer output/deferred metadata, all upstream event shapes, message-fragment caching/mutation diagnostics, and legacy format versions remain.
+- [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, and successful deferral metadata. Format versions 2 through 6 cover legacy span/attribute names, pre-v4 multimodal content, v5 control-flow deferrals, and v6 tool-message roles for implemented content. Output-function spans, richer run metadata, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
 - [ ] Logfire guidance and examples.
 - [ ] AG-UI adapter.
 - [ ] Vercel AI protocol adapter.
@@ -225,8 +225,8 @@ Status:
 - [ ] Record Google Gemini cassettes when credentials are available.
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
-- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. A focused MCP guide covers run-scoped and explicit shared sessions, direct prompts/resources/tools, transports, and trusted config loading. Dedicated multimodal, capability, and per-provider examples remain.
-- [ ] Split focused advanced guides out of the README without turning it back into an exhaustive API dump.
+- [~] The README now starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused MCP and OpenTelemetry guides cover shared-session lifecycle, direct protocol operations, privacy, format compatibility, and usage attribution. Dedicated multimodal, capability, and per-provider examples remain.
+- [~] Focused MCP and OpenTelemetry guides now keep advanced setup out of the README. Add guides for capabilities, provider configuration, deferred execution, compaction, and model wrappers without turning the README into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
@@ -236,7 +236,7 @@ Status:
 
 ## Next work
 
-1. Complete remaining OpenTelemetry event shapes, output/deferred metadata, message-fragment caching/mutation diagnostics, and any required legacy instrumentation formats.
+1. Complete OpenTelemetry output-function spans, richer run metadata, remaining event shapes, and message-fragment caching/mutation diagnostics.
 2. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 3. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.
 4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.

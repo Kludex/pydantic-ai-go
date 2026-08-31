@@ -2,6 +2,9 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/baggage"
@@ -53,7 +56,11 @@ func (instrumentation *Instrumentation) WrapRun(
 		name = "agent"
 	}
 	modelName := modelName(info.Model())
-	ctx, span := instrumentation.runtime.tracer.Start(ctx, name+" run", trace.WithAttributes(
+	names := namesForInstrumentationVersion(instrumentation.runtime.version)
+	newMessageIndex := info.newMessages
+	ctx, span := instrumentation.runtime.tracer.Start(ctx, names.runSpan(name), trace.WithAttributes(
+		attribute.String("model_name", modelName),
+		attribute.String("agent_name", name),
 		attribute.String("gen_ai.operation.name", "invoke_agent"),
 		attribute.String("gen_ai.agent.name", name),
 		attribute.String("gen_ai.agent.call.id", info.RunID),
@@ -68,19 +75,37 @@ func (instrumentation *Instrumentation) WrapRun(
 			span.RecordError(err)
 		}
 		usage := info.Usage()
-		span.SetAttributes(aggregatedUsageAttributes(usage)...)
+		span.SetAttributes(aggregatedUsageAttributes(usage, instrumentation.runtime.useAggregatedUsage)...)
 		if selected := info.Model(); !modelIsNil(selected) {
-			span.SetAttributes(attribute.String("gen_ai.request.model", selected.Name()))
+			span.SetAttributes(
+				attribute.String("model_name", selected.Name()),
+				attribute.String("gen_ai.request.model", selected.Name()),
+			)
+		}
+		messages := info.Messages()
+		span.SetAttributes(attribute.String(
+			"pydantic_ai.all_messages",
+			telemetryMessagesJSON(
+				messages, instrumentation.runtime.includeContent, instrumentation.runtime.includeBinaryContent,
+				instrumentation.runtime.version,
+			),
+		))
+		if newMessageIndex > 0 {
+			span.SetAttributes(attribute.Int("pydantic_ai.new_message_index", newMessageIndex))
 		}
 		if instrumentation.runtime.includeContent {
-			span.SetAttributes(attribute.String(
-				"pydantic_ai.all_messages",
-				telemetryMessagesJSON(info.Messages(), instrumentation.runtime.includeBinaryContent),
-			))
-			if err == nil && outcome.Deferred == nil {
+			if instructions := latestTelemetryInstructions(messages); instructions != "" {
+				span.SetAttributes(attribute.String("gen_ai.system_instructions", telemetryJSON([]map[string]any{{
+					"type": "text", "content": instructions,
+				}})))
+			}
+			if err == nil {
+				final := outcome.Output
+				if outcome.Deferred != nil {
+					final = outcome.Deferred.Clone()
+				}
 				span.SetAttributes(attribute.String(
-					"final_result",
-					telemetryFinalResult(outcome.Output, instrumentation.runtime.includeBinaryContent),
+					"final_result", telemetryFinalResult(final, instrumentation.runtime.includeBinaryContent),
 				))
 			}
 		}
@@ -112,6 +137,43 @@ func (instrumentation *Instrumentation) WrapModelRequest(
 	return response, err
 }
 
+// OnToolValidationError records a failed tool call after inner capabilities decline recovery.
+func (instrumentation *Instrumentation) OnToolValidationError(
+	ctx context.Context,
+	_ *RunInfo,
+	hook ToolHookContext,
+	rawArgs json.RawMessage,
+	validationErr error,
+) (any, error) {
+	names := namesForInstrumentationVersion(instrumentation.runtime.version)
+	attributes := []attribute.KeyValue{
+		attribute.String("gen_ai.operation.name", "execute_tool"),
+		attribute.String("gen_ai.tool.name", hook.Call.ToolName),
+		attribute.String("gen_ai.tool.call.id", hook.Call.ToolCallID),
+		attribute.String("pydantic_ai.tool.failure_stage", "validation"),
+	}
+	if instrumentation.runtime.includeContent {
+		attributes = append(attributes,
+			attribute.String(names.toolArguments, telemetryJSON(telemetryRawJSON(rawArgs))),
+			attribute.String(names.toolResult, validationErr.Error()),
+		)
+	}
+	_, span := instrumentation.runtime.tracer.Start(
+		ctx, names.toolSpan(hook.Call.ToolName), trace.WithAttributes(attributes...),
+	)
+	span.SetStatus(codes.Error, validationErr.Error())
+	if instrumentation.runtime.includeContent {
+		span.RecordError(validationErr)
+	} else {
+		span.AddEvent("exception", trace.WithAttributes(
+			attribute.String("exception.type", fmt.Sprintf("%T", validationErr)),
+			attribute.String("exception.escaped", "true"),
+		))
+	}
+	span.End()
+	return nil, validationErr
+}
+
 // WrapToolExecution records local function-tool arguments and results.
 func (instrumentation *Instrumentation) WrapToolExecution(
 	ctx context.Context,
@@ -123,22 +185,38 @@ func (instrumentation *Instrumentation) WrapToolExecution(
 	if toolSpanActive(ctx) {
 		return next(ctx, args)
 	}
-	ctx, span := instrumentation.runtime.tracer.Start(ctx, "running tool: "+hook.Call.ToolName, trace.WithAttributes(
+	names := namesForInstrumentationVersion(instrumentation.runtime.version)
+	ctx, span := instrumentation.runtime.tracer.Start(ctx, names.toolSpan(hook.Call.ToolName), trace.WithAttributes(
 		attribute.String("gen_ai.operation.name", "execute_tool"),
 		attribute.String("gen_ai.tool.name", hook.Call.ToolName),
 		attribute.String("gen_ai.tool.call.id", hook.Call.ToolCallID),
 	))
 	ctx = context.WithValue(ctx, toolSpanContextKey{}, true)
 	if instrumentation.runtime.includeContent {
-		span.SetAttributes(attribute.String("gen_ai.tool.call.arguments", telemetryJSON(telemetryValue(args))))
+		span.SetAttributes(attribute.String(names.toolArguments, telemetryJSON(telemetryValue(args))))
 	}
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
 			span.RecordError(err)
+		} else if deferralName, metadata, deferred := telemetryToolDeferral(result); deferred {
+			span.SetAttributes(attribute.String("pydantic_ai.tool.deferral.name", deferralName))
+			if instrumentation.runtime.includeContent && metadata != nil {
+				span.SetAttributes(attribute.String(
+					"pydantic_ai.tool.deferral.metadata",
+					telemetryJSON(telemetryOutputValue(metadata, instrumentation.runtime.includeBinaryContent)),
+				))
+			}
+			if instrumentation.runtime.version < 5 {
+				span.SetStatus(codes.Error, deferralName)
+				span.AddEvent("exception", trace.WithAttributes(
+					attribute.String("exception.type", deferralName),
+					attribute.String("exception.escaped", "true"),
+				))
+			}
 		} else if instrumentation.runtime.includeContent {
 			span.SetAttributes(attribute.String(
-				"gen_ai.tool.call.result",
+				names.toolResult,
 				telemetryJSON(telemetryOutputValue(result, instrumentation.runtime.includeBinaryContent)),
 			))
 		}
@@ -161,20 +239,47 @@ func instrumentationBaggage(ctx context.Context, name, runID, conversationID str
 	return baggage.ContextWithBaggage(ctx, current)
 }
 
-func aggregatedUsageAttributes(usage Usage) []attribute.KeyValue {
-	attributes := []attribute.KeyValue{
-		attribute.Int("gen_ai.aggregated_usage.input_tokens", usage.InputTokens),
-		attribute.Int("gen_ai.aggregated_usage.output_tokens", usage.OutputTokens),
+func aggregatedUsageAttributes(usage Usage, aggregate bool) []attribute.KeyValue {
+	prefix := "gen_ai.usage."
+	if aggregate {
+		prefix = "gen_ai.aggregated_usage."
+	}
+	attributes := append(usageTelemetryAttributes(usage, prefix),
 		attribute.Int("pydantic_ai.requests", usage.Requests),
 		attribute.Int("pydantic_ai.tool_calls", usage.ToolCalls),
-	}
+	)
 	if usage.CostUSD != nil {
 		attributes = append(attributes, attribute.Float64("operation.cost", *usage.CostUSD))
 	}
-	for key, value := range usage.Details {
-		attributes = append(attributes, attribute.Int("gen_ai.aggregated_usage.details."+key, value))
-	}
 	return attributes
+}
+
+func latestTelemetryInstructions(messages []ModelMessage) string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		request, ok := messages[index].(ModelRequest)
+		if ok && request.Instructions != "" {
+			return request.Instructions
+		}
+	}
+	return ""
+}
+
+func telemetryToolDeferral(result any) (string, map[string]any, bool) {
+	switch result := result.(type) {
+	case ExternalToolRequest:
+		return "CallDeferred", result.Metadata, true
+	case *ExternalToolRequest:
+		if result != nil {
+			return "CallDeferred", result.Metadata, true
+		}
+	case ToolApprovalRequest:
+		return "ApprovalRequired", result.Metadata, true
+	case *ToolApprovalRequest:
+		if result != nil {
+			return "ApprovalRequired", result.Metadata, true
+		}
+	}
+	return "", nil, false
 }
 
 func telemetryFinalResult(value any, includeBinary bool) string {
@@ -199,16 +304,34 @@ func telemetryOutputValue(value any, includeBinary bool) any {
 			value.Content[index] = telemetryOutputUserContent(content, includeBinary)
 		}
 		return value
-	case []any:
-		result := make([]any, len(value))
-		for index, item := range value {
-			result[index] = telemetryOutputValue(item, includeBinary)
+	case DeferredToolRequests:
+		return map[string]any{
+			"calls": value.Calls, "approvals": value.Approvals,
+			"metadata": telemetryOutputValue(value.Metadata, includeBinary),
+		}
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Array, reflect.Slice:
+		if reflected.Type().Elem().Kind() == reflect.Uint8 {
+			return value
+		}
+		if reflected.Kind() == reflect.Slice && reflected.IsNil() {
+			return value
+		}
+		result := make([]any, reflected.Len())
+		for index := range reflected.Len() {
+			result[index] = telemetryOutputValue(reflected.Index(index).Interface(), includeBinary)
 		}
 		return result
-	case map[string]any:
-		result := make(map[string]any, len(value))
-		for key, item := range value {
-			result[key] = telemetryOutputValue(item, includeBinary)
+	case reflect.Map:
+		if reflected.Type().Key().Kind() != reflect.String || reflected.IsNil() {
+			return value
+		}
+		result := make(map[string]any, reflected.Len())
+		iterator := reflected.MapRange()
+		for iterator.Next() {
+			result[iterator.Key().String()] = telemetryOutputValue(iterator.Value().Interface(), includeBinary)
 		}
 		return result
 	default:
@@ -230,5 +353,6 @@ var (
 	_ CapabilityOrderingProvider = (*Instrumentation)(nil)
 	_ RunWrapper                 = (*Instrumentation)(nil)
 	_ ModelRequestWrapper        = (*Instrumentation)(nil)
+	_ ToolValidationErrorHook    = (*Instrumentation)(nil)
 	_ ToolExecutionWrapper       = (*Instrumentation)(nil)
 )

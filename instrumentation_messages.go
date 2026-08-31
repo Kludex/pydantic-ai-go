@@ -4,17 +4,22 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"mime"
+	"net/url"
+	"path"
 	"strings"
 )
 
-func telemetryMessagesJSON(messages []ModelMessage, includeBinary bool) string {
+func telemetryMessagesJSON(messages []ModelMessage, includeContent, includeBinary bool, version int) string {
 	output := make([]map[string]any, 0, len(messages))
 	for _, message := range messages {
 		switch message := message.(type) {
 		case ModelRequest:
-			output = append(output, telemetryRequestMessageGroups(message, includeBinary)...)
+			output = append(output, telemetryRequestMessageGroups(message, includeContent, includeBinary, version)...)
 		case ModelResponse:
-			entry := map[string]any{"role": "assistant", "parts": telemetryResponseParts(message.Parts)}
+			entry := map[string]any{
+				"role": "assistant", "parts": telemetryResponseParts(message.Parts, includeContent, version),
+			}
 			if message.FinishReason != "" {
 				entry["finish_reason"] = message.FinishReason
 			}
@@ -24,7 +29,9 @@ func telemetryMessagesJSON(messages []ModelMessage, includeBinary bool) string {
 	return telemetryJSON(output)
 }
 
-func telemetryRequestMessageGroups(request ModelRequest, includeBinary bool) []map[string]any {
+func telemetryRequestMessageGroups(
+	request ModelRequest, includeContent, includeBinary bool, version int,
+) []map[string]any {
 	groups := make([]map[string]any, 0, 2)
 	var role string
 	var parts []any
@@ -40,36 +47,44 @@ func telemetryRequestMessageGroups(request ModelRequest, includeBinary bool) []m
 		switch part := part.(type) {
 		case SystemPromptPart:
 			nextRole = "system"
-			nextParts = []any{map[string]any{"type": "text", "content": part.Content}}
+			nextParts = []any{telemetryText(part.Content, includeContent)}
 		case UserPromptPart:
 			if len(part.Contents) == 0 {
-				nextParts = []any{map[string]any{"type": "text", "content": part.Content}}
+				nextParts = []any{telemetryText(part.Content, includeContent)}
 			} else {
 				for _, content := range part.Contents {
-					nextParts = append(nextParts, telemetryUserContent(content, includeBinary))
+					nextParts = append(nextParts, telemetryUserContent(content, includeContent, includeBinary, version))
 				}
 			}
 		case ToolReturnPart:
-			nextRole = "tool"
-			nextParts = []any{map[string]any{
-				"type": "tool_call_response", "id": part.ToolCallID,
-				"name": part.ToolName, "result": telemetryValue(part.Content),
-			}}
+			if version >= 6 {
+				nextRole = "tool"
+			}
+			result := map[string]any{
+				"type": "tool_call_response", "id": part.ToolCallID, "name": part.ToolName,
+			}
+			if includeContent {
+				result["result"] = telemetryValue(part.Content)
+			}
+			nextParts = []any{result}
 		case RetryPromptPart:
 			if part.ToolName != "" {
-				nextRole = "tool"
-				nextParts = []any{map[string]any{
-					"type": "tool_call_response", "id": part.ToolCallID,
-					"name": part.ToolName, "result": part.ModelResponse(),
-				}}
+				if version >= 6 {
+					nextRole = "tool"
+				}
+				result := map[string]any{
+					"type": "tool_call_response", "id": part.ToolCallID, "name": part.ToolName,
+				}
+				if includeContent {
+					result["result"] = part.ModelResponse()
+				}
+				nextParts = []any{result}
 			} else {
-				nextParts = []any{map[string]any{"type": "text", "content": part.ModelResponse()}}
+				nextParts = []any{telemetryText(part.ModelResponse(), includeContent)}
 			}
 		case ToolAvailabilityDeltaPart:
 			nextRole = "system"
-			nextParts = []any{map[string]any{
-				"type": "text", "content": "Tools available: " + strings.Join(part.ToolsAdded, ", "),
-			}}
+			nextParts = []any{telemetryText("Tools available: "+strings.Join(part.ToolsAdded, ", "), includeContent)}
 		default:
 			continue
 		}
@@ -83,54 +98,108 @@ func telemetryRequestMessageGroups(request ModelRequest, includeBinary bool) []m
 	return groups
 }
 
-func telemetryUserContent(content UserContent, includeBinary bool) any {
+func telemetryText(content string, includeContent bool) map[string]any {
+	value := map[string]any{"type": "text"}
+	if includeContent {
+		value["content"] = content
+	}
+	return value
+}
+
+func telemetryUserContent(content UserContent, includeContent, includeBinary bool, version int) any {
 	switch content := content.(type) {
 	case TextContent:
-		return map[string]any{"type": "text", "content": content.Text}
+		return telemetryText(content.Text, includeContent)
 	case ImageURL:
-		return map[string]any{"type": "uri", "uri": content.URL, "modality": "image"}
+		if version <= 3 {
+			value := map[string]any{"type": "image-url"}
+			if includeContent {
+				value["url"] = content.URL
+			}
+			return value
+		}
+		value := map[string]any{"type": "uri", "modality": "image"}
+		if includeContent {
+			value["uri"] = content.URL
+		}
+		if mediaType := telemetryURLMediaType(content.URL); mediaType != "" {
+			value["mime_type"] = mediaType
+		}
+		return value
 	case BinaryContent:
+		if version <= 3 {
+			value := map[string]any{"type": "binary", "media_type": content.MediaType}
+			if includeContent && includeBinary {
+				value["content"] = base64.StdEncoding.EncodeToString(content.Data)
+			}
+			return value
+		}
 		value := map[string]any{"type": "blob", "mime_type": content.MediaType}
 		if slash := strings.IndexByte(content.MediaType, '/'); slash > 0 {
-			value["modality"] = content.MediaType[:slash]
+			modality := content.MediaType[:slash]
+			if modality == "image" || modality == "audio" || modality == "video" {
+				value["modality"] = modality
+			}
 		}
-		if includeBinary {
+		if includeContent && includeBinary {
 			value["content"] = base64.StdEncoding.EncodeToString(content.Data)
 		}
 		return value
 	default:
-		return map[string]any{"type": "text", "content": fmt.Sprint(content)}
+		if includeContent {
+			return map[string]any{"type": "text", "content": fmt.Sprint(content)}
+		}
+		return map[string]any{"type": "text"}
 	}
 }
 
-func telemetryResponseParts(parts []ResponsePart) []any {
+func telemetryURLMediaType(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return mime.TypeByExtension(path.Ext(parsed.Path))
+}
+
+func telemetryResponseParts(parts []ResponsePart, includeContent bool, version int) []any {
 	output := make([]any, 0, len(parts))
 	for _, part := range parts {
 		switch part := part.(type) {
 		case TextPart:
-			output = append(output, map[string]any{"type": "text", "content": part.Content})
+			output = append(output, telemetryText(part.Content, includeContent))
 		case ThinkingPart:
-			output = append(output, map[string]any{"type": "reasoning", "content": part.Content})
+			if version >= 3 {
+				value := map[string]any{"type": "reasoning"}
+				if includeContent {
+					value["content"] = part.Content
+				}
+				output = append(output, value)
+			}
 		case CompactionPart:
-			output = append(output, map[string]any{"type": "text", "content": part.Content})
+			output = append(output, telemetryText(part.Content, includeContent))
 		case ToolCallPart:
-			output = append(output, telemetryToolCall(part.ToolName, part.ToolCallID, part.Args))
+			output = append(output, telemetryToolCall(part.ToolName, part.ToolCallID, part.Args, includeContent))
 		case NativeToolCallPart:
-			output = append(output, telemetryToolCall(part.ToolName, part.ToolCallID, part.Args))
+			output = append(output, telemetryToolCall(part.ToolName, part.ToolCallID, part.Args, includeContent))
 		case NativeToolReturnPart:
-			output = append(output, map[string]any{
-				"type": "tool_call_response", "id": part.ToolCallID,
-				"name": part.ToolName, "result": telemetryValue(part.Content),
-			})
+			value := map[string]any{
+				"type": "tool_call_response", "id": part.ToolCallID, "name": part.ToolName, "builtin": true,
+			}
+			if includeContent {
+				value["result"] = telemetryValue(part.Content)
+			}
+			output = append(output, value)
 		}
 	}
 	return output
 }
 
-func telemetryToolCall(name, id string, arguments json.RawMessage) map[string]any {
-	return map[string]any{
-		"type": "tool_call", "id": id, "name": name, "arguments": telemetryRawJSON(arguments),
+func telemetryToolCall(name, id string, arguments json.RawMessage, includeContent bool) map[string]any {
+	value := map[string]any{"type": "tool_call", "id": id, "name": name}
+	if includeContent {
+		value["arguments"] = telemetryRawJSON(arguments)
 	}
+	return value
 }
 
 func telemetryRawJSON(raw json.RawMessage) any {

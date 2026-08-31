@@ -34,10 +34,7 @@ func modelSettingAttributes(settings ModelSettings) []attribute.KeyValue {
 }
 
 func responseTelemetryAttributes(response *ModelResponse) []attribute.KeyValue {
-	attributes := []attribute.KeyValue{
-		attribute.Int("gen_ai.usage.input_tokens", response.Usage.InputTokens),
-		attribute.Int("gen_ai.usage.output_tokens", response.Usage.OutputTokens),
-	}
+	attributes := usageTelemetryAttributes(response.Usage, "gen_ai.usage.")
 	if response.ProviderName != "" {
 		attributes = append(attributes,
 			attribute.String("gen_ai.provider.name", response.ProviderName),
@@ -61,23 +58,48 @@ func responseTelemetryAttributes(response *ModelResponse) []attribute.KeyValue {
 			"gen_ai.response.finish_reasons", []string{string(response.FinishReason)},
 		))
 	}
-	if response.Usage.CacheWriteTokens != 0 {
-		attributes = append(attributes, attribute.Int(
-			"gen_ai.usage.cache_creation.input_tokens", response.Usage.CacheWriteTokens,
-		))
-	}
-	if response.Usage.CacheReadTokens != 0 {
-		attributes = append(attributes, attribute.Int(
-			"gen_ai.usage.cache_read.input_tokens", response.Usage.CacheReadTokens,
-		))
-	}
-	for key, value := range response.Usage.Details {
-		attributes = append(attributes, attribute.Int("gen_ai.usage.details."+key, value))
-	}
 	if response.Usage.CostUSD != nil {
 		attributes = append(attributes, attribute.Float64("operation.cost", *response.Usage.CostUSD))
 	} else if calculation, err := response.Price(); err == nil {
 		attributes = append(attributes, attribute.Float64("operation.cost", calculation.TotalPrice))
+	}
+	return attributes
+}
+
+func usageTelemetryAttributes(usage Usage, prefix string) []attribute.KeyValue {
+	attributes := make([]attribute.KeyValue, 0, 12+len(usage.Details))
+	if usage.InputTokens != 0 {
+		attributes = append(attributes, attribute.Int(prefix+"input_tokens", usage.InputTokens))
+	}
+	if usage.OutputTokens != 0 {
+		attributes = append(attributes, attribute.Int(prefix+"output_tokens", usage.OutputTokens))
+	}
+	if usage.CacheWriteTokens != 0 {
+		attributes = append(attributes, attribute.Int(prefix+"cache_creation.input_tokens", usage.CacheWriteTokens))
+	}
+	if usage.CacheReadTokens != 0 {
+		attributes = append(attributes, attribute.Int(prefix+"cache_read.input_tokens", usage.CacheReadTokens))
+	}
+	details := make(map[string]int, len(usage.Details)+7)
+	for key, value := range usage.Details {
+		details[key] = value
+	}
+	for key, value := range map[string]int{
+		"cache_write_tokens": usage.CacheWriteTokens, "cache_read_tokens": usage.CacheReadTokens,
+		"input_audio_tokens": usage.InputAudioTokens, "cache_audio_read_tokens": usage.CacheAudioReadTokens,
+		"output_audio_tokens": usage.OutputAudioTokens, "reasoning_tokens": usage.ReasoningTokens,
+		"accepted_prediction_tokens": usage.AcceptedPredictionTokens,
+		"rejected_prediction_tokens": usage.RejectedPredictionTokens,
+	} {
+		if value != 0 {
+			details[key] = value
+		}
+	}
+	for key, value := range details {
+		if key == "input_tokens" || key == "output_tokens" {
+			continue
+		}
+		attributes = append(attributes, attribute.Int(prefix+"details."+key, value))
 	}
 	return attributes
 }

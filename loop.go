@@ -300,7 +300,7 @@ func (a *Agent[Deps, Output]) newRun(
 	}
 	r.info = &RunInfo{
 		RunID: runID, ConversationID: conversationID,
-		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
+		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, newMessages: r.newMessages,
 		model: func() Model { return r.model },
 	}
 	r.staticInstructions = a.staticInstructions(cfg.instructions, runCapabilityInstructions)

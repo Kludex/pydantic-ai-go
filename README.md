@@ -266,7 +266,7 @@ func TestAgent(t *testing.T) {
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |
 | Add middleware | `Capability` and its focused hook interfaces |
-| Add OpenTelemetry | `NewInstrumentation` or `NewInstrumentedModel` |
+| Add OpenTelemetry | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |
 | Call a model without an agent | `RequestModel` or `StreamModel` |
 | Drive a run one event at a time | `AgentRun` |
 

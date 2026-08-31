@@ -1378,7 +1378,7 @@ func TestMultimodalUserPrompt(t *testing.T) {
 		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"a cat"}]}}],"usageMetadata":{}}`))
 	})
 	msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
-		ai.TextContent{Text: "what is this?"},
+		ai.TextContent{Text: "what is this?"}, ai.CachePoint{},
 		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
 		ai.ImageURL{URL: "https://example.com/cat.png"},
 		ai.UploadedFile{
@@ -1415,6 +1415,7 @@ func TestMultimodalUnknownContent(t *testing.T) {
 		"invalid Gemini upload": ai.UploadedFile{
 			FileID: "file", ProviderName: "google", MediaType: "application/pdf",
 		},
+		"invalid cache point": ai.CachePoint{TTL: "1d"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			msgs := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{

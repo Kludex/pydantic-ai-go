@@ -317,14 +317,15 @@ type contentBlock struct {
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
 	// tool_result
-	ToolUseID        string              `json:"tool_use_id,omitempty"`
-	Content          any                 `json:"content,omitempty"`
-	EncryptedContent string              `json:"encrypted_content,omitempty"`
-	Caller           map[string]any      `json:"caller,omitempty"`
-	IsError          bool                `json:"is_error,omitempty"`
-	Tool             *toolReferenceParam `json:"tool,omitempty"`
-	FileID           string              `json:"file_id,omitempty"`
-	ServerName       string              `json:"server_name,omitempty"`
+	ToolUseID        string                       `json:"tool_use_id,omitempty"`
+	Content          any                          `json:"content,omitempty"`
+	EncryptedContent string                       `json:"encrypted_content,omitempty"`
+	Caller           map[string]any               `json:"caller,omitempty"`
+	IsError          bool                         `json:"is_error,omitempty"`
+	Tool             *toolReferenceParam          `json:"tool,omitempty"`
+	FileID           string                       `json:"file_id,omitempty"`
+	ServerName       string                       `json:"server_name,omitempty"`
+	CacheControl     *anthropicPromptCacheControl `json:"cache_control,omitempty"`
 }
 
 type toolReferenceParam struct {
@@ -360,6 +361,11 @@ type anthropicCacheControl struct {
 	TTL  ai.AdvisorCachingTTL `json:"ttl"`
 }
 
+type anthropicPromptCacheControl struct {
+	Type string           `json:"type"`
+	TTL  ai.CachePointTTL `json:"ttl"`
+}
+
 type anthropicCitations struct {
 	Enabled bool `json:"enabled"`
 }
@@ -392,6 +398,15 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 	blocks := make([]contentBlock, 0, len(p.Contents))
 	for _, c := range p.Contents {
 		switch item := c.(type) {
+		case ai.CachePoint:
+			ttl, err := item.ResolvedTTL()
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, contentBlock{
+				Type:         "cache_point_marker",
+				CacheControl: &anthropicPromptCacheControl{Type: "ephemeral", TTL: ttl},
+			})
 		case ai.TextContent:
 			blocks = append(blocks, contentBlock{Type: "text", Text: item.Text})
 		case ai.BinaryContent:
@@ -423,6 +438,58 @@ func convertUserPrompt(p ai.UserPromptPart) ([]contentBlock, error) {
 		}
 	}
 	return blocks, nil
+}
+
+func resolveAnthropicCachePoints(messages *[]messageParam) error {
+	var lastBlock *contentBlock
+	resolved := make([]messageParam, 0, len(*messages))
+	for _, message := range *messages {
+		content := make([]contentBlock, 0, len(message.Content))
+		hadMarker := false
+		for _, block := range message.Content {
+			if block.Type == "cache_point_marker" {
+				hadMarker = true
+				if lastBlock == nil {
+					return fmt.Errorf("anthropic: cache point must follow user content")
+				}
+				switch lastBlock.Type {
+				case "text", "tool_use", "server_tool_use", "image", "tool_result", "document", "tool_addition":
+				default:
+					return fmt.Errorf("anthropic: cache control not supported for content type %q", lastBlock.Type)
+				}
+				lastBlock.CacheControl = block.CacheControl
+				continue
+			}
+			content = append(content, block)
+			lastBlock = &content[len(content)-1]
+		}
+		if len(content) > 0 || !hadMarker {
+			message.Content = content
+			resolved = append(resolved, message)
+			if len(content) > 0 {
+				lastBlock = &resolved[len(resolved)-1].Content[len(content)-1]
+			}
+		}
+	}
+	*messages = resolved
+	return nil
+}
+
+func limitAnthropicCachePoints(messages []messageParam, maximum int) {
+	remaining := maximum
+	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
+		for blockIndex := len(messages[messageIndex].Content) - 1; blockIndex >= 0; blockIndex-- {
+			block := &messages[messageIndex].Content[blockIndex]
+			if block.CacheControl == nil {
+				continue
+			}
+			if remaining > 0 {
+				remaining--
+			} else {
+				block.CacheControl = nil
+			}
+		}
+	}
 }
 
 func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]toolParam, error) {
@@ -725,6 +792,10 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 			break
 		}
 	}
+	if err := resolveAnthropicCachePoints(&req.Messages); err != nil {
+		return nil, err
+	}
+	limitAnthropicCachePoints(req.Messages, 4)
 	for _, tool := range params.Tools {
 		if memoryEnabled && tool.Name == "memory" {
 			continue

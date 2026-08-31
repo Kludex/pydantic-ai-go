@@ -251,7 +251,11 @@ func TestOpenRouterPromptCaching(t *testing.T) {
 			modelName, openrouter.WithBaseURL(server.URL), openrouter.WithHTTPClient(server.Client()),
 		)
 		_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
-			ai.UserPromptPart{Content: "question"},
+			ai.UserPromptPart{Contents: []ai.UserContent{
+				ai.TextContent{Text: "old"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+				ai.TextContent{Text: "middle"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+				ai.TextContent{Text: "new"}, ai.CachePoint{},
+			}},
 		}}}, ai.ModelRequestParams{
 			Instructions: "static\n\ndynamic",
 			InstructionParts: []ai.InstructionPart{
@@ -267,10 +271,12 @@ func TestOpenRouterPromptCaching(t *testing.T) {
 	request("anthropic/claude-sonnet-4.6")
 	anthropicMessages := bodies[0]["messages"].([]any)
 	instruction := anthropicMessages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
-	lastMessage := anthropicMessages[2].(map[string]any)["content"].([]any)[0].(map[string]any)
+	userContent := anthropicMessages[2].(map[string]any)["content"].([]any)
 	tools := bodies[0]["tools"].([]any)
 	if instruction["cache_control"].(map[string]any)["ttl"] != "1h" ||
-		lastMessage["cache_control"].(map[string]any)["ttl"] != "5m" ||
+		userContent[0].(map[string]any)["cache_control"] != nil ||
+		userContent[1].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" ||
+		userContent[2].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" ||
 		tools[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" ||
 		tools[1].(map[string]any)["cache_control"] != nil {
 		t.Fatalf("unexpected Anthropic cache boundaries: %#v", bodies[0])
@@ -281,9 +287,12 @@ func TestOpenRouterPromptCaching(t *testing.T) {
 	if _, cached := googleMessages[0].(map[string]any)["content"].([]any); cached {
 		t.Fatalf("dynamic Google instructions were cached: %#v", googleMessages)
 	}
-	googleLast := googleMessages[2].(map[string]any)["content"].([]any)[0].(map[string]any)
-	if cache := googleLast["cache_control"].(map[string]any); cache["type"] != "ephemeral" || cache["ttl"] != nil {
-		t.Fatalf("unexpected Google message cache boundary: %#v", googleLast)
+	googleContent := googleMessages[2].(map[string]any)["content"].([]any)
+	for _, item := range googleContent {
+		cache := item.(map[string]any)["cache_control"].(map[string]any)
+		if cache["type"] != "ephemeral" || cache["ttl"] != nil {
+			t.Fatalf("unexpected Google message cache boundary: %#v", googleContent)
+		}
 	}
 	if bodies[1]["tools"].([]any)[0].(map[string]any)["cache_control"] != nil {
 		t.Fatalf("Google tool definition was cached: %#v", bodies[1]["tools"])
@@ -297,6 +306,15 @@ func TestOpenRouterPromptCaching(t *testing.T) {
 	encoded := string(encodedBytes)
 	if strings.Contains(encoded, "cache_control") || strings.Contains(encoded, "openrouter_cache_") {
 		t.Fatalf("unsupported cache settings leaked to OpenRouter: %s", encoded)
+	}
+
+	request("openai/gpt-5.6")
+	openAIMessages := bodies[3]["messages"].([]any)
+	openAIContent := openAIMessages[len(openAIMessages)-1].(map[string]any)["content"].([]any)
+	for _, item := range openAIContent {
+		if item.(map[string]any)["prompt_cache_breakpoint"].(map[string]any)["mode"] != "explicit" {
+			t.Fatalf("unexpected routed OpenAI cache breakpoint: %#v", openAIContent)
+		}
 	}
 }
 

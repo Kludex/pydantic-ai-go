@@ -403,11 +403,12 @@ type responsesInput struct {
 }
 
 type responsesInputContent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
-	FileID   string `json:"file_id,omitempty"`
-	Detail   string `json:"detail,omitempty"`
+	Type                  string                       `json:"type"`
+	Text                  string                       `json:"text,omitempty"`
+	ImageURL              string                       `json:"image_url,omitempty"`
+	FileID                string                       `json:"file_id,omitempty"`
+	Detail                string                       `json:"detail,omitempty"`
+	PromptCacheBreakpoint *openAIPromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 type responsesTool struct {
@@ -688,13 +689,14 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 	}
 	converter := responsesMessageConverter{
-		providerName:     m.providerName,
-		clientToolSearch: activeToolSearch,
-		serverToolSearch: serverToolSearch,
-		deferred:         deferred,
-		rendered:         make(map[string]struct{}),
-		strictSupport:    m.strictToolSupport,
-		phaseSupport:     responsesPhaseSupported(m.name, m.phaseSupport),
+		providerName:           m.providerName,
+		clientToolSearch:       activeToolSearch,
+		serverToolSearch:       serverToolSearch,
+		deferred:               deferred,
+		rendered:               make(map[string]struct{}),
+		strictSupport:          m.strictToolSupport,
+		phaseSupport:           responsesPhaseSupported(m.name, m.phaseSupport),
+		promptCacheBreakpoints: supportsOpenAIPromptCache(m.name),
 	}
 	for _, msg := range trimOpenAICompactionMessages(msgs, m.providerName) {
 		items, err := converter.convert(msg)

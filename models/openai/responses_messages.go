@@ -72,13 +72,14 @@ func prepareResponsesFunctionTool(definition ai.ToolDefinition, strictSupport bo
 }
 
 type responsesMessageConverter struct {
-	providerName     string
-	clientToolSearch bool
-	serverToolSearch bool
-	deferred         map[string]ai.ToolDefinition
-	rendered         map[string]struct{}
-	strictSupport    bool
-	phaseSupport     bool
+	providerName           string
+	clientToolSearch       bool
+	serverToolSearch       bool
+	deferred               map[string]ai.ToolDefinition
+	rendered               map[string]struct{}
+	strictSupport          bool
+	phaseSupport           bool
+	promptCacheBreakpoints bool
 }
 
 func (c *responsesMessageConverter) convert(msg ai.ModelMessage) ([]responsesInput, error) {
@@ -99,7 +100,7 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 		case ai.SystemPromptPart:
 			out = append(out, responsesInput{Role: "system", Content: part.Content})
 		case ai.UserPromptPart:
-			content, err := responsesUserContent(part, c.providerName)
+			content, err := responsesUserContent(part, c.providerName, c.promptCacheBreakpoints)
 			if err != nil {
 				return nil, err
 			}
@@ -143,13 +144,26 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 	return out, nil
 }
 
-func responsesUserContent(prompt ai.UserPromptPart, providerName string) (any, error) {
+func responsesUserContent(
+	prompt ai.UserPromptPart, providerName string, promptCacheBreakpoints bool,
+) (any, error) {
 	if len(prompt.Contents) == 0 {
 		return prompt.Content, nil
 	}
 	content := make([]responsesInputContent, 0, len(prompt.Contents))
 	for _, item := range prompt.Contents {
 		switch item := item.(type) {
+		case ai.CachePoint:
+			if _, err := item.ResolvedTTL(); err != nil {
+				return nil, err
+			}
+			if !promptCacheBreakpoints {
+				continue
+			}
+			if len(content) == 0 {
+				return nil, fmt.Errorf("openai: cache point must follow user content")
+			}
+			content[len(content)-1].PromptCacheBreakpoint = &openAIPromptCacheBreakpoint{Mode: "explicit"}
 		case ai.TextContent:
 			content = append(content, responsesInputContent{Type: "input_text", Text: item.Text})
 		case ai.ImageURL:

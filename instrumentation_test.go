@@ -74,7 +74,7 @@ func TestInstrumentedModelRequest(t *testing.T) {
 			ai.UserPromptPart{Contents: []ai.UserContent{
 				ai.TextContent{Text: "hello"}, ai.ImageURL{URL: "https://example.com/image.png"},
 				ai.UploadedFile{FileID: "file-1", ProviderName: "openai", MediaType: "text/csv"},
-				ai.BinaryContent{Data: []byte("secret"), MediaType: "audio/wav"}, nil,
+				ai.BinaryContent{Data: []byte("secret"), MediaType: "audio/wav"}, ai.CachePoint{}, nil,
 			}},
 			ai.ToolReturnPart{ToolName: "prior", ToolCallID: "prior-id", Content: map[string]any{"ok": true}},
 			ai.RetryPromptPart{Content: "retry", ToolName: "prior", ToolCallID: "prior-id"},

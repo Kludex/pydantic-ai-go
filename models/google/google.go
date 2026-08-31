@@ -273,6 +273,11 @@ func (model *Model) convertUserPrompt(p ai.UserPromptPart) ([]part, error) {
 	parts := make([]part, 0, len(p.Contents))
 	for _, c := range p.Contents {
 		switch item := c.(type) {
+		case ai.CachePoint:
+			if _, err := item.ResolvedTTL(); err != nil {
+				return nil, err
+			}
+			continue
 		case ai.TextContent:
 			parts = append(parts, part{Text: item.Text})
 		case ai.BinaryContent:

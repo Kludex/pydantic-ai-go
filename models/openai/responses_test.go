@@ -774,6 +774,52 @@ func TestResponsesMultimodalInput(t *testing.T) {
 	}
 }
 
+func TestResponsesPromptCachePoints(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = response.Write([]byte(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`))
+	}))
+	defer server.Close()
+	options := []openai.Option{openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client())}
+	gpt := openai.NewResponsesModel("gpt-5.6", options...)
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.TextContent{Text: "cache me"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+	}}}}}
+	if _, err := gpt.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	content := bodies[0]["input"].([]any)[0].(map[string]any)["content"].([]any)
+	if content[0].(map[string]any)["prompt_cache_breakpoint"].(map[string]any)["mode"] != "explicit" {
+		t.Fatalf("unexpected Responses cache breakpoint: %#v", content)
+	}
+	older := openai.NewResponsesModel("gpt-5.5", options...)
+	if _, err := older.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	content = bodies[1]["input"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 1 || content[0].(map[string]any)["prompt_cache_breakpoint"] != nil {
+		t.Fatalf("unsupported Responses cache point leaked: %#v", content)
+	}
+	for name, contents := range map[string][]ai.UserContent{
+		"first":   {ai.CachePoint{}, ai.TextContent{Text: "later"}},
+		"invalid": {ai.TextContent{Text: "first"}, ai.CachePoint{TTL: "1d"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := gpt.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: contents},
+			}}}, ai.ModelRequestParams{})
+			if err == nil || !strings.Contains(err.Error(), "cache point") {
+				t.Fatalf("unexpected Responses cache-point error: %v", err)
+			}
+		})
+	}
+}
+
 func TestResponsesRejectsUnsupportedUserContent(t *testing.T) {
 	text := ai.TextContent{Text: "pointer"}
 	tests := []struct {

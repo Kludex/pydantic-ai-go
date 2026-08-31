@@ -604,13 +604,16 @@ func TestOpenAIChatPromptCache(t *testing.T) {
 	model := openai.NewModel("routed", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
 	ctx := openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
 		InstructionsTTL: "1h", MessagesTTL: "5m", ToolsTTL: "1h",
-		IncludeTTL: true, SupportsDynamicInstructions: true,
+		IncludeTTL: true, SupportsDynamicInstructions: true, ExplicitMarkerStyle: openai.ChatPromptCacheMarkerControl, MaxPoints: 3,
 	})
-	_, err := model.Request(ctx, []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
-		ai.UserPromptPart{Contents: []ai.UserContent{
-			ai.TextContent{Text: "look"}, ai.ImageURL{URL: "https://example.com/image.png"},
-		}},
-	}}}, ai.ModelRequestParams{
+	_, err := model.Request(ctx, []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "earlier"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.TextContent{Text: "look"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+			ai.TextContent{Text: "uncached"},
+			ai.ImageURL{URL: "https://example.com/image.png"}, ai.CachePoint{},
+		}}}},
+	}, ai.ModelRequestParams{
 		Instructions: "static one\n\nstatic two\n\ndynamic",
 		InstructionParts: []ai.InstructionPart{
 			{Content: "static one"}, {Content: "static two"}, {Content: "dynamic", Dynamic: true},
@@ -626,8 +629,10 @@ func TestOpenAIChatPromptCache(t *testing.T) {
 		messages[2].(map[string]any)["content"] != "dynamic" {
 		t.Fatalf("unexpected instruction cache boundary: %#v", messages)
 	}
-	userContent := messages[3].(map[string]any)["content"].([]any)
-	if userContent[1].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" {
+	userContent := messages[4].(map[string]any)["content"].([]any)
+	if userContent[0].(map[string]any)["cache_control"] != nil ||
+		userContent[1].(map[string]any)["cache_control"] != nil ||
+		userContent[2].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" {
 		t.Fatalf("unexpected message cache boundary: %#v", userContent)
 	}
 	tool := bodies[0]["tools"].([]any)[0].(map[string]any)
@@ -689,6 +694,66 @@ func TestOpenAIChatPromptCache(t *testing.T) {
 		ai.UserPromptPart{Content: ""},
 	}}}, ai.ModelRequestParams{}); err != nil {
 		t.Fatal(err)
+	}
+
+	explicit := openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
+		ExplicitMarkerStyle: openai.ChatPromptCacheMarkerControl, IncludeTTL: true,
+	})
+	for name, contents := range map[string][]ai.UserContent{
+		"first":   {ai.CachePoint{}, ai.TextContent{Text: "later"}},
+		"invalid": {ai.TextContent{Text: "first"}, ai.CachePoint{TTL: "1d"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(explicit, []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: contents},
+			}}}, ai.ModelRequestParams{})
+			if err == nil || !strings.Contains(err.Error(), "cache point") {
+				t.Fatalf("unexpected cache-point error: %v", err)
+			}
+		})
+	}
+	limited := openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
+		InstructionsTTL: "5m", ToolsTTL: "5m", MaxPoints: 1,
+	})
+	_, err = model.Request(limited, nil, ai.ModelRequestParams{
+		Instructions: "system", Tools: []ai.ToolDefinition{{Name: "tool", Schema: map[string]any{"type": "object"}}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "exceeding the maximum") {
+		t.Fatalf("unexpected reserved cache-point error: %v", err)
+	}
+	invalidStyle := openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
+		ExplicitMarkerStyle: "invalid",
+	})
+	_, err = model.Request(invalidStyle, []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{ai.TextContent{Text: "first"}, ai.CachePoint{}}},
+	}}}, ai.ModelRequestParams{})
+	if err == nil || !strings.Contains(err.Error(), "invalid chat prompt cache marker style") {
+		t.Fatalf("unexpected marker-style error: %v", err)
+	}
+
+	_, err = model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{ai.TextContent{Text: "kept"}, ai.CachePoint{}}},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupported := bodies[len(bodies)-1]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(unsupported) != 1 || unsupported[0].(map[string]any)["cache_control"] != nil {
+		t.Fatalf("unsupported explicit cache point leaked: %#v", unsupported)
+	}
+	gpt := openai.NewModel("gpt-5.6", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+	_, err = gpt.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.TextContent{Text: "cache me"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+		}},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	openAIPart := bodies[len(bodies)-1]["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if openAIPart["prompt_cache_breakpoint"].(map[string]any)["mode"] != "explicit" ||
+		openAIPart["cache_control"] != nil {
+		t.Fatalf("unexpected OpenAI cache breakpoint: %#v", openAIPart)
 	}
 }
 

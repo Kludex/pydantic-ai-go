@@ -1,0 +1,33 @@
+[
+  {
+    "parts": [
+      {
+        "content": [
+          {
+            "content": "stable context",
+            "metadata": null,
+            "kind": "text-content"
+          },
+          {
+            "kind": "cache-point",
+            "ttl": "1h"
+          },
+          {
+            "content": "question",
+            "metadata": null,
+            "kind": "text-content"
+          }
+        ],
+        "timestamp": "2026-08-31T21:29:26.540505Z",
+        "part_kind": "user-prompt"
+      }
+    ],
+    "timestamp": null,
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

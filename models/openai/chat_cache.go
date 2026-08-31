@@ -1,6 +1,18 @@
 package openai
 
-import "context"
+import (
+	"context"
+	"fmt"
+	"strings"
+)
+
+// ChatPromptCacheMarkerStyle selects the provider wire format for explicit markers.
+type ChatPromptCacheMarkerStyle string
+
+const (
+	ChatPromptCacheMarkerControl    ChatPromptCacheMarkerStyle = "cache_control"
+	ChatPromptCacheMarkerBreakpoint ChatPromptCacheMarkerStyle = "openai"
+)
 
 // ChatPromptCache configures explicit cache breakpoints for one compatible
 // Chat Completions request. Provider packages should ignore unsupported fields.
@@ -10,6 +22,8 @@ type ChatPromptCache struct {
 	ToolsTTL                    string
 	IncludeTTL                  bool
 	SupportsDynamicInstructions bool
+	ExplicitMarkerStyle         ChatPromptCacheMarkerStyle
+	MaxPoints                   int
 }
 
 type chatPromptCacheContextKey struct{}
@@ -28,6 +42,14 @@ func chatPromptCacheFromContext(ctx context.Context) ChatPromptCache {
 type chatCacheControl struct {
 	Type string `json:"type"`
 	TTL  string `json:"ttl,omitempty"`
+}
+
+type openAIPromptCacheBreakpoint struct {
+	Mode string `json:"mode"`
+}
+
+func supportsOpenAIPromptCache(modelName string) bool {
+	return strings.HasPrefix(strings.ToLower(modelName), "gpt-5.6")
 }
 
 func newChatCacheControl(ttl string, includeTTL bool) *chatCacheControl {
@@ -50,4 +72,62 @@ func addChatMessageCache(message *chatMessage, ttl string, includeTTL bool) {
 		content[len(content)-1].CacheControl = control
 		message.Content = content
 	}
+}
+
+func limitChatCachePoints(messages []chatMessage, tools []any, maximum int) error {
+	if maximum == 0 {
+		return nil
+	}
+	used := 0
+	for _, tool := range tools {
+		if functionTool, ok := tool.(chatTool); ok && functionTool.CacheControl != nil {
+			used++
+		}
+	}
+	for _, message := range messages {
+		if message.Role == "system" {
+			used += chatMessageCachePoints(message)
+		}
+	}
+	if used > maximum {
+		return fmt.Errorf(
+			"openai: tool and system cache points use %d slots, exceeding the maximum of %d", used, maximum,
+		)
+	}
+	remaining := maximum - used
+	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
+		if messages[messageIndex].Role == "system" {
+			continue
+		}
+		content, ok := messages[messageIndex].Content.([]contentPart)
+		if !ok {
+			continue
+		}
+		for partIndex := len(content) - 1; partIndex >= 0; partIndex-- {
+			if content[partIndex].CacheControl == nil {
+				continue
+			}
+			if remaining > 0 {
+				remaining--
+			} else {
+				content[partIndex].CacheControl = nil
+			}
+		}
+		messages[messageIndex].Content = content
+	}
+	return nil
+}
+
+func chatMessageCachePoints(message chatMessage) int {
+	content, ok := message.Content.([]contentPart)
+	if !ok {
+		return 0
+	}
+	count := 0
+	for _, part := range content {
+		if part.CacheControl != nil {
+			count++
+		}
+	}
+	return count
 }

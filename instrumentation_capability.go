@@ -441,10 +441,14 @@ func telemetryOutputValue(value any, includeBinary bool) any {
 		return result
 	case ToolReturn:
 		value.ReturnValue = telemetryOutputValue(value.ReturnValue, includeBinary)
-		value.Content = cloneUserContents(value.Content)
-		for index, content := range value.Content {
-			value.Content[index] = telemetryOutputUserContent(content, includeBinary)
+		content := make([]UserContent, 0, len(value.Content))
+		for _, item := range cloneUserContents(value.Content) {
+			if _, ok := item.(CachePoint); ok {
+				continue
+			}
+			content = append(content, telemetryOutputUserContent(item, includeBinary))
 		}
+		value.Content = content
 		return value
 	case DeferredToolRequests:
 		return map[string]any{

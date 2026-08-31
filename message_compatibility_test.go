@@ -70,6 +70,30 @@ func TestUnmarshalUpstreamMultimodalMessageFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamCachePointFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_cache_point.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prompt := messages[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
+	if len(prompt.Contents) != 3 || prompt.Contents[0].(ai.TextContent).Text != "stable context" ||
+		prompt.Contents[1].(ai.CachePoint).TTL != ai.CachePointTTL1Hour ||
+		prompt.Contents[2].(ai.TextContent).Text != "question" {
+		t.Fatalf("unexpected cache-point fixture: %+v", prompt.Contents)
+	}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"kind":"cache-point","ttl":"1h"`) {
+		t.Fatalf("cache-point round trip changed wire shape: %s", encoded)
+	}
+}
+
 func TestUnmarshalUpstreamToolSearchFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/messages/upstream_tool_search.json")
 	if err != nil {

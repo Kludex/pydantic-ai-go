@@ -443,6 +443,7 @@ type wireUserContent struct {
 	ProviderName   string         `json:"provider_name,omitempty"`
 	Identifier     string         `json:"identifier,omitempty"`
 	VendorMetadata map[string]any `json:"vendor_metadata,omitempty"`
+	TTL            CachePointTTL  `json:"ttl,omitempty"`
 }
 
 func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
@@ -458,6 +459,12 @@ func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
 			items = append(items, wireUserContent{Kind: "image-url", URL: item.URL})
 		case BinaryContent:
 			items = append(items, wireUserContent{Kind: "binary", Data: item.Data, MediaType: item.MediaType})
+		case CachePoint:
+			ttl, err := item.ResolvedTTL()
+			if err != nil {
+				return nil, err
+			}
+			items = append(items, wireUserContent{Kind: "cache-point", TTL: ttl})
 		case UploadedFile:
 			items = append(items, wireUserContent{
 				Kind: "uploaded-file", FileID: item.FileID, ProviderName: item.ProviderName,
@@ -489,6 +496,13 @@ func unmarshalUserContent(raw json.RawMessage) (UserPromptPart, error) {
 			part.Contents = append(part.Contents, ImageURL{URL: item.URL})
 		case "binary":
 			part.Contents = append(part.Contents, BinaryContent{Data: item.Data, MediaType: item.MediaType})
+		case "cache-point":
+			point := CachePoint{TTL: item.TTL}
+			ttl, err := point.ResolvedTTL()
+			if err != nil {
+				return UserPromptPart{}, err
+			}
+			part.Contents = append(part.Contents, CachePoint{TTL: ttl})
 		case "uploaded-file":
 			part.Contents = append(part.Contents, UploadedFile{
 				FileID: item.FileID, ProviderName: item.ProviderName, MediaType: item.MediaType,

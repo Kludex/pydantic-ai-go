@@ -81,6 +81,42 @@ Inline content increases request size. Prefer `ImageURL` when the provider can f
 > [!WARNING]
 > A URL can expose its host, path, query values, and access token to the model provider. Use short-lived signed URLs. Do not place long-lived credentials in the URL.
 
+## Mark a prompt-cache boundary
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](anthropic.NewModel("claude-sonnet-4-6"))
+	result, err := agent.RunParts(
+		context.Background(),
+		[]ai.UserContent{
+			ai.TextContent{Text: "A long, stable reference document..."},
+			ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+			ai.TextContent{Text: "Summarize the reference document."},
+		},
+		struct{}{},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`CachePoint` marks the preceding content item. It cannot be the first item. The zero value uses five minutes. Anthropic accepts five-minute and one-hour boundaries and keeps the newest four. OpenAI GPT-5.6 Chat Completions and Responses use explicit cache breakpoints and ignore the per-marker TTL.
+
+OpenRouter maps cache points for Anthropic and Gemini routes. It includes TTL only for Anthropic, enforces Anthropic's four-point limit, and maps OpenAI GPT-5.6 routes to OpenAI breakpoints. Unsupported providers validate and omit the marker.
+
 ## Reference an uploaded file
 
 ```go

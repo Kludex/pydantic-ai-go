@@ -82,7 +82,7 @@ func TestInstrumentationCapabilityRecordsRunRequestsAndTools(t *testing.T) {
 				"items": []any{ai.BinaryContent{Data: []byte("secret"), MediaType: "image/png"}},
 			},
 			Content: []ai.UserContent{
-				ai.TextContent{Text: "attachment"},
+				ai.TextContent{Text: "attachment"}, ai.CachePoint{},
 				ai.BinaryContent{Data: []byte("secret"), MediaType: "audio/wav"},
 			},
 		}, nil

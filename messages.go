@@ -165,6 +165,34 @@ type BinaryContent struct {
 func (BinaryContent) userContentKind() string { return "binary" }
 func (BinaryContent) enqueueItemKind() string { return "user-content" }
 
+// CachePointTTL selects the lifetime of an explicit prompt-cache boundary.
+type CachePointTTL string
+
+const (
+	CachePointTTL5Minutes CachePointTTL = "5m"
+	CachePointTTL1Hour    CachePointTTL = "1h"
+)
+
+// CachePoint marks the preceding user-content item as a prompt-cache boundary.
+// The zero value uses a five-minute lifetime. Unsupported providers omit the marker.
+type CachePoint struct {
+	TTL CachePointTTL
+}
+
+// ResolvedTTL returns the explicit lifetime, applying and validating the default.
+func (point CachePoint) ResolvedTTL() (CachePointTTL, error) {
+	if point.TTL == "" {
+		return CachePointTTL5Minutes, nil
+	}
+	if point.TTL != CachePointTTL5Minutes && point.TTL != CachePointTTL1Hour {
+		return "", fmt.Errorf("ai: invalid cache point TTL %q", point.TTL)
+	}
+	return point.TTL, nil
+}
+
+func (CachePoint) userContentKind() string { return "cache-point" }
+func (CachePoint) enqueueItemKind() string { return "user-content" }
+
 // UploadedFile references a file already hosted by a model provider.
 type UploadedFile struct {
 	FileID         string

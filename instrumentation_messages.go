@@ -53,6 +53,9 @@ func telemetryRequestMessageGroups(
 				nextParts = []any{telemetryText(part.Content, includeContent)}
 			} else {
 				for _, content := range part.Contents {
+					if _, ok := content.(CachePoint); ok {
+						continue
+					}
 					nextParts = append(nextParts, telemetryUserContent(content, includeContent, includeBinary, version))
 				}
 			}

@@ -1030,6 +1030,90 @@ func TestMultimodalUserPrompt(t *testing.T) {
 	}
 }
 
+func TestAnthropicCachePoints(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	messages := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.TextContent{Text: "old"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+			ai.TextContent{Text: "middle"}, ai.CachePoint{},
+		}}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.TextContent{Text: "new one"}, ai.CachePoint{},
+			ai.TextContent{Text: "new two"}, ai.CachePoint{},
+			ai.TextContent{Text: "new three"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+		}}}},
+	}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	wireMessages := body["messages"].([]any)
+	old := wireMessages[0].(map[string]any)["content"].([]any)
+	newer := wireMessages[1].(map[string]any)["content"].([]any)
+	if old[0].(map[string]any)["cache_control"] != nil ||
+		old[1].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" {
+		t.Fatalf("old Anthropic cache points were not limited: %#v", old)
+	}
+	for index, block := range newer {
+		cache := block.(map[string]any)["cache_control"].(map[string]any)
+		want := "5m"
+		if index == 2 {
+			want = "1h"
+		}
+		if cache["type"] != "ephemeral" || cache["ttl"] != want {
+			t.Fatalf("unexpected Anthropic cache point %d: %#v", index, block)
+		}
+	}
+
+	messages = []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "prior"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+		}}}},
+	}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	wireMessages = body["messages"].([]any)
+	if len(wireMessages) != 1 ||
+		wireMessages[0].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
+		t.Fatalf("leading cache point did not attach to prior content: %#v", wireMessages)
+	}
+}
+
+func TestAnthropicCachePointErrors(t *testing.T) {
+	model := newServer(t, func(http.ResponseWriter, *http.Request) {
+		t.Fatal("invalid cache point reached transport")
+	})
+	for name, contents := range map[string][]ai.UserContent{
+		"first":   {ai.CachePoint{}, ai.TextContent{Text: "later"}},
+		"invalid": {ai.TextContent{Text: "first"}, ai.CachePoint{TTL: "1d"}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Contents: contents},
+			}}}, ai.ModelRequestParams{})
+			if err == nil || !strings.Contains(err.Error(), "cache point") {
+				t.Fatalf("unexpected cache-point error: %v", err)
+			}
+		})
+	}
+	_, err := model.Request(t.Context(), []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ThinkingPart{
+			Content: "thought", Signature: "signed", ProviderName: "anthropic",
+		}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{ai.CachePoint{}}}}},
+	}, ai.ModelRequestParams{})
+	if err == nil || !strings.Contains(err.Error(), `cache control not supported for content type "thinking"`) {
+		t.Fatalf("unexpected unsupported cache target error: %v", err)
+	}
+}
+
 func TestMultimodalUnknownContent(t *testing.T) {
 	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 	for _, test := range []struct {

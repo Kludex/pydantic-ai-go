@@ -178,13 +178,14 @@ func TestUnmarshalUserContentForms(t *testing.T) {
 		{"kind":"text-content","content":"look at this"},
 		{"kind":"image-url","url":"https://example.com/cat.png"},
 		{"kind":"binary","data":"aGk=","media_type":"image/png"},
+		{"kind":"cache-point","ttl":"1h"},
 		{"kind":"uploaded-file","file_id":"file-1","provider_name":"anthropic","media_type":"text/csv","identifier":"sales","vendor_metadata":{"purpose":"data"}}
 	]}]}]`))
 	if err != nil {
 		t.Fatal(err)
 	}
 	part := msgs[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
-	if len(part.Contents) != 4 {
+	if len(part.Contents) != 5 {
 		t.Fatalf("unexpected contents %+v", part.Contents)
 	}
 	if part.Contents[1].(ai.ImageURL).URL != "https://example.com/cat.png" {
@@ -193,7 +194,10 @@ func TestUnmarshalUserContentForms(t *testing.T) {
 	if string(part.Contents[2].(ai.BinaryContent).Data) != "hi" {
 		t.Fatalf("unexpected binary %+v", part.Contents[2])
 	}
-	uploaded := part.Contents[3].(ai.UploadedFile)
+	if part.Contents[3].(ai.CachePoint).TTL != ai.CachePointTTL1Hour {
+		t.Fatalf("unexpected cache point %+v", part.Contents[3])
+	}
+	uploaded := part.Contents[4].(ai.UploadedFile)
 	if uploaded.FileID != "file-1" || uploaded.ProviderName != "anthropic" ||
 		uploaded.VendorMetadata["purpose"] != "data" {
 		t.Fatalf("unexpected uploaded file %+v", uploaded)
@@ -212,6 +216,7 @@ func TestMarshalUserContentRoundTrip(t *testing.T) {
 		ai.TextContent{Text: "what is this?"},
 		ai.ImageURL{URL: "https://example.com/cat.png"},
 		ai.BinaryContent{Data: []byte("hi"), MediaType: "image/png"},
+		ai.CachePoint{},
 		ai.UploadedFile{
 			FileID: "file-1", ProviderName: "openai", MediaType: "text/csv", Identifier: "sales",
 			VendorMetadata: map[string]any{"purpose": "data"},
@@ -221,13 +226,26 @@ func TestMarshalUserContentRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !strings.Contains(string(data), `"kind":"cache-point","ttl":"5m"`) {
+		t.Fatalf("cache point is not wire compatible: %s", data)
+	}
 	back, err := ai.UnmarshalMessages(data)
 	if err != nil {
 		t.Fatal(err)
 	}
 	part := back[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
-	if len(part.Contents) != 4 || part.Contents[3].(ai.UploadedFile).Identifier != "sales" {
+	if len(part.Contents) != 5 || part.Contents[3].(ai.CachePoint).TTL != ai.CachePointTTL5Minutes ||
+		part.Contents[4].(ai.UploadedFile).Identifier != "sales" {
 		t.Fatalf("round trip lost contents: %+v", part.Contents)
+	}
+	invalid := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
+		Contents: []ai.UserContent{ai.TextContent{Text: "first"}, ai.CachePoint{TTL: "1d"}},
+	}}}}
+	if _, err := ai.MarshalMessages(invalid); err == nil || !strings.Contains(err.Error(), "invalid cache point TTL") {
+		t.Fatalf("unexpected invalid cache-point marshal error: %v", err)
+	}
+	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"user-prompt","content":[{"kind":"cache-point","ttl":"1d"}]}]}]`)); err == nil || !strings.Contains(err.Error(), "invalid cache point TTL") {
+		t.Fatalf("unexpected invalid cache-point unmarshal error: %v", err)
 	}
 }
 

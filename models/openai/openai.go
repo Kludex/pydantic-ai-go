@@ -334,10 +334,11 @@ type chatMessage struct {
 }
 
 type contentPart struct {
-	Type         string            `json:"type"`
-	Text         string            `json:"text,omitempty"`
-	ImageURL     *imageURL         `json:"image_url,omitempty"`
-	CacheControl *chatCacheControl `json:"cache_control,omitempty"`
+	Type                  string                       `json:"type"`
+	Text                  string                       `json:"text,omitempty"`
+	ImageURL              *imageURL                    `json:"image_url,omitempty"`
+	CacheControl          *chatCacheControl            `json:"cache_control,omitempty"`
+	PromptCacheBreakpoint *openAIPromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
 }
 
 type imageURL struct {
@@ -415,6 +416,9 @@ func (m *Model) buildPayload(
 		req.TopP = nil
 	}
 	cache := chatPromptCacheFromContext(ctx)
+	if cache.ExplicitMarkerStyle == "" && m.providerName == "openai" && supportsOpenAIPromptCache(m.name) {
+		cache.ExplicitMarkerStyle = ChatPromptCacheMarkerBreakpoint
+	}
 	if params.Instructions != "" {
 		if cache.InstructionsTTL != "" && len(params.InstructionParts) > 0 {
 			firstInstruction := len(req.Messages)
@@ -447,7 +451,7 @@ func (m *Model) buildPayload(
 		}
 	}
 	for _, msg := range msgs {
-		converted, err := m.convertMessage(msg)
+		converted, err := m.convertMessage(msg, cache)
 		if err != nil {
 			return nil, err
 		}
@@ -500,6 +504,9 @@ func (m *Model) buildPayload(
 	}
 	if len(req.Tools) > 0 {
 		req.ParallelToolCalls = params.Settings.ParallelToolCalls
+	}
+	if err := limitChatCachePoints(req.Messages, req.Tools, cache.MaxPoints); err != nil {
+		return nil, err
 	}
 	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		strict := true
@@ -568,10 +575,10 @@ func openAIReasoningActive(effort string) bool {
 	return effort != "" && effort != "none"
 }
 
-func (model *Model) convertMessage(msg ai.ModelMessage) ([]chatMessage, error) {
+func (model *Model) convertMessage(msg ai.ModelMessage, cache ChatPromptCache) ([]chatMessage, error) {
 	switch message := msg.(type) {
 	case ai.ModelRequest:
-		return convertRequest(message)
+		return convertRequest(message, cache)
 	case ai.ModelResponse:
 		return model.convertResponse(message), nil
 	default:
@@ -579,14 +586,14 @@ func (model *Model) convertMessage(msg ai.ModelMessage) ([]chatMessage, error) {
 	}
 }
 
-func convertRequest(m ai.ModelRequest) ([]chatMessage, error) {
+func convertRequest(m ai.ModelRequest, cache ChatPromptCache) ([]chatMessage, error) {
 	var out []chatMessage
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.SystemPromptPart:
 			out = append(out, chatMessage{Role: "system", Content: p.Content})
 		case ai.UserPromptPart:
-			msg, err := convertUserPrompt(p)
+			msg, err := convertUserPrompt(p, cache)
 			if err != nil {
 				return nil, err
 			}
@@ -922,13 +929,34 @@ func contentString(content any) (string, error) {
 	return string(b), nil
 }
 
-func convertUserPrompt(p ai.UserPromptPart) (chatMessage, error) {
+func convertUserPrompt(p ai.UserPromptPart, cache ChatPromptCache) (chatMessage, error) {
 	if len(p.Contents) == 0 {
 		return chatMessage{Role: "user", Content: p.Content}, nil
 	}
 	parts := make([]contentPart, 0, len(p.Contents))
 	for _, c := range p.Contents {
 		switch item := c.(type) {
+		case ai.CachePoint:
+			ttl, err := item.ResolvedTTL()
+			if err != nil {
+				return chatMessage{}, err
+			}
+			if cache.ExplicitMarkerStyle == "" {
+				continue
+			}
+			if len(parts) == 0 {
+				return chatMessage{}, fmt.Errorf("openai: cache point must follow user content")
+			}
+			switch cache.ExplicitMarkerStyle {
+			case ChatPromptCacheMarkerBreakpoint:
+				parts[len(parts)-1].PromptCacheBreakpoint = &openAIPromptCacheBreakpoint{Mode: "explicit"}
+			case ChatPromptCacheMarkerControl:
+				parts[len(parts)-1].CacheControl = newChatCacheControl(string(ttl), cache.IncludeTTL)
+			default:
+				return chatMessage{}, fmt.Errorf(
+					"openai: invalid chat prompt cache marker style %q", cache.ExplicitMarkerStyle,
+				)
+			}
 		case ai.TextContent:
 			parts = append(parts, contentPart{Type: "text", Text: item.Text})
 		case ai.ImageURL:

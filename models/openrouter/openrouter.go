@@ -153,11 +153,17 @@ func (model *Model) prepareParams(
 			MessagesTTL:     string(cacheSettings[cacheMessagesKey]),
 			ToolsTTL:        string(cacheSettings[cacheToolsKey]),
 			IncludeTTL:      true, SupportsDynamicInstructions: true,
+			ExplicitMarkerStyle: openai.ChatPromptCacheMarkerControl, MaxPoints: 4,
 		}
 	case "google":
 		cache = openai.ChatPromptCache{
-			InstructionsTTL: string(cacheSettings[cacheInstructionsKey]),
-			MessagesTTL:     string(cacheSettings[cacheMessagesKey]),
+			InstructionsTTL:     string(cacheSettings[cacheInstructionsKey]),
+			MessagesTTL:         string(cacheSettings[cacheMessagesKey]),
+			ExplicitMarkerStyle: openai.ChatPromptCacheMarkerControl,
+		}
+	case "openai":
+		if strings.HasPrefix(strings.ToLower(routedModel), "gpt-5.6") {
+			cache.ExplicitMarkerStyle = openai.ChatPromptCacheMarkerBreakpoint
 		}
 	}
 	params.Settings = settings

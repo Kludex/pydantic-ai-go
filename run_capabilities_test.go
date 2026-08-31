@@ -33,7 +33,9 @@ func (c *runOnlyCapability) Setup(registry *ai.CapabilityRegistry) error {
 	return nil
 }
 
-func (c *runOnlyCapability) WrapRun(ctx context.Context, _ *ai.RunInfo, next ai.RunFunc) error {
+func (c *runOnlyCapability) WrapRun(
+	ctx context.Context, _ *ai.RunInfo, next ai.RunFunc,
+) (ai.RunOutcome, error) {
 	c.runCalls.Add(1)
 	return next(ctx)
 }

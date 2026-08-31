@@ -44,11 +44,13 @@ func (c *traceCapability) Setup(reg *ai.CapabilityRegistry) error {
 	return nil
 }
 
-func (c *traceCapability) WrapRun(ctx context.Context, _ *ai.RunInfo, next ai.RunFunc) error {
+func (c *traceCapability) WrapRun(
+	ctx context.Context, _ *ai.RunInfo, next ai.RunFunc,
+) (ai.RunOutcome, error) {
 	*c.log = append(*c.log, c.name+":run-in")
-	err := next(ctx)
+	outcome, err := next(ctx)
 	*c.log = append(*c.log, c.name+":run-out")
-	return err
+	return outcome, err
 }
 
 func (c *traceCapability) WrapModelRequest(ctx context.Context, _ *ai.RunInfo, msgs []ai.ModelMessage, params ai.ModelRequestParams, next ai.ModelRequestFunc) (*ai.ModelResponse, error) {
@@ -284,10 +286,12 @@ type inspectCapability struct{ onRunOut func(*ai.RunInfo) }
 
 func (inspectCapability) Setup(*ai.CapabilityRegistry) error { return nil }
 
-func (c *inspectCapability) WrapRun(ctx context.Context, ri *ai.RunInfo, next ai.RunFunc) error {
-	err := next(ctx)
+func (c *inspectCapability) WrapRun(
+	ctx context.Context, ri *ai.RunInfo, next ai.RunFunc,
+) (ai.RunOutcome, error) {
+	outcome, err := next(ctx)
 	c.onRunOut(ri)
-	return err
+	return outcome, err
 }
 
 func TestCapabilityWithStreaming(t *testing.T) {

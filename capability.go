@@ -88,15 +88,6 @@ type ToolCallWrapper interface {
 	WrapToolCall(ctx context.Context, ri *RunInfo, call ToolCallPart, next ToolCallFunc) (any, error)
 }
 
-// RunFunc continues the run chain.
-type RunFunc func(ctx context.Context) error
-
-// RunWrapper intercepts the whole run. Implementations call next to
-// continue; an error aborts the run.
-type RunWrapper interface {
-	WrapRun(ctx context.Context, ri *RunInfo, next RunFunc) error
-}
-
 // InstructionsProvider contributes instructions before every model request.
 type InstructionsProvider interface {
 	Instructions(ctx context.Context, ri *RunInfo) (string, error)

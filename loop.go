@@ -3286,31 +3286,98 @@ func newRunID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// wrappedLoop is the run interception point: capability middleware
-// (RunWrapper) around the whole loop, outermost first.
+// wrappedLoop is the run lifecycle interception point. Wrappers are outermost
+// first, before hooks run in order, and after and error hooks run in reverse.
 func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output], error) {
-	var result *RunResult[Output]
-	next := RunFunc(func(ctx context.Context) error {
-		var err error
-		result, err = r.loop(ctx)
-		return err
+	next := RunFunc(func(ctx context.Context) (RunOutcome, error) {
+		for _, capability := range r.capabilities {
+			if hook, ok := capability.(BeforeRunHook); ok {
+				if err := hook.BeforeRun(ctx, r.info); err != nil {
+					return RunOutcome{}, err
+				}
+			}
+		}
+		result, err := r.loop(ctx)
+		if err != nil {
+			return RunOutcome{}, err
+		}
+		return runOutcomeFromResult(result), nil
 	})
-	for i := len(r.capabilities) - 1; i >= 0; i-- {
-		if wrapper, ok := r.capabilities[i].(RunWrapper); ok {
+	for index := len(r.capabilities) - 1; index >= 0; index-- {
+		if wrapper, ok := r.capabilities[index].(RunWrapper); ok {
 			innerNext := next
-			next = func(ctx context.Context) error {
+			next = func(ctx context.Context) (RunOutcome, error) {
 				return wrapper.WrapRun(ctx, r.info, innerNext)
 			}
 		}
 	}
-	err := next(ctx)
-	if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
+	outcome, err := next(ctx)
+	detached := errors.Is(context.Cause(r.ctx), errStreamDetached)
+	if err != nil && !detached {
+		for index := len(r.capabilities) - 1; index >= 0; index-- {
+			hook, ok := r.capabilities[index].(RunErrorHook)
+			if !ok {
+				continue
+			}
+			outcome, err = hook.OnRunError(ctx, r.info, err)
+			if err == nil {
+				break
+			}
+		}
+	}
+	if err == nil {
+		for index := len(r.capabilities) - 1; index >= 0; index-- {
+			hook, ok := r.capabilities[index].(AfterRunHook)
+			if !ok {
+				continue
+			}
+			outcome, err = hook.AfterRun(ctx, r.info, outcome.Clone())
+			if err != nil {
+				break
+			}
+		}
+	}
+	cause := context.Cause(r.ctx)
+	if errors.Is(cause, ErrRunCancelled) {
 		usage := r.usage
 		usage.ToolCalls = int(r.toolCalls.Load())
 		return nil, &RunCancelledError{messages: slices.Clone(r.messages), usage: usage}
 	}
+	if cause != nil {
+		return nil, cause
+	}
 	if err != nil {
 		return nil, err
 	}
-	return result, nil
+	return r.resultFromRunOutcome(outcome)
+}
+
+func runOutcomeFromResult[Output any](result *RunResult[Output]) RunOutcome {
+	outcome := RunOutcome{Output: result.Output}
+	if result.deferred != nil {
+		deferred := result.deferred.Clone()
+		outcome.Deferred = &deferred
+	}
+	return outcome
+}
+
+func (r *run[Deps, Output]) resultFromRunOutcome(outcome RunOutcome) (*RunResult[Output], error) {
+	if outcome.Deferred != nil {
+		return r.deferredResult(outcome.Deferred.Clone()), nil
+	}
+	if outcome.Output == nil {
+		var zero Output
+		outputType := reflect.TypeFor[Output]()
+		switch outputType.Kind() {
+		case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+			return r.result(zero), nil
+		}
+	}
+	output, ok := outcome.Output.(Output)
+	if !ok {
+		return nil, fmt.Errorf(
+			"ai: run outcome has output type %T, expected %v", outcome.Output, reflect.TypeFor[Output](),
+		)
+	}
+	return r.result(output), nil
 }

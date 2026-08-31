@@ -271,10 +271,11 @@ func convertRequest(m ai.ModelRequest) ([]chatMessage, error) {
 			}
 			out = append(out, chatMessage{Role: "tool", Content: content, ToolCallID: p.ToolCallID})
 		case ai.RetryPromptPart:
+			content := p.ModelResponse()
 			if p.ToolCallID != "" {
-				out = append(out, chatMessage{Role: "tool", Content: p.Content, ToolCallID: p.ToolCallID})
+				out = append(out, chatMessage{Role: "tool", Content: content, ToolCallID: p.ToolCallID})
 			} else {
-				out = append(out, chatMessage{Role: "user", Content: p.Content})
+				out = append(out, chatMessage{Role: "user", Content: content})
 			}
 		default:
 			return nil, fmt.Errorf("openai: unknown request part type %T", part)

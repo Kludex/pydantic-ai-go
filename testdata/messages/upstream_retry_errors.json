@@ -1,0 +1,43 @@
+[
+  {
+    "parts": [
+      {
+        "content": [
+          {
+            "type": "string_type",
+            "loc": [
+              "items",
+              0,
+              "name"
+            ],
+            "msg": "Input should be a valid string",
+            "input": 42
+          },
+          {
+            "type": "greater_than",
+            "loc": [
+              "count"
+            ],
+            "msg": "Input should be greater than 0",
+            "input": -1,
+            "ctx": {
+              "gt": 0
+            },
+            "url": "https://errors.pydantic.dev/2/v/greater_than"
+          }
+        ],
+        "tool_name": "submit",
+        "tool_call_id": "call-1",
+        "timestamp": "2026-01-03T04:05:06Z",
+        "part_kind": "retry-prompt"
+      }
+    ],
+    "timestamp": null,
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

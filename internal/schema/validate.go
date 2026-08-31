@@ -3,8 +3,10 @@ package schema
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v6"
 )
@@ -12,6 +14,13 @@ import (
 // Validator is a compiled JSON Schema.
 type Validator struct {
 	schema *jsonschema.Schema
+}
+
+// ValidationIssue is one leaf failure from JSON Schema validation.
+type ValidationIssue struct {
+	Keyword  string
+	Location []string
+	Message  string
 }
 
 // Compile compiles a JSON Schema for repeated validation.
@@ -78,4 +87,43 @@ func (v *Validator) ValidateJSON(data []byte) error {
 		return fmt.Errorf("decode trailing JSON: %w", err)
 	}
 	return v.Validate(value)
+}
+
+// ValidationIssues returns flattened leaf failures for a validation error.
+// Decode and other non-schema errors return nil.
+func ValidationIssues(err error) []ValidationIssue {
+	var validationError *jsonschema.ValidationError
+	if !errors.As(err, &validationError) {
+		return nil
+	}
+	var issues []ValidationIssue
+	collectValidationIssues(*validationError.BasicOutput(), &issues)
+	return issues
+}
+
+func collectValidationIssues(output jsonschema.OutputUnit, issues *[]ValidationIssue) {
+	if output.Error != nil {
+		keywordPath := parseJSONPointer(output.KeywordLocation)
+		keyword := "schema"
+		if len(keywordPath) > 0 {
+			keyword = keywordPath[len(keywordPath)-1]
+		}
+		*issues = append(*issues, ValidationIssue{
+			Keyword: keyword, Location: parseJSONPointer(output.InstanceLocation), Message: output.Error.String(),
+		})
+	}
+	for _, nested := range output.Errors {
+		collectValidationIssues(nested, issues)
+	}
+}
+
+func parseJSONPointer(pointer string) []string {
+	if pointer == "" {
+		return nil
+	}
+	parts := strings.Split(strings.TrimPrefix(pointer, "/"), "/")
+	for index := range parts {
+		parts[index] = strings.ReplaceAll(strings.ReplaceAll(parts[index], "~1", "/"), "~0", "~")
+	}
+	return parts
 }

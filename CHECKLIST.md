@@ -41,17 +41,17 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, response/part-metadata, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
 - [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
-- [~] System-prompt timestamps are preserved. User-prompt, tool-return, and retry-prompt timestamps and remaining request-part metadata still need parity.
+- [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
 - [ ] Compaction and builtin-tool return parts.
 - [ ] Tool availability delta parts.
 - [x] Implemented requests/responses preserve timestamps, local metadata, run/conversation IDs, normalized finish reasons, provider details/URLs/names, response IDs, and lifecycle state, including deprecated `vendor_*` aliases.
 - [x] Text, thinking, and function-tool-call parts preserve IDs, signatures, provider names/details, and typed tool kinds through serialization, fallback replay, keyed streaming accumulation, and consumer-safe copies.
-- [ ] Retry prompt structured validation errors.
+- [x] Retry prompts preserve structured validation errors and timestamps, format provider feedback consistently, and retain JSON Schema keyword, location, message, and offending input details.
 - [x] Interrupted tool-return outcomes, request state, and synthesized history repair after run cancellation.
 - [x] Synthesized-return metadata markers and deterministic, idempotent repair of trailing, interior, shadowed-ID, malformed-order, and empty-ID dangling calls.
 - [x] Orphaned tool results are removed while plain validation feedback is preserved; consecutive requests and synthetic responses are merged with tool results hoisted before user-facing content.
@@ -71,7 +71,7 @@ Status:
 - [x] Provider-aware strict tool mode via `WithStrict()` / `WithoutStrict()`: OpenAI infers schema compatibility, Anthropic is explicit and model-gated, and Gemini 2.5+ defaults to request-wide `VALIDATED`; each provider supports alias/proxy overrides.
 - [x] Surface Anthropic's lossy strict transformation of dynamic-map schemas through `anthropic.WithSchemaWarningHandler`.
 - [x] Per-tool and agent-wide per-step preparation and omission via `AddPreparedTool` and `AddToolsPrepareFunc`, applied in upstream order.
-- [x] Complete Draft 2020-12 tool schemas, including prepared raw schemas and asserted formats, compile before each request and validate arguments before Go decoding or execution.
+- [x] Complete Draft 2020-12 tool schemas, including prepared raw schemas and asserted formats, compile before each request and validate arguments before Go decoding or execution; failures produce persisted structured retry details.
 - [x] Typed semantic argument validators run after JSON Schema validation and Go decoding but before execution for dependency-aware, simple, prepared, and raw-schema tools, with retry and terminal-failure semantics.
 - [x] Agent-wide and per-run function/output retry budgets, plus per-function-tool overrides and `RunContext` retry metadata.
 - [ ] Per-toolset retry defaults and output-tool-specific overrides once those abstractions land.
@@ -217,7 +217,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add per-run typed output specialization, capabilities, tools, and toolsets.
-3. Add structured retry validation errors and the remaining request-part timestamps and metadata.
+3. Add rich tool return values, extra content, and revealed tools.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

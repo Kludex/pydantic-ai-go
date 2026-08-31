@@ -134,28 +134,35 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 	switch part := p.(type) {
 	case SystemPromptPart:
 		wire := wirePart{PartKind: "system-prompt", Content: mustJSON(part.Content), DynamicRef: part.DynamicRef}
-		if !part.Timestamp.IsZero() {
-			timestamp := part.Timestamp
-			wire.Timestamp = &timestamp
-		}
-		return wire, nil
+		return wirePartWithTimestamp(wire, part.Timestamp), nil
 	case UserPromptPart:
 		content, err := marshalUserContent(part)
 		if err != nil {
 			return wirePart{}, err
 		}
-		return wirePart{PartKind: "user-prompt", Content: content}, nil
+		return wirePartWithTimestamp(wirePart{PartKind: "user-prompt", Content: content}, part.Timestamp), nil
 	case ToolReturnPart:
 		content, err := json.Marshal(part.Content)
 		if err != nil {
 			return wirePart{}, fmt.Errorf("ai: marshal tool return content: %w", err)
 		}
-		return wirePart{
+		return wirePartWithTimestamp(wirePart{
 			PartKind: "tool-return", Content: content, ToolName: part.ToolName,
 			ToolCallID: part.ToolCallID, Outcome: part.Outcome, Metadata: part.Metadata,
-		}, nil
+		}, part.Timestamp), nil
 	case RetryPromptPart:
-		return wirePart{PartKind: "retry-prompt", Content: mustJSON(part.Content), ToolName: part.ToolName, ToolCallID: part.ToolCallID}, nil
+		content := mustJSON(part.Content)
+		if part.Errors != nil {
+			var err error
+			content, err = json.Marshal(part.Errors)
+			if err != nil {
+				return wirePart{}, fmt.Errorf("ai: marshal retry validation errors: %w", err)
+			}
+		}
+		wire := wirePart{
+			PartKind: "retry-prompt", Content: content, ToolName: part.ToolName, ToolCallID: part.ToolCallID,
+		}
+		return wirePartWithTimestamp(wire, part.Timestamp), nil
 	default:
 		return wirePart{}, fmt.Errorf("ai: unknown request part type %T", p)
 	}
@@ -259,7 +266,14 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 		}
 		return part, nil
 	case "user-prompt":
-		return unmarshalUserContent(wp.Content)
+		part, err := unmarshalUserContent(wp.Content)
+		if err != nil {
+			return nil, err
+		}
+		if wp.Timestamp != nil {
+			part.Timestamp = *wp.Timestamp
+		}
+		return part, nil
 	case "tool-return":
 		var content any
 		// wp.Content is raw JSON from a document that already parsed,
@@ -267,12 +281,25 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 		if len(wp.Content) > 0 {
 			_ = json.Unmarshal(wp.Content, &content)
 		}
-		return ToolReturnPart{
+		part := ToolReturnPart{
 			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID,
 			Outcome: wp.Outcome, Metadata: wp.Metadata,
-		}, nil
+		}
+		if wp.Timestamp != nil {
+			part.Timestamp = *wp.Timestamp
+		}
+		return part, nil
 	case "retry-prompt":
-		return RetryPromptPart{Content: stringContent(wp.Content), ToolName: wp.ToolName, ToolCallID: wp.ToolCallID}, nil
+		part := RetryPromptPart{ToolName: wp.ToolName, ToolCallID: wp.ToolCallID}
+		if err := json.Unmarshal(wp.Content, &part.Content); err != nil {
+			if err := json.Unmarshal(wp.Content, &part.Errors); err != nil {
+				return nil, fmt.Errorf("ai: unmarshal retry validation errors: %w", err)
+			}
+		}
+		if wp.Timestamp != nil {
+			part.Timestamp = *wp.Timestamp
+		}
+		return part, nil
 	default:
 		return nil, fmt.Errorf("ai: unknown request part kind %q", wp.PartKind)
 	}
@@ -298,6 +325,13 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 	default:
 		return nil, fmt.Errorf("ai: unknown response part kind %q", wp.PartKind)
 	}
+}
+
+func wirePartWithTimestamp(part wirePart, timestamp time.Time) wirePart {
+	if !timestamp.IsZero() {
+		part.Timestamp = &timestamp
+	}
+	return part
 }
 
 func mustJSON(s string) json.RawMessage {

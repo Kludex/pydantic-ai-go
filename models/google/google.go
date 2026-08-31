@@ -301,14 +301,15 @@ func convertRequest(m ai.ModelRequest) ([]content, error) {
 				ID: rp.ToolCallID, Name: rp.ToolName, Response: map[string]any{key: rp.Content},
 			}})
 		case ai.RetryPromptPart:
+			response := rp.ModelResponse()
 			if rp.ToolName != "" {
 				parts = append(parts, part{FunctionResponse: &functionResponse{
 					ID:       rp.ToolCallID,
 					Name:     rp.ToolName,
-					Response: map[string]any{"error": rp.Content},
+					Response: map[string]any{"error": response},
 				}})
 			} else {
-				parts = append(parts, part{Text: rp.Content})
+				parts = append(parts, part{Text: response})
 			}
 		default:
 			return nil, fmt.Errorf("google: unknown request part type %T", p)

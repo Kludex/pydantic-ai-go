@@ -1,6 +1,7 @@
 package schema_test
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -42,6 +43,36 @@ func TestValidator(t *testing.T) {
 	}
 	if err := validator.Validate(map[string]any{"count": 2, "state": "ready", "email": "bad"}); err == nil {
 		t.Fatal("expected format validation error")
+	}
+}
+
+func TestValidationIssues(t *testing.T) {
+	validator, err := schema.Compile(map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"a/b~c": map[string]any{"type": "integer"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = validator.ValidateJSON([]byte(`{"a/b~c":"invalid"}`))
+	issues := schema.ValidationIssues(err)
+	if len(issues) != 1 || issues[0].Keyword != "type" || len(issues[0].Location) != 1 ||
+		issues[0].Location[0] != "a/b~c" || issues[0].Message == "" {
+		t.Fatalf("unexpected validation issues: %+v", issues)
+	}
+	if issues := schema.ValidationIssues(errors.New("decode failure")); issues != nil {
+		t.Fatalf("non-validation error produced issues: %+v", issues)
+	}
+	required, err := schema.Compile(map[string]any{
+		"type": "object", "required": []string{"value"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issues := schema.ValidationIssues(required.Validate(map[string]any{})); len(issues) != 1 || issues[0].Location != nil || issues[0].Keyword != "required" {
+		t.Fatalf("unexpected root validation issue: %+v", issues)
 	}
 }
 

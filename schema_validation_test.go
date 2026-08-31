@@ -40,7 +40,10 @@ func TestOutputToolEnforcesJSONSchema(t *testing.T) {
 		request++
 		if request == 2 {
 			retry := messages[len(messages)-1].(ai.ModelRequest).Parts[0].(ai.RetryPromptPart)
-			if retry.ToolName != params.OutputTool.Name || !strings.Contains(retry.Content, "invalid final result") {
+			if retry.ToolName != params.OutputTool.Name || len(retry.Errors) != 1 ||
+				retry.Errors[0].Type != "enum" || retry.Errors[0].Location[0] != "state" ||
+				retry.Errors[0].Input != "invalid" || retry.Timestamp.IsZero() ||
+				!strings.Contains(retry.ModelResponse(), "1 validation error") {
 				t.Fatalf("unexpected schema retry: %+v", retry)
 			}
 		}
@@ -55,6 +58,51 @@ func TestOutputToolEnforcesJSONSchema(t *testing.T) {
 	result, err := ai.NewAgent[deps, constrainedOutput](model).Run(t.Context(), "go", deps{})
 	if err != nil || result.Output.State != "ready" || request != 2 {
 		t.Fatalf("schema-constrained output failed: result=%+v err=%v requests=%d", result, err, request)
+	}
+}
+
+func TestToolValidationErrorsPreserveArrayLocations(t *testing.T) {
+	request := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request++
+		if request == 3 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+		}
+		if request == 2 {
+			retry := messages[len(messages)-1].(ai.ModelRequest).Parts[0].(ai.RetryPromptPart)
+			if len(retry.Errors) != 1 || len(retry.Errors[0].Location) != 2 ||
+				retry.Errors[0].Location[0] != "items" || retry.Errors[0].Location[1] != 0 ||
+				retry.Errors[0].Input != "invalid" {
+				t.Fatalf("array validation location was not preserved: %+v", retry)
+			}
+		}
+		args := `{"items":["invalid"]}`
+		if request == 2 {
+			args = `{"items":[1]}`
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "batch", ToolCallID: "call", Args: []byte(args),
+		}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	agent.AddRawTool(ai.ToolDefinition{Name: "batch", Schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{"items": map[string]any{
+			"type": "array", "items": map[string]any{"type": "integer"},
+		}},
+		"required": []any{"items"},
+	}}, func(context.Context, json.RawMessage) (any, error) {
+		return "done", nil
+	})
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil || result.Output != "done" || request != 3 {
+		t.Fatalf("array validation retry failed: result=%+v err=%v requests=%d", result, err, request)
+	}
+	toolReturn := result.Messages()[4].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
+	if toolReturn.Timestamp.IsZero() {
+		t.Fatalf("generated tool return has no timestamp: %+v", toolReturn)
 	}
 }
 

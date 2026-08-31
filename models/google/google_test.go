@@ -244,8 +244,9 @@ func TestRetryAndSystemParts(t *testing.T) {
 	if parts[1].(map[string]any)["functionResponse"] == nil {
 		t.Fatalf("tool retry should be a function response: %v", parts[1])
 	}
-	if parts[2].(map[string]any)["text"] != "plain retry" {
-		t.Fatalf("plain retry should be text: %v", parts[2])
+	if text := parts[2].(map[string]any)["text"].(string); !strings.Contains(text, "Validation feedback:\nplain retry") ||
+		!strings.HasSuffix(text, "Fix the errors and try again.") {
+		t.Fatalf("plain retry should be formatted as validation feedback: %v", parts[2])
 	}
 	for index, key := range []string{"result", "error", "error"} {
 		response := parts[index+3].(map[string]any)["functionResponse"].(map[string]any)["response"].(map[string]any)

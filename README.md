@@ -261,7 +261,7 @@ Inside tools and output validators, `rc.Retry` is the current counter for that t
 
 Return `ai.Retryf(...)` when the model should correct the call. Return `ai.ToolFailedf(...)` when the call completed unsuccessfully and the model should adapt instead of retrying. A terminal failure does not consume the tool's retry budget.
 
-Unknown tool names also go back to the model as retry prompts. The prompt lists only tools exposed for that request, so a tool omitted by preparation cannot be executed from a stale call.
+Unknown tool names also go back to the model as retry prompts. The prompt lists only tools exposed for that request, so a tool omitted by preparation cannot be executed from a stale call. JSON Schema failures are retained as structured `ValidationError` values on `RetryPromptPart.Errors`, including the failing location and input. Providers receive the same formatted feedback from `RetryPromptPart.ModelResponse()`.
 
 Use `ai.WithToolTimeout(5 * time.Second)` to give one tool call a deadline. The tool must honor `ctx.Done()`. A tool-specific timeout becomes a retry, while cancellation of the parent run remains `context.Canceled`.
 

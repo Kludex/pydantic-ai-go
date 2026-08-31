@@ -47,8 +47,10 @@ func TestDynamicSystemPromptReevaluatesResumedHistory(t *testing.T) {
 	static := firstRequest.Parts[0].(ai.SystemPromptPart)
 	initial := firstRequest.Parts[1].(ai.SystemPromptPart)
 	dynamic := firstRequest.Parts[2].(ai.SystemPromptPart)
+	user := firstRequest.Parts[3].(ai.UserPromptPart)
 	if static.Content != "Static system prompt." || initial.Content != "Initial one" ||
-		dynamic.Content != "Policy one" || dynamic.DynamicRef != "tenant-policy" || dynamic.Timestamp.IsZero() {
+		dynamic.Content != "Policy one" || dynamic.DynamicRef != "tenant-policy" || dynamic.Timestamp.IsZero() ||
+		user.Timestamp.IsZero() {
 		t.Fatalf("unexpected initial system prompts: %+v", firstRequest.Parts)
 	}
 

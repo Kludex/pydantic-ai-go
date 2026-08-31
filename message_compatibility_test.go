@@ -22,8 +22,10 @@ func TestUnmarshalUpstreamBasicMessageFixture(t *testing.T) {
 		t.Fatalf("expected 4 messages, got %d", len(messages))
 	}
 	request := messages[0].(ai.ModelRequest)
-	if request.Parts[0].(ai.SystemPromptPart).Content != "be nice" {
-		t.Fatalf("unexpected system prompt %+v", request.Parts[0])
+	systemPrompt := request.Parts[0].(ai.SystemPromptPart)
+	userPrompt := request.Parts[1].(ai.UserPromptPart)
+	if systemPrompt.Content != "be nice" || systemPrompt.Timestamp.IsZero() || userPrompt.Timestamp.IsZero() {
+		t.Fatalf("unexpected prompt metadata: system=%+v user=%+v", systemPrompt, userPrompt)
 	}
 	response := messages[1].(ai.ModelResponse)
 	if response.Usage.InputTokens != 10 || response.Usage.OutputTokens != 5 {
@@ -34,8 +36,8 @@ func TestUnmarshalUpstreamBasicMessageFixture(t *testing.T) {
 		t.Fatalf("unexpected tool call %+v", call)
 	}
 	toolReturn := messages[2].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
-	if toolReturn.Outcome != ai.ToolReturnOutcomeSuccess {
-		t.Fatalf("unexpected tool outcome %q", toolReturn.Outcome)
+	if toolReturn.Outcome != ai.ToolReturnOutcomeSuccess || toolReturn.Timestamp.IsZero() {
+		t.Fatalf("unexpected tool return %+v", toolReturn)
 	}
 	if messages[3].(ai.ModelResponse).Text() != "done" {
 		t.Fatalf("unexpected final response %+v", messages[3])
@@ -96,6 +98,31 @@ func TestUnmarshalUpstreamSynthesizedReturnFixture(t *testing.T) {
 	if part.Metadata[ai.SynthesizedToolReturnMetadataKey] != true ||
 		part.Outcome != ai.ToolReturnOutcomeInterrupted {
 		t.Fatalf("unexpected synthesized return fixture: %+v", part)
+	}
+}
+
+func TestUnmarshalUpstreamRetryErrorsFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_retry_errors.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := messages[0].(ai.ModelRequest).Parts[0].(ai.RetryPromptPart)
+	if part.Content != "" || len(part.Errors) != 2 || part.Errors[0].Type != "string_type" ||
+		part.Errors[0].Location[1] != float64(0) || part.Errors[1].Context["gt"] != float64(0) ||
+		part.Timestamp.IsZero() || !strings.Contains(part.ModelResponse(), "2 validation errors") {
+		t.Fatalf("unexpected structured retry: %+v", part)
+	}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"type":"greater_than"`) ||
+		!strings.Contains(string(encoded), `"timestamp":"2026-01-03T04:05:06Z"`) {
+		t.Fatalf("structured retry was not serialized: %s", encoded)
 	}
 }
 

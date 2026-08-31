@@ -104,6 +104,35 @@ func TestInterruptedRequestRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRetryPromptStructuredErrorFailures(t *testing.T) {
+	_, err := ai.MarshalMessages([]ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.RetryPromptPart{Errors: []ai.ValidationError{{Type: "custom", Input: make(chan int)}}},
+	}}})
+	if err == nil || !strings.Contains(err.Error(), "ai: marshal retry validation errors") {
+		t.Fatalf("unexpected marshal error: %v", err)
+	}
+
+	_, err = ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"retry-prompt","content":{}}]}]`))
+	if err == nil || !strings.Contains(err.Error(), "ai: unmarshal retry validation errors") {
+		t.Fatalf("unexpected unmarshal error: %v", err)
+	}
+}
+
+func TestRetryPromptModelResponseFormatting(t *testing.T) {
+	plain := ai.RetryPromptPart{Content: "retry", ToolName: "tool"}.ModelResponse()
+	if plain != "retry\n\nFix the errors and try again." {
+		t.Fatalf("unexpected tool retry formatting: %q", plain)
+	}
+	structured := ai.RetryPromptPart{Errors: []ai.ValidationError{{
+		Type: "required", Message: "missing", Input: map[string]any{"other": true},
+		Context: map[string]any{"hidden": true},
+	}}}.ModelResponse()
+	if strings.Contains(structured, "other") || strings.Contains(structured, "hidden") ||
+		!strings.Contains(structured, "1 validation error") {
+		t.Fatalf("unexpected structured retry formatting: %s", structured)
+	}
+}
+
 func TestUnmarshalUnknownKind(t *testing.T) {
 	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"mystery"}]`)); err == nil {
 		t.Fatal("expected error")

@@ -185,10 +185,11 @@ func convertResponsesRequest(m ai.ModelRequest) ([]responsesInput, error) {
 			}
 			out = append(out, responsesInput{Type: "function_call_output", CallID: part.ToolCallID, Output: content})
 		case ai.RetryPromptPart:
+			content := part.ModelResponse()
 			if part.ToolCallID != "" {
-				out = append(out, responsesInput{Type: "function_call_output", CallID: part.ToolCallID, Output: part.Content})
+				out = append(out, responsesInput{Type: "function_call_output", CallID: part.ToolCallID, Output: content})
 			} else {
-				out = append(out, responsesInput{Role: "user", Content: part.Content})
+				out = append(out, responsesInput{Role: "user", Content: content})
 			}
 		default:
 			return nil, fmt.Errorf("openai: unknown request part type %T", p)

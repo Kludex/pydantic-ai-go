@@ -2,6 +2,7 @@ package ai
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 )
 
@@ -118,8 +119,9 @@ func (SystemPromptPart) requestPartKind() string { return "system-prompt" }
 // UserPromptPart carries user input. Content holds plain text; Contents,
 // when non-empty, holds multimodal items instead and Content is ignored.
 type UserPromptPart struct {
-	Content  string
-	Contents []UserContent
+	Content   string
+	Contents  []UserContent
+	Timestamp time.Time
 }
 
 func (UserPromptPart) requestPartKind() string { return "user-prompt" }
@@ -174,20 +176,56 @@ type ToolReturnPart struct {
 	ToolCallID string
 	Outcome    ToolReturnOutcome
 	Metadata   map[string]any
+	Timestamp  time.Time
 }
 
 func (ToolReturnPart) requestPartKind() string { return "tool-return" }
 
-// RetryPromptPart asks the model to try again, carrying the reason.
-// It is produced by tool argument validation failures, tools returning
-// Retryf errors, and output validation failures.
+// ValidationError is one structured JSON Schema validation failure.
+type ValidationError struct {
+	Type     string         `json:"type"`
+	Location []any          `json:"loc"`
+	Message  string         `json:"msg"`
+	Input    any            `json:"input,omitempty"`
+	Context  map[string]any `json:"ctx,omitempty"`
+	URL      string         `json:"url,omitempty"`
+}
+
+// RetryPromptPart asks the model to try again, carrying either plain content
+// or structured validation errors. Errors takes precedence when non-nil.
 type RetryPromptPart struct {
 	Content    string
+	Errors     []ValidationError
 	ToolName   string
 	ToolCallID string
+	Timestamp  time.Time
 }
 
 func (RetryPromptPart) requestPartKind() string { return "retry-prompt" }
+
+// ModelResponse formats retry feedback for a model.
+func (p RetryPromptPart) ModelResponse() string {
+	description := p.Content
+	if p.Errors != nil {
+		errors := make([]ValidationError, len(p.Errors))
+		copy(errors, p.Errors)
+		for index := range errors {
+			errors[index].Context = nil
+			if p.ToolName == "" && len(errors[index].Location) <= 1 {
+				errors[index].Input = nil
+			}
+		}
+		content, _ := json.MarshalIndent(errors, "", "  ")
+		noun := "errors"
+		if len(errors) == 1 {
+			noun = "error"
+		}
+		description = fmt.Sprintf("%d validation %s:\n```json\n%s\n```", len(errors), noun, content)
+	} else if p.ToolName == "" {
+		description = "Validation feedback:\n" + description
+	}
+	return description + "\n\nFix the errors and try again."
+}
 
 // ResponsePart is one part of a ModelResponse.
 type ResponsePart interface {

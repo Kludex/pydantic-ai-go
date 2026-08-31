@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -166,6 +167,7 @@ func (a *Agent[Deps, Output]) newRun(
 	}
 	requestParts := slices.Clone(interruptedReturns)
 	requestParts = append(requestParts, prompt)
+	requestParts = stampRequestParts(requestParts, time.Now().UTC())
 	r.messages = append(r.messages, ModelRequest{
 		Parts: requestParts, RunID: runID, ConversationID: conversationID,
 	})
@@ -1341,9 +1343,7 @@ func (r *run[Deps, Output]) executeCall(ctx context.Context, call ToolCallPart) 
 			if retryErr := r.countToolRetry(call.ToolName); retryErr != nil {
 				return nil, nil, retryErr
 			}
-			return RetryPromptPart{
-				Content: "invalid arguments: " + err.Error(), ToolName: call.ToolName, ToolCallID: call.ToolCallID,
-			}, nil, nil
+			return validationRetryPrompt(err, call.Args, call.ToolName, call.ToolCallID, "invalid arguments"), nil, nil
 		}
 	}
 	toolRC := *r.rc
@@ -1411,8 +1411,7 @@ func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCal
 			if retryErr := r.countOutputRetry(); retryErr != nil {
 				return nil, nil, retryErr
 			}
-			msg := fmt.Sprintf("invalid final result: %v", err)
-			return RetryPromptPart{Content: msg, ToolName: call.ToolName, ToolCallID: call.ToolCallID}, nil, nil
+			return validationRetryPrompt(err, call.Args, call.ToolName, call.ToolCallID, "invalid final result"), nil, nil
 		}
 	}
 	if err := json.Unmarshal(call.Args, &out); err != nil {
@@ -1456,7 +1455,8 @@ func (r *run[Deps, Output]) finalizeText(ctx context.Context, resp *ModelRespons
 				if retryErr := r.countOutputRetry(); retryErr != nil {
 					return nil, nil, retryErr
 				}
-				return nil, &RetryPromptPart{Content: fmt.Sprintf("invalid JSON output: %v", err)}, nil
+				retry := validationRetryPrompt(err, []byte(resp.Text()), "", "", "invalid JSON output")
+				return nil, &retry, nil
 			}
 		}
 		if err := json.Unmarshal([]byte(resp.Text()), &out); err != nil {
@@ -1498,10 +1498,73 @@ func (r *run[Deps, Output]) validate(
 }
 
 func (r *run[Deps, Output]) appendRequest(parts []RequestPart, state RequestState) {
+	timestamp := time.Now().UTC()
 	r.messages = append(r.messages, ModelRequest{
-		Parts: parts, Timestamp: time.Now().UTC(), RunID: r.rc.RunID,
+		Parts: stampRequestParts(parts, timestamp), Timestamp: timestamp, RunID: r.rc.RunID,
 		ConversationID: r.rc.ConversationID, State: state,
 	})
+}
+
+func stampRequestParts(parts []RequestPart, timestamp time.Time) []RequestPart {
+	stamped := slices.Clone(parts)
+	for index, requestPart := range stamped {
+		switch part := requestPart.(type) {
+		case UserPromptPart:
+			if part.Timestamp.IsZero() {
+				part.Timestamp = timestamp
+			}
+			stamped[index] = part
+		case ToolReturnPart:
+			if part.Timestamp.IsZero() {
+				part.Timestamp = timestamp
+			}
+			stamped[index] = part
+		case RetryPromptPart:
+			if part.Timestamp.IsZero() {
+				part.Timestamp = timestamp
+			}
+			stamped[index] = part
+		}
+	}
+	return stamped
+}
+
+func validationRetryPrompt(err error, raw json.RawMessage, toolName, toolCallID, prefix string) RetryPromptPart {
+	issues := schema.ValidationIssues(err)
+	if len(issues) == 0 {
+		return RetryPromptPart{
+			Content: prefix + ": " + err.Error(), ToolName: toolName, ToolCallID: toolCallID,
+			Timestamp: time.Now().UTC(),
+		}
+	}
+	decoder := json.NewDecoder(strings.NewReader(string(raw)))
+	decoder.UseNumber()
+	var input any
+	_ = decoder.Decode(&input)
+	validationErrors := make([]ValidationError, len(issues))
+	for index, issue := range issues {
+		location := make([]any, len(issue.Location))
+		value := input
+		for partIndex, part := range issue.Location {
+			location[partIndex] = part
+			switch current := value.(type) {
+			case map[string]any:
+				value = current[part]
+			case []any:
+				itemIndex, parseErr := strconv.Atoi(part)
+				if parseErr == nil && itemIndex >= 0 && itemIndex < len(current) {
+					location[partIndex] = itemIndex
+					value = current[itemIndex]
+				}
+			}
+		}
+		validationErrors[index] = ValidationError{
+			Type: issue.Keyword, Location: location, Message: issue.Message, Input: value,
+		}
+	}
+	return RetryPromptPart{
+		Errors: validationErrors, ToolName: toolName, ToolCallID: toolCallID, Timestamp: time.Now().UTC(),
+	}
 }
 
 func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) {

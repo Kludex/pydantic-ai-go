@@ -297,10 +297,11 @@ func convertRequest(m ai.ModelRequest) ([]messageParam, error) {
 				IsError: p.Outcome == ai.ToolReturnOutcomeFailed || p.Outcome == ai.ToolReturnOutcomeInterrupted,
 			})
 		case ai.RetryPromptPart:
+			content := p.ModelResponse()
 			if p.ToolCallID != "" {
-				blocks = append(blocks, contentBlock{Type: "tool_result", ToolUseID: p.ToolCallID, Content: p.Content, IsError: true})
+				blocks = append(blocks, contentBlock{Type: "tool_result", ToolUseID: p.ToolCallID, Content: content, IsError: true})
 			} else {
-				blocks = append(blocks, contentBlock{Type: "text", Text: p.Content})
+				blocks = append(blocks, contentBlock{Type: "text", Text: content})
 			}
 		default:
 			return nil, fmt.Errorf("anthropic: unknown request part type %T", part)

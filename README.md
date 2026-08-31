@@ -670,6 +670,8 @@ You can enqueue user content, request parts, complete requests, and complete res
 
 Each non-empty call returns an ID. Streams emit `EnqueuedMessagesEvent` with that ID and detached copies of the messages after run, conversation, and timestamp fields are filled. An `asap` message arriving during final validation redirects the run into another request instead of being dropped. A `when_idle` message redirects only after the current output candidate is complete.
 
+If the run pauses for approval or external execution, undelivered groups are stored in response metadata under `PendingMessagesMetadataKey`. They survive `MarshalMessages` and `UnmarshalMessages`, including repeated deferred pauses and resumable cancellation histories. On resume, deferred results are applied before `asap` groups are delivered. `when_idle` groups remain queued until the resumed run can finish.
+
 ## Multimodal input
 
 `RunParts` sends images and files alongside text:

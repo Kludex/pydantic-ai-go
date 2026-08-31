@@ -238,6 +238,14 @@ func (a *Agent[Deps, Output]) newRun(
 		toolNames[tool.def.Name] = struct{}{}
 	}
 	history := dropOrphanedToolResults(cfg.history)
+	restoredPending, err := restorePendingMessages(history)
+	if err != nil {
+		cancellation.finish()
+		return nil, err
+	}
+	for _, pending := range restoredPending {
+		r.pendingMessages.add(pending)
+	}
 	var interruptedReturns []RequestPart
 	var resumeSeed *ModelResponse
 	if cfg.resumeSuspended {
@@ -297,7 +305,6 @@ func (a *Agent[Deps, Output]) newRun(
 	if cfg.promptedTemplate != nil {
 		promptedTemplate = *cfg.promptedTemplate
 	}
-	var err error
 	r.params, err = a.buildParams(
 		r.staticInstructions, settings, outputMode, r.outputTool, promptedTemplate, r.tools,
 	)
@@ -903,8 +910,10 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 // modelRequest is the model-request interception point: tracing plus
 // capability middleware (ModelRequestWrapper), outermost first.
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
-	if err := r.deliverPendingMessages(PendingMessageASAP); err != nil {
-		return nil, err
+	if r.deferredResults == nil {
+		if err := r.deliverPendingMessages(PendingMessageASAP); err != nil {
+			return nil, err
+		}
 	}
 	if err := r.selectModel(ctx); err != nil {
 		return nil, err
@@ -976,6 +985,9 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		if err := r.refreshRevealedDeferredTools(&params); err != nil {
 			return nil, err
 		}
+	}
+	if err := r.deliverPendingMessages(PendingMessageASAP); err != nil {
+		return nil, err
 	}
 	requestMessages := r.messages
 	if r.resumeSeed != nil {
@@ -1891,7 +1903,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		}
 		if resp == nil {
 			if r.pendingDeferred != nil {
-				return r.deferredResult(*r.pendingDeferred), nil
+				return r.deferredResult(*r.pendingDeferred)
 			}
 			return nil, &UnexpectedModelBehaviorError{Message: "model request returned no response"}
 		}
@@ -2003,7 +2015,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return r.result(*final), nil
 		}
 		if r.pendingDeferred != nil {
-			return r.deferredResult(*r.pendingDeferred), nil
+			return r.deferredResult(*r.pendingDeferred)
 		}
 	}
 }
@@ -3024,13 +3036,16 @@ func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
 	return &RunResult[Output]{Output: out, usage: usage, messages: r.messages, newMessages: r.newMessages}
 }
 
-func (r *run[Deps, Output]) deferredResult(requests DeferredToolRequests) *RunResult[Output] {
+func (r *run[Deps, Output]) deferredResult(requests DeferredToolRequests) (*RunResult[Output], error) {
+	if err := persistPendingMessages(r.messages, r.pendingMessages); err != nil {
+		return nil, err
+	}
 	usage := r.usage
 	usage.ToolCalls = int(r.toolCalls.Load())
 	requests = requests.Clone()
 	return &RunResult[Output]{
 		usage: usage, messages: r.messages, newMessages: r.newMessages, deferred: &requests,
-	}
+	}, nil
 }
 
 func (r *run[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
@@ -3341,7 +3356,12 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 	if errors.Is(cause, ErrRunCancelled) {
 		usage := r.usage
 		usage.ToolCalls = int(r.toolCalls.Load())
-		return nil, &RunCancelledError{messages: slices.Clone(r.messages), usage: usage}
+		cancelled := &RunCancelledError{messages: slices.Clone(r.messages), usage: usage}
+		if persistErr := persistPendingMessages(r.messages, r.pendingMessages); persistErr != nil {
+			return nil, errors.Join(cancelled, persistErr)
+		}
+		cancelled.messages = slices.Clone(r.messages)
+		return nil, cancelled
 	}
 	if cause != nil {
 		return nil, cause
@@ -3363,7 +3383,7 @@ func runOutcomeFromResult[Output any](result *RunResult[Output]) RunOutcome {
 
 func (r *run[Deps, Output]) resultFromRunOutcome(outcome RunOutcome) (*RunResult[Output], error) {
 	if outcome.Deferred != nil {
-		return r.deferredResult(outcome.Deferred.Clone()), nil
+		return r.deferredResult(outcome.Deferred.Clone())
 	}
 	if outcome.Output == nil {
 		var zero Output

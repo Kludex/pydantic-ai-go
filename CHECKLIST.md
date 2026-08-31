@@ -58,7 +58,7 @@ Status:
 - [x] Rich `ToolReturn` values separate the provider-facing return value, trailing multimodal user content, local metadata, and deferred-tool reveals while preserving provider-valid concurrent ordering.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, signature, provider-metadata, and tool-argument deltas across bundled providers and fallback replay.
 - [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, `FinalResultEvent`, and metadata-bearing `FinishEvent` with typed, applicable deltas.
-- [x] Concurrent-safe `RunContext.Enqueue`, `EnqueueWhenIdle`, and explicit priorities inject grouped user content, request parts, or complete messages; `asap` drains before the next request or redirects final output, `when_idle` redirects only at termination, and `EnqueuedMessagesEvent` carries stamped detached messages.
+- [x] Concurrent-safe `RunContext.Enqueue`, `EnqueueWhenIdle`, and explicit priorities inject grouped user content, request parts, or complete messages; `asap` drains before the next request or redirects final output, `when_idle` redirects only at termination, and `EnqueuedMessagesEvent` carries stamped detached messages. Undelivered groups persist through serialized and repeated deferred pauses and resumable cancellation histories, then drain only after deferred results resolve.
 
 ### Tools and toolsets
 
@@ -231,7 +231,7 @@ Status:
 
 ## Next work
 
-1. Preserve queued messages across deferred pauses, then expose external enqueue through an iterative/manual run driver.
+1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
 2. Audit upstream node lifecycle semantics against the plain loop and document the focused request/tool/output replacements.
 3. Add provider-managed search for Anthropic and OpenAI Responses; OpenAI Responses client search already uses native wire items in streaming and non-streaming requests.
 4. Add `CompactionPart` and reset derived deferred-tool visibility at compaction boundaries.

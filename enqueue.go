@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"slices"
 	"sync"
@@ -16,6 +17,10 @@ type EnqueueItem interface {
 
 // PendingMessagePriority controls when an enqueued message enters history.
 type PendingMessagePriority string
+
+// PendingMessagesMetadataKey identifies deferred-run metadata that preserves
+// messages queued for later delivery.
+const PendingMessagesMetadataKey = "pydantic_ai_go_pending_messages"
 
 const (
 	// PendingMessageASAP delivers before the next model request, or redirects
@@ -119,6 +124,17 @@ func (q *pendingMessageQueue) add(message pendingMessage) {
 	q.pending = append(q.pending, message)
 }
 
+func (q *pendingMessageQueue) snapshot() []pendingMessage {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	messages := make([]pendingMessage, len(q.pending))
+	for index, message := range q.pending {
+		message.messages = cloneModelMessages(message.messages)
+		messages[index] = message
+	}
+	return messages
+}
+
 func (q *pendingMessageQueue) drain(priority PendingMessagePriority) []pendingMessage {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -173,6 +189,98 @@ func (r *run[Deps, Output]) deliverPendingMessageGroups(groups []pendingMessage)
 		}
 	}
 	return nil
+}
+
+type persistedPendingMessage struct {
+	EnqueueID string                 `json:"enqueue_id"`
+	Priority  PendingMessagePriority `json:"priority"`
+	Messages  string                 `json:"messages"`
+}
+
+func persistPendingMessages(messages []ModelMessage, queue *pendingMessageQueue) error {
+	pending := queue.snapshot()
+	if len(pending) == 0 {
+		return nil
+	}
+	persisted := make([]persistedPendingMessage, len(pending))
+	for index, message := range pending {
+		encoded, err := MarshalMessages(message.messages)
+		if err != nil {
+			return fmt.Errorf("ai: persist pending messages: %w", err)
+		}
+		persisted[index] = persistedPendingMessage{
+			EnqueueID: message.id, Priority: message.priority, Messages: string(encoded),
+		}
+	}
+	encoded, _ := json.Marshal(persisted)
+	for index := len(messages) - 1; index >= 0; index-- {
+		response, ok := messages[index].(ModelResponse)
+		if !ok {
+			continue
+		}
+		metadata := make(map[string]any, len(response.Metadata)+1)
+		for key, value := range response.Metadata {
+			metadata[key] = cloneSchemaValue(value)
+		}
+		metadata[PendingMessagesMetadataKey] = string(encoded)
+		response.Metadata = metadata
+		messages[index] = response
+		return nil
+	}
+	// A queue is reachable only from a run context created after a model response.
+	return fmt.Errorf("ai: persist pending messages: deferred history has no model response") // pragma: no cover
+}
+
+func restorePendingMessages(messages []ModelMessage) ([]pendingMessage, error) {
+	for index := len(messages) - 1; index >= 0; index-- {
+		response, ok := messages[index].(ModelResponse)
+		if !ok || response.Metadata == nil {
+			continue
+		}
+		value, exists := response.Metadata[PendingMessagesMetadataKey]
+		if !exists {
+			continue
+		}
+		encoded, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf(
+				"ai: restore pending messages: metadata has type %T, expected string", value,
+			)
+		}
+		var persisted []persistedPendingMessage
+		if err := json.Unmarshal([]byte(encoded), &persisted); err != nil {
+			return nil, fmt.Errorf("ai: restore pending messages: %w", err)
+		}
+		pending := make([]pendingMessage, len(persisted))
+		for pendingIndex, item := range persisted {
+			if item.EnqueueID == "" {
+				return nil, fmt.Errorf("ai: restore pending messages: enqueue ID must not be empty")
+			}
+			if item.Priority != PendingMessageASAP && item.Priority != PendingMessageWhenIdle {
+				return nil, fmt.Errorf(
+					"ai: restore pending messages: invalid priority %q", item.Priority,
+				)
+			}
+			decoded, err := UnmarshalMessages([]byte(item.Messages))
+			if err != nil {
+				return nil, fmt.Errorf("ai: restore pending messages: %w", err)
+			}
+			if len(decoded) == 0 {
+				return nil, fmt.Errorf("ai: restore pending messages: message group must not be empty")
+			}
+			if _, ok := decoded[len(decoded)-1].(ModelRequest); !ok {
+				return nil, fmt.Errorf("ai: restore pending messages: message group must end with a ModelRequest")
+			}
+			pending[pendingIndex] = pendingMessage{
+				id: item.EnqueueID, priority: item.Priority, messages: decoded,
+			}
+		}
+		response.Metadata = cloneSchemaMap(response.Metadata)
+		delete(response.Metadata, PendingMessagesMetadataKey)
+		messages[index] = response
+		return pending, nil
+	}
+	return nil, nil
 }
 
 func stampEnqueuedMessages(messages []ModelMessage, runID, conversationID string) []ModelMessage {

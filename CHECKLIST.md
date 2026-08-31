@@ -83,7 +83,7 @@ Status:
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
 - [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
-- [ ] Approval-required toolset wrapper.
+- [x] `RequireApprovalToolset` wraps all or selected original tool names while forwarding instructions and run/step/open/close lifecycle.
 - [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.
 - [x] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history.
 - [x] Local `search_tools` discovery through `WithToolSearch`, with typed results, configurable detached search callbacks, word-bounded relevance, undiscovered-first ranking, result limits, and independent retries.
@@ -228,5 +228,5 @@ Status:
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add provider-managed tool search and native OpenAI Responses deferred-tool streaming; non-streaming client search and additions now use native wire items.
 3. Add dynamic per-call approval/defer decisions and an inline deferred-call handler on top of the explicit pause/resume values.
-4. Add the approval-required toolset wrapper and streamed inline result event.
+4. Add the inline deferred-call handler and its streamed result event; the static approval-required toolset wrapper is complete.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.

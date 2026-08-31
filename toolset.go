@@ -106,6 +106,19 @@ func DeferLoadingToolset[Deps any](toolset Toolset[Deps], names ...string) Tools
 	return deferredToolset[Deps]{toolset: toolset, names: selected}
 }
 
+// RequireApprovalToolset requires approval for every wrapped tool, or only
+// the selected original names when names are provided.
+func RequireApprovalToolset[Deps any](toolset Toolset[Deps], names ...string) Toolset[Deps] {
+	var selected map[string]struct{}
+	if len(names) > 0 {
+		selected = make(map[string]struct{}, len(names))
+		for _, name := range names {
+			selected[name] = struct{}{}
+		}
+	}
+	return approvalRequiredToolset[Deps]{toolset: toolset, names: selected}
+}
+
 // SetToolsetMetadata merges metadata onto every tool. New values take precedence.
 func SetToolsetMetadata[Deps any](toolset Toolset[Deps], metadata map[string]any) Toolset[Deps] {
 	return metadataToolset[Deps]{toolset: toolset, metadata: cloneSchemaMap(metadata)}
@@ -397,6 +410,32 @@ func (t deferredToolset[Deps]) Tools(
 }
 
 func (t deferredToolset[Deps]) ToolsetInstructions(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]InstructionPart, error) {
+	return resolveToolsetInstructions(ctx, rc, t.toolset)
+}
+
+type approvalRequiredToolset[Deps any] struct {
+	toolset Toolset[Deps]
+	names   map[string]struct{}
+}
+
+func (t approvalRequiredToolset[Deps]) Tools(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]Tool[Deps], error) {
+	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
+	if err != nil {
+		return nil, err
+	}
+	for index := range tools {
+		if _, selected := t.names[tools[index].entry.def.Name]; t.names == nil || selected {
+			tools[index].entry.def.RequiresApproval = true
+		}
+	}
+	return tools, nil
+}
+
+func (t approvalRequiredToolset[Deps]) ToolsetInstructions(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]InstructionPart, error) {
 	return resolveToolsetInstructions(ctx, rc, t.toolset)

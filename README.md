@@ -235,7 +235,7 @@ publicWeatherTools := ai.FilterToolset(weatherTools, func(
 agent.AddToolset(ai.PrefixToolset(publicWeatherTools, "weather"))
 ```
 
-The model sees `weather_get_weather`, while the function receives `get_weather` through `RunContext.ToolName`. You can also use `CombineToolsets`, `RenameToolset`, `PrepareToolset`, and `SetToolsetMetadata`. `WithToolsetMaxRetries` and `WithToolsetTimeout` provide defaults without replacing explicit tool options. Toolsets list tools and contribute optional instructions before each model step. Pass them through `WithRunToolsets` to scope them to one run.
+The model sees `weather_get_weather`, while the function receives `get_weather` through `RunContext.ToolName`. You can also use `CombineToolsets`, `RenameToolset`, `PrepareToolset`, and `SetToolsetMetadata`. `RequireApprovalToolset` requires approval for every wrapped tool or a selected set of original names. `WithToolsetMaxRetries` and `WithToolsetTimeout` provide defaults without replacing explicit tool options. Toolsets list tools and contribute optional instructions before each model step. Pass them through `WithRunToolsets` to scope them to one run.
 
 Use `WithDeferredLoading()` on one tool or wrap a collection with `DeferLoadingToolset`. Deferred definitions remain hidden until `ToolReturn.Tools` reveals them. The first premature call to each hidden tool receives a free availability correction, so it does not consume the budget needed by a later valid call. Reveals are deduplicated in model-call order and persisted as `ToolAvailabilityDeltaPart`, so resumed histories retain the same visibility.
 

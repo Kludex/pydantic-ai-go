@@ -86,6 +86,12 @@ func openWrappedToolset[Deps any](
 			wrapper.toolset = toolset
 			return wrapper
 		}
+	case approvalRequiredToolset[Deps]:
+		wrapped = wrapper.toolset
+		replace = func(toolset Toolset[Deps]) Toolset[Deps] {
+			wrapper.toolset = toolset
+			return wrapper
+		}
 	case toolSearchToolset[Deps]:
 		wrapped = wrapper.toolset
 		replace = func(toolset Toolset[Deps]) Toolset[Deps] {

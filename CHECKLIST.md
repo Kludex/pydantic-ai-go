@@ -41,8 +41,10 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, response/part-metadata, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
-- [~] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging. Legacy dynamic system-prompt IDs and history reevaluation remain.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, response/part-metadata, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
+- [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
+- [~] System-prompt timestamps are preserved. User-prompt, tool-return, and retry-prompt timestamps and remaining request-part metadata still need parity.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
 - [ ] Compaction and builtin-tool return parts.
@@ -215,7 +217,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add per-run typed output specialization, capabilities, tools, and toolsets.
-3. Add stable persisted instruction IDs and reevaluate dynamic instructions when resuming history.
+3. Add structured retry validation errors and the remaining request-part timestamps and metadata.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.
 6. Add MCP once raw/dynamic tool lifecycle and deferred calls are stable.

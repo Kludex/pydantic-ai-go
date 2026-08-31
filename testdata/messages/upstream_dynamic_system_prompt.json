@@ -1,0 +1,24 @@
+[
+  {
+    "parts": [
+      {
+        "content": "Policy tenant-a",
+        "timestamp": "2026-01-02T03:04:05Z",
+        "dynamic_ref": "tenant-policy",
+        "part_kind": "system-prompt"
+      },
+      {
+        "content": "hello",
+        "timestamp": "2026-01-02T03:04:05Z",
+        "part_kind": "user-prompt"
+      }
+    ],
+    "timestamp": null,
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

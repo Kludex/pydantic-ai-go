@@ -99,6 +99,29 @@ func TestUnmarshalUpstreamSynthesizedReturnFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamDynamicSystemPromptFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_dynamic_system_prompt.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := messages[0].(ai.ModelRequest).Parts[0].(ai.SystemPromptPart)
+	if part.Content != "Policy tenant-a" || part.DynamicRef != "tenant-policy" || part.Timestamp.IsZero() {
+		t.Fatalf("unexpected dynamic system prompt: %+v", part)
+	}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"dynamic_ref":"tenant-policy"`) ||
+		!strings.Contains(string(encoded), `"timestamp":"2026-01-02T03:04:05Z"`) {
+		t.Fatalf("dynamic system prompt metadata was not serialized: %s", encoded)
+	}
+}
+
 func TestUnmarshalUpstreamPartMetadataFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/messages/upstream_part_metadata.json")
 	if err != nil {

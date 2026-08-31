@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"sync/atomic"
 )
 
@@ -15,6 +16,8 @@ type Agent[Deps, Output any] struct {
 	model              Model
 	instructions       string
 	instructionsFuncs  []InstructionsFunc[Deps]
+	systemPrompts      []string
+	systemPromptFuncs  []systemPromptRunner[Deps]
 	modelSettingsFuncs []ModelSettingsFunc[Deps]
 	modelSelectors     []ModelSelectorFunc[Deps]
 	modelIDResolvers   []ModelIDResolverFunc[Deps]
@@ -42,6 +45,12 @@ type toolEntry[Deps any] struct {
 	prepare ToolPrepareFunc[Deps]
 }
 
+type systemPromptRunner[Deps any] struct {
+	id      string
+	fn      InstructionsFunc[Deps]
+	dynamic bool
+}
+
 // NewAgent creates an agent backed by model. Model may be nil when an agent
 // selector, capability selector, or per-run model always supplies one.
 func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output] {
@@ -53,6 +62,7 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		opt(&cfg)
 	}
 	a.instructions = cfg.instructions
+	a.systemPrompts = slices.Clone(cfg.systemPrompts)
 	a.settings = cfg.settings.Clone()
 	a.usageLimits = cfg.limits
 	a.outputMode = cfg.outputMode
@@ -103,6 +113,29 @@ type InstructionsFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps]) 
 func (a *Agent[Deps, Output]) AddInstructionsFunc(fn InstructionsFunc[Deps]) {
 	a.checkNotStarted()
 	a.instructionsFuncs = append(a.instructionsFuncs, fn)
+}
+
+// AddSystemPromptFunc registers a legacy system prompt evaluated when a new
+// conversation starts. Prefer AddInstructionsFunc for new applications.
+func (a *Agent[Deps, Output]) AddSystemPromptFunc(fn InstructionsFunc[Deps]) {
+	a.checkNotStarted()
+	a.systemPromptFuncs = append(a.systemPromptFuncs, systemPromptRunner[Deps]{fn: fn})
+}
+
+// AddDynamicSystemPromptFunc registers a legacy system prompt under a stable
+// application ID. Matching parts in resumed history are reevaluated with the
+// new run context. IDs must remain stable across application versions.
+func (a *Agent[Deps, Output]) AddDynamicSystemPromptFunc(id string, fn InstructionsFunc[Deps]) {
+	if id == "" {
+		panic("ai: dynamic system prompt ID must not be empty")
+	}
+	a.checkNotStarted()
+	for _, runner := range a.systemPromptFuncs {
+		if runner.dynamic && runner.id == id {
+			panic(fmt.Sprintf("ai: duplicate dynamic system prompt ID %q", id))
+		}
+	}
+	a.systemPromptFuncs = append(a.systemPromptFuncs, systemPromptRunner[Deps]{id: id, fn: fn, dynamic: true})
 }
 
 // ModelSettingsFunc returns settings to merge over settings resolved by
@@ -189,6 +222,7 @@ type Option func(*config)
 
 type config struct {
 	instructions    string
+	systemPrompts   []string
 	settings        ModelSettings
 	limits          UsageLimits
 	retryLimits     *RetryLimits
@@ -251,9 +285,15 @@ func WithSequentialToolExecution() Option {
 	return func(c *config) { c.sequentialTools = true }
 }
 
-// WithInstructions sets the static system instructions.
+// WithInstructions sets the static instructions sent with every model request.
 func WithInstructions(instructions string) Option {
 	return func(c *config) { c.instructions = instructions }
+}
+
+// WithSystemPrompt appends a legacy system prompt to the first request in a
+// conversation. Prefer WithInstructions for new applications.
+func WithSystemPrompt(prompt string) Option {
+	return func(c *config) { c.systemPrompts = append(c.systemPrompts, prompt) }
 }
 
 // WithModelSettings sets default model settings for every request.

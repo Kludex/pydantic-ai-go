@@ -75,6 +75,8 @@ type wirePart struct {
 	Args            json.RawMessage   `json:"args,omitempty"`
 	ID              string            `json:"id,omitempty"`
 	Signature       string            `json:"signature,omitempty"`
+	DynamicRef      string            `json:"dynamic_ref,omitempty"`
+	Timestamp       *time.Time        `json:"timestamp,omitempty"`
 	ProviderName    string            `json:"provider_name,omitempty"`
 	ProviderDetails map[string]any    `json:"provider_details,omitempty"`
 	Outcome         ToolReturnOutcome `json:"outcome,omitempty"`
@@ -131,7 +133,12 @@ func marshalMessage(m ModelMessage) ([]byte, error) {
 func marshalRequestPart(p RequestPart) (wirePart, error) {
 	switch part := p.(type) {
 	case SystemPromptPart:
-		return wirePart{PartKind: "system-prompt", Content: mustJSON(part.Content)}, nil
+		wire := wirePart{PartKind: "system-prompt", Content: mustJSON(part.Content), DynamicRef: part.DynamicRef}
+		if !part.Timestamp.IsZero() {
+			timestamp := part.Timestamp
+			wire.Timestamp = &timestamp
+		}
+		return wire, nil
 	case UserPromptPart:
 		content, err := marshalUserContent(part)
 		if err != nil {
@@ -246,7 +253,11 @@ func unmarshalMessage(data []byte) (ModelMessage, error) {
 func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 	switch wp.PartKind {
 	case "system-prompt":
-		return SystemPromptPart{Content: stringContent(wp.Content)}, nil
+		part := SystemPromptPart{Content: stringContent(wp.Content), DynamicRef: wp.DynamicRef}
+		if wp.Timestamp != nil {
+			part.Timestamp = *wp.Timestamp
+		}
+		return part, nil
 	case "user-prompt":
 		return unmarshalUserContent(wp.Content)
 	case "tool-return":

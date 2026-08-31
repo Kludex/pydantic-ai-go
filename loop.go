@@ -408,6 +408,7 @@ type run[Deps, Output any] struct {
 	currentOutputTool      *ToolDefinition
 	currentOutputValidator *schema.Validator
 	staticInstructions     []InstructionPart
+	systemPromptsPrepared  bool
 	runSettings            *ModelSettings
 	runSettingsFuncs       []erasedModelSettingsFunc
 	runInstructionsFuncs   []erasedInstructionsFunc
@@ -687,6 +688,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	rc.MaxRetries = r.retryLimits.Output
 	settings, err := r.prepareModelSettings(ctx, &rc)
 	if err != nil {
+		return ModelRequestParams{}, err
+	}
+	if err := r.prepareSystemPrompts(ctx, &rc); err != nil {
 		return ModelRequestParams{}, err
 	}
 	instructionParts, err := r.prepareInstructions(ctx, &rc)
@@ -1626,6 +1630,76 @@ func (r *run[Deps, Output]) prepareModelSettings(
 	rc.ModelSettings = settings
 	r.rc.ModelSettings = settings
 	return settings, nil
+}
+
+func (r *run[Deps, Output]) prepareSystemPrompts(ctx context.Context, rc *RunContext[Deps]) error {
+	if r.systemPromptsPrepared {
+		return nil
+	}
+	r.systemPromptsPrepared = true
+	runners := make(map[string]systemPromptRunner[Deps])
+	for _, runner := range r.agent.systemPromptFuncs {
+		if runner.dynamic {
+			runners[runner.id] = runner
+		}
+	}
+	for messageIndex := range r.newMessages {
+		request, ok := r.messages[messageIndex].(ModelRequest)
+		if !ok {
+			continue
+		}
+		parts := slices.Clone(request.Parts)
+		for partIndex, requestPart := range parts {
+			part, ok := requestPart.(SystemPromptPart)
+			if !ok || part.DynamicRef == "" {
+				continue
+			}
+			runner, ok := runners[part.DynamicRef]
+			if !ok {
+				continue
+			}
+			content, err := runner.fn(ctx, rc)
+			if err != nil {
+				return fmt.Errorf("ai: dynamic system prompt %q: %w", part.DynamicRef, err)
+			}
+			parts[partIndex] = SystemPromptPart{
+				Content: content, Timestamp: time.Now().UTC(), DynamicRef: part.DynamicRef,
+			}
+		}
+		request.Parts = parts
+		r.messages[messageIndex] = request
+	}
+	if r.newMessages > 0 {
+		return nil
+	}
+	parts := make([]RequestPart, 0, len(r.agent.systemPrompts)+len(r.agent.systemPromptFuncs))
+	for _, content := range r.agent.systemPrompts {
+		parts = append(parts, SystemPromptPart{Content: content, Timestamp: time.Now().UTC()})
+	}
+	for _, runner := range r.agent.systemPromptFuncs {
+		content, err := runner.fn(ctx, rc)
+		if err != nil {
+			if runner.dynamic {
+				return fmt.Errorf("ai: dynamic system prompt %q: %w", runner.id, err)
+			}
+			return fmt.Errorf("ai: system prompt: %w", err)
+		}
+		if content == "" && !runner.dynamic {
+			continue
+		}
+		part := SystemPromptPart{Content: content, Timestamp: time.Now().UTC()}
+		if runner.dynamic {
+			part.DynamicRef = runner.id
+		}
+		parts = append(parts, part)
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	request := r.messages[len(r.messages)-1].(ModelRequest)
+	request.Parts = append(parts, request.Parts...)
+	r.messages[len(r.messages)-1] = request
+	return nil
 }
 
 func (r *run[Deps, Output]) prepareInstructions(

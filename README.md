@@ -83,6 +83,19 @@ result, err := agent.Run(
 
 Run settings merge field by field. Bundled models accept provider-level defaults through `openai.WithDefaultSettings`, `anthropic.WithDefaultSettings`, and `google.WithDefaultSettings`. After model selection, settings resolve in model, agent, capability, then run order. Dynamic callbacks run before every model request, so they can adapt after tool calls and retries. Each callback sees prior layers through `RunContext.ModelSettings`. The effective joined instructions are persisted on every sent `ModelRequest`, including middleware changes, so serialized histories retain request context. A zero `UsageLimits` value disables agent-level limits for that run.
 
+Prefer instructions for new applications. If you resume histories that use legacy system prompts, register a stable application ID so the prompt can be reevaluated with the new dependencies:
+
+```go
+agent.AddDynamicSystemPromptFunc("tenant-policy", func(
+	_ context.Context,
+	rc *ai.RunContext[Deps],
+) (string, error) {
+	return "Use " + rc.Deps.DefaultUnit + " for temperatures.", nil
+})
+```
+
+The ID is serialized as `SystemPromptPart.DynamicRef`. Keep it stable across deployments. A resumed run updates every matching part after selecting the model, without duplicating system prompts in the new request.
+
 ## Model selection
 
 Use `AddModelSelector` when later steps need a different model:

@@ -104,9 +104,13 @@ type RequestPart interface {
 	requestPartKind() string
 }
 
-// SystemPromptPart carries the system prompt / instructions.
+// SystemPromptPart carries a legacy system prompt. Prefer instructions for
+// new applications. DynamicRef identifies a registered dynamic prompt that
+// is reevaluated when serialized history is resumed.
 type SystemPromptPart struct {
-	Content string
+	Content    string
+	Timestamp  time.Time
+	DynamicRef string
 }
 
 func (SystemPromptPart) requestPartKind() string { return "system-prompt" }

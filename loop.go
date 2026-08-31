@@ -891,74 +891,156 @@ func (r *run[Deps, Output]) setCurrentTools(params ModelRequestParams) {
 func (r *run[Deps, Output]) resolveDeferredToolResults(
 	ctx context.Context, results DeferredToolResults,
 ) ([]RequestPart, error) {
-	pending := unresolvedToolCalls(r.messages)
+	parts, _, err := r.applyDeferredToolResults(ctx, unresolvedToolCalls(r.messages), results, true)
+	return parts, err
+}
+
+func (r *run[Deps, Output]) applyDeferredToolResults(
+	ctx context.Context,
+	pending []ToolCallPart,
+	results DeferredToolResults,
+	requireAll bool,
+) ([]RequestPart, map[string]struct{}, error) {
 	pendingByID := make(map[string]ToolCallPart, len(pending))
 	for _, call := range pending {
 		if call.ToolCallID == "" {
-			return nil, fmt.Errorf("ai: pending tool call %q has an empty tool call ID", call.ToolName)
+			return nil, nil, fmt.Errorf("ai: pending tool call %q has an empty tool call ID", call.ToolName)
 		}
 		if _, duplicate := pendingByID[call.ToolCallID]; duplicate {
-			return nil, fmt.Errorf("ai: pending tool calls have duplicate tool call ID %q", call.ToolCallID)
+			return nil, nil, fmt.Errorf("ai: pending tool calls have duplicate tool call ID %q", call.ToolCallID)
 		}
 		pendingByID[call.ToolCallID] = call
 	}
 	for id := range results.Calls {
 		if _, exists := pendingByID[id]; !exists {
-			return nil, fmt.Errorf("ai: deferred call result %q does not match a pending tool call", id)
+			return nil, nil, fmt.Errorf("ai: deferred call result %q does not match a pending tool call", id)
 		}
 		if _, duplicate := results.Approvals[id]; duplicate {
-			return nil, fmt.Errorf("ai: deferred result %q appears in calls and approvals", id)
+			return nil, nil, fmt.Errorf("ai: deferred result %q appears in calls and approvals", id)
 		}
 	}
 	for id := range results.Approvals {
 		if _, exists := pendingByID[id]; !exists {
-			return nil, fmt.Errorf("ai: approval result %q does not match a pending tool call", id)
+			return nil, nil, fmt.Errorf("ai: approval result %q does not match a pending tool call", id)
 		}
 	}
 	for id := range results.Metadata {
 		if _, exists := pendingByID[id]; !exists {
-			return nil, fmt.Errorf("ai: deferred metadata %q does not match a pending tool call", id)
+			return nil, nil, fmt.Errorf("ai: deferred metadata %q does not match a pending tool call", id)
 		}
 	}
 
 	r.resolvingDeferred = make(map[string]deferredResolution, len(pending))
 	defer func() { r.resolvingDeferred = nil }()
+	selected := make([]ToolCallPart, 0, len(pending))
+	resolved := make(map[string]struct{}, len(pending))
 	for _, call := range pending {
 		entry, registered := r.findTool(call.ToolName)
 		_, available := r.currentTools[call.ToolName]
 		if !registered || !available {
-			return nil, fmt.Errorf("ai: pending tool %q is not available in the resumed run", call.ToolName)
+			return nil, nil, fmt.Errorf("ai: pending tool %q is not available in the resumed run", call.ToolName)
 		}
 		metadata := cloneSchemaMap(results.Metadata[call.ToolCallID])
 		switch {
 		case entry.def.ExternalExecution:
 			if _, wrongKind := results.Approvals[call.ToolCallID]; wrongKind {
-				return nil, fmt.Errorf("ai: external tool call %q received an approval result", call.ToolCallID)
+				return nil, nil, fmt.Errorf("ai: external tool call %q received an approval result", call.ToolCallID)
 			}
 			result, exists := results.Calls[call.ToolCallID]
 			if !exists {
-				return nil, fmt.Errorf("ai: missing result for external tool call %q", call.ToolCallID)
+				if requireAll {
+					return nil, nil, fmt.Errorf("ai: missing result for external tool call %q", call.ToolCallID)
+				}
+				continue
 			}
 			r.resolvingDeferred[call.ToolCallID] = deferredResolution{result: result, metadata: metadata}
 		case entry.def.RequiresApproval:
 			if _, wrongKind := results.Calls[call.ToolCallID]; wrongKind {
-				return nil, fmt.Errorf("ai: approval tool call %q received an external result", call.ToolCallID)
+				return nil, nil, fmt.Errorf("ai: approval tool call %q received an external result", call.ToolCallID)
 			}
 			approval, exists := results.Approvals[call.ToolCallID]
 			if !exists {
-				return nil, fmt.Errorf("ai: missing approval for tool call %q", call.ToolCallID)
+				if requireAll {
+					return nil, nil, fmt.Errorf("ai: missing approval for tool call %q", call.ToolCallID)
+				}
+				continue
 			}
 			normalized, err := normalizeToolApproval(approval)
 			if err != nil {
-				return nil, fmt.Errorf("ai: approval for tool call %q: %w", call.ToolCallID, err)
+				return nil, nil, fmt.Errorf("ai: approval for tool call %q: %w", call.ToolCallID, err)
 			}
 			r.resolvingDeferred[call.ToolCallID] = deferredResolution{approval: normalized, metadata: metadata}
 		default:
-			return nil, fmt.Errorf("ai: pending tool call %q is not deferred", call.ToolCallID)
+			return nil, nil, fmt.Errorf("ai: pending tool call %q is not deferred", call.ToolCallID)
+		}
+		selected = append(selected, call)
+		resolved[call.ToolCallID] = struct{}{}
+	}
+	if len(selected) == 0 {
+		return nil, resolved, nil
+	}
+	parts, _, err := r.executeCallsWithCallEvents(ctx, selected, false)
+	return parts, resolved, err
+}
+
+func (r *run[Deps, Output]) handleDeferredToolCalls(
+	ctx context.Context, requests DeferredToolRequests,
+) ([]RequestPart, *DeferredToolRequests, error) {
+	remaining := requests.Clone()
+	var parts []RequestPart
+	for _, capability := range r.capabilities {
+		handler, ok := capability.(DeferredToolCallHandler)
+		if !ok {
+			continue
+		}
+		results, err := handler.HandleDeferredToolCalls(ctx, r.info, remaining.Clone())
+		if err != nil {
+			return nil, nil, fmt.Errorf("ai: handle deferred tool calls: %w", err)
+		}
+		if results == nil {
+			continue
+		}
+		clonedResults := cloneDeferredToolResults(*results)
+		pending := append(cloneToolCalls(remaining.Approvals), remaining.Calls...)
+		resolvedParts, resolved, err := r.applyDeferredToolResults(ctx, pending, clonedResults, false)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !r.emitStreamEvent(DeferredToolResultsEvent{Results: cloneDeferredToolResults(clonedResults)}) {
+			return nil, nil, context.Canceled
+		}
+		parts = append(parts, resolvedParts...)
+		remaining = remainingDeferredToolRequests(remaining, resolved)
+		if len(remaining.Calls) == 0 && len(remaining.Approvals) == 0 {
+			return parts, nil, nil
 		}
 	}
-	parts, _, err := r.executeCalls(ctx, pending)
-	return parts, err
+	return parts, &remaining, nil
+}
+
+func remainingDeferredToolRequests(
+	requests DeferredToolRequests, resolved map[string]struct{},
+) DeferredToolRequests {
+	remaining := DeferredToolRequests{Metadata: map[string]map[string]any{}}
+	for _, call := range requests.Calls {
+		if _, ok := resolved[call.ToolCallID]; !ok {
+			remaining.Calls = append(remaining.Calls, call)
+		}
+	}
+	for _, call := range requests.Approvals {
+		if _, ok := resolved[call.ToolCallID]; !ok {
+			remaining.Approvals = append(remaining.Approvals, call)
+		}
+	}
+	for id, metadata := range requests.Metadata {
+		if _, ok := resolved[id]; !ok {
+			remaining.Metadata[id] = cloneSchemaMap(metadata)
+		}
+	}
+	if len(remaining.Metadata) == 0 {
+		remaining.Metadata = nil
+	}
+	return remaining
 }
 
 func normalizeToolApproval(approval ToolApproval) (ToolApproval, error) {
@@ -1208,6 +1290,7 @@ func cloneToolDefinition(def ToolDefinition) ToolDefinition {
 	def.Schema = cloneSchemaMap(def.Schema)
 	def.ReturnSchema = cloneSchemaMap(def.ReturnSchema)
 	def.Metadata = cloneSchemaMap(def.Metadata)
+	def.ApprovalMetadata = cloneSchemaMap(def.ApprovalMetadata)
 	if def.Strict != nil {
 		strict := *def.Strict
 		def.Strict = &strict
@@ -1343,6 +1426,17 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		if err != nil {
 			return nil, err
 		}
+		if r.pendingDeferred != nil {
+			if !r.emitStreamEvent(DeferredToolRequestsEvent{Requests: r.pendingDeferred.Clone()}) {
+				return nil, context.Canceled
+			}
+			resolvedParts, remaining, err := r.handleDeferredToolCalls(ctx, *r.pendingDeferred)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, resolvedParts...)
+			r.pendingDeferred = remaining
+		}
 		if len(parts) > 0 {
 			r.appendRequest(parts, RequestStateComplete)
 		}
@@ -1350,9 +1444,6 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return r.result(*final), nil
 		}
 		if r.pendingDeferred != nil {
-			if !r.emitStreamEvent(DeferredToolRequestsEvent{Requests: r.pendingDeferred.Clone()}) {
-				return nil, context.Canceled
-			}
 			return r.deferredResult(*r.pendingDeferred), nil
 		}
 	}
@@ -1390,8 +1481,9 @@ const (
 )
 
 type deferredRequestPart struct {
-	call ToolCallPart
-	kind deferredCallKind
+	call     ToolCallPart
+	kind     deferredCallKind
+	metadata map[string]any
 }
 
 func (deferredRequestPart) requestPartKind() string { return "deferred" }
@@ -1449,8 +1541,14 @@ func (r *run[Deps, Output]) emitToolCallEvents(calls []ToolCallPart) bool {
 func (r *run[Deps, Output]) executeCalls(
 	ctx context.Context, calls []ToolCallPart,
 ) ([]RequestPart, *Output, error) {
+	return r.executeCallsWithCallEvents(ctx, calls, true)
+}
+
+func (r *run[Deps, Output]) executeCallsWithCallEvents(
+	ctx context.Context, calls []ToolCallPart, emitCalls bool,
+) ([]RequestPart, *Output, error) {
 	r.pendingDeferred = nil
-	if !r.emitToolCallEvents(calls) {
+	if emitCalls && !r.emitToolCallEvents(calls) {
 		return nil, nil, context.Canceled
 	}
 	if r.agent.endStrategy == EndStrategyEarly {
@@ -1775,6 +1873,9 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 				} else {
 					pending.Approvals = append(pending.Approvals, outcome.deferred.call)
 				}
+				if len(outcome.deferred.metadata) > 0 {
+					pending.Metadata[id] = cloneSchemaMap(outcome.deferred.metadata)
+				}
 			}
 		}
 		if outcome.part != nil {
@@ -1920,7 +2021,9 @@ func (r *run[Deps, Output]) executeCall(
 		case entry.def.ExternalExecution:
 			return deferredRequestPart{call: call, kind: deferredCallExternal}, nil, nil, nil
 		case entry.def.RequiresApproval:
-			return deferredRequestPart{call: call, kind: deferredCallApproval}, nil, nil, nil
+			return deferredRequestPart{
+				call: call, kind: deferredCallApproval, metadata: cloneSchemaMap(entry.def.ApprovalMetadata),
+			}, nil, nil, nil
 		}
 	}
 	toolRC := *r.rc

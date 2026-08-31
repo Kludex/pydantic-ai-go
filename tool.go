@@ -420,6 +420,12 @@ func WithApprovalRequired() ToolOption {
 	return func(d *ToolDefinition) { d.RequiresApproval = true }
 }
 
+// WithApprovalMetadata adds detached context to pending approval requests.
+// It is local and is not included in provider tool definitions.
+func WithApprovalMetadata(metadata map[string]any) ToolOption {
+	return func(d *ToolDefinition) { d.ApprovalMetadata = cloneSchemaMap(metadata) }
+}
+
 // WithExternalExecution returns calls for execution outside the agent process.
 // Prefer NewExternalTool or NewRawExternalTool when no local function exists.
 func WithExternalExecution() ToolOption {

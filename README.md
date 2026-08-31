@@ -304,7 +304,9 @@ func runWithApproval(ctx context.Context, model ai.Model) (string, error) {
 }
 ```
 
-`WithApprovalRequired` validates arguments and pauses before local execution. `NewExternalTool` and `NewRawExternalTool` return validated calls for another process to execute. A paused `RunResult` has a non-nil `Deferred()` value and a zero `Output`. Resume with its message history and results for every pending call. Use `ApproveToolWithArgs` to replace arguments, or `DenyTool` to return a denial without execution. Per-call result metadata is available through `RunContext.ToolCallMetadata`, and approved tools receive `ToolCallApproved == true`.
+`WithApprovalRequired` validates arguments and pauses before local execution. Add `WithApprovalMetadata` when the caller needs context such as a policy reason. `NewExternalTool` and `NewRawExternalTool` return validated calls for another process to execute. A paused `RunResult` has a non-nil `Deferred()` value and a zero `Output`. Resume with its message history and results for every pending call. Use `ApproveToolWithArgs` to replace arguments, or `DenyTool` to return a denial without execution. Per-call result metadata is available through `RunContext.ToolCallMetadata`, and approved tools receive `ToolCallApproved == true`.
+
+Use `DeferredToolHandlerFunc` as a capability when the resolver runs in the same process. Handlers run in capability order. Each handler receives a detached copy of the unresolved requests and may return results for any subset. Resolved calls continue inline. Calls omitted by every handler remain in `RunResult.Deferred()`. Streams emit `DeferredToolRequestsEvent` before handlers and `DeferredToolResultsEvent` for each returned result batch.
 
 Approval protects against the model acting without confirmation. It does not replace authentication or authorization for clients that can submit message history and approval results.
 

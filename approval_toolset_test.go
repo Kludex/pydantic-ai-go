@@ -3,6 +3,7 @@ package ai_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -10,6 +11,12 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 )
+
+type approvalErrorToolset struct{}
+
+func (approvalErrorToolset) Tools(context.Context, *ai.RunContext[deps]) ([]ai.Tool[deps], error) {
+	return nil, errors.New("approval tools unavailable")
+}
 
 func TestRequireApprovalToolsetSelectsOriginalNames(t *testing.T) {
 	request := 0
@@ -55,6 +62,14 @@ func TestRequireApprovalToolsetSelectsOriginalNames(t *testing.T) {
 	)
 	if err != nil || result.Output != "done" || !slices.Equal(calls, []string{"safe", "danger"}) {
 		t.Fatalf("unexpected approval resume: result=%+v calls=%v err=%v", result, calls, err)
+	}
+}
+
+func TestRequireApprovalToolsetPropagatesToolErrors(t *testing.T) {
+	agent := ai.NewAgent[deps, string](fakes.NewTestModel())
+	agent.AddToolset(ai.RequireApprovalToolset[deps](approvalErrorToolset{}))
+	if _, err := agent.Run(t.Context(), "go", deps{}); err == nil || !strings.Contains(err.Error(), "unavailable") {
+		t.Fatalf("expected wrapped toolset error, got %v", err)
 	}
 }
 

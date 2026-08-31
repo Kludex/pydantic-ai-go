@@ -198,3 +198,10 @@ type DeferredToolRequestsEvent struct {
 }
 
 func (DeferredToolRequestsEvent) streamEventKind() string { return "deferred-tool-requests" }
+
+// DeferredToolResultsEvent announces results returned by an inline handler.
+type DeferredToolResultsEvent struct {
+	Results DeferredToolResults
+}
+
+func (DeferredToolResultsEvent) streamEventKind() string { return "deferred-tool-results" }

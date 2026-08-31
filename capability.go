@@ -142,6 +142,31 @@ func capabilityModelSettingsProvider(capability Capability) ModelSettingsProvide
 	return provider
 }
 
+// DeferredToolCallHandler resolves any subset of pending external calls and
+// approvals inline. Return nil to leave every request for the next handler or
+// caller. Handlers run in capability order.
+type DeferredToolCallHandler interface {
+	HandleDeferredToolCalls(
+		ctx context.Context, ri *RunInfo, requests DeferredToolRequests,
+	) (*DeferredToolResults, error)
+}
+
+// DeferredToolHandlerFunc adapts a function into a capability that only
+// handles deferred tool calls.
+type DeferredToolHandlerFunc func(
+	ctx context.Context, ri *RunInfo, requests DeferredToolRequests,
+) (*DeferredToolResults, error)
+
+// Setup implements Capability.
+func (DeferredToolHandlerFunc) Setup(*CapabilityRegistry) error { return nil }
+
+// HandleDeferredToolCalls calls the adapted function.
+func (f DeferredToolHandlerFunc) HandleDeferredToolCalls(
+	ctx context.Context, ri *RunInfo, requests DeferredToolRequests,
+) (*DeferredToolResults, error) {
+	return f(ctx, ri, requests)
+}
+
 // RunEventStreamWrapper transforms the consumer-facing event stream. Changes
 // do not affect accumulated messages, tool execution, or final output. The
 // wrapper must consume stream and stop when its downstream yield returns false.

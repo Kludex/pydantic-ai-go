@@ -207,6 +207,8 @@ type ToolDefinition struct {
 	DeferLoading bool `json:"-"`
 	// RequiresApproval pauses before local execution until a caller approves.
 	RequiresApproval bool `json:"-"`
+	// ApprovalMetadata is returned with a pending approval request.
+	ApprovalMetadata map[string]any `json:"-"`
 	// ExternalExecution returns the call for execution outside the agent.
 	ExternalExecution bool `json:"-"`
 	// ToolKind identifies framework-managed typed tool calls and returns.

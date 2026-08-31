@@ -84,6 +84,9 @@ func cloneModelResponse(response *ModelResponse) *ModelResponse {
 			part.Args = slices.Clone(part.Args)
 			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
 			cloned.Parts[index] = part
+		case CompactionPart:
+			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
+			cloned.Parts[index] = part
 		}
 	}
 	cloned.Usage = response.Usage.Clone()

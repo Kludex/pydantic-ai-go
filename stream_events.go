@@ -14,9 +14,10 @@ type EventStream iter.Seq2[StreamEvent, error]
 type ResponsePartKind string
 
 const (
-	ResponsePartKindText     ResponsePartKind = "text"
-	ResponsePartKindThinking ResponsePartKind = "thinking"
-	ResponsePartKindToolCall ResponsePartKind = "tool-call"
+	ResponsePartKindText       ResponsePartKind = "text"
+	ResponsePartKindThinking   ResponsePartKind = "thinking"
+	ResponsePartKindCompaction ResponsePartKind = "compaction"
+	ResponsePartKindToolCall   ResponsePartKind = "tool-call"
 )
 
 // ResponsePartDelta updates one response part.

@@ -377,6 +377,13 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 				}, nil) {
 					return
 				}
+			case CompactionPart:
+				if !yield(CompactionEvent{
+					PartID: partID, Content: part.Content, ID: part.ID,
+					ProviderName: part.ProviderName, ProviderDetails: cloneSchemaMap(part.ProviderDetails),
+				}, nil) {
+					return
+				}
 			case ToolCallPart:
 				if !yield(ToolCallStartEvent{
 					PartID: partID, ToolName: part.ToolName, ToolCallID: part.ToolCallID,
@@ -395,6 +402,7 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 			state = ModelResponseStateComplete
 		}
 		yield(FinishEvent{
+			Parts: cloneModelResponse(response).Parts,
 			Usage: response.Usage, ModelName: response.ModelName, Timestamp: response.Timestamp,
 			ProviderName: response.ProviderName, ProviderURL: response.ProviderURL,
 			ProviderDetails: cloneSchemaMap(response.ProviderDetails), ProviderResponseID: response.ProviderResponseID,

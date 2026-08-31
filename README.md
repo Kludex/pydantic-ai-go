@@ -733,7 +733,7 @@ agent := ai.NewAgent[Deps, string](fakes.NewTestModel())
 
 ## Interoperability
 
-Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. Text, thinking, and tool-call parts also retain provider IDs, signatures, details, and typed tool kinds. OpenTelemetry spans follow the GenAI semantic conventions and are free unless you set a global tracer provider.
+Message history serializes to PydanticAI's JSON format via `ai.MarshalMessages` / `ai.UnmarshalMessages`, so histories exchange cleanly with [PydanticAI](https://ai.pydantic.dev), [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go), and Logfire. Requests and responses retain timestamps, run and conversation IDs, metadata, normalized finish reasons, provider details, response IDs, and lifecycle state. Text, thinking, tool-call, and compaction parts retain provider IDs and details. Compaction resets deferred-tool discoveries from the summarized window while later reveals remain active. OpenTelemetry spans follow the GenAI semantic conventions and are free unless you set a global tracer provider.
 
 ## Status
 

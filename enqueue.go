@@ -213,7 +213,8 @@ func persistPendingMessages(messages []ModelMessage, queue *pendingMessageQueue)
 		}
 	}
 	encoded, _ := json.Marshal(persisted)
-	for index := len(messages) - 1; index >= 0; index-- {
+	// A queue is reachable only from a run context created after a model response.
+	for index := len(messages) - 1; ; index-- {
 		response, ok := messages[index].(ModelResponse)
 		if !ok {
 			continue
@@ -227,8 +228,6 @@ func persistPendingMessages(messages []ModelMessage, queue *pendingMessageQueue)
 		messages[index] = response
 		return nil
 	}
-	// A queue is reachable only from a run context created after a model response.
-	return fmt.Errorf("ai: persist pending messages: deferred history has no model response") // pragma: no cover
 }
 
 func restorePendingMessages(messages []ModelMessage) ([]pendingMessage, error) {

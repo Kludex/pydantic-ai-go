@@ -41,13 +41,13 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, tool-availability, typed tool-search, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, compaction, tool-availability, typed tool-search, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
 - [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
 - [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
-- [ ] Compaction and builtin-tool return parts.
+- [~] Provider-neutral compaction parts preserve readable summaries, opaque IDs/details, serialization, stream lifecycle, and deferred-tool visibility boundaries. Provider-native compaction request/response mapping and builtin-tool return parts remain.
 - [x] Tool availability delta parts, including the legacy `added` decode alias and upstream-compatible serialization.
 - [x] Implemented requests/responses preserve timestamps, local metadata, run/conversation IDs, normalized finish reasons, provider details/URLs/names, response IDs, and lifecycle state, including deprecated `vendor_*` aliases.
 - [x] Text, thinking, and function-tool-call parts preserve IDs, signatures, provider names/details, and typed tool kinds through serialization, fallback replay, keyed streaming accumulation, and consumer-safe copies.
@@ -88,7 +88,7 @@ Status:
 - [x] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history.
 - [x] Local `search_tools` discovery through `WithToolSearch`, with typed results, configurable detached search callbacks, word-bounded relevance, undiscovered-first ranking, result limits, and independent retries.
 - [~] Anthropic 4.5+ models render deferred definitions, local search results as `tool_reference` blocks, and other reveals as `tool_addition` blocks with the required beta header. OpenAI Responses maps local search to client-executed `tool_search` in streaming and non-streaming requests, preserves final streamed call IDs, replays `tool_search_output`, and sends other reveals through `additional_tools`. Provider-managed search remains.
-- [ ] Reset derived tool-discovery visibility at compaction boundaries once `CompactionPart` is implemented.
+- [x] Reset derived deferred-tool discovery visibility at compaction part boundaries while allowing calls generated in the compacting response to use the request-time visibility snapshot; post-boundary reveals remain visible.
 - [ ] Native/builtin tools distinct from function tools.
 
 ### Deferred execution and approval
@@ -105,7 +105,7 @@ Status:
 ### Streaming
 
 - [x] Provider-optional `StreamingModel` and `Agent.RunStream`.
-- [x] Normalized part lifecycle and final-result events over text, thinking, and partial tool arguments, with stable IDs and interleaved-delta routing.
+- [x] Normalized part lifecycle and final-result events over text, thinking, compaction, and partial tool arguments, with stable IDs and interleaved-delta routing.
 - [x] Non-streaming fallback replay.
 - [x] OpenAI Chat Completions SSE streaming.
 - [x] Anthropic SSE streaming for text, thinking, function calls, usage, errors, and cancellation.
@@ -234,6 +234,6 @@ Status:
 1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
 2. Audit upstream node lifecycle semantics against the plain loop and document the focused request/tool/output replacements.
 3. Add provider-managed search for Anthropic and OpenAI Responses; OpenAI Responses client search already uses native wire items in streaming and non-streaming requests.
-4. Add `CompactionPart` and reset derived deferred-tool visibility at compaction boundaries.
+4. Add provider-native compaction mapping and configuration for Anthropic and OpenAI Responses; the provider-neutral part and visibility reset are complete.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
 6. Extend upstream message fixtures as remaining persisted part types land.

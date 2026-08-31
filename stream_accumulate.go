@@ -35,6 +35,12 @@ func (p *accumulatedPart) responsePart() ResponsePart {
 			ProviderName: p.providerName, ProviderDetails: cloneSchemaMap(p.providerDetails),
 		}
 	}
+	if p.kind == ResponsePartKindCompaction {
+		return CompactionPart{
+			Content: p.text, ID: p.responseID,
+			ProviderName: p.providerName, ProviderDetails: cloneSchemaMap(p.providerDetails),
+		}
+	}
 	return ToolCallPart{
 		ToolName: p.toolName, Args: json.RawMessage(p.toolArgs), ToolCallID: p.toolCallID,
 		ToolKind: p.toolKind, ID: p.responseID,
@@ -137,7 +143,7 @@ func accumulate(
 					part.providerName != "" || len(part.providerDetails) > 0 {
 					response.Parts = append(response.Parts, part.responsePart())
 				}
-			case ResponsePartKindToolCall:
+			case ResponsePartKindCompaction, ResponsePartKindToolCall:
 				response.Parts = append(response.Parts, part.responsePart())
 			}
 		}
@@ -219,6 +225,22 @@ func accumulate(
 					ProviderName: event.ProviderName,
 				},
 			}); err != nil {
+				return partialResponse(), err
+			}
+		case CompactionEvent:
+			if event.PartID != "" {
+				if _, exists := partsByID[event.PartID]; exists {
+					return nil, &UnexpectedModelBehaviorError{
+						Message: fmt.Sprintf("duplicate compaction stream part %q", event.PartID),
+					}
+				}
+			}
+			part := newPart(event.PartID, ResponsePartKindCompaction)
+			part.text = event.Content
+			part.responseID = event.ID
+			part.providerName = event.ProviderName
+			part.providerDetails = cloneSchemaMap(event.ProviderDetails)
+			if err := startPart(part); err != nil {
 				return partialResponse(), err
 			}
 		case ToolCallStartEvent:

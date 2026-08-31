@@ -308,3 +308,17 @@ type ThinkingPart struct {
 }
 
 func (ThinkingPart) responsePartKind() string { return "thinking" }
+
+// CompactionPart summarizes history that a provider compacted. ProviderDetails
+// may contain opaque data required when sending the part back to that provider.
+type CompactionPart struct {
+	Content         string
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
+}
+
+// HasContent reports whether the provider supplied a readable summary.
+func (part CompactionPart) HasContent() bool { return part.Content != "" }
+
+func (CompactionPart) responsePartKind() string { return "compaction" }

@@ -30,6 +30,7 @@ func TestKindMarkers(t *testing.T) {
 		{TextPart{}, "text"},
 		{ToolCallPart{}, "tool-call"},
 		{ThinkingPart{}, "thinking"},
+		{CompactionPart{}, "compaction"},
 	}
 	for _, tc := range responseKinds {
 		if tc.part.responsePartKind() != tc.want {
@@ -45,6 +46,7 @@ func TestStreamEventKinds(t *testing.T) {
 	}{
 		{TextDeltaEvent{}, "text-delta"},
 		{ThinkingDeltaEvent{}, "thinking-delta"},
+		{CompactionEvent{}, "compaction"},
 		{ToolCallStartEvent{}, "tool-call-start"},
 		{ToolCallDeltaEvent{}, "tool-call-delta"},
 		{FinishEvent{}, "finish"},

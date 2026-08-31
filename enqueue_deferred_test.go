@@ -339,3 +339,33 @@ func TestQueuedMessagesRemainInCancellationHistory(t *testing.T) {
 		t.Fatalf("queued cancellation message was lost: result=%+v seen=%v err=%v", result, seen, err)
 	}
 }
+
+func TestPendingPersistenceErrorJoinsCancellation(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "cancel", ToolCallID: "cancel", Args: json.RawMessage(`{}`),
+		}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddTool(agent, "cancel", func(
+		_ context.Context, rc *ai.RunContext[deps], _ struct{},
+	) (string, error) {
+		_, err := rc.Enqueue(ai.ModelRequest{
+			Parts:    []ai.RequestPart{ai.UserPromptPart{Content: "later"}},
+			Metadata: map[string]any{"invalid": make(chan struct{})},
+		})
+		if err != nil {
+			return "", err
+		}
+		rc.Cancel()
+		return "canceled", nil
+	})
+	result, err := agent.Run(t.Context(), "go", deps{})
+	var cancelled *ai.RunCancelledError
+	if result != nil || !errors.As(err, &cancelled) ||
+		!strings.Contains(err.Error(), "ai: persist pending messages:") {
+		t.Fatalf("unexpected joined cancellation result=%+v err=%v", result, err)
+	}
+}

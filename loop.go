@@ -810,6 +810,9 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 				case ThinkingPart:
 					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
 					message.Parts[partIndex] = part
+				case CompactionPart:
+					part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
+					message.Parts[partIndex] = part
 				}
 			}
 			cloned[index] = message
@@ -821,17 +824,22 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 func revealedToolNames(messages []ModelMessage) map[string]struct{} {
 	revealed := make(map[string]struct{})
 	for _, message := range messages {
-		request, ok := message.(ModelRequest)
-		if !ok {
-			continue
-		}
-		for _, requestPart := range request.Parts {
-			part, ok := requestPart.(ToolAvailabilityDeltaPart)
-			if !ok {
-				continue
+		switch message := message.(type) {
+		case ModelRequest:
+			for _, requestPart := range message.Parts {
+				part, ok := requestPart.(ToolAvailabilityDeltaPart)
+				if !ok {
+					continue
+				}
+				for _, name := range part.ToolsAdded {
+					revealed[name] = struct{}{}
+				}
 			}
-			for _, name := range part.ToolsAdded {
-				revealed[name] = struct{}{}
+		case ModelResponse:
+			for _, responsePart := range message.Parts {
+				if _, compacted := responsePart.(CompactionPart); compacted {
+					clear(revealed)
+				}
 			}
 		}
 	}
@@ -910,6 +918,7 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 // modelRequest is the model-request interception point: tracing plus
 // capability middleware (ModelRequestWrapper), outermost first.
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
+	r.revealedTools = revealedToolNames(r.messages)
 	if r.deferredResults == nil {
 		if err := r.deliverPendingMessages(PendingMessageASAP); err != nil {
 			return nil, err

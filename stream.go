@@ -75,6 +75,17 @@ type ThinkingDeltaEvent struct {
 
 func (ThinkingDeltaEvent) modelStreamEventKind() string { return "thinking-delta" }
 
+// CompactionEvent emits one complete provider compaction part.
+type CompactionEvent struct {
+	PartID          string
+	Content         string
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
+}
+
+func (CompactionEvent) modelStreamEventKind() string { return "compaction" }
+
 // ToolCallStartEvent begins a provider tool call.
 type ToolCallStartEvent struct {
 	// PartID identifies this tool-call part. ToolCallDeltaEvent uses the

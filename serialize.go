@@ -194,6 +194,15 @@ func marshalResponsePart(p ResponsePart) (wirePart, error) {
 			PartKind: "thinking", Content: mustJSON(part.Content), ID: part.ID, Signature: part.Signature,
 			ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
 		}, nil
+	case CompactionPart:
+		var content json.RawMessage
+		if part.Content != "" {
+			content = mustJSON(part.Content)
+		}
+		return wirePart{
+			PartKind: "compaction", Content: content, ID: part.ID,
+			ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+		}, nil
 	default:
 		return wirePart{}, fmt.Errorf("ai: unknown response part type %T", p)
 	}
@@ -336,6 +345,11 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 	case "thinking":
 		return ThinkingPart{
 			Content: stringContent(wp.Content), ID: wp.ID, Signature: wp.Signature,
+			ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
+		}, nil
+	case "compaction":
+		return CompactionPart{
+			Content: stringContent(wp.Content), ID: wp.ID,
 			ProviderName: wp.ProviderName, ProviderDetails: wp.ProviderDetails,
 		}, nil
 	default:

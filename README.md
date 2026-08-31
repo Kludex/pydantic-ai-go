@@ -239,6 +239,18 @@ The model sees `weather_get_weather`, while the function receives `get_weather` 
 
 Use `WithDeferredLoading()` on one tool or wrap a collection with `DeferLoadingToolset`. Deferred definitions remain hidden until `ToolReturn.Tools` reveals them. The first premature call to each hidden tool receives a free availability correction, so it does not consume the budget needed by a later valid call. Reveals are deduplicated in model-call order and persisted as `ToolAvailabilityDeltaPart`, so resumed histories retain the same visibility.
 
+Add local discovery when the model should search a large deferred catalog:
+
+```go
+catalog := ai.WithToolSearch(
+	ai.DeferLoadingToolset(ai.NewFunctionToolset(githubTools...)),
+	ai.ToolSearchConfig[Deps]{MaxResults: 5},
+)
+agent.AddToolset(catalog)
+```
+
+The wrapper exposes `search_tools`. Default search uses case-insensitive word overlap across tool names and descriptions, prioritizes undiscovered matches, and returns typed `ToolSearchResult` values. Set `ToolSearchConfig.Search` to use an external index. Custom search receives detached definitions and its unknown or duplicate names are ignored.
+
 Stateful toolsets can implement three small optional interfaces:
 
 ```go

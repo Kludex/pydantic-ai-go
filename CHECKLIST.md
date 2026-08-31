@@ -41,7 +41,7 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, tool-availability, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, tool-availability, typed tool-search, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
 - [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
 - [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
@@ -85,8 +85,10 @@ Status:
 - [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
 - [ ] Approval-required toolset wrapper.
 - [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.
-- [~] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history. Search-driven discovery remains.
-- [ ] Provider-native deferred definitions and mid-conversation tool-addition rendering for Anthropic and OpenAI Responses; bundled providers currently use local withholding and persisted reveal deltas.
+- [x] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history.
+- [x] Local `search_tools` discovery through `WithToolSearch`, with typed results, configurable detached search callbacks, word-bounded relevance, undiscovered-first ranking, result limits, and independent retries.
+- [ ] Provider-native tool search, deferred definitions, and mid-conversation tool-addition rendering for Anthropic and OpenAI Responses; bundled providers currently use local search, local withholding, and persisted reveal deltas.
+- [ ] Reset derived tool-discovery visibility at compaction boundaries once `CompactionPart` is implemented.
 - [ ] Native/builtin tools distinct from function tools.
 
 ### Deferred execution and approval
@@ -222,8 +224,8 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run typed output specialization and stateful toolset lifecycle.
-3. Add search-driven discovery for deferred tools, then provider-native deferred definition and mid-conversation addition rendering.
+2. Add per-run typed output specialization and reflected tool return schemas.
+3. Add provider-native tool search, deferred definitions, and mid-conversation addition rendering for Anthropic and OpenAI Responses.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.
 6. Add MCP now that raw/dynamic toolsets have run and step lifecycle support, after deferred calls define the pause/resume boundary.

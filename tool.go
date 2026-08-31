@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -29,10 +30,11 @@ type RunContext[Deps any] struct {
 	ModelSettings  ModelSettings
 	UsageLimits    UsageLimits
 
-	usage        *Usage
-	toolCalls    *atomic.Int64
-	messages     *[]ModelMessage
-	cancellation *runCancellation
+	usage         *Usage
+	toolCalls     *atomic.Int64
+	messages      *[]ModelMessage
+	revealedTools *map[string]struct{}
+	cancellation  *runCancellation
 }
 
 // Usage returns the usage accumulated so far in this run.
@@ -44,6 +46,20 @@ func (rc *RunContext[Deps]) Usage() Usage {
 
 // Messages returns the conversation so far in this run.
 func (rc *RunContext[Deps]) Messages() []ModelMessage { return *rc.messages }
+
+// RevealedTools returns model-facing deferred tool names revealed in this run
+// or its resumed history, sorted for deterministic inspection.
+func (rc *RunContext[Deps]) RevealedTools() []string {
+	if rc.revealedTools == nil {
+		return nil
+	}
+	names := make([]string, 0, len(*rc.revealedTools))
+	for name := range *rc.revealedTools {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
 
 // Cancel requests cancellation of this run. In-flight model and tool calls
 // receive cancellation through their context.Context. Concurrent tool calls

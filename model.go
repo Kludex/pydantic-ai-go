@@ -196,6 +196,8 @@ type ToolDefinition struct {
 	// DeferLoading hides the tool until a rich tool return reveals its name.
 	// It is resolved by the agent and is not sent to providers.
 	DeferLoading bool `json:"-"`
-	maxRetries   *int
-	timeout      time.Duration
+	// ToolKind identifies framework-managed typed tool calls and returns.
+	ToolKind   ToolPartKind `json:"-"`
+	maxRetries *int
+	timeout    time.Duration
 }

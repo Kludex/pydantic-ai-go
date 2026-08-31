@@ -11,6 +11,10 @@ import (
 )
 
 func TestRunContextExposesUsageAndMessages(t *testing.T) {
+	var empty ai.RunContext[deps]
+	if empty.RevealedTools() != nil {
+		t.Fatal("zero run context has revealed tools")
+	}
 	agent := ai.NewAgent[deps, string](fakes.NewTestModel())
 	var usage ai.Usage
 	var msgCount int

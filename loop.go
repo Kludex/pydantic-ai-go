@@ -220,7 +220,8 @@ func (a *Agent[Deps, Output]) newRun(
 	r.rc = &RunContext[Deps]{
 		Deps: deps, MaxRetries: r.outputMaxRetries, RunID: runID, ConversationID: conversationID,
 		Model: model, ModelSettings: settings, UsageLimits: limits,
-		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, cancellation: cancellation,
+		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
+		revealedTools: &r.revealedTools, cancellation: cancellation,
 	}
 	r.info = &RunInfo{
 		RunID: runID, ConversationID: conversationID,
@@ -845,6 +846,23 @@ func (r *run[Deps, Output]) setCurrentTools(params ModelRequestParams) {
 	}
 }
 
+func (r *run[Deps, Output]) applyResponseToolKinds(response *ModelResponse) {
+	parts := slices.Clone(response.Parts)
+	for index, responsePart := range parts {
+		call, ok := responsePart.(ToolCallPart)
+		if !ok || call.ToolKind != "" {
+			continue
+		}
+		entry, ok := r.findTool(call.ToolName)
+		if !ok || entry.def.ToolKind == "" {
+			continue
+		}
+		call.ToolKind = entry.def.ToolKind
+		parts[index] = call
+	}
+	response.Parts = parts
+}
+
 func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelRequestParams, error) {
 	params := r.params
 	rc := *r.rc
@@ -1065,6 +1083,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return nil, err
 		}
 		r.usage.Add(resp.Usage)
+		r.applyResponseToolKinds(resp)
 		r.messages = append(r.messages, *resp)
 
 		calls := resp.ToolCalls()

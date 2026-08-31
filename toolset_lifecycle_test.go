@@ -94,6 +94,7 @@ func TestToolsetRunStepAndResourceLifecycle(t *testing.T) {
 	wrapped = ai.WithToolsetMaxRetries(wrapped, 2)
 	wrapped = ai.WithToolsetTimeout(wrapped, time.Second)
 	wrapped = ai.DeferLoadingToolset(wrapped, "missing")
+	wrapped = ai.WithToolSearch(wrapped, ai.ToolSearchConfig[deps]{})
 	wrapped = ai.SetToolsetMetadata(wrapped, map[string]any{"remote": true})
 	toolset := ai.CombineToolsets(wrapped, local)
 	request := 0

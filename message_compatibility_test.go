@@ -70,6 +70,34 @@ func TestUnmarshalUpstreamMultimodalMessageFixture(t *testing.T) {
 	}
 }
 
+func TestUnmarshalUpstreamToolSearchFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_tool_search.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := messages[0].(ai.ModelResponse).Parts[0].(ai.ToolCallPart)
+	parts := messages[1].(ai.ModelRequest).Parts
+	returned := parts[0].(ai.ToolReturnPart)
+	delta := parts[1].(ai.ToolAvailabilityDeltaPart)
+	content := returned.Content.(map[string]any)
+	discovered := content["discovered_tools"].([]any)[0].(map[string]any)
+	if call.ToolKind != ai.ToolPartKindToolSearch || returned.ToolKind != ai.ToolPartKindToolSearch ||
+		discovered["name"] != "github_get_me" || !slices.Equal(delta.ToolsAdded, []string{"github_get_me"}) {
+		t.Fatalf("unexpected tool search fixture: %+v", messages)
+	}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"tool_kind":"tool-search"`) {
+		t.Fatalf("typed tool search identity was not serialized: %s", encoded)
+	}
+}
+
 func TestUnmarshalUpstreamToolAvailabilityFixture(t *testing.T) {
 	data, err := os.ReadFile("testdata/messages/upstream_tool_availability.json")
 	if err != nil {

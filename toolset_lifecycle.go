@@ -63,6 +63,10 @@ func wrappedToolsetForRun[Deps any](
 		resolved, err := toolsetForRun(ctx, rc, wrapper.toolset)
 		wrapper.toolset = resolved
 		return wrapper, true, err
+	case toolSearchToolset[Deps]:
+		resolved, err := toolsetForRun(ctx, rc, wrapper.toolset)
+		wrapper.toolset = resolved
+		return wrapper, true, err
 	default:
 		return nil, false, nil
 	}
@@ -122,6 +126,10 @@ func wrappedToolsetForRunStep[Deps any](
 		wrapper.toolset = resolved
 		return wrapper, true, err
 	case deferredToolset[Deps]:
+		resolved, err := toolsetForRunStep(ctx, rc, wrapper.toolset)
+		wrapper.toolset = resolved
+		return wrapper, true, err
+	case toolSearchToolset[Deps]:
 		resolved, err := toolsetForRunStep(ctx, rc, wrapper.toolset)
 		wrapper.toolset = resolved
 		return wrapper, true, err

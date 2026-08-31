@@ -1,0 +1,77 @@
+[
+  {
+    "parts": [
+      {
+        "tool_name": "search_tools",
+        "args": {
+          "queries": [
+            "github profile"
+          ]
+        },
+        "tool_call_id": "search-1",
+        "tool_kind": "tool-search",
+        "id": null,
+        "provider_name": null,
+        "provider_details": null,
+        "part_kind": "tool-call"
+      }
+    ],
+    "usage": {
+      "input_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "input_audio_tokens": 0,
+      "cache_audio_read_tokens": 0,
+      "output_audio_tokens": 0,
+      "details": {},
+      "cost": null
+    },
+    "model_name": null,
+    "timestamp": "2026-01-04T05:06:07Z",
+    "kind": "response",
+    "provider_name": null,
+    "provider_url": null,
+    "provider_details": null,
+    "provider_response_id": null,
+    "finish_reason": null,
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  },
+  {
+    "parts": [
+      {
+        "tool_name": "search_tools",
+        "content": {
+          "discovered_tools": [
+            {
+              "name": "github_get_me"
+            }
+          ]
+        },
+        "tool_call_id": "search-1",
+        "tool_kind": "tool-search",
+        "metadata": null,
+        "timestamp": "2026-01-04T05:06:07Z",
+        "outcome": "success",
+        "part_kind": "tool-return"
+      },
+      {
+        "tools_added": [
+          "github_get_me"
+        ],
+        "tool_call_id": "search-1",
+        "part_kind": "tool-availability-delta"
+      }
+    ],
+    "timestamp": "2026-01-04T05:06:07Z",
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

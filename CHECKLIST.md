@@ -200,7 +200,7 @@ Status:
 - [~] Provider-neutral compaction boundaries, composable message history processors, stateful OpenAI Responses/Anthropic compaction, OpenAI stateless message/custom triggers, direct compaction requests, durable history replacement, model-wrapper unwrapping, and usage-limit accounting are complete. Token-based trimming, dedicated compaction tracing, and provider-neutral summarization helpers remain.
 - [~] Local tool search is available as a composable toolset; deferred capability loading remains.
 - [x] Prefix, rename, filter, prepare, combine, and set-tool-metadata helpers through composable toolsets.
-- [ ] Reinjected system prompts for histories that omit or must not trust persisted system parts.
+- [x] `ReinjectSystemPrompt` restores static, one-time, and dynamic legacy system prompts to request-only history snapshots, preserves authoritative existing prompts by default, strips untrusted prompts on demand, drops emptied requests, and leaves durable history unchanged.
 - [x] Central empty-response content-filter failures plus opt-in `RaiseContentFilterError` for partial/refusal responses, including provider-specific reason messages, complete interoperable response bodies, detached inspection, and ordinary or streamed runs.
 - [ ] Include selected function-tool return schemas in provider definitions, with explicit per-tool overrides and description fallback for providers without structured return-schema fields.
 - [x] Shared in-process concurrency gates support context-aware admission, running/waiting/available metrics, optional bounded-queue backpressure, model wrappers that hold slots through stream consumption, and whole-run capability limits.

@@ -91,6 +91,7 @@ type RunInfo struct {
 	prompt           UserPromptPart
 	metadata         *runMetadataState
 	model            func() Model
+	systemPrompts    func(context.Context) ([]SystemPromptPart, error)
 }
 
 // AgentName returns the configured application agent name.

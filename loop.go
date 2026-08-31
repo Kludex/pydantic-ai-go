@@ -334,6 +334,9 @@ func (a *Agent[Deps, Output]) newRun(
 		agentName: a.name, agentDescription: description,
 		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, newMessages: r.newMessages,
 		metadata: &r.metadata, model: func() Model { return r.model },
+		systemPrompts: func(ctx context.Context) ([]SystemPromptPart, error) {
+			return r.configuredSystemPromptParts(ctx, r.rc)
+		},
 	}
 	if err := r.resolveMetadata(runCtx); err != nil {
 		cancellation.finish()
@@ -3537,7 +3540,27 @@ func (r *run[Deps, Output]) prepareSystemPrompts(ctx context.Context, rc *RunCon
 	if r.newMessages > 0 {
 		return nil
 	}
-	parts := make([]RequestPart, 0, len(r.agent.systemPrompts)+len(r.agent.systemPromptFuncs))
+	parts, err := r.configuredSystemPromptParts(ctx, rc)
+	if err != nil {
+		return err
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	prepended := make([]RequestPart, len(parts))
+	for index := range parts {
+		prepended[index] = parts[index]
+	}
+	request := r.messages[len(r.messages)-1].(ModelRequest)
+	request.Parts = append(prepended, request.Parts...)
+	r.messages[len(r.messages)-1] = request
+	return nil
+}
+
+func (r *run[Deps, Output]) configuredSystemPromptParts(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]SystemPromptPart, error) {
+	parts := make([]SystemPromptPart, 0, len(r.agent.systemPrompts)+len(r.agent.systemPromptFuncs))
 	for _, content := range r.agent.systemPrompts {
 		parts = append(parts, SystemPromptPart{Content: content, Timestamp: time.Now().UTC()})
 	}
@@ -3545,9 +3568,9 @@ func (r *run[Deps, Output]) prepareSystemPrompts(ctx context.Context, rc *RunCon
 		content, err := runner.fn(ctx, rc)
 		if err != nil {
 			if runner.dynamic {
-				return fmt.Errorf("ai: dynamic system prompt %q: %w", runner.id, err)
+				return nil, fmt.Errorf("ai: dynamic system prompt %q: %w", runner.id, err)
 			}
-			return fmt.Errorf("ai: system prompt: %w", err)
+			return nil, fmt.Errorf("ai: system prompt: %w", err)
 		}
 		if content == "" && !runner.dynamic {
 			continue
@@ -3558,13 +3581,7 @@ func (r *run[Deps, Output]) prepareSystemPrompts(ctx context.Context, rc *RunCon
 		}
 		parts = append(parts, part)
 	}
-	if len(parts) == 0 {
-		return nil
-	}
-	request := r.messages[len(r.messages)-1].(ModelRequest)
-	request.Parts = append(parts, request.Parts...)
-	r.messages[len(r.messages)-1] = request
-	return nil
+	return parts, nil
 }
 
 func (r *run[Deps, Output]) prepareInstructions(

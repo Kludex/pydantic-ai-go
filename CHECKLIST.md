@@ -2,9 +2,9 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@bf2fb0555cedeb86ef4376629b1317b0ea1a9b2f` (`v2.35.3-17`).
+Audited upstream baseline: `pydantic/pydantic-ai@f711f5376`.
 
-Current upstream checkout: `f711f5376` (22 commits ahead). The drift audit is active; newly discovered work is recorded below before the baseline is advanced.
+The 22 commits after the prior `bf2fb0555` baseline are mapped below. Runtime changes added stable instruction IDs, durable-operation APIs, CLI MCP/tool streaming, Z.AI behavior, AG-UI event ordering, transport-based Google routing, realtime audio iterables, and `genai-prices` 0.1.5.
 
 Status:
 
@@ -142,7 +142,7 @@ Status:
 - [x] OpenAI-compatible Chat Completions and Responses configuration through detached `ProviderConfig`: stable provider identity, base URL, optional bearer authentication, provider headers/query values, dynamic request preparation, custom HTTP clients, per-request header precedence, environment base URLs, streamed identity, and explicit strict/deferred feature switches.
 - [x] Azure OpenAI and Azure AI Foundry configuration through `models/azure`: current `/v1`, serverless `.models.ai.azure.com`, and legacy deployment routes; API-key and per-request Microsoft Entra token authentication; environment defaults; API-version validation; Chat Completions and Responses models; and Azure provider attribution.
 - [ ] AWS Bedrock, including the legacy InvokeModel tool-search profile that defaults to regex and rejects explicit BM25.
-- [ ] Groq, Mistral, Cohere, Cerebras, xAI, OpenRouter, Ollama, Hugging Face, and other upstream providers.
+- [ ] Groq, Mistral, Cohere, Cerebras, xAI, OpenRouter, Ollama, Hugging Face, Z.AI, and other upstream providers. Z.AI parity includes GLM 5.3 Flash and its non-standard `finish_reason` normalization.
 - [~] `ModelProfile`, `ModelProfiler`, and transparent `NewProfiledModel` provide wrapper-safe model-specific structured-output defaults and prompted templates; bundled strict-tool, thinking, native-tool, and provider-setting support still relies on model-name checks and provider-local switches rather than one complete profile matrix.
 - [ ] Provider HTTP retries and configurable retry policy.
 - [x] Transparent `ModelWrapper` delegation and wrapper-aware provider compaction are complete. `FallbackModel` supports ordered models, default provider-API-error fallback, composable error/response predicates, detached diagnostics, rejected-response cost accounting, streaming-open fallback, pinned suspended continuations with rewind, combined strategy/native-history behavior, and reverse lifecycle cleanup. Shared concurrency-limited and OpenTelemetry-instrumented model wrappers preserve optional model capabilities.
@@ -207,7 +207,7 @@ Status:
 - [ ] First-class `pydantic-evals-go` task adapter.
 - [~] Agent/model/tool spans and request cost attributes are present. `InstrumentedModel` adds client-kind request spans, GenAI request/response/provider/server/tool/message attributes, arbitrary first-class usage details, token/cost/time-to-first-chunk histograms, stream-lifetime spans, provider identity, and independent content/binary/request-parameter privacy controls. The outermost `Instrumentation` capability adds one run/request/tool hierarchy, configurable aggregate usage names, final or deferred output, full redacted message envelopes, latest instructions, new-message indexes, agent/run/conversation baggage, duplicate suppression, failed argument-validation spans, successful deferral metadata, application run metadata, agent names and dependency-rendered descriptions, variable-instruction diagnostics based on final prepared request instructions, run messages/schemas, and output-function spans with validated arguments, converted results, tool/function identity, privacy controls, errors, middleware nesting, and version 2 legacy naming. Richer request/tool Logfire schemas/messages, all upstream event shapes, and message-fragment caching/mutation diagnostics remain.
 - [ ] Logfire guidance and examples.
-- [ ] AG-UI adapter.
+- [ ] AG-UI adapter, including an assistant `TEXT_MESSAGE_START` before tool-call events owned by the same response.
 - [ ] Vercel AI protocol adapter.
 - [ ] A2A integration.
 
@@ -216,12 +216,12 @@ Status:
 - [x] `AgentRun` provides manual normalized-event progression through `StartRun`, `StartRunParts`, and `ResumeRun`, with external enqueue, idle enqueue, cancellation, live usage, deterministic cleanup, and no public graph internals.
 - [x] Direct `RequestModel` and single-consumer `StreamModel` APIs without an agent loop, including detached inputs/live snapshots, model defaults, settings validation, restored historical instructions, provider-native history adaptation, normalized fallback streaming, per-segment timeouts and pricing, model lifecycle, and automatic suspended-response continuation.
 - [ ] Embeddings API and provider implementations.
-- [ ] Realtime voice/audio API and providers.
+- [ ] Realtime voice/audio API and providers, including incremental and iterable audio input.
 - [ ] MCP server support.
 - [ ] Agent-to-agent delegation examples and usage propagation.
-- [ ] CLI and web chat entry points.
+- [ ] CLI and web chat entry points, including MCP configuration loading and streamed tool-call display.
 - [ ] Prompt templates and format helpers.
-- [ ] Durable execution integrations.
+- [ ] Durable execution integrations, including the public third-party backend contract, explicitly named durable operations for capabilities, operation serialization, and backend-specific cache identity.
 - [-] Public graph API and graph-backed loop - excluded because this project intentionally uses a plain loop and capability middleware.
 
 ## Quality, documentation, and maintenance
@@ -237,13 +237,13 @@ Status:
 - [ ] Compatibility policy, semantic versioning policy, and changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
 - [x] Use the tagged `genai-prices` Go `v0.1.5` module release instead of a commit pseudo-version.
-- [ ] Audit the 22 upstream commits from `bf2fb0555` through current `f711f5376`, including stable instruction IDs, transport-based Google routing, AG-UI tool-call message starts, new durable-operation APIs, and CLI MCP/tool streaming; then advance the audited baseline.
+- [x] Audited and mapped the 22 upstream commits from `bf2fb0555` through `f711f5376` without treating unimplemented changes as complete.
 - [ ] Pin `.upstream-sync.json` to the audited upstream commit.
 - [ ] After parity, add the daily `gh-aw` upstream-sync workflow described in `PLAN.md`.
 
 ## Next work
 
-1. Complete the upstream drift audit through `f711f5376`; stable instruction IDs are the largest newly discovered core change.
+1. Implement stable instruction IDs discovered in upstream `ebad0a022`, including source qualification, editing, validation, and serialization.
 2. Complete richer OpenTelemetry request/tool Logfire schemas/messages, remaining event shapes, and message-fragment caching/mutation diagnostics; agent descriptions, variable instructions, run metadata/schemas, and output-function spans are complete.
 3. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
 4. Extend MCP shared sessions with model-backed sampling, elicitation, task extension/input-required retries, and OAuth helpers and examples.

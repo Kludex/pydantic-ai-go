@@ -226,6 +226,43 @@ func (tool ImageGenerationTool) CloneNativeTool() NativeTool {
 	return tool
 }
 
+// FileSearchRetrievalMode selects a provider-managed retrieval strategy.
+type FileSearchRetrievalMode string
+
+const (
+	FileSearchRetrievalHybrid   FileSearchRetrievalMode = "hybrid"
+	FileSearchRetrievalSemantic FileSearchRetrievalMode = "semantic"
+	FileSearchRetrievalKeyword  FileSearchRetrievalMode = "keyword"
+)
+
+// FileSearchTool asks a compatible provider to search managed file stores.
+type FileSearchTool struct {
+	FileStoreIDs  []string
+	MaxNumResults *int
+	Instructions  string
+	RetrievalMode FileSearchRetrievalMode
+	Optional      bool
+}
+
+// Kind returns the stable native-tool discriminator.
+func (FileSearchTool) Kind() string { return "file_search" }
+
+// UniqueID identifies this native tool within one model request.
+func (FileSearchTool) UniqueID() string { return "file_search" }
+
+// IsOptional reports whether an unsupported model may omit the tool.
+func (tool FileSearchTool) IsOptional() bool { return tool.Optional }
+
+// CloneNativeTool returns a detached definition.
+func (tool FileSearchTool) CloneNativeTool() NativeTool {
+	tool.FileStoreIDs = slices.Clone(tool.FileStoreIDs)
+	if tool.MaxNumResults != nil {
+		maximum := *tool.MaxNumResults
+		tool.MaxNumResults = &maximum
+	}
+	return tool
+}
+
 // WebFetchTool asks a compatible provider to retrieve content from URLs.
 type WebFetchTool struct {
 	MaxUses          int
@@ -332,7 +369,34 @@ func ValidateNativeTools(tools []NativeTool) error {
 			if err := validateImageGenerationTool(*tool); err != nil {
 				return err
 			}
+		case FileSearchTool:
+			if err := validateFileSearchTool(tool); err != nil {
+				return err
+			}
+		case *FileSearchTool:
+			if err := validateFileSearchTool(*tool); err != nil {
+				return err
+			}
 		}
+	}
+	return nil
+}
+
+func validateFileSearchTool(tool FileSearchTool) error {
+	if len(tool.FileStoreIDs) == 0 {
+		return fmt.Errorf("ai: file search requires at least one file store ID")
+	}
+	for _, id := range tool.FileStoreIDs {
+		if id == "" {
+			return fmt.Errorf("ai: file search store ID must not be empty")
+		}
+	}
+	if tool.MaxNumResults != nil && *tool.MaxNumResults <= 0 {
+		return fmt.Errorf("ai: file search maximum results must be positive")
+	}
+	if tool.RetrievalMode != "" && tool.RetrievalMode != FileSearchRetrievalHybrid &&
+		tool.RetrievalMode != FileSearchRetrievalSemantic && tool.RetrievalMode != FileSearchRetrievalKeyword {
+		return fmt.Errorf("ai: invalid file search retrieval mode %q", tool.RetrievalMode)
 	}
 	return nil
 }

@@ -95,6 +95,21 @@ func TestImageGenerationToolIsDetached(t *testing.T) {
 	ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{}))
 }
 
+func TestFileSearchToolIsDetached(t *testing.T) {
+	maximum := 5
+	tool := ai.FileSearchTool{
+		FileStoreIDs: []string{"store"}, MaxNumResults: &maximum,
+		RetrievalMode: ai.FileSearchRetrievalHybrid, Optional: true,
+	}
+	cloned := tool.CloneNativeTool().(ai.FileSearchTool)
+	cloned.FileStoreIDs[0] = "changed"
+	*cloned.MaxNumResults = 1
+	if tool.FileStoreIDs[0] != "store" || *tool.MaxNumResults != 5 || !tool.IsOptional() ||
+		tool.Kind() != "file_search" || tool.UniqueID() != "file_search" {
+		t.Fatalf("file search tool was not detached: %+v", tool)
+	}
+}
+
 func TestNativeToolsFromAgentRunAndCapability(t *testing.T) {
 	tests := map[string]func(*ai.Agent[struct{}, string]) []ai.RunOption{
 		"agent method": func(agent *ai.Agent[struct{}, string]) []ai.RunOption {
@@ -140,6 +155,7 @@ func TestNativeToolsFromAgentRunAndCapability(t *testing.T) {
 func TestValidateNativeToolPointers(t *testing.T) {
 	if err := ai.ValidateNativeTools([]ai.NativeTool{
 		&ai.WebSearchTool{}, &ai.WebFetchTool{}, &ai.ImageGenerationTool{},
+		&ai.FileSearchTool{FileStoreIDs: []string{"store"}},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -147,6 +163,7 @@ func TestValidateNativeToolPointers(t *testing.T) {
 		&ai.WebSearchTool{SearchContextSize: "huge"},
 		&ai.WebFetchTool{MaxUses: -1},
 		&ai.ImageGenerationTool{Quality: "maximum"},
+		&ai.FileSearchTool{},
 	} {
 		if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err == nil {
 			t.Fatalf("expected pointer validation error for %T", tool)
@@ -256,6 +273,25 @@ func TestNativeToolValidation(t *testing.T) {
 		"image aspect ratio": func() {
 			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.ImageGenerationTool{
 				AspectRatio: "7:3",
+			}))
+		},
+		"file search stores": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.FileSearchTool{}))
+		},
+		"file search empty store": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.FileSearchTool{
+				FileStoreIDs: []string{""},
+			}))
+		},
+		"file search max results": func() {
+			maximum := 0
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.FileSearchTool{
+				FileStoreIDs: []string{"store"}, MaxNumResults: &maximum,
+			}))
+		},
+		"file search retrieval mode": func() {
+			ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithNativeTools(ai.FileSearchTool{
+				FileStoreIDs: []string{"store"}, RetrievalMode: "neural",
 			}))
 		},
 		"agent method duplicate": func() {

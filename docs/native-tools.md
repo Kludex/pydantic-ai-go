@@ -166,6 +166,44 @@ func main() {
 
 Provider responses use `ToolPartKindWebFetch`. Gemini reconstructs calls and returns from `urlContextMetadata` while retaining the complete metadata in `ModelResponse.ProviderDetails`. Anthropic preserves native result payloads and caller metadata.
 
+## Search managed files
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	model := openai.NewResponsesModel(
+		"gpt-5.4",
+		openai.WithResponsesFileSearchResults(true),
+	)
+	agent := ai.NewAgent[struct{}, string](
+		model,
+		ai.WithNativeTools(ai.FileSearchTool{
+			FileStoreIDs: []string{"vs_abc123"},
+		}),
+	)
+
+	result, err := agent.Run(context.Background(), "Summarize the latest quarterly report.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`FileSearchTool` references managed vector stores. OpenAI Responses sends `FileStoreIDs` as vector-store IDs. `WithResponsesFileSearchResults` requests the matched chunks in each normalized `NativeToolReturnPart`; leave it disabled when you only need the model's answer.
+
+`MaxNumResults`, `Instructions`, and `RetrievalMode` are portable fields reserved for providers that expose those controls. OpenAI ignores them. Google and xAI file-search rendering remain provider-parity work.
+
 ## Execute code
 
 ```go

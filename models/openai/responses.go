@@ -35,6 +35,7 @@ type ResponsesModel struct {
 	backgroundPollInterval time.Duration
 	phaseSupport           *bool
 	codeExecutionOutputs   bool
+	fileSearchResults      bool
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
@@ -55,6 +56,7 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 		background: m.background, backgroundPollInterval: m.backgroundPollInterval,
 		phaseSupport:         phaseSupport,
 		codeExecutionOutputs: m.responsesCodeExecutionOutputs,
+		fileSearchResults:    m.responsesFileSearchResults,
 	}
 }
 
@@ -396,6 +398,7 @@ type responsesInput struct {
 	ContainerID      string          `json:"container_id,omitempty"`
 	Code             string          `json:"code,omitempty"`
 	Outputs          any             `json:"outputs,omitempty"`
+	Queries          []string        `json:"queries,omitempty"`
 }
 
 type responsesInputContent struct {
@@ -419,6 +422,7 @@ type responsesTool struct {
 	Filters           *responsesWebSearchFilters      `json:"filters,omitempty"`
 	ExternalWebAccess *bool                           `json:"external_web_access,omitempty"`
 	Container         *responsesCodeContainer         `json:"container,omitempty"`
+	VectorStoreIDs    []string                        `json:"vector_store_ids,omitempty"`
 	Action            ai.ImageGenerationAction        `json:"action,omitempty"`
 	Background        ai.ImageGenerationBackground    `json:"background,omitempty"`
 	InputFidelity     ai.ImageGenerationInputFidelity `json:"input_fidelity,omitempty"`
@@ -465,6 +469,10 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 	case *ai.ImageGenerationTool:
 		prepared, err := responsesImageGenerationTool(*tool)
 		return prepared, true, err
+	case ai.FileSearchTool:
+		return responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}, true, nil
+	case *ai.FileSearchTool:
+		return responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}, true, nil
 	default:
 		if nativeTool.IsOptional() {
 			return responsesTool{}, false, nil
@@ -630,6 +638,9 @@ func (m *ResponsesModel) buildResponsesPayload(
 			if tool.Type == "code_interpreter" && m.codeExecutionOutputs {
 				req.Include = append(req.Include, "code_interpreter_call.outputs")
 			}
+			if tool.Type == "file_search" && m.fileSearchResults {
+				req.Include = append(req.Include, "file_search_call.results")
+			}
 		}
 	}
 	deferred := make(map[string]ai.ToolDefinition, len(params.DeferredTools))
@@ -745,24 +756,26 @@ type responsesOutputItem struct {
 		Logprobs    []map[string]any `json:"logprobs"`
 		Annotations []map[string]any `json:"annotations"`
 	} `json:"content"`
-	CallID           *string         `json:"call_id"`
-	Name             string          `json:"name"`
-	Arguments        json.RawMessage `json:"arguments"`
-	Action           json.RawMessage `json:"action"`
-	Namespace        string          `json:"namespace"`
-	Execution        string          `json:"execution"`
-	Status           string          `json:"status"`
-	Phase            string          `json:"phase"`
-	Tools            []responsesTool `json:"tools"`
-	EncryptedContent string          `json:"encrypted_content"`
-	ContainerID      string          `json:"container_id"`
-	Code             string          `json:"code"`
-	Background       string          `json:"background"`
-	Quality          string          `json:"quality"`
-	Size             string          `json:"size"`
-	RevisedPrompt    string          `json:"revised_prompt"`
-	OutputFormat     string          `json:"output_format"`
-	Result           string          `json:"result"`
+	CallID           *string          `json:"call_id"`
+	Name             string           `json:"name"`
+	Arguments        json.RawMessage  `json:"arguments"`
+	Action           json.RawMessage  `json:"action"`
+	Namespace        string           `json:"namespace"`
+	Execution        string           `json:"execution"`
+	Status           string           `json:"status"`
+	Phase            string           `json:"phase"`
+	Tools            []responsesTool  `json:"tools"`
+	EncryptedContent string           `json:"encrypted_content"`
+	ContainerID      string           `json:"container_id"`
+	Code             string           `json:"code"`
+	Background       string           `json:"background"`
+	Quality          string           `json:"quality"`
+	Size             string           `json:"size"`
+	RevisedPrompt    string           `json:"revised_prompt"`
+	OutputFormat     string           `json:"output_format"`
+	Result           string           `json:"result"`
+	Queries          []string         `json:"queries"`
+	Results          []map[string]any `json:"results"`
 	Outputs          []struct {
 		Type string `json:"type"`
 		Logs string `json:"logs"`
@@ -891,6 +904,23 @@ func responsesCodeExecutionParts(
 			ToolName: "code_execution", ToolCallID: item.ID, ToolKind: ai.ToolPartKindCodeExecution,
 			Content: content, Timestamp: timestamp, ProviderName: "openai",
 		}, nil
+}
+
+func responsesFileSearchParts(
+	item responsesOutputItem, timestamp time.Time,
+) (ai.NativeToolCallPart, ai.NativeToolReturnPart) {
+	args, _ := json.Marshal(map[string]any{"queries": item.Queries})
+	content := map[string]any{"status": item.Status}
+	if item.Results != nil {
+		content["results"] = item.Results
+	}
+	return ai.NativeToolCallPart{
+			ToolName: "file_search", Args: args, ToolCallID: item.ID, ToolKind: ai.ToolPartKindFileSearch,
+			ID: item.ID, ProviderName: "openai",
+		}, ai.NativeToolReturnPart{
+			ToolName: "file_search", ToolCallID: item.ID, ToolKind: ai.ToolPartKindFileSearch,
+			Content: content, Timestamp: timestamp, ProviderName: "openai",
+		}
 }
 
 func responsesImageGenerationParts(
@@ -1034,6 +1064,9 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 				resp.Parts = append(resp.Parts, file)
 			}
 			resp.Parts = append(resp.Parts, returned)
+		case "file_search_call":
+			call, returned := responsesFileSearchParts(item, timestamp)
+			resp.Parts = append(resp.Parts, call, returned)
 		case "image_generation_call":
 			call, file, returned, err := responsesImageGenerationParts(item, timestamp)
 			if err != nil {

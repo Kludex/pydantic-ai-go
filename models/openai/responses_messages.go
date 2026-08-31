@@ -274,6 +274,18 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				out = append(out, responsesInput{Type: "image_generation_call", ID: part.ToolCallID})
 				continue
 			}
+			if part.ToolKind == ai.ToolPartKindFileSearch && part.ToolCallID != "" {
+				var arguments struct {
+					Queries []string `json:"queries"`
+				}
+				if err := json.Unmarshal(part.Args, &arguments); err != nil {
+					return nil, fmt.Errorf("openai: parse file search arguments: %w", err)
+				}
+				out = append(out, responsesInput{
+					Type: "file_search_call", ID: part.ToolCallID, Queries: arguments.Queries, Status: "completed",
+				})
+				continue
+			}
 			if !c.serverToolSearch || part.ToolKind != ai.ToolPartKindToolSearch {
 				continue
 			}

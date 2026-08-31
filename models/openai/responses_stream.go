@@ -338,6 +338,15 @@ func (m *ResponsesModel) responsesEventStream(
 					}, nil) {
 						return
 					}
+				case "file_search_call":
+					emittedParts = true
+					if !yield(ai.ToolCallStartEvent{
+						PartID: responsesToolPartID(event), ToolName: "file_search", ToolCallID: event.Item.ID,
+						ToolKind: ai.ToolPartKindFileSearch, ID: event.Item.ID,
+						ProviderName: m.providerName, Native: true,
+					}, nil) {
+						return
+					}
 				case "image_generation_call":
 					emittedParts = true
 					if !yield(ai.ToolCallStartEvent{
@@ -442,6 +451,17 @@ func (m *ResponsesModel) responsesEventStream(
 						}
 					}
 					if !yield(ai.NativeToolReturnEvent{
+						PartID: "return:" + event.Item.ID, Part: returned,
+					}, nil) {
+						return
+					}
+					continue
+				}
+				if event.Item.Type == "file_search_call" {
+					call, returned := responsesFileSearchParts(event.Item, responseTimestamp)
+					if !yield(ai.ToolCallDeltaEvent{
+						PartID: responsesToolPartID(event), ToolCallID: call.ToolCallID, ArgsDelta: string(call.Args),
+					}, nil) || !yield(ai.NativeToolReturnEvent{
 						PartID: "return:" + event.Item.ID, Part: returned,
 					}, nil) {
 						return
@@ -587,6 +607,8 @@ func (m *ResponsesModel) responsesEventStream(
 				"response.code_interpreter_call.completed",
 				"response.image_generation_call.generating", "response.image_generation_call.in_progress",
 				"response.image_generation_call.completed",
+				"response.file_search_call.in_progress", "response.file_search_call.searching",
+				"response.file_search_call.completed",
 				"response.reasoning_summary_part.done", "response.reasoning_summary_text.done",
 				"response.reasoning_text.done":
 			default:

@@ -346,6 +346,82 @@ func TestResponsesCodeExecutionOutputErrors(t *testing.T) {
 	}
 }
 
+func TestResponsesFileSearchNativeTool(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[
+				{"type":"file_search_call","id":"search-1","status":"completed","queries":["quarterly revenue"],
+				 "results":[{"file_id":"file-1","filename":"report.pdf","score":0.9,"text":"Revenue grew."}]},
+				{"type":"message","id":"message","content":[{"type":"output_text","text":"done"}]}
+			]
+		}`))
+	}, openai.WithResponsesFileSearchResults(true))
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.FileSearchTool{FileStoreIDs: []string{"vs-1", "vs-2"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	stores := tool["vector_store_ids"].([]any)
+	if tool["type"] != "file_search" || len(stores) != 2 || stores[0] != "vs-1" ||
+		body["include"].([]any)[0] != "file_search_call.results" {
+		t.Fatalf("unexpected file search request: %#v", body)
+	}
+	if len(response.Parts) != 3 {
+		t.Fatalf("unexpected file search response: %#v", response.Parts)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	returned := response.Parts[1].(ai.NativeToolReturnPart)
+	content := returned.Content.(map[string]any)
+	results := content["results"].([]map[string]any)
+	if call.ToolKind != ai.ToolPartKindFileSearch || call.ToolCallID != "search-1" ||
+		string(call.Args) != `{"queries":["quarterly revenue"]}` || returned.ToolCallID != "search-1" ||
+		returned.ToolKind != ai.ToolPartKindFileSearch || content["status"] != "completed" ||
+		results[0]["filename"] != "report.pdf" || returned.Timestamp.IsZero() {
+		t.Fatalf("unexpected normalized file search: call=%+v return=%+v", call, returned)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := body["input"].([]any)[0].(map[string]any)
+	if replayed["type"] != "file_search_call" || replayed["id"] != "search-1" ||
+		replayed["status"] != "completed" || replayed["queries"].([]any)[0] != "quarterly revenue" {
+		t.Fatalf("unexpected file search replay: %#v", replayed)
+	}
+}
+
+func TestResponsesFileSearchDefaultsAndErrors(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"status":"completed","output":[
+			{"type":"file_search_call","id":"search","status":"in_progress","queries":[]}]}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		&ai.FileSearchTool{FileStoreIDs: []string{"vs"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if body["include"] != nil {
+		t.Fatalf("file search results were requested by default: %#v", body)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{
+			ToolName: "file_search", ToolCallID: "bad", ToolKind: ai.ToolPartKindFileSearch,
+			ProviderName: "openai", Args: json.RawMessage(`{`),
+		},
+	}}}, ai.ModelRequestParams{}); err == nil || !strings.Contains(err.Error(), "parse file search arguments") {
+		t.Fatalf("unexpected malformed file search replay error: %v", err)
+	}
+}
+
 func TestResponsesImageGenerationNativeTool(t *testing.T) {
 	compression := 75
 	var body map[string]any

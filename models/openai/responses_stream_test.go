@@ -144,6 +144,76 @@ func TestResponsesStaticCodeExecutionFileStream(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamFileSearch(t *testing.T) {
+	model := newResponsesServerWithOptions(t, sseHandler(t, []string{
+		`{"type":"response.created","response":{"id":"response","model":"gpt-5","created_at":100,"status":"in_progress"}}`,
+		`{"type":"response.output_item.added","item":{"id":"search-1","type":"file_search_call","status":"in_progress","queries":[]}}`,
+		`{"type":"response.file_search_call.in_progress","item_id":"search-1"}`,
+		`{"type":"response.file_search_call.searching","item_id":"search-1"}`,
+		`{"type":"response.file_search_call.completed","item_id":"search-1"}`,
+		`{"type":"response.output_item.done","item":{"id":"search-1","type":"file_search_call","status":"completed","queries":["revenue"],"results":[{"file_id":"file-1","text":"grew"}]}}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[{"id":"search-1","type":"file_search_call","status":"completed","queries":["revenue"],"results":[{"file_id":"file-1","text":"grew"}]}],"usage":{}}}`,
+	}), openai.WithResponsesFileSearchResults(true))
+	events, err := collect(t, model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.FileSearchTool{FileStoreIDs: []string{"vs"}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var start ai.ToolCallStartEvent
+	var delta ai.ToolCallDeltaEvent
+	var returned ai.NativeToolReturnEvent
+	var finish ai.FinishEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			start = event
+		case ai.ToolCallDeltaEvent:
+			delta = event
+		case ai.NativeToolReturnEvent:
+			returned = event
+		case ai.FinishEvent:
+			finish = event
+		}
+	}
+	results := returned.Part.Content.(map[string]any)["results"].([]map[string]any)
+	if !start.Native || start.ToolKind != ai.ToolPartKindFileSearch || start.ToolCallID != "search-1" ||
+		delta.ArgsDelta != `{"queries":["revenue"]}` || delta.ToolCallID != "search-1" ||
+		returned.Part.ToolKind != ai.ToolPartKindFileSearch || results[0]["text"] != "grew" ||
+		len(finish.Parts) != 2 {
+		t.Fatalf("unexpected file search stream: %#v", events)
+	}
+}
+
+func TestResponsesStreamFileSearchCanStop(t *testing.T) {
+	events := []string{
+		`{"type":"response.output_item.added","item":{"id":"search","type":"file_search_call"}}`,
+		`{"type":"response.output_item.done","item":{"id":"search","type":"file_search_call","queries":[]}}`,
+	}
+	for breakAfter := 1; breakAfter <= 3; breakAfter++ {
+		t.Run(fmt.Sprintf("event %d", breakAfter), func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, events))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen++
+				if seen == breakAfter {
+					break
+				}
+			}
+			if seen != breakAfter {
+				t.Fatalf("stream ended after %d events", seen)
+			}
+		})
+	}
+}
+
 func TestResponsesStreamImageGeneration(t *testing.T) {
 	model := newResponsesServer(t, sseHandler(t, []string{
 		`{"type":"response.created","response":{"id":"response","model":"gpt-5","created_at":100,"status":"in_progress"}}`,

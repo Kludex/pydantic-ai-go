@@ -21,7 +21,7 @@ import (
 func (m *ResponsesModel) StreamRequest(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
-	if responseID, ok := suspendedResponsesID(msgs); ok {
+	if responseID, ok := suspendedResponsesID(msgs, m.providerName); ok {
 		sequence, hasSequence := suspendedResponsesSequence(msgs)
 		if !hasSequence {
 			response, err := m.retrieveResponse(ctx, responseID, params.Settings.ExtraHeaders)
@@ -46,9 +46,10 @@ func (m *ResponsesModel) StreamRequest(
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	req.Header.Set("Accept", "text/event-stream")
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	if err := m.configureRequest(req, params.Settings.ExtraHeaders); err != nil {
+		return nil, err
+	}
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -76,9 +77,10 @@ func (m *ResponsesModel) retrieveResponseStream(
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	req.Header.Set("Accept", "text/event-stream")
-	setExtraHeaders(req, headers)
+	if err := m.configureRequest(req, headers); err != nil {
+		return nil, err
+	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai: retrieve background response stream: %w", err)
@@ -92,7 +94,7 @@ func (m *ResponsesModel) retrieveResponseStream(
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
 	return m.responsesEventStream(resp.Body, &ai.ResponseMetadataEvent{
-		ModelName: m.name, ProviderName: "openai", ProviderURL: m.baseURL,
+		ModelName: m.name, ProviderName: m.providerName, ProviderURL: m.baseURL,
 		ProviderResponseID: responseID,
 		ProviderDetails:    map[string]any{"background": true, "sequence_number": sequence},
 		State:              ai.ModelResponseStateSuspended,
@@ -201,7 +203,7 @@ func (m *ResponsesModel) responsesEventStream(
 				responseTimestamp = timestamp
 				if !yield(ai.ResponseMetadataEvent{
 					Usage: metadataResponse.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
-					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: metadataResponse.ID,
 					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
 				}, nil) {
@@ -214,7 +216,7 @@ func (m *ResponsesModel) responsesEventStream(
 				partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
 				providerName := ""
 				if event.ItemID != "" {
-					providerName = "openai"
+					providerName = m.providerName
 				}
 				if !yield(ai.TextDeltaEvent{
 					PartID: partID, Delta: event.Delta, ID: event.ItemID, ProviderName: providerName,
@@ -225,7 +227,7 @@ func (m *ResponsesModel) responsesEventStream(
 				emittedParts = true
 				partID := responsesThinkingPartID(event)
 				if !yield(ai.ThinkingDeltaEvent{
-					PartID: partID, Delta: event.Delta, ID: event.ItemID, ProviderName: "openai",
+					PartID: partID, Delta: event.Delta, ID: event.ItemID, ProviderName: m.providerName,
 				}, nil) {
 					return
 				}
@@ -235,7 +237,7 @@ func (m *ResponsesModel) responsesEventStream(
 					emittedParts = true
 				}
 				if event.Part.Text != "" && !yield(ai.ThinkingDeltaEvent{
-					PartID: partID, Delta: event.Part.Text, ID: event.ItemID, ProviderName: "openai",
+					PartID: partID, Delta: event.Part.Text, ID: event.ItemID, ProviderName: m.providerName,
 				}, nil) {
 					return
 				}
@@ -245,7 +247,7 @@ func (m *ResponsesModel) responsesEventStream(
 					if event.Item.EncryptedContent != "" {
 						emittedParts = true
 						if !yield(ai.CompactionEvent{
-							PartID: "item:" + event.Item.ID, ID: event.Item.ID, ProviderName: "openai",
+							PartID: "item:" + event.Item.ID, ID: event.Item.ID, ProviderName: m.providerName,
 							ProviderDetails: map[string]any{"encrypted_content": event.Item.EncryptedContent},
 						}, nil) {
 							return
@@ -260,7 +262,7 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 					if !yield(ai.ToolCallStartEvent{
 						PartID: partID, ToolName: event.Item.Name, ToolCallID: responsesCallID(event.Item.CallID),
-						ID: event.Item.ID, ProviderName: "openai", ProviderDetails: providerDetails,
+						ID: event.Item.ID, ProviderName: m.providerName, ProviderDetails: providerDetails,
 					}, nil) {
 						return
 					}
@@ -281,7 +283,7 @@ func (m *ResponsesModel) responsesEventStream(
 						if !yield(ai.ToolCallStartEvent{
 							PartID: responsesToolPartID(event), ToolName: ai.ToolSearchName,
 							ToolKind: ai.ToolPartKindToolSearch, ID: event.Item.ID,
-							ProviderName: "openai", ProviderDetails: map[string]any{"execution": "client"},
+							ProviderName: m.providerName, ProviderDetails: map[string]any{"execution": "client"},
 						}, nil) {
 							return
 						}
@@ -292,7 +294,7 @@ func (m *ResponsesModel) responsesEventStream(
 						}
 						if !yield(ai.ToolCallStartEvent{
 							PartID: responsesToolPartID(event), ToolName: ai.ToolSearchName, ToolCallID: callID,
-							ToolKind: ai.ToolPartKindToolSearch, ID: event.Item.ID, ProviderName: "openai", Native: true,
+							ToolKind: ai.ToolPartKindToolSearch, ID: event.Item.ID, ProviderName: m.providerName, Native: true,
 							ProviderDetails: map[string]any{
 								"call_id":   responsesNullableCallID(event.Item.CallID),
 								"execution": "server", "status": event.Item.Status,
@@ -307,7 +309,7 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 					if event.Item.EncryptedContent != "" && !yield(ai.ThinkingDeltaEvent{
 						PartID: responsesThinkingPartID(event), ID: event.Item.ID,
-						SignatureDelta: event.Item.EncryptedContent, ProviderName: "openai",
+						SignatureDelta: event.Item.EncryptedContent, ProviderName: m.providerName,
 					}, nil) {
 						return
 					}
@@ -339,7 +341,7 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 					if !yield(ai.NativeToolReturnEvent{
 						PartID: "item:" + event.Item.ID,
-						Part:   responsesToolSearchReturn(event.Item, callID, responseTimestamp),
+						Part:   responsesToolSearchReturn(event.Item, callID, responseTimestamp, m.providerName),
 					}, nil) {
 						return
 					}
@@ -353,6 +355,7 @@ func (m *ResponsesModel) responsesEventStream(
 						yield(nil, err)
 						return
 					}
+					setResponsesProvider(response, m.providerName, m.baseURL)
 					snapshotParts = response.Parts
 					compacted = providerBool(response.ProviderDetails, "compaction")
 					if !emittedParts && !yieldStaticResponsesParts(response, yield) {
@@ -380,7 +383,7 @@ func (m *ResponsesModel) responsesEventStream(
 				}
 				yield(ai.FinishEvent{
 					Parts: snapshotParts, Usage: event.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
-					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: event.Response.ID,
 					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
 				}, nil)
@@ -417,6 +420,7 @@ func (m *ResponsesModel) responsesEventStream(
 					yield(nil, err)
 					return
 				}
+				setResponsesProvider(response, m.providerName, m.baseURL)
 				snapshotParts = response.Parts
 				if !emittedParts && !yieldStaticResponsesParts(response, yield) {
 					return
@@ -436,7 +440,7 @@ func (m *ResponsesModel) responsesEventStream(
 				}
 				yield(ai.FinishEvent{
 					Parts: snapshotParts, Usage: latest.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
-					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: latest.Response.ID,
 					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
 				}, nil)

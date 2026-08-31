@@ -8,7 +8,11 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go"
 )
 
-func trimOpenAICompactionMessages(messages []ai.ModelMessage) []ai.ModelMessage {
+func trimOpenAICompactionMessages(messages []ai.ModelMessage, providerNames ...string) []ai.ModelMessage {
+	providerName := "openai"
+	if len(providerNames) > 0 {
+		providerName = providerNames[0]
+	}
 	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
 		response, ok := messages[messageIndex].(ai.ModelResponse)
 		if !ok {
@@ -16,7 +20,7 @@ func trimOpenAICompactionMessages(messages []ai.ModelMessage) []ai.ModelMessage 
 		}
 		for partIndex := len(response.Parts) - 1; partIndex >= 0; partIndex-- {
 			part, ok := response.Parts[partIndex].(ai.CompactionPart)
-			if !ok || part.ProviderName != "openai" {
+			if !ok || part.ProviderName != providerName {
 				continue
 			}
 			encryptedContent, _ := part.ProviderDetails["encrypted_content"].(string)
@@ -62,6 +66,7 @@ func prepareResponsesFunctionTool(definition ai.ToolDefinition, strictSupport bo
 }
 
 type responsesMessageConverter struct {
+	providerName     string
 	clientToolSearch bool
 	serverToolSearch bool
 	deferred         map[string]ai.ToolDefinition
@@ -133,12 +138,12 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 		switch part := responsePart.(type) {
 		case ai.TextPart:
 			id := ""
-			if part.ProviderName == "" || part.ProviderName == "openai" {
+			if part.ProviderName == "" || part.ProviderName == c.providerName {
 				id = part.ID
 			}
 			out = append(out, responsesInput{Role: "assistant", Content: part.Content, ID: id})
 		case ai.CompactionPart:
-			if part.ProviderName != "openai" {
+			if part.ProviderName != c.providerName {
 				continue
 			}
 			encryptedContent, _ := part.ProviderDetails["encrypted_content"].(string)
@@ -149,7 +154,7 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				Type: "compaction", ID: part.ID, EncryptedContent: encryptedContent,
 			})
 		case ai.ThinkingPart:
-			if (part.ProviderName == "" || part.ProviderName == "openai") &&
+			if (part.ProviderName == "" || part.ProviderName == c.providerName) &&
 				(part.ID != "" || part.Signature != "") {
 				out = append(out, responsesInput{
 					Type: "reasoning", ID: part.ID, EncryptedContent: part.Signature,
@@ -157,7 +162,7 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 			}
 		case ai.ToolCallPart:
 			id := ""
-			if part.ProviderName == "" || part.ProviderName == "openai" {
+			if part.ProviderName == "" || part.ProviderName == c.providerName {
 				id = part.ID
 			}
 			if c.clientToolSearch && part.ToolKind == ai.ToolPartKindToolSearch {
@@ -174,7 +179,7 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				continue
 			}
 			namespace := ""
-			if part.ProviderName == "" || part.ProviderName == "openai" {
+			if part.ProviderName == "" || part.ProviderName == c.providerName {
 				namespace, _ = part.ProviderDetails["namespace"].(string)
 			}
 			out = append(out, responsesInput{
@@ -182,7 +187,7 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				Name: part.ToolName, Arguments: string(part.Args), Namespace: namespace,
 			})
 		case ai.NativeToolCallPart:
-			if !c.serverToolSearch || part.ProviderName != "openai" ||
+			if !c.serverToolSearch || part.ProviderName != c.providerName ||
 				part.ToolKind != ai.ToolPartKindToolSearch {
 				continue
 			}
@@ -198,7 +203,7 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				Arguments: arguments, Execution: "server", Status: status,
 			})
 		case ai.NativeToolReturnPart:
-			if !c.serverToolSearch || part.ProviderName != "openai" ||
+			if !c.serverToolSearch || part.ProviderName != c.providerName ||
 				part.ToolKind != ai.ToolPartKindToolSearch {
 				continue
 			}

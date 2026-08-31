@@ -211,10 +211,11 @@ The bundled providers use the same `ai.Model` interface.
 | --- | --- | --- |
 | OpenAI Chat Completions | `openai.NewModel("gpt-5-mini")` | `OPENAI_API_KEY` |
 | OpenAI Responses | `openai.NewResponsesModel("gpt-5-mini")` | `OPENAI_API_KEY` |
+| Azure OpenAI | `azure.NewModel("deployment", azure.Config{})` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
 | Anthropic | `anthropic.NewModel("claude-sonnet-4-5")` | `ANTHROPIC_API_KEY` |
 | Google Gemini | `google.NewModel("gemini-2.5-flash")` | `GEMINI_API_KEY` |
 
-Each constructor accepts an API key, base URL, HTTP client, and default model settings. This lets you use test servers, gateways, and compatible endpoints without changing the agent.
+Each constructor supports custom HTTP clients and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints, Azure API versions, and provider-specific options.
 
 ## Test an agent without network calls
 
@@ -263,6 +264,7 @@ func TestAgent(t *testing.T) {
 | Require approval | `WithApprovalRequired` and `DeferredToolResults` |
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |
 | Limit usage or cost | `UsageLimits` |
+| Configure a provider or compatible endpoint | [Provider configuration](docs/providers.md) |
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |
 | Add middleware | `Capability` and its focused hook interfaces |

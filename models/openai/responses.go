@@ -18,9 +18,13 @@ import (
 // Completions. Create one with NewResponsesModel.
 type ResponsesModel struct {
 	name                   string
+	providerName           string
 	apiKey                 string
 	baseURL                string
 	httpClient             *http.Client
+	providerHeaders        http.Header
+	providerQuery          url.Values
+	prepareRequest         RequestPreparationFunc
 	strictToolSupport      bool
 	deferredToolSupport    bool
 	defaultSettings        ai.ModelSettings
@@ -33,10 +37,12 @@ type ResponsesModel struct {
 func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 	m := NewModel(name, opts...)
 	return &ResponsesModel{
-		name: m.name, apiKey: m.apiKey, baseURL: m.baseURL, httpClient: m.httpClient,
-		strictToolSupport: m.strictToolSupport, deferredToolSupport: m.deferredToolSupport,
-		defaultSettings: m.defaultSettings, background: m.background,
-		backgroundPollInterval: m.backgroundPollInterval,
+		name: m.name, providerName: m.providerName, apiKey: m.apiKey,
+		baseURL: m.baseURL, httpClient: m.httpClient,
+		providerHeaders: m.providerHeaders.Clone(), providerQuery: cloneURLValues(m.providerQuery),
+		prepareRequest: m.prepareRequest, strictToolSupport: m.strictToolSupport,
+		deferredToolSupport: m.deferredToolSupport, defaultSettings: m.defaultSettings,
+		background: m.background, backgroundPollInterval: m.backgroundPollInterval,
 	}
 }
 
@@ -48,7 +54,7 @@ func (m *ResponsesModel) DefaultModelSettings() ai.ModelSettings { return m.defa
 
 // Request implements ai.Model.
 func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
-	if responseID, ok := suspendedResponsesID(msgs); ok {
+	if responseID, ok := suspendedResponsesID(msgs, m.providerName); ok {
 		return m.retrieveResponse(ctx, responseID, params.Settings.ExtraHeaders)
 	}
 	payload, err := m.buildResponsesPayload(msgs, params, true)
@@ -64,8 +70,9 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	if err := m.configureRequest(req, params.Settings.ExtraHeaders); err != nil {
+		return nil, err
+	}
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -81,8 +88,7 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 	}
 	response, err := parseResponsesResponse(data)
 	if response != nil {
-		response.ProviderName = "openai"
-		response.ProviderURL = m.baseURL
+		setResponsesProvider(response, m.providerName, m.baseURL)
 	}
 	return response, err
 }
@@ -105,8 +111,9 @@ func (m *ResponsesModel) CompactMessages(
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	if err := m.configureRequest(req, params.Settings.ExtraHeaders); err != nil {
+		return nil, err
+	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai: compact request: %w", err)
@@ -132,8 +139,7 @@ func (m *ResponsesModel) CompactMessages(
 	}
 	part.ProviderDetails[ai.StandingPromptPlantedKey] = true
 	compacted.Parts[len(compacted.Parts)-1] = part
-	compacted.ProviderName = "openai"
-	compacted.ProviderURL = m.baseURL
+	setResponsesProvider(compacted, m.providerName, m.baseURL)
 	return compacted, nil
 }
 
@@ -147,7 +153,7 @@ func (m *ResponsesModel) ContinuationDelay(response ai.ModelResponse) time.Durat
 
 // CancelSuspendedResponse implements ai.SuspendedResponseCanceler.
 func (m *ResponsesModel) CancelSuspendedResponse(ctx context.Context, response ai.ModelResponse) error {
-	if response.ProviderName != "openai" || response.ProviderResponseID == "" ||
+	if response.ProviderName != m.providerName || response.ProviderResponseID == "" ||
 		!providerBool(response.ProviderDetails, "background") {
 		return nil
 	}
@@ -158,7 +164,9 @@ func (m *ResponsesModel) CancelSuspendedResponse(ctx context.Context, response a
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
+	if err := m.configureRequest(req, nil); err != nil {
+		return err
+	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return fmt.Errorf("openai: cancel background response: %w", err)
@@ -183,8 +191,9 @@ func (m *ResponsesModel) retrieveResponse(
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
-	setExtraHeaders(req, headers)
+	if err := m.configureRequest(req, headers); err != nil {
+		return nil, err
+	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("openai: retrieve background response: %w", err)
@@ -199,18 +208,21 @@ func (m *ResponsesModel) retrieveResponse(
 	}
 	response, err := parseResponsesResponse(data)
 	if response != nil {
-		response.ProviderName = "openai"
-		response.ProviderURL = m.baseURL
+		setResponsesProvider(response, m.providerName, m.baseURL)
 	}
 	return response, err
 }
 
-func suspendedResponsesID(messages []ai.ModelMessage) (string, bool) {
+func suspendedResponsesID(messages []ai.ModelMessage, providerNames ...string) (string, bool) {
+	providerName := "openai"
+	if len(providerNames) > 0 {
+		providerName = providerNames[0]
+	}
 	if len(messages) == 0 {
 		return "", false
 	}
 	response, ok := messages[len(messages)-1].(ai.ModelResponse)
-	if !ok || response.State != ai.ModelResponseStateSuspended || response.ProviderName != "openai" ||
+	if !ok || response.State != ai.ModelResponseStateSuspended || response.ProviderName != providerName ||
 		response.ProviderResponseID == "" || !providerBool(response.ProviderDetails, "background") {
 		return "", false
 	}
@@ -220,6 +232,33 @@ func suspendedResponsesID(messages []ai.ModelMessage) (string, bool) {
 func providerBool(details map[string]any, key string) bool {
 	value, _ := details[key].(bool)
 	return value
+}
+
+func setResponsesProvider(response *ai.ModelResponse, providerName, providerURL string) {
+	response.ProviderName = providerName
+	response.ProviderURL = providerURL
+	for index, responsePart := range response.Parts {
+		switch part := responsePart.(type) {
+		case ai.TextPart:
+			part.ProviderName = providerName
+			response.Parts[index] = part
+		case ai.ThinkingPart:
+			part.ProviderName = providerName
+			response.Parts[index] = part
+		case ai.ToolCallPart:
+			part.ProviderName = providerName
+			response.Parts[index] = part
+		case ai.NativeToolCallPart:
+			part.ProviderName = providerName
+			response.Parts[index] = part
+		case ai.NativeToolReturnPart:
+			part.ProviderName = providerName
+			response.Parts[index] = part
+		case ai.CompactionPart:
+			part.ProviderName = providerName
+			response.Parts[index] = part
+		}
+	}
 }
 
 type responsesRequest struct {
@@ -331,13 +370,14 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 	}
 	converter := responsesMessageConverter{
+		providerName:     m.providerName,
 		clientToolSearch: activeToolSearch,
 		serverToolSearch: serverToolSearch,
 		deferred:         deferred,
 		rendered:         make(map[string]struct{}),
 		strictSupport:    m.strictToolSupport,
 	}
-	for _, msg := range trimOpenAICompactionMessages(msgs) {
+	for _, msg := range trimOpenAICompactionMessages(msgs, m.providerName) {
 		items, err := converter.convert(msg)
 		if err != nil {
 			return nil, err
@@ -587,13 +627,13 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 				},
 			})
 			if outputIndex, ok := searchPairs[itemIndex]; ok {
-				resp.Parts = append(resp.Parts, responsesToolSearchReturn(rr.Output[outputIndex], callID, timestamp))
+				resp.Parts = append(resp.Parts, responsesToolSearchReturn(rr.Output[outputIndex], callID, timestamp, "openai"))
 			}
 		case "tool_search_output":
 			if item.Execution != "server" || pairedOutputs[itemIndex] {
 				continue
 			}
-			resp.Parts = append(resp.Parts, responsesToolSearchReturn(item, responsesEffectiveCallID(item), timestamp))
+			resp.Parts = append(resp.Parts, responsesToolSearchReturn(item, responsesEffectiveCallID(item), timestamp, "openai"))
 		case "reasoning":
 			if len(item.Summary) == 0 && item.EncryptedContent != "" {
 				resp.Parts = append(resp.Parts, ai.ThinkingPart{
@@ -656,7 +696,9 @@ func pairResponsesToolSearchItems(items []responsesOutputItem) (map[int]int, map
 	return pairs, pairedOutputs
 }
 
-func responsesToolSearchReturn(item responsesOutputItem, callID string, timestamp time.Time) ai.NativeToolReturnPart {
+func responsesToolSearchReturn(
+	item responsesOutputItem, callID string, timestamp time.Time, providerName string,
+) ai.NativeToolReturnPart {
 	matches := make([]ai.ToolSearchMatch, 0, len(item.Tools))
 	for _, tool := range item.Tools {
 		if tool.Type == "function" && tool.Name != "" {
@@ -665,7 +707,7 @@ func responsesToolSearchReturn(item responsesOutputItem, callID string, timestam
 	}
 	return ai.NativeToolReturnPart{
 		ToolName: ai.ToolSearchName, ToolCallID: callID, ToolKind: ai.ToolPartKindToolSearch,
-		Content: ai.ToolSearchResult{DiscoveredTools: matches}, Timestamp: timestamp, ProviderName: "openai",
+		Content: ai.ToolSearchResult{DiscoveredTools: matches}, Timestamp: timestamp, ProviderName: providerName,
 		ProviderDetails: map[string]any{
 			"id": item.ID, "call_id": responsesNullableCallID(item.CallID),
 			"execution": item.Execution, "status": item.Status,
@@ -735,7 +777,12 @@ func (m *ResponsesModel) SupportsToolSearchStrategy(strategy ai.ToolSearchStrate
 }
 
 // NativeToolSearchProvider identifies histories this model can replay natively.
-func (*ResponsesModel) NativeToolSearchProvider() string { return "openai" }
+func (m *ResponsesModel) NativeToolSearchProvider() string {
+	if !m.deferredToolSupport {
+		return ""
+	}
+	return m.providerName
+}
 
 var (
 	_ ai.Model                        = (*ResponsesModel)(nil)

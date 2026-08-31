@@ -9,7 +9,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -18,9 +20,13 @@ import (
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
 type Model struct {
 	name                   string
+	providerName           string
 	apiKey                 string
 	baseURL                string
 	httpClient             *http.Client
+	providerHeaders        http.Header
+	providerQuery          url.Values
+	prepareRequest         RequestPreparationFunc
 	strictToolSupport      bool
 	deferredToolSupport    bool
 	defaultSettings        ai.ModelSettings
@@ -31,12 +37,64 @@ type Model struct {
 // Option configures a Model.
 type Option func(*Model)
 
+// RequestPreparationFunc prepares an HTTP request after provider defaults and
+// before per-request extra headers are applied. It can add dynamic credentials.
+// The function must be safe for concurrent calls and must not retain the request.
+type RequestPreparationFunc func(*http.Request) error
+
+// ProviderConfig configures an OpenAI-compatible endpoint. Name is persisted
+// in message history and telemetry. Headers and Query are copied.
+type ProviderConfig struct {
+	Name           string
+	BaseURL        string
+	APIKey         string
+	HTTPClient     *http.Client
+	Headers        http.Header
+	Query          url.Values
+	PrepareRequest RequestPreparationFunc
+}
+
+// WithProvider configures an OpenAI-compatible provider in one option.
+func WithProvider(provider ProviderConfig) Option {
+	if provider.Name == "" {
+		panic("openai: provider name must not be empty")
+	}
+	if provider.BaseURL == "" {
+		panic("openai: provider base URL must not be empty")
+	}
+	headers := provider.Headers.Clone()
+	query := cloneURLValues(provider.Query)
+	return func(m *Model) {
+		m.providerName = provider.Name
+		m.baseURL = strings.TrimRight(provider.BaseURL, "/")
+		m.apiKey = provider.APIKey
+		if provider.HTTPClient != nil {
+			m.httpClient = provider.HTTPClient
+		}
+		m.providerHeaders = headers.Clone()
+		m.providerQuery = cloneURLValues(query)
+		m.prepareRequest = provider.PrepareRequest
+	}
+}
+
+// WithProviderName changes the provider identity persisted in message history
+// and telemetry. Use it with WithBaseURL for OpenAI-compatible endpoints.
+func WithProviderName(name string) Option {
+	if name == "" {
+		panic("openai: provider name must not be empty")
+	}
+	return func(m *Model) { m.providerName = name }
+}
+
 // WithAPIKey sets the API key. The default is the OPENAI_API_KEY environment variable.
+// An empty key disables the default Authorization header.
 func WithAPIKey(key string) Option { return func(m *Model) { m.apiKey = key } }
 
 // WithBaseURL points the model at a different endpoint, such as a proxy or
-// an OpenAI-compatible provider. The default is https://api.openai.com/v1.
-func WithBaseURL(url string) Option { return func(m *Model) { m.baseURL = url } }
+// an OpenAI-compatible provider. The default is OPENAI_BASE_URL or https://api.openai.com/v1.
+func WithBaseURL(url string) Option {
+	return func(m *Model) { m.baseURL = strings.TrimRight(url, "/") }
+}
 
 // WithHTTPClient sets the HTTP client used for requests.
 func WithHTTPClient(c *http.Client) Option { return func(m *Model) { m.httpClient = c } }
@@ -75,10 +133,15 @@ func WithBackgroundPollInterval(interval time.Duration) Option {
 
 // NewModel creates a Model for the named OpenAI model, e.g. "gpt-5".
 func NewModel(name string, opts ...Option) *Model {
+	baseURL := os.Getenv("OPENAI_BASE_URL")
+	if baseURL == "" {
+		baseURL = "https://api.openai.com/v1"
+	}
 	m := &Model{
 		name:                   name,
+		providerName:           "openai",
 		apiKey:                 os.Getenv("OPENAI_API_KEY"),
-		baseURL:                "https://api.openai.com/v1",
+		baseURL:                strings.TrimRight(baseURL, "/"),
 		httpClient:             http.DefaultClient,
 		strictToolSupport:      true,
 		deferredToolSupport:    true,
@@ -111,8 +174,9 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	if err := m.configureRequest(req, params.Settings.ExtraHeaders); err != nil {
+		return nil, err
+	}
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -128,7 +192,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	}
 	response, err := parseResponse(data)
 	if response != nil {
-		response.ProviderName = "openai"
+		response.ProviderName = m.providerName
 		response.ProviderURL = m.baseURL
 	}
 	return response, err

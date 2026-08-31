@@ -32,9 +32,10 @@ func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, param
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+m.apiKey)
 	req.Header.Set("Accept", "text/event-stream")
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	if err := m.configureRequest(req, params.Settings.ExtraHeaders); err != nil {
+		return nil, err
+	}
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -114,7 +115,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 				}
 				yield(ai.FinishEvent{
 					Usage: usage, ModelName: modelName, Timestamp: timestamp,
-					ProviderName: "openai", ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: responseID, FinishReason: openAIChatFinishReason(finishReason),
 					State: ai.ModelResponseStateComplete,
 				}, nil)

@@ -309,6 +309,10 @@ type ThinkingPart struct {
 
 func (ThinkingPart) responsePartKind() string { return "thinking" }
 
+// StandingPromptPlantedKey marks provider details for a compaction built from
+// a window that already contained the run's standing prompt.
+const StandingPromptPlantedKey = "pydantic_ai_standing_prompt_planted"
+
 // CompactionPart summarizes history that a provider compacted. ProviderDetails
 // may contain opaque data required when sending the part back to that provider.
 type CompactionPart struct {

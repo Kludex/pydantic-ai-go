@@ -23,6 +23,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 		streamed = body.Stream
 		sseHandler(t, []string{
 			`{"type":"response.created","response":{"model":"gpt-5"}}`,
+			`{"type":"response.output_item.added","item":{"id":"cmp","type":"compaction","encrypted_content":"opaque"}}`,
 			`{"type":"response.output_item.added","item":{"id":"msg","type":"message"}}`,
 			`{"type":"response.output_text.delta","item_id":"msg","delta":"Hi"}`,
 			`{"type":"response.output_item.added","item":{"id":"reason","type":"reasoning","encrypted_content":"signature"}}`,
@@ -33,7 +34,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 			`{"type":"response.function_call_arguments.delta","item_id":"fc","delta":"{\"x\":"}`,
 			`{"type":"response.function_call_arguments.delta","item_id":"fc","delta":"1}"}`,
 			`{"type":"response.output_text.done"}`,
-			`{"type":"response.completed","response":{"id":"response-stream","model":"gpt-5","created_at":1735689600.25,"status":"completed","usage":{"input_tokens":5,"output_tokens":3}}}`,
+			`{"type":"response.completed","response":{"id":"response-stream","model":"gpt-5","created_at":1735689600.25,"status":"completed","output":[{"id":"cmp","type":"compaction","encrypted_content":"opaque"}],"usage":{"input_tokens":5,"output_tokens":3}}}`,
 			`[DONE]`,
 		})(w, r)
 	})
@@ -47,6 +48,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 	var text, thinking, args string
 	var textPartID, textID, thinkingPartID, thinkingID, thinkingSignature, argsPartID string
 	var start ai.ToolCallStartEvent
+	var compaction ai.CompactionEvent
 	var finish ai.FinishEvent
 	for _, event := range events {
 		switch event := event.(type) {
@@ -63,6 +65,8 @@ func TestResponsesStreamEvents(t *testing.T) {
 			if event.SignatureDelta != "" {
 				thinkingSignature = event.SignatureDelta
 			}
+		case ai.CompactionEvent:
+			compaction = event
 		case ai.ToolCallStartEvent:
 			start = event
 		case ai.ToolCallDeltaEvent:
@@ -72,8 +76,13 @@ func TestResponsesStreamEvents(t *testing.T) {
 			finish = event
 		}
 	}
-	if text != "Hi" || thinking != "ABC" || start.ToolName != "work" || start.ToolCallID != "c1" || args != `{"x":1}` {
-		t.Fatalf("unexpected events text=%q thinking=%q start=%+v args=%q", text, thinking, start, args)
+	if text != "Hi" || thinking != "ABC" || start.ToolName != "work" || start.ToolCallID != "c1" ||
+		args != `{"x":1}` || compaction.PartID != "item:cmp" || compaction.ID != "cmp" ||
+		compaction.ProviderDetails["encrypted_content"] != "opaque" {
+		t.Fatalf(
+			"unexpected events text=%q thinking=%q compaction=%+v start=%+v args=%q",
+			text, thinking, compaction, start, args,
+		)
 	}
 	if textPartID != "output:0:content:0:text" || textID != "msg" ||
 		thinkingPartID != "item:reason:thinking:0" || thinkingID != "reason" || thinkingSignature != "signature" ||
@@ -83,6 +92,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 	}
 	if finish.ModelName != "gpt-5" || finish.Usage.Requests != 1 || finish.Usage.InputTokens != 5 ||
 		finish.Usage.OutputTokens != 3 || finish.ProviderName != "openai" || finish.ProviderURL == "" ||
+		finish.ProviderDetails["compaction"] != true ||
 		finish.ProviderResponseID != "response-stream" || finish.FinishReason != ai.FinishReasonStop ||
 		finish.State != ai.ModelResponseStateComplete || finish.Timestamp.IsZero() ||
 		finish.ProviderDetails["finish_reason"] != "completed" || finish.ProviderDetails["timestamp"] == nil {
@@ -741,4 +751,63 @@ func TestResponsesStreamEarlyBreak(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestStoppingResponsesCompactionStreams(t *testing.T) {
+	t.Run("SSE", func(t *testing.T) {
+		model := newResponsesServer(t, sseHandler(t, []string{
+			`{"type":"response.output_item.added","item":{"id":"cmp","type":"compaction","encrypted_content":"opaque"}}`,
+			`{"type":"response.completed","response":{"id":"response","model":"gpt-5","status":"completed","usage":{}}}`,
+		}))
+		events, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := false
+		for event, eventErr := range events {
+			if eventErr != nil {
+				t.Fatal(eventErr)
+			}
+			if _, ok := event.(ai.CompactionEvent); ok {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			t.Fatal("SSE compaction was not emitted")
+		}
+	})
+
+	t.Run("static retrieval", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"id":"job", "model":"gpt-5", "status":"completed",
+				"output":[
+					{"id":"cmp","type":"compaction","encrypted_content":"opaque"},
+					{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}
+				], "usage":{}
+			}`))
+		})
+		history := []ai.ModelMessage{ai.ModelResponse{
+			ProviderName: "openai", ProviderResponseID: "job", State: ai.ModelResponseStateSuspended,
+			ProviderDetails: map[string]any{"background": true},
+		}}
+		events, err := model.StreamRequest(t.Context(), history, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen := false
+		for event, eventErr := range events {
+			if eventErr != nil {
+				t.Fatal(eventErr)
+			}
+			if _, ok := event.(ai.CompactionEvent); ok {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			t.Fatal("static compaction was not emitted")
+		}
+	})
 }

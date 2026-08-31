@@ -880,3 +880,125 @@ func TestResponsesParallelToolCallsSetting(t *testing.T) {
 		t.Fatalf("parallel setting not forwarded: %v", gotBody)
 	}
 }
+
+func TestResponsesCompactionRoundTripTrimsHistory(t *testing.T) {
+	var input []map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []map[string]any `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		input = body.Input
+		_, _ = w.Write([]byte(`{
+			"id":"response", "model":"gpt-5",
+			"output":[
+				{"id":"cmp-new","type":"compaction","encrypted_content":"new-encrypted"},
+				{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}
+			],
+			"usage":{"input_tokens":1,"output_tokens":1}
+		}`))
+	})
+	messages := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.SystemPromptPart{Content: "standing"}, ai.UserPromptPart{Content: "drop"},
+		}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "drop older response"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.TextPart{Content: "drop before boundary"},
+			ai.CompactionPart{
+				Content: "summary", ID: "cmp-old", ProviderName: "openai",
+				ProviderDetails: map[string]any{"encrypted_content": "old-encrypted"},
+			},
+			ai.TextPart{Content: "keep after boundary"},
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "keep tail"}}},
+	}
+	response, err := model.Request(t.Context(), messages, ai.ModelRequestParams{AllowText: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(input) != 4 || input[0]["role"] != "system" || input[0]["content"] != "standing" ||
+		input[1]["type"] != "compaction" || input[1]["id"] != "cmp-old" ||
+		input[1]["encrypted_content"] != "old-encrypted" || input[2]["content"] != "keep after boundary" ||
+		input[3]["content"] != "keep tail" {
+		t.Fatalf("unexpected compacted Responses input: %+v", input)
+	}
+	compaction, ok := response.Parts[0].(ai.CompactionPart)
+	if !ok || compaction.ID != "cmp-new" || compaction.ProviderName != "openai" ||
+		compaction.ProviderDetails["encrypted_content"] != "new-encrypted" ||
+		response.ProviderDetails["compaction"] != true || response.Text() != "done" {
+		t.Fatalf("unexpected Responses compaction: %+v", response.Parts)
+	}
+}
+
+func TestResponsesIgnoresInvalidCompactionBoundaries(t *testing.T) {
+	for name, compaction := range map[string]ai.CompactionPart{
+		"foreign": {
+			Content: "summary", ProviderName: "anthropic",
+			ProviderDetails: map[string]any{"encrypted_content": "foreign"},
+		},
+		"missing encrypted content": {Content: "summary", ProviderName: "openai"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var input []map[string]any
+			model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+				var body struct {
+					Input []map[string]any `json:"input"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				input = body.Input
+				_, _ = w.Write([]byte(`{
+					"id":"response", "model":"gpt-5", "status":"completed",
+					"output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}],
+					"usage":{"input_tokens":1,"output_tokens":1}
+				}`))
+			})
+			messages := []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "keep"}}},
+				ai.ModelResponse{Parts: []ai.ResponsePart{compaction, ai.TextPart{Content: "assistant"}}},
+			}
+			if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{AllowText: true}); err != nil {
+				t.Fatal(err)
+			}
+			if len(input) != 2 || input[0]["content"] != "keep" || input[1]["content"] != "assistant" {
+				t.Fatalf("invalid compaction changed input: %+v", input)
+			}
+		})
+	}
+}
+
+func TestResponsesCompactionDoesNotDuplicatePlantedPrompt(t *testing.T) {
+	var input []map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Input []map[string]any `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		input = body.Input
+		_, _ = w.Write([]byte(`{
+			"id":"response", "model":"gpt-5", "status":"completed",
+			"output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}],
+			"usage":{}
+		}`))
+	})
+	messages := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.SystemPromptPart{Content: "standing"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.CompactionPart{
+			ProviderName: "openai", ProviderDetails: map[string]any{
+				"encrypted_content": "opaque", ai.StandingPromptPlantedKey: true,
+			},
+		}}},
+	}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(input) != 1 || input[0]["type"] != "compaction" {
+		t.Fatalf("planted prompt was duplicated: %+v", input)
+	}
+}

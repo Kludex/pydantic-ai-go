@@ -232,6 +232,8 @@ OpenAI Chat and Gemini accept presence and frequency penalties. OpenAI Chat also
 
 Use `ExtraHeaders` for provider preview headers or gateway routing. OpenAI and Anthropic also accept `ExtraBody` for new provider fields that do not have a typed setting yet. Both maps are detached per run. Extra body fields cannot replace typed request fields. This prevents an extension value from silently changing the model, tools, output schema, or another validated setting.
 
+`CompactionPart` preserves a provider-generated summary or opaque context blob. Anthropic and OpenAI Responses send valid parts back only to their originating provider and trim history before the latest boundary. Anthropic enables the compaction beta and a default `context_management` edit; set `ExtraBody["context_management"]` to override it. OpenAI Responses requires `ProviderDetails["encrypted_content"]`. A post-compaction tool reveal remains visible, while discoveries summarized behind the boundary are hidden.
+
 A tool can stop its run through `RunContext.Cancel`. Cancellation reaches sibling tools through `context.Context`, waits for their cleanup, and returns an error matching `ai.ErrRunCancelled`:
 
 ```go

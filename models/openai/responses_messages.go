@@ -3,9 +3,52 @@ package openai
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
+
+func trimOpenAICompactionMessages(messages []ai.ModelMessage) []ai.ModelMessage {
+	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
+		response, ok := messages[messageIndex].(ai.ModelResponse)
+		if !ok {
+			continue
+		}
+		for partIndex := len(response.Parts) - 1; partIndex >= 0; partIndex-- {
+			part, ok := response.Parts[partIndex].(ai.CompactionPart)
+			if !ok || part.ProviderName != "openai" {
+				continue
+			}
+			encryptedContent, _ := part.ProviderDetails["encrypted_content"].(string)
+			if encryptedContent == "" {
+				continue
+			}
+			response.Parts = slices.Clone(response.Parts[partIndex:])
+			trimmed := make([]ai.ModelMessage, 0, len(messages)-messageIndex+1)
+			standingPromptPlanted, _ := part.ProviderDetails[ai.StandingPromptPlantedKey].(bool)
+			if !standingPromptPlanted {
+				var standingParts []ai.RequestPart
+				for _, earlier := range messages[:messageIndex] {
+					request, ok := earlier.(ai.ModelRequest)
+					if !ok {
+						continue
+					}
+					for _, requestPart := range request.Parts {
+						if system, ok := requestPart.(ai.SystemPromptPart); ok {
+							standingParts = append(standingParts, system)
+						}
+					}
+				}
+				if len(standingParts) > 0 {
+					trimmed = append(trimmed, ai.ModelRequest{Parts: standingParts})
+				}
+			}
+			trimmed = append(trimmed, response)
+			return append(trimmed, messages[messageIndex+1:]...)
+		}
+	}
+	return messages
+}
 
 func prepareResponsesFunctionTool(definition ai.ToolDefinition, strictSupport bool) (responsesTool, error) {
 	schema, strict, err := prepareOpenAITool(definition, strictSupport)
@@ -93,6 +136,17 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				id = part.ID
 			}
 			out = append(out, responsesInput{Role: "assistant", Content: part.Content, ID: id})
+		case ai.CompactionPart:
+			if part.ProviderName != "openai" {
+				continue
+			}
+			encryptedContent, _ := part.ProviderDetails["encrypted_content"].(string)
+			if encryptedContent == "" {
+				continue
+			}
+			out = append(out, responsesInput{
+				Type: "compaction", ID: part.ID, EncryptedContent: encryptedContent,
+			})
 		case ai.ThinkingPart:
 			if (part.ProviderName == "" || part.ProviderName == "openai") &&
 				(part.ID != "" || part.Signature != "") {

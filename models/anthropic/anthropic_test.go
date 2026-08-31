@@ -392,10 +392,13 @@ func TestNativeDeferredToolRendering(t *testing.T) {
 	first := ai.ToolDefinition{Name: "first", Schema: schema, DeferLoading: true}
 	second := ai.ToolDefinition{Name: "second", Schema: schema, DeferLoading: true}
 	messages := []ai.ModelMessage{
-		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
-			ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
-			Args: []byte(`{"queries":["first"]}`),
-		}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.CompactionPart{Content: "Summary.", ProviderName: "anthropic"},
+			ai.ToolCallPart{
+				ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+				Args: []byte(`{"queries":["first"]}`),
+			},
+		}},
 		ai.ModelRequest{Parts: []ai.RequestPart{
 			ai.ToolReturnPart{
 				ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
@@ -418,8 +421,8 @@ func TestNativeDeferredToolRendering(t *testing.T) {
 		t.Fatal(err)
 	}
 	wireTools := gotBody["tools"].([]any)
-	if gotBeta != "mid-conversation-tool-changes-2026-07-01" {
-		t.Fatalf("tool-addition beta header missing: %q", gotBeta)
+	if gotBeta != "mid-conversation-tool-changes-2026-07-01,compact-2026-01-12" {
+		t.Fatalf("tool-addition and compaction beta headers missing: %q", gotBeta)
 	}
 	if len(wireTools) != 3 || wireTools[0].(map[string]any)["name"] != ai.ToolSearchName ||
 		wireTools[0].(map[string]any)["defer_loading"] != nil ||
@@ -884,5 +887,130 @@ func TestParallelToolCallsSetting(t *testing.T) {
 				t.Fatalf("unexpected tool choice %v", choice)
 			}
 		})
+	}
+}
+
+func TestAnthropicCompactionRoundTripTrimsHistory(t *testing.T) {
+	var body map[string]any
+	var beta string
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		beta = r.Header.Get("anthropic-beta")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"response", "model":"claude", "stop_reason":"end_turn",
+			"content":[
+				{"type":"compaction","content":"New summary.","encrypted_content":"new-encrypted"},
+				{"type":"text","text":"done"}
+			],
+			"usage":{"input_tokens":1,"output_tokens":1}
+		}`))
+	})
+	messages := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "drop"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.TextPart{Content: "drop before boundary"},
+			ai.CompactionPart{
+				Content: "Old summary.", ProviderName: "anthropic",
+				ProviderDetails: map[string]any{"encrypted_content": "old-encrypted"},
+			},
+			ai.TextPart{Content: "keep after boundary"},
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "keep tail"}}},
+	}
+	response, err := model.Request(t.Context(), messages, ai.ModelRequestParams{
+		AllowText: true, Instructions: "standing",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wireMessages := body["messages"].([]any)
+	contextManagement := body["context_management"].(map[string]any)
+	edits := contextManagement["edits"].([]any)
+	if len(wireMessages) != 2 || body["system"] != "standing" || len(edits) != 1 ||
+		edits[0].(map[string]any)["type"] != "compact_20260112" ||
+		!strings.Contains(beta, "compact-2026-01-12") {
+		t.Fatalf("unexpected compacted Anthropic request messages=%+v beta=%q", wireMessages, beta)
+	}
+	assistant := wireMessages[0].(map[string]any)["content"].([]any)
+	if len(assistant) != 2 || assistant[0].(map[string]any)["type"] != "compaction" ||
+		assistant[0].(map[string]any)["content"] != "Old summary." ||
+		assistant[0].(map[string]any)["encrypted_content"] != "old-encrypted" ||
+		assistant[1].(map[string]any)["text"] != "keep after boundary" {
+		t.Fatalf("unexpected Anthropic compaction blocks: %+v", assistant)
+	}
+	compaction, ok := response.Parts[0].(ai.CompactionPart)
+	if !ok || compaction.Content != "New summary." || compaction.ProviderName != "anthropic" ||
+		compaction.ProviderDetails["encrypted_content"] != "new-encrypted" || response.Text() != "done" {
+		t.Fatalf("unexpected Anthropic compaction response: %+v", response.Parts)
+	}
+}
+
+func TestAnthropicIgnoresInvalidCompactionBoundaries(t *testing.T) {
+	for name, compaction := range map[string]ai.CompactionPart{
+		"foreign": {Content: "Summary.", ProviderName: "openai"},
+		"contentless": {
+			ProviderName: "anthropic", ProviderDetails: map[string]any{"encrypted_content": "opaque"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			var beta string
+			model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				beta = r.Header.Get("anthropic-beta")
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				_, _ = w.Write([]byte(`{
+					"id":"response", "model":"claude", "stop_reason":"end_turn",
+					"content":[{"type":"text","text":"done"}], "usage":{}
+				}`))
+			})
+			messages := []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "keep"}}},
+				ai.ModelResponse{Parts: []ai.ResponsePart{compaction, ai.TextPart{Content: "assistant"}}},
+			}
+			if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{AllowText: true}); err != nil {
+				t.Fatal(err)
+			}
+			if len(body["messages"].([]any)) != 2 || strings.Contains(beta, "compact-2026-01-12") {
+				t.Fatalf("invalid compaction changed Anthropic input=%+v beta=%q", body["messages"], beta)
+			}
+		})
+	}
+}
+
+func TestAnthropicCompactionContextManagementOverride(t *testing.T) {
+	var body map[string]any
+	var beta string
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		beta = r.Header.Get("anthropic-beta")
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"response", "model":"claude", "stop_reason":"end_turn",
+			"content":[{"type":"text","text":"done"}], "usage":{}
+		}`))
+	})
+	messages := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.CompactionPart{
+		Content: "Summary.", ProviderName: "anthropic",
+	}}}}
+	settings := ai.ModelSettings{
+		ExtraHeaders: map[string]string{"anthropic-beta": "custom-beta, compact-2026-01-12"},
+		ExtraBody: map[string]any{"context_management": map[string]any{
+			"edits": []any{map[string]any{"type": "custom"}},
+		}},
+	}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{
+		AllowText: true, Settings: settings,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	edits := body["context_management"].(map[string]any)["edits"].([]any)
+	if len(edits) != 1 || edits[0].(map[string]any)["type"] != "custom" ||
+		beta != "custom-beta,compact-2026-01-12" {
+		t.Fatalf("compaction overrides were replaced: body=%+v beta=%q", body, beta)
 	}
 }

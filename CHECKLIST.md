@@ -47,7 +47,7 @@ Status:
 - [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
-- [~] Provider-neutral compaction parts preserve readable summaries, opaque IDs/details, serialization, stream lifecycle, and deferred-tool visibility boundaries. Provider-native compaction request/response mapping and builtin-tool return parts remain.
+- [~] Compaction parts preserve readable summaries, opaque IDs/details, serialization, stream lifecycle, deferred-tool visibility boundaries, and same-provider Anthropic/OpenAI Responses round trips with latest-boundary history trimming. Explicit compaction capabilities/settings and builtin-tool return parts remain.
 - [x] Tool availability delta parts, including the legacy `added` decode alias and upstream-compatible serialization.
 - [x] Implemented requests/responses preserve timestamps, local metadata, run/conversation IDs, normalized finish reasons, provider details/URLs/names, response IDs, and lifecycle state, including deprecated `vendor_*` aliases.
 - [x] Text, thinking, and function-tool-call parts preserve IDs, signatures, provider names/details, and typed tool kinds through serialization, fallback replay, keyed streaming accumulation, and consumer-safe copies.
@@ -128,8 +128,8 @@ Status:
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: text/reasoning/function-call streaming plus authoritative terminal snapshots, response/item IDs, encrypted reasoning, function namespaces, portable reasoning effort, logprob requests/static text metadata, service tiers, status, timestamps, configurable background create/poll/retrieve/cancel/detach continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; streamed logprob metadata, provider-managed search, native output, multimodal content, and other builtin tools remain.
-- [~] Anthropic Messages: text/thinking/function-tool streaming, portable effort-to-budget and explicit-budget thinking configuration, service-tier mapping and response metadata, signed-thinking round trips, multimodal input, response IDs, stop reasons, automatic ordinary/streamed `pause_turn` continuation, and provider-native deferred-definition/reveal rendering; adaptive thinking profiles, native server search, citations, and other native tools remain.
+- [~] OpenAI Responses: text/reasoning/function-call/compaction streaming plus authoritative terminal snapshots, response/item IDs, encrypted reasoning and compaction round trips, latest-compaction history trimming with standing-prompt provenance, function namespaces, portable reasoning effort, logprob requests/static text metadata, service tiers, status, timestamps, configurable background create/poll/retrieve/cancel/detach continuation, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; explicit compaction, streamed logprob metadata, provider-managed search, native output, multimodal content, and other builtin tools remain.
+- [~] Anthropic Messages: text/thinking/function-tool/compaction streaming, portable effort-to-budget and explicit-budget thinking configuration, service-tier mapping and response metadata, signed-thinking and readable/encrypted compaction round trips, latest-compaction trimming, required beta/default context management with extension overrides, multimodal input, response IDs, stop reasons, automatic ordinary/streamed `pause_turn` continuation, and provider-native deferred-definition/reveal rendering; explicit compaction configuration, adaptive thinking profiles, native server search, citations, and other native tools remain.
 - [~] Google Gemini: text/thinking/function-tool streaming, generation-aware thinking levels/budgets and thought inclusion, portable penalties/logprobs/service tiers, returned static/streamed logprob and tier metadata, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
 - [ ] Azure OpenAI.
@@ -234,6 +234,6 @@ Status:
 1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
 2. Audit upstream node lifecycle semantics against the plain loop and document the focused request/tool/output replacements.
 3. Add provider-managed search for Anthropic and OpenAI Responses; OpenAI Responses client search already uses native wire items in streaming and non-streaming requests.
-4. Add provider-native compaction mapping and configuration for Anthropic and OpenAI Responses; the provider-neutral part and visibility reset are complete.
+4. Add explicit compaction capabilities and provider-specific triggering settings; Anthropic/OpenAI Responses mapping, trimming, and visibility reset are complete.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
 6. Extend upstream message fixtures as remaining persisted part types land.

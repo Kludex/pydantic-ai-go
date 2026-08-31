@@ -32,8 +32,8 @@ func (m *Model) StreamRequest(
 	if err != nil {
 		return nil, err
 	}
-	m.setRequestHeaders(req, payload, true)
 	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	m.setRequestHeaders(req, payload, true)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -59,13 +59,15 @@ type streamEvent struct {
 		Usage anthropicUsage `json:"usage"`
 	} `json:"message"`
 	ContentBlock struct {
-		Type      string          `json:"type"`
-		Text      string          `json:"text"`
-		Thinking  string          `json:"thinking"`
-		Signature string          `json:"signature"`
-		ID        string          `json:"id"`
-		Name      string          `json:"name"`
-		Input     json.RawMessage `json:"input"`
+		Type              string          `json:"type"`
+		Text              string          `json:"text"`
+		Thinking          string          `json:"thinking"`
+		Signature         string          `json:"signature"`
+		ID                string          `json:"id"`
+		Name              string          `json:"name"`
+		Input             json.RawMessage `json:"input"`
+		CompactionContent string          `json:"content"`
+		EncryptedContent  string          `json:"encrypted_content"`
 	} `json:"content_block"`
 	Delta struct {
 		Type        string `json:"type"`
@@ -164,6 +166,15 @@ func (m *Model) emitContentBlockStart(yield func(ai.ModelStreamEvent, error) boo
 	switch event.ContentBlock.Type {
 	case "text":
 		return event.ContentBlock.Text == "" || yield(ai.TextDeltaEvent{PartID: partID, Delta: event.ContentBlock.Text}, nil)
+	case "compaction":
+		var details map[string]any
+		if event.ContentBlock.EncryptedContent != "" {
+			details = map[string]any{"encrypted_content": event.ContentBlock.EncryptedContent}
+		}
+		return yield(ai.CompactionEvent{
+			PartID: partID, Content: event.ContentBlock.CompactionContent,
+			ProviderName: "anthropic", ProviderDetails: details,
+		}, nil)
 	case "thinking":
 		return event.ContentBlock.Thinking == "" && event.ContentBlock.Signature == "" ||
 			yield(ai.ThinkingDeltaEvent{

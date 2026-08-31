@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -108,8 +109,8 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if err != nil {
 		return nil, err
 	}
-	m.setRequestHeaders(req, payload, false)
 	setExtraHeaders(req, params.Settings.ExtraHeaders)
+	m.setRequestHeaders(req, payload, false)
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
@@ -135,8 +136,23 @@ func (m *Model) setRequestHeaders(req *http.Request, payload *messagesRequest, s
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", m.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
-	if payload.ToolAdditions {
-		req.Header.Set("anthropic-beta", "mid-conversation-tool-changes-2026-07-01")
+	betas := strings.FieldsFunc(req.Header.Get("anthropic-beta"), func(r rune) bool {
+		return r == ',' || r == ' '
+	})
+	if payload.ToolAdditions && !slices.Contains(betas, "mid-conversation-tool-changes-2026-07-01") {
+		betas = append(betas, "mid-conversation-tool-changes-2026-07-01")
+	}
+	if payload.Compaction && !slices.Contains(betas, "compact-2026-01-12") {
+		betas = append(betas, "compact-2026-01-12")
+	}
+	if len(betas) > 0 {
+		unique := make([]string, 0, len(betas))
+		for _, beta := range betas {
+			if !slices.Contains(unique, beta) {
+				unique = append(unique, beta)
+			}
+		}
+		req.Header.Set("anthropic-beta", strings.Join(unique, ","))
 	}
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
@@ -154,19 +170,21 @@ func (e *APIError) Error() string {
 }
 
 type messagesRequest struct {
-	Model         string           `json:"model"`
-	MaxTokens     int              `json:"max_tokens"`
-	System        string           `json:"system,omitempty"`
-	Messages      []messageParam   `json:"messages"`
-	Tools         []toolParam      `json:"tools,omitempty"`
-	ToolChoice    *toolChoiceParam `json:"tool_choice,omitempty"`
-	Temperature   *float64         `json:"temperature,omitempty"`
-	TopP          *float64         `json:"top_p,omitempty"`
-	Stop          []string         `json:"stop_sequences,omitempty"`
-	Stream        bool             `json:"stream,omitempty"`
-	ToolAdditions bool             `json:"-"`
-	Thinking      *thinkingParam   `json:"thinking,omitempty"`
-	ServiceTier   string           `json:"service_tier,omitempty"`
+	Model             string           `json:"model"`
+	MaxTokens         int              `json:"max_tokens"`
+	System            string           `json:"system,omitempty"`
+	Messages          []messageParam   `json:"messages"`
+	Tools             []toolParam      `json:"tools,omitempty"`
+	ToolChoice        *toolChoiceParam `json:"tool_choice,omitempty"`
+	Temperature       *float64         `json:"temperature,omitempty"`
+	TopP              *float64         `json:"top_p,omitempty"`
+	Stop              []string         `json:"stop_sequences,omitempty"`
+	Stream            bool             `json:"stream,omitempty"`
+	ToolAdditions     bool             `json:"-"`
+	Compaction        bool             `json:"-"`
+	Thinking          *thinkingParam   `json:"thinking,omitempty"`
+	ServiceTier       string           `json:"service_tier,omitempty"`
+	ContextManagement map[string]any   `json:"context_management,omitempty"`
 }
 
 type thinkingParam struct {
@@ -192,10 +210,11 @@ type contentBlock struct {
 	Name  string          `json:"name,omitempty"`
 	Input json.RawMessage `json:"input,omitempty"`
 	// tool_result
-	ToolUseID string              `json:"tool_use_id,omitempty"`
-	Content   any                 `json:"content,omitempty"`
-	IsError   bool                `json:"is_error,omitempty"`
-	Tool      *toolReferenceParam `json:"tool,omitempty"`
+	ToolUseID        string              `json:"tool_use_id,omitempty"`
+	Content          any                 `json:"content,omitempty"`
+	EncryptedContent string              `json:"encrypted_content,omitempty"`
+	IsError          bool                `json:"is_error,omitempty"`
+	Tool             *toolReferenceParam `json:"tool,omitempty"`
 }
 
 type toolReferenceParam struct {
@@ -274,15 +293,22 @@ func (m *Model) buildPayload(msgs []ai.ModelMessage, params ai.ModelRequestParam
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultMaxTokens
 	}
+	trimmedMessages, compaction := trimAnthropicCompactionMessages(msgs)
 	nativeDeferred := m.deferredToolSupport && len(params.DeferredTools) > 0 && hasStableAnthropicTool(params)
 	deferredNames := make(map[string]struct{}, len(params.DeferredTools))
 	if nativeDeferred {
 		for _, tool := range params.DeferredTools {
 			deferredNames[tool.Name] = struct{}{}
 		}
-		req.ToolAdditions = hasAnthropicToolAdditions(msgs, deferredNames)
+		req.ToolAdditions = hasAnthropicToolAdditions(trimmedMessages, deferredNames)
 	}
-	for _, msg := range msgs {
+	req.Compaction = compaction
+	if _, overridden := params.Settings.ExtraBody["context_management"]; compaction && !overridden {
+		req.ContextManagement = map[string]any{
+			"edits": []any{map[string]any{"type": "compact_20260112"}},
+		}
+	}
+	for _, msg := range trimmedMessages {
 		converted, err := convertMessage(msg, deferredNames)
 		if err != nil {
 			return nil, err
@@ -523,12 +549,39 @@ func anthropicToolSearchResult(
 	return names, message, nil
 }
 
+func trimAnthropicCompactionMessages(messages []ai.ModelMessage) ([]ai.ModelMessage, bool) {
+	for messageIndex := len(messages) - 1; messageIndex >= 0; messageIndex-- {
+		response, ok := messages[messageIndex].(ai.ModelResponse)
+		if !ok {
+			continue
+		}
+		for partIndex := len(response.Parts) - 1; partIndex >= 0; partIndex-- {
+			part, ok := response.Parts[partIndex].(ai.CompactionPart)
+			if !ok || part.ProviderName != "anthropic" || !part.HasContent() {
+				continue
+			}
+			response.Parts = slices.Clone(response.Parts[partIndex:])
+			trimmed := make([]ai.ModelMessage, 1, len(messages)-messageIndex)
+			trimmed[0] = response
+			return append(trimmed, messages[messageIndex+1:]...), true
+		}
+	}
+	return messages, false
+}
+
 func convertResponse(m ai.ModelResponse) []messageParam {
 	var blocks []contentBlock
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.TextPart:
 			blocks = append(blocks, contentBlock{Type: "text", Text: p.Content})
+		case ai.CompactionPart:
+			if p.ProviderName == "anthropic" && p.HasContent() {
+				encryptedContent, _ := p.ProviderDetails["encrypted_content"].(string)
+				blocks = append(blocks, contentBlock{
+					Type: "compaction", Content: p.Content, EncryptedContent: encryptedContent,
+				})
+			}
 		case ai.ThinkingPart:
 			if p.Signature != "" && (p.ProviderName == "" || p.ProviderName == "anthropic") {
 				blocks = append(blocks, contentBlock{Type: "thinking", Thinking: p.Content, Signature: p.Signature})
@@ -571,13 +624,15 @@ type messagesResponse struct {
 	StopReason  string `json:"stop_reason"`
 	ServiceTier string `json:"service_tier"`
 	Content     []struct {
-		Type      string          `json:"type"`
-		Text      string          `json:"text"`
-		Thinking  string          `json:"thinking"`
-		Signature string          `json:"signature"`
-		ID        string          `json:"id"`
-		Name      string          `json:"name"`
-		Input     json.RawMessage `json:"input"`
+		Type              string          `json:"type"`
+		Text              string          `json:"text"`
+		Thinking          string          `json:"thinking"`
+		Signature         string          `json:"signature"`
+		ID                string          `json:"id"`
+		Name              string          `json:"name"`
+		Input             json.RawMessage `json:"input"`
+		CompactionContent string          `json:"content"`
+		EncryptedContent  string          `json:"encrypted_content"`
 	} `json:"content"`
 	Usage anthropicUsage `json:"usage"`
 }
@@ -631,6 +686,14 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		switch block.Type {
 		case "text":
 			resp.Parts = append(resp.Parts, ai.TextPart{Content: block.Text})
+		case "compaction":
+			var details map[string]any
+			if block.EncryptedContent != "" {
+				details = map[string]any{"encrypted_content": block.EncryptedContent}
+			}
+			resp.Parts = append(resp.Parts, ai.CompactionPart{
+				Content: block.CompactionContent, ProviderName: "anthropic", ProviderDetails: details,
+			})
 		case "thinking":
 			resp.Parts = append(resp.Parts, ai.ThinkingPart{
 				Content: block.Thinking, Signature: block.Signature, ProviderName: "anthropic",

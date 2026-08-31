@@ -275,7 +275,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		rendered:         make(map[string]struct{}),
 		strictSupport:    m.strictToolSupport,
 	}
-	for _, msg := range msgs {
+	for _, msg := range trimOpenAICompactionMessages(msgs) {
 		items, err := converter.convert(msg)
 		if err != nil {
 			return nil, err
@@ -469,6 +469,17 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 						Content: c.Text, ID: item.ID, ProviderName: "openai", ProviderDetails: details,
 					})
 				}
+			}
+		case "compaction":
+			if item.EncryptedContent != "" {
+				resp.Parts = append(resp.Parts, ai.CompactionPart{
+					ID: item.ID, ProviderName: "openai",
+					ProviderDetails: map[string]any{"encrypted_content": item.EncryptedContent},
+				})
+				if resp.ProviderDetails == nil {
+					resp.ProviderDetails = map[string]any{}
+				}
+				resp.ProviderDetails["compaction"] = true
 			}
 		case "function_call":
 			arguments, err := normalizeResponsesArguments(item.Arguments)

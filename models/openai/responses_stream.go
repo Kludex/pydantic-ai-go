@@ -246,6 +246,16 @@ func (m *ResponsesModel) responsesEventStream(
 				}
 			case "response.output_item.added":
 				switch event.Item.Type {
+				case "compaction":
+					if event.Item.EncryptedContent != "" {
+						emittedParts = true
+						if !yield(ai.CompactionEvent{
+							PartID: "item:" + event.Item.ID, ID: event.Item.ID, ProviderName: "openai",
+							ProviderDetails: map[string]any{"encrypted_content": event.Item.EncryptedContent},
+						}, nil) {
+							return
+						}
+					}
 				case "function_call":
 					emittedParts = true
 					partID := responsesToolPartID(event)
@@ -316,6 +326,7 @@ func (m *ResponsesModel) responsesEventStream(
 				}
 			case "response.completed":
 				var snapshotParts []ai.ResponsePart
+				compacted := false
 				if len(event.Response.Output) > 0 {
 					response, err := modelResponseFromResponses(event.Response)
 					if err != nil {
@@ -323,6 +334,7 @@ func (m *ResponsesModel) responsesEventStream(
 						return
 					}
 					snapshotParts = response.Parts
+					compacted = providerBool(response.ProviderDetails, "compaction")
 					if !emittedParts && !yieldStaticResponsesParts(response, yield) {
 						return
 					}
@@ -335,11 +347,16 @@ func (m *ResponsesModel) responsesEventStream(
 					event.Response.Status, event.Response.IncompleteDetails,
 					event.Response.CreatedAt, event.Response.Background,
 				)
-				if lastSequence != nil {
+				if lastSequence != nil || compacted {
 					if providerDetails == nil {
 						providerDetails = map[string]any{}
 					}
-					providerDetails["sequence_number"] = *lastSequence
+					if lastSequence != nil {
+						providerDetails["sequence_number"] = *lastSequence
+					}
+					if compacted {
+						providerDetails["compaction"] = true
+					}
 				}
 				yield(ai.FinishEvent{
 					Parts: snapshotParts, Usage: event.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
@@ -433,6 +450,13 @@ func yieldStaticResponsesParts(
 		case ai.TextPart:
 			if !yield(ai.TextDeltaEvent{
 				PartID: partID, Delta: part.Content, ID: part.ID,
+				ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+			}, nil) {
+				return false
+			}
+		case ai.CompactionPart:
+			if !yield(ai.CompactionEvent{
+				PartID: partID, Content: part.Content, ID: part.ID,
 				ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
 			}, nil) {
 				return false

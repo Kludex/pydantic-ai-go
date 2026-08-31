@@ -77,6 +77,7 @@ func TestStreamEvents(t *testing.T) {
 			`{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"c1","name":"work","input":{}}}`,
 			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"x\":"}}`,
 			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"1}"}}`,
+			`{"type":"content_block_start","index":3,"content_block":{"type":"compaction","content":"Summary.","encrypted_content":"opaque"}}`,
 			`{"type":"ping"}`,
 			`{"type":"message_delta","delta":{"stop_reason":"tool_use"},"usage":{"output_tokens":8}}`,
 			`{"type":"message_stop"}`,
@@ -94,6 +95,7 @@ func TestStreamEvents(t *testing.T) {
 	var text, thinking, signature, args string
 	var textPartID, thinkingPartID, argsPartID string
 	var start ai.ToolCallStartEvent
+	var compaction ai.CompactionEvent
 	var finish ai.FinishEvent
 	for _, event := range events {
 		switch event := event.(type) {
@@ -106,6 +108,8 @@ func TestStreamEvents(t *testing.T) {
 			if event.SignatureDelta != "" {
 				signature = event.SignatureDelta
 			}
+		case ai.CompactionEvent:
+			compaction = event
 		case ai.ToolCallStartEvent:
 			start = event
 		case ai.ToolCallDeltaEvent:
@@ -116,8 +120,13 @@ func TestStreamEvents(t *testing.T) {
 		}
 	}
 	if text != "Hi" || thinking != "AB" || signature != "ignored" || start.ToolName != "work" ||
-		start.ToolCallID != "c1" || args != `{"x":1}` {
-		t.Fatalf("unexpected events: text=%q thinking=%q start=%+v args=%q", text, thinking, start, args)
+		start.ToolCallID != "c1" || args != `{"x":1}` || compaction.PartID != "3" ||
+		compaction.Content != "Summary." || compaction.ProviderName != "anthropic" ||
+		compaction.ProviderDetails["encrypted_content"] != "opaque" {
+		t.Fatalf(
+			"unexpected events: text=%q thinking=%q compaction=%+v start=%+v args=%q",
+			text, thinking, compaction, start, args,
+		)
 	}
 	if textPartID != "0" || thinkingPartID != "1" || start.PartID != "2" || argsPartID != "2" {
 		t.Fatalf("unstable Anthropic part IDs: text=%q thinking=%q start=%q args=%q", textPartID, thinkingPartID, start.PartID, argsPartID)

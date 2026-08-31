@@ -78,8 +78,11 @@ func (ToolCallStartEvent) modelStreamEventKind() string { return "tool-call-star
 type ToolCallDeltaEvent struct {
 	// PartID identifies the tool call started by ToolCallStartEvent. An empty
 	// ID targets the current tool call for sequential streams.
-	PartID    string
-	ArgsDelta string
+	PartID string
+	// ToolCallID fills an ID omitted from the start event. A different non-empty
+	// ID is rejected after the call has acquired one.
+	ToolCallID string
+	ArgsDelta  string
 }
 
 func (ToolCallDeltaEvent) modelStreamEventKind() string { return "tool-call-delta" }

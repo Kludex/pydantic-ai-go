@@ -87,7 +87,7 @@ Status:
 - [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.
 - [x] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history.
 - [x] Local `search_tools` discovery through `WithToolSearch`, with typed results, configurable detached search callbacks, word-bounded relevance, undiscovered-first ranking, result limits, and independent retries.
-- [~] Anthropic 4.5+ models render deferred definitions, local search results as `tool_reference` blocks, and other reveals as `tool_addition` blocks with the required beta header. Non-streaming OpenAI Responses maps local search to client-executed `tool_search`, replays `tool_search_output`, and sends other reveals through `additional_tools`. Provider-managed search and native OpenAI Responses streaming remain.
+- [~] Anthropic 4.5+ models render deferred definitions, local search results as `tool_reference` blocks, and other reveals as `tool_addition` blocks with the required beta header. OpenAI Responses maps local search to client-executed `tool_search` in streaming and non-streaming requests, preserves final streamed call IDs, replays `tool_search_output`, and sends other reveals through `additional_tools`. Provider-managed search remains.
 - [ ] Reset derived tool-discovery visibility at compaction boundaries once `CompactionPart` is implemented.
 - [ ] Native/builtin tools distinct from function tools.
 
@@ -125,7 +125,7 @@ Status:
 ### Provider implementations
 
 - [x] OpenAI Chat Completions.
-- [~] OpenAI Responses: text/reasoning/function-call streaming plus response/item IDs, encrypted reasoning, function namespaces, status, timestamps, background metadata, and non-streaming client-executed deferred-tool search/reveal rendering; native deferred streaming, provider-managed search, native output, multimodal content, other builtin tools, and background continuation remain.
+- [~] OpenAI Responses: text/reasoning/function-call streaming plus response/item IDs, encrypted reasoning, function namespaces, status, timestamps, background metadata, and streaming/non-streaming client-executed deferred-tool search/reveal rendering; provider-managed search, native output, multimodal content, other builtin tools, and background continuation remain.
 - [~] Anthropic Messages: text/thinking/function-tool streaming, signed-thinking round trips, multimodal input, response IDs, stop reasons, suspended `pause_turn` state, and provider-native deferred-definition/reveal rendering; automatic pause continuation, native server search, citations, and other native tools remain.
 - [~] Google Gemini: text/thinking/function-tool streaming, thought-signature round trips, native output, multimodal input, function-call/response IDs, normalized finish reasons, full JSON Schema wire fields, and Gemini 2.5+ strict defaults; native tools and advanced metadata remain.
 - [ ] OpenAI-compatible provider configuration without provider-specific forks.
@@ -227,7 +227,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add provider-managed tool search and native OpenAI Responses deferred-tool streaming; non-streaming client search and additions now use native wire items.
+2. Add provider-managed tool search; OpenAI Responses client search now uses native wire items in streaming and non-streaming requests.
 3. Support re-deferral from resolved calls while preserving one request/result event batch per logical call.
-4. Add provider-managed search and native OpenAI Responses deferred streaming.
+4. Add provider-managed search for Anthropic and OpenAI Responses.
 5. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.

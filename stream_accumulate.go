@@ -228,9 +228,19 @@ func accumulate(
 				return nil, &UnexpectedModelBehaviorError{Message: "tool call delta before tool call start"}
 			}
 			current = part
+			if event.ToolCallID != "" && part.toolCallID != "" && event.ToolCallID != part.toolCallID {
+				return nil, &UnexpectedModelBehaviorError{Message: fmt.Sprintf(
+					"tool call ID changed from %q to %q", part.toolCallID, event.ToolCallID,
+				)}
+			}
+			if event.ToolCallID != "" {
+				part.toolCallID = event.ToolCallID
+			}
 			part.toolArgs += event.ArgsDelta
 			if err := emitEvent(PartDeltaEvent{
-				Index: part.index, PartID: part.id, Delta: ToolCallPartDelta{ArgsDelta: event.ArgsDelta},
+				Index: part.index, PartID: part.id, Delta: ToolCallPartDelta{
+					ArgsDelta: event.ArgsDelta, ToolCallID: event.ToolCallID,
+				},
 			}); err != nil {
 				return nil, err
 			}

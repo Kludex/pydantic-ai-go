@@ -90,7 +90,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 	}
 }
 
-func TestResponsesStreamUsesPortableDeferredToolFallback(t *testing.T) {
+func TestResponsesStreamUsesNativeDeferredToolSearch(t *testing.T) {
 	var gotBody map[string]any
 	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
@@ -112,9 +112,98 @@ func TestResponsesStreamUsesPortableDeferredToolFallback(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools := gotBody["tools"].([]any)
-	if len(tools) != 1 || tools[0].(map[string]any)["type"] != "function" ||
-		tools[0].(map[string]any)["name"] != ai.ToolSearchName {
-		t.Fatalf("stream did not use local deferred fallback: %+v", tools)
+	if len(tools) != 2 || tools[0].(map[string]any)["type"] != "function" ||
+		tools[0].(map[string]any)["name"] != "hidden" || tools[0].(map[string]any)["defer_loading"] != true ||
+		tools[1].(map[string]any)["type"] != "tool_search" ||
+		tools[1].(map[string]any)["execution"] != "client" {
+		t.Fatalf("stream did not use native deferred search: %+v", tools)
+	}
+}
+
+func TestResponsesStreamClientToolSearchCall(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"search-item","type":"tool_search_call","call_id":"provisional","execution":"client","arguments":null}}`,
+		`{"type":"response.output_item.done","output_index":0,"item":{"id":"search-item","type":"tool_search_call","call_id":"search-final","execution":"client","arguments":{"query":"weather"},"status":"completed"}}`,
+		`{"type":"response.completed","response":{"model":"gpt-5","status":"completed","usage":{}}}`,
+		`[DONE]`,
+	}))
+	events, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, ok := events[0].(ai.ToolCallStartEvent)
+	if !ok || start.ToolName != ai.ToolSearchName || start.ToolKind != ai.ToolPartKindToolSearch ||
+		start.ToolCallID != "" || start.PartID != "item:search-item" ||
+		start.ProviderDetails["execution"] != "client" {
+		t.Fatalf("unexpected client search start: %+v", events[0])
+	}
+	delta, ok := events[1].(ai.ToolCallDeltaEvent)
+	if !ok || delta.PartID != start.PartID || delta.ToolCallID != "search-final" ||
+		delta.ArgsDelta != `{"query":"weather"}` {
+		t.Fatalf("unexpected client search completion: %+v", events[1])
+	}
+}
+
+func TestResponsesStreamToolSearchEdgeCases(t *testing.T) {
+	for name, events := range map[string][]string{
+		"invalid function arguments": {
+			`{"type":"response.output_item.added","item":{"id":"call","type":"function_call","call_id":"call","name":"work","arguments":"bad"}}`,
+		},
+		"server search": {
+			`{"type":"response.output_item.added","item":{"id":"search","type":"tool_search_call","execution":"server"}}`,
+		},
+		"invalid search arguments": {
+			`{"type":"response.output_item.added","item":{"id":"search","type":"tool_search_call","execution":"client"}}`,
+			`{"type":"response.output_item.done","item":{"id":"search","type":"tool_search_call","execution":"client","arguments":"bad"}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, events))
+			if _, err := collect(t, model, ai.ModelRequestParams{}); err == nil {
+				t.Fatal("expected tool-search stream error")
+			}
+		})
+	}
+
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_item.added","item":{"id":"search","type":"tool_search_call","execution":"client"}}`,
+		`{"type":"response.output_item.done","item":{"id":"search","type":"tool_search_call","execution":"client","arguments":{"query":"x"}}}`,
+		`{"type":"response.completed","response":{"status":"completed","usage":{}}}`,
+	}))
+	events, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if delta := events[1].(ai.ToolCallDeltaEvent); delta.ToolCallID != "search" {
+		t.Fatalf("item ID was not used as call ID: %+v", delta)
+	}
+}
+
+func TestResponsesStreamConsumerBreakOnToolSearch(t *testing.T) {
+	for name, stopAt := range map[string]string{"start": "start", "delta": "delta"} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, []string{
+				`{"type":"response.output_item.added","item":{"id":"search","type":"tool_search_call","execution":"client"}}`,
+				`{"type":"response.output_item.done","item":{"id":"search","type":"tool_search_call","call_id":"search","execution":"client","arguments":{"query":"x"}}}`,
+				`{"type":"mystery"}`,
+			}))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if stopAt == "start" {
+					if _, ok := event.(ai.ToolCallStartEvent); ok {
+						break
+					}
+				} else if _, ok := event.(ai.ToolCallDeltaEvent); ok {
+					break
+				}
+			}
+		})
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"iter"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 
@@ -36,6 +37,56 @@ func (m *streamingModel) StreamRequest(_ context.Context, msgs []ai.ModelMessage
 
 func newStreamingModel(script func(msgs []ai.ModelMessage) []ai.ModelStreamEvent) *streamingModel {
 	return &streamingModel{Model: fakes.NewTestModel(), script: script}
+}
+
+func TestRunStreamFillsToolCallIDFromDelta(t *testing.T) {
+	request := 0
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		request++
+		if request == 1 {
+			return []ai.ModelStreamEvent{
+				ai.ToolCallStartEvent{PartID: "work", ToolName: "work"},
+				ai.ToolCallDeltaEvent{PartID: "work", ToolCallID: "final-id", ArgsDelta: `{}`},
+				ai.FinishEvent{},
+			}
+		}
+		return []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: "done"}, ai.FinishEvent{}}
+	})
+	agent := ai.NewAgent[deps, string](model)
+	seenID := ""
+	ai.AddTool(agent, "work", func(_ context.Context, rc *ai.RunContext[deps], _ struct{}) (string, error) {
+		seenID = rc.ToolCallID
+		return "worked", nil
+	})
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stream.Result() == nil || stream.Result().Output != "done" || seenID != "final-id" {
+		t.Fatalf("delta tool call ID was not retained: result=%+v id=%q", stream.Result(), seenID)
+	}
+}
+
+func TestRunStreamRejectsChangedDeltaToolCallID(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ToolCallStartEvent{PartID: "work", ToolName: "work", ToolCallID: "first"},
+			ai.ToolCallDeltaEvent{PartID: "work", ToolCallID: "second", ArgsDelta: `{}`},
+		}
+	})
+	agent := ai.NewAgent[deps, string](model)
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			if !strings.Contains(err.Error(), "changed") {
+				t.Fatalf("unexpected changed ID error: %v", err)
+			}
+			return
+		}
+	}
+	t.Fatal("expected changed tool call ID error")
 }
 
 func TestRunStreamPreservesPartProviderMetadata(t *testing.T) {

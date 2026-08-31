@@ -18,7 +18,7 @@ import (
 func (m *ResponsesModel) StreamRequest(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
-	payload, err := m.buildResponsesPayload(msgs, params, false)
+	payload, err := m.buildResponsesPayload(msgs, params, true)
 	if err != nil {
 		return nil, err
 	}
@@ -58,13 +58,14 @@ type responsesStreamEvent struct {
 	ContentIndex int    `json:"content_index"`
 	SummaryIndex int    `json:"summary_index"`
 	Item         struct {
-		ID               string `json:"id"`
-		Type             string `json:"type"`
-		CallID           string `json:"call_id"`
-		Name             string `json:"name"`
-		Arguments        string `json:"arguments"`
-		Namespace        string `json:"namespace"`
-		EncryptedContent string `json:"encrypted_content"`
+		ID               string          `json:"id"`
+		Type             string          `json:"type"`
+		CallID           string          `json:"call_id"`
+		Name             string          `json:"name"`
+		Arguments        json.RawMessage `json:"arguments"`
+		Execution        string          `json:"execution"`
+		Namespace        string          `json:"namespace"`
+		EncryptedContent string          `json:"encrypted_content"`
 	} `json:"item"`
 	Part struct {
 		Text string `json:"text"`
@@ -147,8 +148,25 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 					}, nil) {
 						return
 					}
-					if event.Item.Arguments != "" && !yield(ai.ToolCallDeltaEvent{
-						PartID: partID, ArgsDelta: event.Item.Arguments,
+					if len(event.Item.Arguments) > 0 && string(event.Item.Arguments) != `""` {
+						arguments, err := normalizeResponsesArguments(event.Item.Arguments)
+						if err != nil {
+							yield(nil, err)
+							return
+						}
+						if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(arguments)}, nil) {
+							return
+						}
+					}
+				case "tool_search_call":
+					if event.Item.Execution != "client" {
+						yield(nil, fmt.Errorf("openai: server-executed tool search is not supported yet"))
+						return
+					}
+					if !yield(ai.ToolCallStartEvent{
+						PartID: responsesToolPartID(event), ToolName: ai.ToolSearchName,
+						ToolKind: ai.ToolPartKindToolSearch, ID: event.Item.ID,
+						ProviderName: "openai", ProviderDetails: map[string]any{"execution": "client"},
 					}, nil) {
 						return
 					}
@@ -163,6 +181,23 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 			case "response.function_call_arguments.delta":
 				if !yield(ai.ToolCallDeltaEvent{PartID: responsesToolPartID(event), ArgsDelta: event.Delta}, nil) {
 					return
+				}
+			case "response.output_item.done":
+				if event.Item.Type == "tool_search_call" && event.Item.Execution == "client" {
+					arguments, err := normalizeResponsesArguments(event.Item.Arguments)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					callID := event.Item.CallID
+					if callID == "" {
+						callID = event.Item.ID
+					}
+					if !yield(ai.ToolCallDeltaEvent{
+						PartID: responsesToolPartID(event), ToolCallID: callID, ArgsDelta: string(arguments),
+					}, nil) {
+						return
+					}
 				}
 			case "response.completed":
 				modelName := event.Response.Model
@@ -191,7 +226,7 @@ func (m *ResponsesModel) responsesEventStream(body io.ReadCloser) iter.Seq2[ai.M
 				yield(nil, fmt.Errorf("openai: Responses stream error %s: %s", event.Error.Code, event.Error.Message))
 				return
 			case "response.created", "response.in_progress", "response.queued",
-				"response.output_item.done", "response.content_part.added", "response.content_part.done",
+				"response.content_part.added", "response.content_part.done",
 				"response.output_text.done", "response.function_call_arguments.done",
 				"response.reasoning_summary_part.done", "response.reasoning_summary_text.done",
 				"response.reasoning_text.done":

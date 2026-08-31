@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
@@ -103,6 +104,33 @@ func NewModel(name string, options ...Option) *Model {
 	openAIOptions = append(openAIOptions, configuration.options...)
 	model := openai.NewModel(name, openAIOptions...)
 	return &Model{ModelWrapper: ai.WrapModel(model), model: model}
+}
+
+// PromptCacheRetention reports the longest downstream prompt-cache lifetime.
+func (model *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	_, cache, err := extractCacheSettings(settings)
+	if err != nil {
+		return 0, false
+	}
+	provider, _, found := strings.Cut(strings.TrimPrefix(model.Name(), "~"), "/")
+	if !found {
+		return 0, false
+	}
+	if provider != "anthropic" {
+		return 0, false
+	}
+	values := []CacheTTL{cache[cacheInstructionsKey], cache[cacheMessagesKey], cache[cacheToolsKey]}
+	for _, value := range values {
+		if value == CacheTTL1Hour {
+			return time.Hour, true
+		}
+	}
+	for _, value := range values {
+		if value == CacheTTL5Minutes {
+			return 5 * time.Minute, true
+		}
+	}
+	return 0, false
 }
 
 // Request implements ai.Model.

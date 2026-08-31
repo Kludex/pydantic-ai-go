@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
@@ -57,6 +58,115 @@ func TestOpenAICompatibleProvider(t *testing.T) {
 	}
 	if response.ProviderName != "local" || response.ProviderURL != server.URL+"/v1" {
 		t.Fatalf("unexpected provider identity: %+v", response)
+	}
+}
+
+func TestOpenAIPromptCacheRequestSettings(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		switch request.URL.Path {
+		case "/chat/completions":
+			_, _ = io.WriteString(response, `{
+				"model":"gpt-5.6","choices":[{"message":{"content":"done"},"finish_reason":"stop"}],
+				"usage":{"prompt_tokens":10,"completion_tokens":1,
+				"prompt_tokens_details":{"cached_tokens":4,"cache_write_tokens":6}}
+			}`)
+		case "/responses":
+			_, _ = io.WriteString(response, `{
+				"id":"response","model":"gpt-5.6","status":"completed",
+				"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}],
+				"usage":{"input_tokens":11,"output_tokens":1,
+				"input_tokens_details":{"cached_tokens":4,"cache_write_tokens":7}}
+			}`)
+		case "/responses/input_tokens":
+			_, _ = io.WriteString(response, `{"input_tokens":12}`)
+		default:
+			t.Errorf("unexpected request path: %s", request.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	settings, err := (openai.Settings{
+		Common:               ai.ModelSettings{ExtraBody: map[string]any{"custom": true}},
+		PromptCacheKey:       "conversation",
+		PromptCacheRetention: openai.PromptCacheRetention24Hours,
+		PromptCacheOptions: &openai.PromptCacheOptions{
+			Mode: openai.PromptCacheModeExplicit, TTL: openai.PromptCacheTTL30Minutes,
+		},
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := openai.ProviderConfig{Name: "openai", BaseURL: server.URL, HTTPClient: server.Client()}
+	chat := openai.NewModel("gpt-5.6", openai.WithProvider(provider), openai.WithDefaultSettings(settings))
+	responses := openai.NewResponsesModel(
+		"gpt-5.6", openai.WithProvider(provider), openai.WithDefaultSettings(settings),
+	)
+	prompt := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: "hello"},
+	}}}
+	chatResponse, err := chat.Request(t.Context(), prompt, ai.ModelRequestParams{Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	responsesResponse, err := responses.Request(t.Context(), prompt, ai.ModelRequestParams{Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	counted, err := responses.CountTokens(t.Context(), prompt, ai.ModelRequestParams{Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := openai.NewModel("gpt-4o", openai.WithProvider(provider))
+	_, err = legacy.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.TextContent{Text: "stable"}, ai.CachePoint{}, ai.TextContent{Text: "question"},
+		}},
+	}}}, ai.ModelRequestParams{Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if chatResponse.Usage.CacheWriteTokens != 6 || responsesResponse.Usage.CacheWriteTokens != 7 ||
+		counted.InputTokens != 12 {
+		t.Fatalf("unexpected cache usage: chat=%+v responses=%+v counted=%+v", chatResponse.Usage, responsesResponse.Usage, counted)
+	}
+	for index, body := range bodies[:2] {
+		options := body["prompt_cache_options"].(map[string]any)
+		if body["prompt_cache_key"] != "conversation" || body["prompt_cache_retention"] != "24h" ||
+			options["mode"] != "explicit" || options["ttl"] != "30m" || body["custom"] != true {
+			t.Fatalf("unexpected prompt cache request %d: %#v", index, body)
+		}
+	}
+	for _, field := range []string{"prompt_cache_key", "prompt_cache_retention", "prompt_cache_options"} {
+		if _, exists := bodies[2][field]; exists {
+			t.Fatalf("token count request included %q: %#v", field, bodies[2])
+		}
+	}
+	if bodies[2]["custom"] != true {
+		t.Fatalf("token count request dropped extra body: %#v", bodies[2])
+	}
+	legacyOptions := bodies[3]["prompt_cache_options"].(map[string]any)
+	legacyContent := bodies[3]["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if legacyOptions["mode"] != "explicit" || legacyContent[0].(map[string]any)["prompt_cache_breakpoint"] != nil {
+		t.Fatalf("legacy cache options or marker gate changed: %#v", bodies[3])
+	}
+	if duration, ok := ai.ResolvePromptCacheRetention(chat, nil); !ok || duration != 24*time.Hour {
+		t.Fatalf("unexpected chat retention: %s %v", duration, ok)
+	}
+	if duration, ok := ai.ResolvePromptCacheRetention(responses, nil); !ok || duration != 24*time.Hour {
+		t.Fatalf("unexpected Responses retention: %s %v", duration, ok)
+	}
+	memory, err := (openai.Settings{PromptCacheRetention: openai.PromptCacheRetentionInMemory}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duration, ok := ai.ResolvePromptCacheRetention(chat, &memory); ok || duration != 0 {
+		t.Fatalf("unexpected in-memory retention: %s %v", duration, ok)
 	}
 }
 

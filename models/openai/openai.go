@@ -238,13 +238,22 @@ func (m *Model) ProviderURL() string { return m.baseURL }
 // DefaultModelSettings returns this model's request defaults.
 func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 
+// PromptCacheRetention reports extended OpenAI prompt-cache retention.
+func (m *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	_, cache, err := extractPromptCacheSettings(settings)
+	if err != nil || cache.Retention != PromptCacheRetention24Hours {
+		return 0, false
+	}
+	return 24 * time.Hour, true
+}
+
 // Request implements ai.Model.
 func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 	payload, err := m.buildPayload(ctx, msgs, params)
 	if err != nil {
 		return nil, err
 	}
-	body, err := marshalRequest(payload, params.Settings.ExtraBody)
+	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
@@ -300,27 +309,31 @@ func (e *APIError) Error() string {
 func (*APIError) IsModelAPIError() bool { return true }
 
 type chatRequest struct {
-	Model             string          `json:"model"`
-	Messages          []chatMessage   `json:"messages"`
-	Tools             []any           `json:"tools,omitempty"`
-	ToolChoice        any             `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool           `json:"parallel_tool_calls,omitempty"`
-	MaxTokens         int             `json:"max_completion_tokens,omitempty"`
-	LegacyMaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature       *float64        `json:"temperature,omitempty"`
-	TopP              *float64        `json:"top_p,omitempty"`
-	Seed              *int            `json:"seed,omitempty"`
-	Stop              []string        `json:"stop,omitempty"`
-	Stream            bool            `json:"stream,omitempty"`
-	StreamOptions     *streamOptions  `json:"stream_options,omitempty"`
-	ResponseFormat    *responseFormat `json:"response_format,omitempty"`
-	ReasoningEffort   string          `json:"reasoning_effort,omitempty"`
-	PresencePenalty   *float64        `json:"presence_penalty,omitempty"`
-	FrequencyPenalty  *float64        `json:"frequency_penalty,omitempty"`
-	LogitBias         map[string]int  `json:"logit_bias,omitempty"`
-	Logprobs          *bool           `json:"logprobs,omitempty"`
-	TopLogprobs       *int            `json:"top_logprobs,omitempty"`
-	ServiceTier       ai.ServiceTier  `json:"service_tier,omitempty"`
+	Model                string               `json:"model"`
+	Messages             []chatMessage        `json:"messages"`
+	Tools                []any                `json:"tools,omitempty"`
+	ToolChoice           any                  `json:"tool_choice,omitempty"`
+	ParallelToolCalls    *bool                `json:"parallel_tool_calls,omitempty"`
+	MaxTokens            int                  `json:"max_completion_tokens,omitempty"`
+	LegacyMaxTokens      int                  `json:"max_tokens,omitempty"`
+	Temperature          *float64             `json:"temperature,omitempty"`
+	TopP                 *float64             `json:"top_p,omitempty"`
+	Seed                 *int                 `json:"seed,omitempty"`
+	Stop                 []string             `json:"stop,omitempty"`
+	Stream               bool                 `json:"stream,omitempty"`
+	StreamOptions        *streamOptions       `json:"stream_options,omitempty"`
+	ResponseFormat       *responseFormat      `json:"response_format,omitempty"`
+	ReasoningEffort      string               `json:"reasoning_effort,omitempty"`
+	PresencePenalty      *float64             `json:"presence_penalty,omitempty"`
+	FrequencyPenalty     *float64             `json:"frequency_penalty,omitempty"`
+	LogitBias            map[string]int       `json:"logit_bias,omitempty"`
+	Logprobs             *bool                `json:"logprobs,omitempty"`
+	TopLogprobs          *int                 `json:"top_logprobs,omitempty"`
+	ServiceTier          ai.ServiceTier       `json:"service_tier,omitempty"`
+	PromptCacheKey       string               `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention PromptCacheRetention `json:"prompt_cache_retention,omitempty"`
+	PromptCacheOptions   *PromptCacheOptions  `json:"prompt_cache_options,omitempty"`
+	ExtraBody            map[string]any       `json:"-"`
 }
 
 type chatMessage struct {
@@ -372,6 +385,11 @@ type chatFunction struct {
 func (m *Model) buildPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*chatRequest, error) {
+	settings, promptCache, err := extractPromptCacheSettings(params.Settings)
+	if err != nil {
+		return nil, err
+	}
+	params.Settings = settings
 	if m.chatCompatibility.NativeToolFunc == nil {
 		for _, nativeTool := range params.NativeTools {
 			if nativeToolIsNil(nativeTool) {
@@ -393,19 +411,23 @@ func (m *Model) buildPayload(
 		return nil, err
 	}
 	req := &chatRequest{
-		Model:            m.name,
-		MaxTokens:        params.Settings.MaxTokens,
-		Temperature:      params.Settings.Temperature,
-		TopP:             params.Settings.TopP,
-		Seed:             params.Settings.Seed,
-		Stop:             params.Settings.StopSequences,
-		ReasoningEffort:  reasoningEffort,
-		PresencePenalty:  params.Settings.PresencePenalty,
-		FrequencyPenalty: params.Settings.FrequencyPenalty,
-		LogitBias:        params.Settings.LogitBias,
-		Logprobs:         params.Settings.Logprobs,
-		TopLogprobs:      params.Settings.TopLogprobs,
-		ServiceTier:      serviceTier,
+		Model:                m.name,
+		MaxTokens:            params.Settings.MaxTokens,
+		Temperature:          params.Settings.Temperature,
+		TopP:                 params.Settings.TopP,
+		Seed:                 params.Settings.Seed,
+		Stop:                 params.Settings.StopSequences,
+		ReasoningEffort:      reasoningEffort,
+		PresencePenalty:      params.Settings.PresencePenalty,
+		FrequencyPenalty:     params.Settings.FrequencyPenalty,
+		LogitBias:            params.Settings.LogitBias,
+		Logprobs:             params.Settings.Logprobs,
+		TopLogprobs:          params.Settings.TopLogprobs,
+		ServiceTier:          serviceTier,
+		PromptCacheKey:       promptCache.Key,
+		PromptCacheRetention: promptCache.Retention,
+		PromptCacheOptions:   promptCache.Options,
+		ExtraBody:            params.Settings.ExtraBody,
 	}
 	if m.chatCompatibility.LegacyMaxTokens {
 		req.LegacyMaxTokens = req.MaxTokens

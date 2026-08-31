@@ -3,6 +3,7 @@ package openrouter_test
 import (
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/openrouter"
@@ -165,6 +166,62 @@ func TestOpenRouterSettingsValidation(t *testing.T) {
 			_, err := test.settings.Build()
 			if err == nil || !strings.Contains(err.Error(), `field "`+test.name+`" conflicts`) {
 				t.Fatalf("unexpected conflict error: %v", err)
+			}
+		})
+	}
+}
+
+func TestOpenRouterPromptCacheRetention(t *testing.T) {
+	anthropicSettings, err := (openrouter.Settings{
+		CacheInstructions: openrouter.CacheTTL5Minutes,
+		CacheMessages:     openrouter.CacheTTL1Hour,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	anthropic := openrouter.NewModel(
+		"anthropic/claude-sonnet-4.6", openrouter.WithDefaultSettings(anthropicSettings),
+	)
+	if duration, ok := ai.ResolvePromptCacheRetention(anthropic, nil); !ok || duration != time.Hour {
+		t.Fatalf("unexpected Anthropic retention: %s %v", duration, ok)
+	}
+	fiveMinutes, err := (openrouter.Settings{CacheToolDefinitions: openrouter.CacheTTL5Minutes}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duration, ok := ai.ResolvePromptCacheRetention(anthropic, &fiveMinutes); !ok || duration != 5*time.Minute {
+		t.Fatalf("unexpected Anthropic five-minute retention: %s %v", duration, ok)
+	}
+	googleSettings, err := (openrouter.Settings{CacheMessages: openrouter.CacheTTL1Hour}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	google := openrouter.NewModel("google/gemini-3.1-pro")
+	if duration, ok := ai.ResolvePromptCacheRetention(google, &googleSettings); ok || duration != 0 {
+		t.Fatalf("Google cache TTL should remain unknown: %s %v", duration, ok)
+	}
+	toolOnly, err := (openrouter.Settings{CacheToolDefinitions: openrouter.CacheTTL1Hour}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duration, ok := ai.ResolvePromptCacheRetention(google, &toolOnly); ok || duration != 0 {
+		t.Fatalf("unsupported Google tool cache reported retention: %s %v", duration, ok)
+	}
+	for name, test := range map[string]struct {
+		model    *openrouter.Model
+		settings ai.ModelSettings
+	}{
+		"no cache": {model: anthropic},
+		"provider": {model: openrouter.NewModel("openai/gpt-5.6"), settings: googleSettings},
+		"name":     {model: openrouter.NewModel("invalid"), settings: googleSettings},
+		"settings": {model: anthropic, settings: ai.ModelSettings{ExtraBody: map[string]any{
+			"openrouter_cache_messages": 42,
+		}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			duration, ok := test.model.PromptCacheRetention(test.settings)
+			if ok || duration != 0 {
+				t.Fatalf("unexpected unsupported retention: %s %v", duration, ok)
 			}
 		})
 	}

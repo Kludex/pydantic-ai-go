@@ -32,6 +32,51 @@ Use `openai.NewResponsesModel` instead of `openai.NewModel` when you need the Re
 
 Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, and `gpt-5.6` model families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
 
+### Prompt caching
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	settings, err := (openai.Settings{
+		PromptCacheKey:       "product-reference",
+		PromptCacheRetention: openai.PromptCacheRetention24Hours,
+		PromptCacheOptions: &openai.PromptCacheOptions{
+			Mode: openai.PromptCacheModeExplicit,
+			TTL:  openai.PromptCacheTTL30Minutes,
+		},
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewResponsesModel("gpt-5.6"),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.RunParts(context.Background(), []ai.UserContent{
+		ai.TextContent{Text: "Stable product reference."},
+		ai.CachePoint{},
+		ai.TextContent{Text: "Summarize the reference."},
+	}, struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`PromptCacheOptions` controls request-wide GPT-5.6 caching for Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolvePromptCacheRetention` reports the longest requested lifetime for durable backends without treating in-memory caching as durable.
+
 ## OpenAI-compatible endpoints
 
 ```go

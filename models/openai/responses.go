@@ -72,6 +72,15 @@ func (m *ResponsesModel) ProviderURL() string { return m.baseURL }
 // DefaultModelSettings returns this model's request defaults.
 func (m *ResponsesModel) DefaultModelSettings() ai.ModelSettings { return m.defaultSettings.Clone() }
 
+// PromptCacheRetention reports extended OpenAI prompt-cache retention.
+func (m *ResponsesModel) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	_, cache, err := extractPromptCacheSettings(settings)
+	if err != nil || cache.Retention != PromptCacheRetention24Hours {
+		return 0, false
+	}
+	return 24 * time.Hour, true
+}
+
 // Request implements ai.Model.
 func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 	if responseID, ok := suspendedResponsesID(msgs, m.providerName); ok {
@@ -81,7 +90,7 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 	if err != nil {
 		return nil, err
 	}
-	body, err := marshalRequest(payload, params.Settings.ExtraBody)
+	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}
@@ -137,7 +146,7 @@ func (m *ResponsesModel) CountTokens(
 		Tools: payload.Tools, ToolChoice: payload.ToolChoice, ParallelToolCalls: payload.ParallelToolCalls,
 		Reasoning: payload.Reasoning,
 	}
-	body, err := marshalRequest(countPayload, params.Settings.ExtraBody)
+	body, err := marshalRequest(countPayload, payload.ExtraBody)
 	if err != nil {
 		return ai.Usage{}, fmt.Errorf("openai: marshal token count request: %w", err)
 	}
@@ -344,22 +353,26 @@ func setResponsesProvider(response *ai.ModelResponse, providerName, providerURL 
 }
 
 type responsesRequest struct {
-	Model             string              `json:"model"`
-	Instructions      string              `json:"instructions,omitempty"`
-	Input             []responsesInput    `json:"input"`
-	Tools             []responsesTool     `json:"tools,omitempty"`
-	ToolChoice        any                 `json:"tool_choice,omitempty"`
-	ParallelToolCalls *bool               `json:"parallel_tool_calls,omitempty"`
-	MaxTokens         int                 `json:"max_output_tokens,omitempty"`
-	Temperature       *float64            `json:"temperature,omitempty"`
-	TopP              *float64            `json:"top_p,omitempty"`
-	Stream            bool                `json:"stream,omitempty"`
-	Background        *bool               `json:"background,omitempty"`
-	Reasoning         *responsesReasoning `json:"reasoning,omitempty"`
-	Text              *responsesText      `json:"text,omitempty"`
-	TopLogprobs       *int                `json:"top_logprobs,omitempty"`
-	Include           []string            `json:"include,omitempty"`
-	ServiceTier       ai.ServiceTier      `json:"service_tier,omitempty"`
+	Model                string               `json:"model"`
+	Instructions         string               `json:"instructions,omitempty"`
+	Input                []responsesInput     `json:"input"`
+	Tools                []responsesTool      `json:"tools,omitempty"`
+	ToolChoice           any                  `json:"tool_choice,omitempty"`
+	ParallelToolCalls    *bool                `json:"parallel_tool_calls,omitempty"`
+	MaxTokens            int                  `json:"max_output_tokens,omitempty"`
+	Temperature          *float64             `json:"temperature,omitempty"`
+	TopP                 *float64             `json:"top_p,omitempty"`
+	Stream               bool                 `json:"stream,omitempty"`
+	Background           *bool                `json:"background,omitempty"`
+	Reasoning            *responsesReasoning  `json:"reasoning,omitempty"`
+	Text                 *responsesText       `json:"text,omitempty"`
+	TopLogprobs          *int                 `json:"top_logprobs,omitempty"`
+	Include              []string             `json:"include,omitempty"`
+	ServiceTier          ai.ServiceTier       `json:"service_tier,omitempty"`
+	PromptCacheKey       string               `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention PromptCacheRetention `json:"prompt_cache_retention,omitempty"`
+	PromptCacheOptions   *PromptCacheOptions  `json:"prompt_cache_options,omitempty"`
+	ExtraBody            map[string]any       `json:"-"`
 }
 
 type responsesReasoning struct {
@@ -615,6 +628,11 @@ func responsesImageGenerationSize(size ai.ImageGenerationSize, aspectRatio ai.Im
 func (m *ResponsesModel) buildResponsesPayload(
 	msgs []ai.ModelMessage, params ai.ModelRequestParams, nativeDeferred bool,
 ) (*responsesRequest, error) {
+	settings, promptCache, err := extractPromptCacheSettings(params.Settings)
+	if err != nil {
+		return nil, err
+	}
+	params.Settings = settings
 	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
 		return nil, fmt.Errorf("openai: native tools: %w", err)
 	}
@@ -627,14 +645,18 @@ func (m *ResponsesModel) buildResponsesPayload(
 		return nil, err
 	}
 	req := &responsesRequest{
-		Model:        m.name,
-		Instructions: params.Instructions,
-		MaxTokens:    params.Settings.MaxTokens,
-		Temperature:  params.Settings.Temperature,
-		TopP:         params.Settings.TopP,
-		Background:   m.background,
-		TopLogprobs:  params.Settings.TopLogprobs,
-		ServiceTier:  serviceTier,
+		Model:                m.name,
+		Instructions:         params.Instructions,
+		MaxTokens:            params.Settings.MaxTokens,
+		Temperature:          params.Settings.Temperature,
+		TopP:                 params.Settings.TopP,
+		Background:           m.background,
+		TopLogprobs:          params.Settings.TopLogprobs,
+		ServiceTier:          serviceTier,
+		PromptCacheKey:       promptCache.Key,
+		PromptCacheRetention: promptCache.Retention,
+		PromptCacheOptions:   promptCache.Options,
+		ExtraBody:            params.Settings.ExtraBody,
 	}
 	if params.Settings.Logprobs != nil && *params.Settings.Logprobs {
 		req.Include = append(req.Include, "message.output_text.logprobs")
@@ -833,7 +855,8 @@ type responsesUsage struct {
 	InputTokens        int `json:"input_tokens"`
 	OutputTokens       int `json:"output_tokens"`
 	InputTokensDetails struct {
-		CachedTokens int `json:"cached_tokens"`
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
 	OutputTokensDetails struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
@@ -843,9 +866,10 @@ type responsesUsage struct {
 func (u responsesUsage) usage() ai.Usage {
 	return ai.Usage{
 		Requests: 1, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
-		CacheReadTokens: u.InputTokensDetails.CachedTokens,
-		ReasoningTokens: u.OutputTokensDetails.ReasoningTokens,
-		Details:         map[string]int{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens},
+		CacheWriteTokens: u.InputTokensDetails.CacheWriteTokens,
+		CacheReadTokens:  u.InputTokensDetails.CachedTokens,
+		ReasoningTokens:  u.OutputTokensDetails.ReasoningTokens,
+		Details:          map[string]int{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens},
 	}
 }
 

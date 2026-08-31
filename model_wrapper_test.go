@@ -43,6 +43,10 @@ func (*fullyOptionalModel) DefaultModelSettings() ai.ModelSettings {
 	return ai.ModelSettings{MaxTokens: 42, StopSequences: []string{"stop"}}
 }
 
+func (*fullyOptionalModel) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	return time.Duration(settings.MaxTokens) * time.Hour, settings.MaxTokens > 0
+}
+
 func (*fullyOptionalModel) SupportsToolSearchStrategy(strategy ai.ToolSearchStrategy) bool {
 	return strategy == ai.ToolSearchStrategyRegex
 }
@@ -96,7 +100,9 @@ func TestModelWrapperDelegatesModelContract(t *testing.T) {
 	}
 	settings := wrapper.DefaultModelSettings()
 	settings.StopSequences[0] = "changed"
+	retention, retained := ai.ResolvePromptCacheRetention(wrapper, nil)
 	if !underlying.opened || !underlying.closed || wrapper.DefaultModelSettings().StopSequences[0] != "stop" ||
+		retention != 42*time.Hour || !retained ||
 		!wrapper.SupportsToolSearchStrategy(ai.ToolSearchStrategyRegex) ||
 		wrapper.SupportsToolSearchStrategy(ai.ToolSearchStrategyBM25) ||
 		wrapper.NativeToolSearchProvider() != "provider" ||
@@ -116,8 +122,13 @@ func TestModelWrapperProvidesSafeOptionalFallbacks(t *testing.T) {
 	if settings := wrapper.DefaultModelSettings(); !reflect.DeepEqual(settings, ai.ModelSettings{}) {
 		t.Fatalf("unexpected default settings: %+v", settings)
 	}
+	retention, retained := wrapper.PromptCacheRetention(ai.ModelSettings{})
+	resolved, resolvedOK := ai.ResolvePromptCacheRetention(wrapper, nil)
+	nilResolved, nilOK := ai.ResolvePromptCacheRetention(nil, nil)
+	directResolved, directOK := ai.ResolvePromptCacheRetention(fakes.NewTestModel(), nil)
 	if wrapper.SupportsToolSearchStrategy(ai.ToolSearchStrategyRegex) || wrapper.NativeToolSearchProvider() != "" ||
-		wrapper.ContinuationDelay(ai.ModelResponse{}) != 0 {
+		wrapper.ContinuationDelay(ai.ModelResponse{}) != 0 || retention != 0 || retained || resolved != 0 || resolvedOK ||
+		nilResolved != 0 || nilOK || directResolved != 0 || directOK {
 		t.Fatal("unexpected optional capability support")
 	}
 	if err := wrapper.CancelSuspendedResponse(t.Context(), ai.ModelResponse{}); err != nil {
@@ -195,6 +206,7 @@ var _ ai.Model = (*ai.ModelWrapper)(nil)
 var _ ai.StreamingModel = (*ai.ModelWrapper)(nil)
 var _ ai.ModelOpener = (*ai.ModelWrapper)(nil)
 var _ ai.ModelDefaultSettings = (*ai.ModelWrapper)(nil)
+var _ ai.PromptCacheRetentionModel = (*ai.ModelWrapper)(nil)
 var _ ai.ToolSearchStrategyModel = (*ai.ModelWrapper)(nil)
 var _ ai.NativeToolSearchHistoryModel = (*ai.ModelWrapper)(nil)
 var _ ai.ModelContinuationDelayer = (*ai.ModelWrapper)(nil)

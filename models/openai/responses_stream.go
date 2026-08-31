@@ -38,7 +38,7 @@ func (m *ResponsesModel) StreamRequest(
 		return nil, err
 	}
 	payload.Stream = true
-	body, err := marshalRequest(payload, params.Settings.ExtraBody)
+	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}

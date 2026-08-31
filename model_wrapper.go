@@ -91,6 +91,14 @@ func (wrapper *ModelWrapper) DefaultModelSettings() ModelSettings {
 	return ModelSettings{}
 }
 
+// PromptCacheRetention delegates provider cache-retention resolution when available.
+func (wrapper *ModelWrapper) PromptCacheRetention(settings ModelSettings) (time.Duration, bool) {
+	if model, ok := wrapper.wrapped.(PromptCacheRetentionModel); ok {
+		return model.PromptCacheRetention(settings.Clone())
+	}
+	return 0, false
+}
+
 // SupportsToolSearchStrategy reports wrapped-model strategy support.
 func (wrapper *ModelWrapper) SupportsToolSearchStrategy(strategy ToolSearchStrategy) bool {
 	model, ok := wrapper.wrapped.(ToolSearchStrategyModel)

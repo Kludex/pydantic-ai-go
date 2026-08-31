@@ -23,7 +23,7 @@ func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, param
 	}
 	payload.Stream = true
 	payload.StreamOptions = &streamOptions{IncludeUsage: true}
-	body, err := marshalRequest(payload, params.Settings.ExtraBody)
+	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("openai: marshal request: %w", err)
 	}

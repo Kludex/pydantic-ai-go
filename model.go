@@ -88,6 +88,30 @@ type ModelDefaultSettings interface {
 	DefaultModelSettings() ModelSettings
 }
 
+// PromptCacheRetentionModel is implemented by models that can report how long
+// provider prompt-cache entries requested by settings may remain reusable.
+type PromptCacheRetentionModel interface {
+	PromptCacheRetention(settings ModelSettings) (time.Duration, bool)
+}
+
+// ResolvePromptCacheRetention reports the longest requested provider cache lifetime.
+// Model defaults are merged before the provider interprets its settings.
+func ResolvePromptCacheRetention(model Model, settings *ModelSettings) (time.Duration, bool) {
+	if modelIsNil(model) {
+		return 0, false
+	}
+	resolver, ok := model.(PromptCacheRetentionModel)
+	if !ok {
+		return 0, false
+	}
+	merged := ModelSettings{}
+	if defaults, ok := model.(ModelDefaultSettings); ok {
+		merged = defaults.DefaultModelSettings()
+	}
+	merged = mergeModelSettings(merged, settings)
+	return resolver.PromptCacheRetention(merged)
+}
+
 func modelName(model Model) string {
 	if modelIsNil(model) {
 		return ""

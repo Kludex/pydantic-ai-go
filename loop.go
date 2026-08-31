@@ -1016,6 +1016,7 @@ func (r *run[Deps, Output]) compileCurrentSchemas(params ModelRequestParams) err
 
 func cloneToolDefinition(def ToolDefinition) ToolDefinition {
 	def.Schema = cloneSchemaMap(def.Schema)
+	def.ReturnSchema = cloneSchemaMap(def.ReturnSchema)
 	def.Metadata = cloneSchemaMap(def.Metadata)
 	if def.Strict != nil {
 		strict := *def.Strict
@@ -1638,6 +1639,9 @@ func (r *run[Deps, Output]) executeCall(
 	content, err := r.callTool(toolCtx, &toolRC, entry, call)
 	if ctx.Err() == nil && errors.Is(toolCtx.Err(), context.DeadlineExceeded) {
 		err = Retryf("Timed out after %s.", entry.def.timeout)
+	}
+	if err == nil && containsNestedToolReturn(content) {
+		err = errors.New("return value contains nested ToolReturn; return ToolReturn directly")
 	}
 	cancel()
 	endSpan(toolSpan, err)

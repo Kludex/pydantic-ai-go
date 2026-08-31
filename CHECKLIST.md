@@ -77,7 +77,7 @@ Status:
 - [x] Per-toolset retry and timeout defaults preserve explicit per-tool overrides.
 - [x] Output-tool-specific retry overrides through `OutputToolConfig.MaxRetries`, including per-run output-tool configuration.
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
-- [ ] Reflected tool return schemas and explicit rejection of nested rich `ToolReturn` values.
+- [x] Reflected scalar/collection/structured tool return schemas, explicit rich-return schema overrides, detached inspection, and rejection of nested rich `ToolReturn` values.
 - [x] Failed and interrupted tool returns use Anthropic error results and Gemini error responses.
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets; a deferred-but-hidden tool receives one free availability correction before later refusals charge its budget.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
@@ -224,7 +224,7 @@ Status:
 ## Next work
 
 1. Extend upstream message fixtures as remaining persisted part types land.
-2. Add per-run typed output specialization and reflected tool return schemas.
+2. Add per-run typed output specialization.
 3. Add provider-native tool search, deferred definitions, and mid-conversation addition rendering for Anthropic and OpenAI Responses.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.

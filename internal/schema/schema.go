@@ -7,6 +7,11 @@ import (
 	"strings"
 )
 
+// ForType returns a JSON Schema for any supported Go type.
+func ForType(t reflect.Type) (map[string]any, error) {
+	return forType(t)
+}
+
 // For returns a JSON Schema (draft 2020-12 compatible object schema) for
 // the struct type T, derived from `json` and `jsonschema` field tags.
 func For(t reflect.Type) (map[string]any, error) {

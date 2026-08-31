@@ -29,6 +29,7 @@ func TestDefaultToolSearchDiscoversMostRelevantDeferredTool(t *testing.T) {
 				}
 			}
 			if search.ToolKind != ai.ToolPartKindToolSearch || search.Description != "Find GitHub tools." ||
+				search.ReturnSchema["type"] != "object" ||
 				search.Schema["properties"].(map[string]any)["queries"].(map[string]any)["description"] !=
 					"GitHub operations." {
 				t.Fatalf("unexpected search definition: %+v", search)

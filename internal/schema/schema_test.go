@@ -72,6 +72,16 @@ func TestForCoversAllTypes(t *testing.T) {
 	}
 }
 
+func TestForTypeSupportsScalarRoots(t *testing.T) {
+	value, err := schema.ForType(reflect.TypeFor[string]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value["type"] != "string" {
+		t.Fatalf("unexpected scalar schema: %+v", value)
+	}
+}
+
 func TestForRejectsNonStructs(t *testing.T) {
 	if _, err := schema.For(reflect.TypeFor[string]()); err == nil {
 		t.Fatal("expected error for non-struct")

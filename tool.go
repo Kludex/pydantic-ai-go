@@ -249,6 +249,9 @@ func newReflectedTool[Deps, Args, Result any](
 	opts []ToolOption,
 ) Tool[Deps] {
 	def := toolDefinition[Args](name, opts)
+	if def.ReturnSchema == nil {
+		def.ReturnSchema = reflectedToolReturnSchema(reflect.TypeFor[Result]())
+	}
 	call := func(ctx context.Context, rc *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
 		var args Args
 		if err := json.Unmarshal(rawArgs, &args); err != nil {
@@ -352,6 +355,12 @@ func WithToolMetadata(metadata map[string]any) ToolOption {
 	return func(d *ToolDefinition) { d.Metadata = cloneSchemaMap(metadata) }
 }
 
+// WithReturnSchema overrides the reflected local schema for a tool's return
+// value. Use it for rich ToolReturn values whose inner type is not reflected.
+func WithReturnSchema(returnSchema map[string]any) ToolOption {
+	return func(d *ToolDefinition) { d.ReturnSchema = cloneSchemaMap(returnSchema) }
+}
+
 // WithSequential makes a tool an execution barrier. Independent tools run
 // concurrently by default. Calls before this tool finish first, this tool
 // runs alone, and later calls start afterward.
@@ -393,6 +402,39 @@ func WithToolTimeout(timeout time.Duration) ToolOption {
 		panic(fmt.Sprintf("ai: tool timeout must be positive, got %s", timeout))
 	}
 	return func(d *ToolDefinition) { d.timeout = timeout }
+}
+
+func reflectedToolReturnSchema(resultType reflect.Type) map[string]any {
+	for resultType.Kind() == reflect.Pointer {
+		resultType = resultType.Elem()
+	}
+	if resultType == reflect.TypeFor[ToolReturn]() || resultType.Kind() == reflect.Interface {
+		return nil
+	}
+	resultSchema, err := schema.ForType(resultType)
+	if err != nil {
+		return nil
+	}
+	return resultSchema
+}
+
+func containsNestedToolReturn(value any) bool {
+	valueType := reflect.TypeOf(value)
+	if valueType == nil || valueType.Kind() != reflect.Array && valueType.Kind() != reflect.Slice {
+		return false
+	}
+	items := reflect.ValueOf(value)
+	for index := range items.Len() {
+		item := items.Index(index)
+		if item.Kind() == reflect.Interface {
+			item = item.Elem()
+		}
+		if item.IsValid() && (item.Type() == reflect.TypeFor[ToolReturn]() ||
+			item.Type() == reflect.TypeFor[*ToolReturn]()) {
+			return true
+		}
+	}
+	return false
 }
 
 func toolDefinition[Args any](name string, opts []ToolOption) ToolDefinition {

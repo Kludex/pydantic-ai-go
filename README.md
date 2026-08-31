@@ -198,7 +198,7 @@ result, err := agent.Run(
 )
 ```
 
-`WithRunTools` does not mutate the agent or leak tools into concurrent runs. A tool name cannot duplicate an agent tool or another per-run tool. Use `agent.AddTool(weatherTool)` to register the same value permanently. `Tool.Definition()` returns a detached copy for inspection.
+`WithRunTools` does not mutate the agent or leak tools into concurrent runs. A tool name cannot duplicate an agent tool or another per-run tool. Use `agent.AddTool(weatherTool)` to register the same value permanently. `Tool.Definition()` returns a detached copy for inspection, including the reflected `ReturnSchema`. Use `WithReturnSchema` when a rich `ToolReturn` needs an explicit schema for its inner value.
 
 Return `ToolReturn` when a tool needs to keep application metadata or send additional user content outside the provider's tool-result message:
 

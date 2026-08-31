@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 )
@@ -110,6 +111,7 @@ func (t toolSearchToolset[Deps]) searchTool(corpus []ToolDefinition) Tool[Deps] 
 	}
 	definition := ToolDefinition{
 		Name: ToolSearchName, Description: description, ToolKind: ToolPartKindToolSearch,
+		ReturnSchema: reflectedToolReturnSchema(reflect.TypeFor[ToolSearchResult]()),
 		Schema: map[string]any{
 			"type": "object",
 			"properties": map[string]any{

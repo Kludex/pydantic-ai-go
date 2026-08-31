@@ -91,6 +91,12 @@ type Reasoning struct {
 	Enabled   *bool           `json:"enabled,omitempty"`
 }
 
+// IsEnabled reports whether this configuration requests reasoning.
+func (reasoning Reasoning) IsEnabled() bool {
+	return (reasoning.Enabled == nil || *reasoning.Enabled) && reasoning.Effort != ReasoningEffortNone &&
+		(reasoning.Effort != "" || reasoning.MaxTokens > 0 || reasoning.Enabled != nil)
+}
+
 // CacheTTL selects the lifetime of one OpenRouter prompt-cache breakpoint.
 type CacheTTL string
 

@@ -188,6 +188,10 @@ Use `openrouter.Settings` for fallback models, provider routing, presets, contex
 
 `Settings.Build` validates conflicts with `ExtraBody` and returns a detached `ModelSettings` snapshot.
 
+OpenRouter adjusts JSON Schema for the routed provider. Google routes inline definitions, simplify nullable unions, stringify enum values, convert `oneOf`, move string formats into descriptions, and remove unsupported fields. Qwen, Amazon, and Meta routes inline non-recursive definitions. Recursive definitions remain referenced instead of expanding forever.
+
+Anthropic routes cannot combine reasoning with forced tool choice. When structured output infers a required output tool, the model sends `tool_choice: "auto"` and keeps reasoning enabled. An explicit required or list choice fails before transport instead of letting OpenRouter silently remove reasoning.
+
 ## Z.AI
 
 ```go

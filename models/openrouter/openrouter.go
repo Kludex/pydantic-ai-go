@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"iter"
+	"maps"
 	"net/http"
 	"os"
 	"strings"
@@ -172,6 +173,46 @@ func (model *Model) prepareParams(
 	settings, cacheSettings, err := extractCacheSettings(settings)
 	if err != nil {
 		return ctx, ai.ModelRequestParams{}, err
+	}
+	params = transformSchemas(params, provider)
+	thinkingActive := false
+	if reasoning, exists := settings.ExtraBody["reasoning"]; exists {
+		switch reasoning := reasoning.(type) {
+		case Reasoning:
+			thinkingActive = reasoning.IsEnabled()
+		case *Reasoning:
+			thinkingActive = reasoning != nil && reasoning.IsEnabled()
+		case map[string]any:
+			enabled, hasEnabled := reasoning["enabled"].(bool)
+			effort, _ := reasoning["effort"].(string)
+			thinkingActive = len(reasoning) > 0 && (!hasEnabled || enabled) && effort != string(ReasoningEffortNone)
+		default:
+			thinkingActive = reasoning != nil
+		}
+	}
+	if provider == "anthropic" && thinkingActive {
+		if choice, exists := settings.ExtraBody["tool_choice"]; exists {
+			switch choice := choice.(type) {
+			case string:
+				if choice == "required" {
+					return ctx, ai.ModelRequestParams{}, fmt.Errorf(
+						"openrouter: tool choice %q cannot be forced with Anthropic thinking; use auto or disable thinking",
+						choice,
+					)
+				}
+			case []string, []any:
+				return ctx, ai.ModelRequestParams{}, fmt.Errorf(
+					"openrouter: specific tools cannot be forced with Anthropic thinking; use auto or disable thinking",
+				)
+			}
+		}
+		if params.OutputTool != nil && !params.AllowText {
+			params.AllowText = true
+			if _, explicit := settings.ExtraBody["tool_choice"]; !explicit {
+				settings.ExtraBody = maps.Clone(settings.ExtraBody)
+				settings.ExtraBody["tool_choice"] = "auto"
+			}
+		}
 	}
 	cache := openai.ChatPromptCache{}
 	switch provider {

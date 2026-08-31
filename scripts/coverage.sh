@@ -9,6 +9,7 @@ packages=(
     ./evals
     ./models/fakes
     ./models/openai
+    ./models/openrouter
     ./models/anthropic
     ./models/azure
     ./models/google

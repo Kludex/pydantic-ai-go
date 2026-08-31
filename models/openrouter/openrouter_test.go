@@ -213,6 +213,97 @@ func TestOpenRouterNativeToolDefaultsAndCompatibility(t *testing.T) {
 	}
 }
 
+func TestOpenRouterDownstreamSchemaAndToolChoice(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	newModel := func(name string) *openrouter.Model {
+		return openrouter.NewModel(name, openrouter.WithBaseURL(server.URL), openrouter.WithHTTPClient(server.Client()))
+	}
+	schema := map[string]any{
+		"$schema": "draft", "title": "Input", "type": "object",
+		"properties": map[string]any{
+			"status": map[string]any{"const": "active"},
+			"email":  map[string]any{"type": "string", "format": "email"},
+		},
+	}
+	params := ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{Name: "get_weather", Schema: schema}},
+		OutputTool: &ai.ToolDefinition{Name: "final_result", Schema: map[string]any{
+			"type": "object", "properties": map[string]any{},
+		}},
+		Settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow}},
+	}
+	if _, err := newModel("anthropic/claude-sonnet-4.6").Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := newModel("google/gemini-2.5-flash").Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	anthropicBody := bodies[0]
+	googleBody := bodies[1]
+	if anthropicBody["tool_choice"] != "auto" || googleBody["tool_choice"] != "required" ||
+		anthropicBody["reasoning"].(map[string]any)["effort"] != "low" {
+		t.Fatalf("unexpected downstream tool choices: anthropic=%#v google=%#v", anthropicBody, googleBody)
+	}
+	googleSchema := googleBody["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)["parameters"].(map[string]any)
+	properties := googleSchema["properties"].(map[string]any)
+	if googleSchema["$schema"] != nil || googleSchema["title"] != nil ||
+		properties["status"].(map[string]any)["enum"].([]any)[0] != "active" ||
+		properties["email"].(map[string]any)["description"] != "Format: email" || schema["title"] != "Input" {
+		t.Fatalf("Google schema profile was not applied defensively: %#v", googleSchema)
+	}
+
+	disabledSettings, err := (openrouter.Settings{Reasoning: &openrouter.Reasoning{Enabled: new(bool)}}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	params.Settings = disabledSettings
+	if _, err := newModel("anthropic/claude-sonnet-4.6").Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if bodies[2]["tool_choice"] != "required" {
+		t.Fatalf("disabled reasoning changed forced tool choice: %#v", bodies[2])
+	}
+	for _, reasoning := range []any{
+		&openrouter.Reasoning{Effort: openrouter.ReasoningEffortLow},
+		true,
+	} {
+		params.Settings = ai.ModelSettings{ExtraBody: map[string]any{"reasoning": reasoning}}
+		if _, err := newModel("anthropic/claude-sonnet-4.6").Request(t.Context(), nil, params); err != nil {
+			t.Fatal(err)
+		}
+		if bodies[len(bodies)-1]["tool_choice"] != "auto" {
+			t.Fatalf("reasoning form did not relax inferred forcing: %#v", bodies[len(bodies)-1])
+		}
+	}
+
+	for name, choice := range map[string]any{"required": "required", "list": []any{"final_result"}} {
+		t.Run(name, func(t *testing.T) {
+			params.Settings = ai.ModelSettings{
+				Thinking:  &ai.ThinkingSettings{Level: ai.ThinkingLevelLow},
+				ExtraBody: map[string]any{"tool_choice": choice},
+			}
+			before := len(bodies)
+			_, err := newModel("anthropic/claude-sonnet-4.6").Request(t.Context(), nil, params)
+			if err == nil || !strings.Contains(err.Error(), "cannot be forced") &&
+				!strings.Contains(err.Error(), "specific tools cannot be forced") {
+				t.Fatalf("unexpected explicit forcing error: %v", err)
+			}
+			if len(bodies) != before {
+				t.Fatal("invalid forced tool choice reached transport")
+			}
+		})
+	}
+}
+
 func TestOpenRouterModelNameValidation(t *testing.T) {
 	for _, name := range []string{"model", "/model", "provider/", "~/model"} {
 		model := openrouter.NewModel(name)

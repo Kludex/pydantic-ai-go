@@ -178,6 +178,7 @@ type ToolReturn struct {
 	ReturnValue any
 	Content     []UserContent
 	Metadata    map[string]any
+	Tools       []string
 }
 
 // ToolReturnPart carries the result of a tool call back to the model.
@@ -192,6 +193,15 @@ type ToolReturnPart struct {
 }
 
 func (ToolReturnPart) requestPartKind() string { return "tool-return" }
+
+// ToolAvailabilityDeltaPart records deferred tools revealed at one point in
+// history. ToolsAdded contains model-facing tool names in reveal order.
+type ToolAvailabilityDeltaPart struct {
+	ToolsAdded []string
+	ToolCallID string
+}
+
+func (ToolAvailabilityDeltaPart) requestPartKind() string { return "tool-availability-delta" }
 
 // ValidationError is one structured JSON Schema validation failure.
 type ValidationError struct {

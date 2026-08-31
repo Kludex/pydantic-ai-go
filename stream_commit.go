@@ -125,7 +125,7 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 		if err := r.emitPendingCallResults(outcomes); err != nil {
 			return nil, err
 		}
-		return committedParts(outcomes), nil
+		return r.committedParts(outcomes), nil
 	}
 	if r.agent.endStrategy == EndStrategyGraceful {
 		if err := r.checkToolCallLimit(calls); err != nil {
@@ -138,7 +138,7 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 				continue
 			}
 			if err := r.executeCommittedBatch(ctx, calls, outcomes, batch); err != nil {
-				return committedParts(outcomes), err
+				return r.committedParts(outcomes), err
 			}
 			batch = batch[:0]
 			if r.isOutputCall(call) {
@@ -146,17 +146,17 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 			} else {
 				outcomes[index] = r.executeOneCommitted(ctx, call)
 				if outcomes[index].err != nil {
-					return committedParts(outcomes), outcomes[index].err
+					return r.committedParts(outcomes), outcomes[index].err
 				}
 			}
 		}
 		if err := r.executeCommittedBatch(ctx, calls, outcomes, batch); err != nil {
-			return committedParts(outcomes), err
+			return r.committedParts(outcomes), err
 		}
 		if err := r.emitPendingCallResults(outcomes); err != nil {
 			return nil, err
 		}
-		return committedParts(outcomes), nil
+		return r.committedParts(outcomes), nil
 	}
 
 	if err := r.checkToolCallLimit(calls); err != nil {
@@ -171,12 +171,12 @@ func (r *run[Deps, Output]) executeCallsWithCommittedOutput(
 		indexes = append(indexes, index)
 	}
 	if err := r.executeCommittedSelected(ctx, calls, outcomes, indexes); err != nil {
-		return committedParts(outcomes), err
+		return r.committedParts(outcomes), err
 	}
 	if err := r.emitPendingCallResults(outcomes); err != nil {
 		return nil, err
 	}
-	return committedParts(outcomes), nil
+	return r.committedParts(outcomes), nil
 }
 
 func (r *run[Deps, Output]) committedCallOutcome(call ToolCallPart, winner bool) callOutcome[Output] {
@@ -277,12 +277,12 @@ func (r *run[Deps, Output]) executeCommittedBatch(
 	return nil
 }
 
-func committedParts[Output any](outcomes []callOutcome[Output]) []RequestPart {
+func (r *run[Deps, Output]) committedParts(outcomes []callOutcome[Output]) []RequestPart {
 	parts := make([]RequestPart, 0, len(outcomes))
 	for _, outcome := range outcomes {
 		if outcome.part != nil {
 			parts = append(parts, outcome.part)
 		}
 	}
-	return parts
+	return append(parts, r.normalizeOutcomeExtraParts(outcomes)...)
 }

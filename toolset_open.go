@@ -80,6 +80,12 @@ func openWrappedToolset[Deps any](
 			wrapper.toolset = toolset
 			return wrapper
 		}
+	case deferredToolset[Deps]:
+		wrapped = wrapper.toolset
+		replace = func(toolset Toolset[Deps]) Toolset[Deps] {
+			wrapper.toolset = toolset
+			return wrapper
+		}
 	default:
 		return nil, nil, false, nil
 	}

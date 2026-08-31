@@ -300,6 +300,7 @@ func convertRequest(m ai.ModelRequest) ([]content, error) {
 			parts = append(parts, part{FunctionResponse: &functionResponse{
 				ID: rp.ToolCallID, Name: rp.ToolName, Response: map[string]any{key: rp.Content},
 			}})
+		case ai.ToolAvailabilityDeltaPart:
 		case ai.RetryPromptPart:
 			response := rp.ModelResponse()
 			if rp.ToolName != "" {

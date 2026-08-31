@@ -3,6 +3,7 @@ package ai_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,6 +54,33 @@ func TestRunStreamCommitsTextBeforeToolProcessing(t *testing.T) {
 				t.Fatalf("tool calls were not settled in history: %v", result.Messages())
 			}
 		})
+	}
+}
+
+func TestRunStreamCommittedToolsPreserveReveals(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ToolCallStartEvent{ToolName: "loader", ToolCallID: "loader"},
+			ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
+			ai.TextDeltaEvent{Delta: "committed"},
+			ai.FinishEvent{},
+		}
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddSimpleTool(agent, "loader", func(context.Context, struct{}) (ai.ToolReturn, error) {
+		return ai.ToolReturn{ReturnValue: "loaded", Tools: []string{"target"}}, nil
+	})
+	ai.AddSimpleTool(agent, "target", func(context.Context, struct{}) (string, error) {
+		return "target", nil
+	}, ai.WithDeferredLoading())
+	result, err := consumeRunStream(t, agent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := result.Messages()[2].(ai.ModelRequest).Parts
+	if len(parts) != 2 ||
+		!slices.Equal(parts[1].(ai.ToolAvailabilityDeltaPart).ToolsAdded, []string{"target"}) {
+		t.Fatalf("committed stream lost tool reveal: %+v", parts)
 	}
 }
 

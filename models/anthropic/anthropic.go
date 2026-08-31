@@ -296,6 +296,7 @@ func convertRequest(m ai.ModelRequest) ([]messageParam, error) {
 				Type: "tool_result", ToolUseID: p.ToolCallID, Content: content,
 				IsError: p.Outcome == ai.ToolReturnOutcomeFailed || p.Outcome == ai.ToolReturnOutcomeInterrupted,
 			})
+		case ai.ToolAvailabilityDeltaPart:
 		case ai.RetryPromptPart:
 			content := p.ModelResponse()
 			if p.ToolCallID != "" {

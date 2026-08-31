@@ -93,6 +93,19 @@ func PrepareToolset[Deps any](toolset Toolset[Deps], prepare ToolsPrepareFunc[De
 	return preparedToolset[Deps]{toolset: toolset, prepare: prepare}
 }
 
+// DeferLoadingToolset hides all wrapped tools, or the selected names, until
+// another tool reveals them through ToolReturn.Tools.
+func DeferLoadingToolset[Deps any](toolset Toolset[Deps], names ...string) Toolset[Deps] {
+	var selected map[string]struct{}
+	if len(names) > 0 {
+		selected = make(map[string]struct{}, len(names))
+		for _, name := range names {
+			selected[name] = struct{}{}
+		}
+	}
+	return deferredToolset[Deps]{toolset: toolset, names: selected}
+}
+
 // SetToolsetMetadata merges metadata onto every tool. New values take precedence.
 func SetToolsetMetadata[Deps any](toolset Toolset[Deps], metadata map[string]any) Toolset[Deps] {
 	return metadataToolset[Deps]{toolset: toolset, metadata: cloneSchemaMap(metadata)}
@@ -358,6 +371,32 @@ func (t defaultedToolset[Deps]) Tools(
 }
 
 func (t defaultedToolset[Deps]) ToolsetInstructions(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]InstructionPart, error) {
+	return resolveToolsetInstructions(ctx, rc, t.toolset)
+}
+
+type deferredToolset[Deps any] struct {
+	toolset Toolset[Deps]
+	names   map[string]struct{}
+}
+
+func (t deferredToolset[Deps]) Tools(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]Tool[Deps], error) {
+	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
+	if err != nil {
+		return nil, err
+	}
+	for index := range tools {
+		if _, selected := t.names[tools[index].entry.def.Name]; t.names == nil || selected {
+			tools[index].entry.def.DeferLoading = true
+		}
+	}
+	return tools, nil
+}
+
+func (t deferredToolset[Deps]) ToolsetInstructions(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]InstructionPart, error) {
 	return resolveToolsetInstructions(ctx, rc, t.toolset)

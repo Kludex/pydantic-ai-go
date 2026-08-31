@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"slices"
 	"time"
 )
 
@@ -81,6 +82,8 @@ type wirePart struct {
 	ProviderDetails map[string]any    `json:"provider_details,omitempty"`
 	Outcome         ToolReturnOutcome `json:"outcome,omitempty"`
 	Metadata        map[string]any    `json:"metadata,omitempty"`
+	ToolsAdded      []string          `json:"tools_added,omitempty"`
+	Added           []string          `json:"added,omitempty"`
 }
 
 func marshalMessage(m ModelMessage) ([]byte, error) {
@@ -150,6 +153,11 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 			PartKind: "tool-return", Content: content, ToolName: part.ToolName,
 			ToolCallID: part.ToolCallID, ToolKind: part.ToolKind, Outcome: part.Outcome, Metadata: part.Metadata,
 		}, part.Timestamp), nil
+	case ToolAvailabilityDeltaPart:
+		return wirePart{
+			PartKind: "tool-availability-delta", ToolsAdded: slices.Clone(part.ToolsAdded),
+			ToolCallID: part.ToolCallID,
+		}, nil
 	case RetryPromptPart:
 		content := mustJSON(part.Content)
 		if part.Errors != nil {
@@ -289,6 +297,14 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 			part.Timestamp = *wp.Timestamp
 		}
 		return part, nil
+	case "tool-availability-delta":
+		tools := wp.ToolsAdded
+		if tools == nil {
+			tools = wp.Added
+		}
+		return ToolAvailabilityDeltaPart{
+			ToolsAdded: slices.Clone(tools), ToolCallID: wp.ToolCallID,
+		}, nil
 	case "retry-prompt":
 		part := RetryPromptPart{ToolName: wp.ToolName, ToolCallID: wp.ToolCallID}
 		if err := json.Unmarshal(wp.Content, &part.Content); err != nil {

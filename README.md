@@ -214,11 +214,12 @@ ai.AddSimpleTool(agent, "inspect_receipt", func(
 			ai.BinaryContent{Data: args.Image, MediaType: "image/png"},
 		},
 		Metadata: map[string]any{"audit_id": args.AuditID},
+		Tools:    []string{"archive_receipt"},
 	}, nil
 })
 ```
 
-`ReturnValue` becomes the tool result. `Content` becomes a trailing user prompt after every result in the same concurrent batch, which preserves provider-valid tool-call ordering. `Metadata` remains in local history and is not sent to the model.
+`ReturnValue` becomes the tool result. `Content` becomes a trailing user prompt after every result in the same concurrent batch, which preserves provider-valid tool-call ordering. `Metadata` remains in local history and is not sent to the model. `Tools` reveals matching deferred tools by their model-facing names. Unknown, already-visible, and already-revealed names are ignored.
 
 Compose larger collections with toolsets:
 
@@ -235,6 +236,8 @@ agent.AddToolset(ai.PrefixToolset(publicWeatherTools, "weather"))
 ```
 
 The model sees `weather_get_weather`, while the function receives `get_weather` through `RunContext.ToolName`. You can also use `CombineToolsets`, `RenameToolset`, `PrepareToolset`, and `SetToolsetMetadata`. `WithToolsetMaxRetries` and `WithToolsetTimeout` provide defaults without replacing explicit tool options. Toolsets list tools and contribute optional instructions before each model step. Pass them through `WithRunToolsets` to scope them to one run.
+
+Use `WithDeferredLoading()` on one tool or wrap a collection with `DeferLoadingToolset`. Deferred definitions remain hidden until `ToolReturn.Tools` reveals them. The first premature call to each hidden tool receives a free availability correction, so it does not consume the budget needed by a later valid call. Reveals are deduplicated in model-call order and persisted as `ToolAvailabilityDeltaPart`, so resumed histories retain the same visibility.
 
 Stateful toolsets can implement three small optional interfaces:
 

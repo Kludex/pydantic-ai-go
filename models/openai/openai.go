@@ -270,6 +270,7 @@ func convertRequest(m ai.ModelRequest) ([]chatMessage, error) {
 				return nil, err
 			}
 			out = append(out, chatMessage{Role: "tool", Content: content, ToolCallID: p.ToolCallID})
+		case ai.ToolAvailabilityDeltaPart:
 		case ai.RetryPromptPart:
 			content := p.ModelResponse()
 			if p.ToolCallID != "" {

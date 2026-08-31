@@ -184,6 +184,7 @@ func convertResponsesRequest(m ai.ModelRequest) ([]responsesInput, error) {
 				return nil, err
 			}
 			out = append(out, responsesInput{Type: "function_call_output", CallID: part.ToolCallID, Output: content})
+		case ai.ToolAvailabilityDeltaPart:
 		case ai.RetryPromptPart:
 			content := part.ModelResponse()
 			if part.ToolCallID != "" {

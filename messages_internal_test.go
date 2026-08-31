@@ -15,6 +15,7 @@ func TestKindMarkers(t *testing.T) {
 		{SystemPromptPart{}, "system-prompt"},
 		{UserPromptPart{}, "user-prompt"},
 		{ToolReturnPart{}, "tool-return"},
+		{ToolAvailabilityDeltaPart{}, "tool-availability-delta"},
 		{RetryPromptPart{}, "retry-prompt"},
 	}
 	for _, tc := range requestKinds {

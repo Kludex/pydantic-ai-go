@@ -183,6 +183,7 @@ func TestResponsesToolCallRoundTrip(t *testing.T) {
 	}
 	msgs = append(msgs, *resp, ai.ModelRequest{Parts: []ai.RequestPart{
 		ai.ToolReturnPart{ToolName: "get_weather", Content: "sunny", ToolCallID: "c1"},
+		ai.ToolAvailabilityDeltaPart{ToolsAdded: []string{"archive"}, ToolCallID: "c1"},
 	}})
 	if _, err := model.Request(t.Context(), msgs, params); err != nil {
 		t.Fatal(err)

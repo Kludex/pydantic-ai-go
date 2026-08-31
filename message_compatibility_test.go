@@ -3,6 +3,7 @@ package ai_test
 import (
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 
@@ -66,6 +67,37 @@ func TestUnmarshalUpstreamMultimodalMessageFixture(t *testing.T) {
 	binary := prompt.Contents[2].(ai.BinaryContent)
 	if string(binary.Data) != "hi" || binary.MediaType != "image/png" {
 		t.Fatalf("unexpected binary content %+v", binary)
+	}
+}
+
+func TestUnmarshalUpstreamToolAvailabilityFixture(t *testing.T) {
+	data, err := os.ReadFile("testdata/messages/upstream_tool_availability.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	part := messages[0].(ai.ModelRequest).Parts[0].(ai.ToolAvailabilityDeltaPart)
+	if !slices.Equal(part.ToolsAdded, []string{"secret", "archive"}) || part.ToolCallID != "reveal-1" {
+		t.Fatalf("unexpected tool availability fixture: %+v", part)
+	}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"tools_added":["secret","archive"]`) {
+		t.Fatalf("tool availability was not serialized: %s", encoded)
+	}
+
+	aliases, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"tool-availability-delta","added":["legacy"]}]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	aliased := aliases[0].(ai.ModelRequest).Parts[0].(ai.ToolAvailabilityDeltaPart)
+	if !slices.Equal(aliased.ToolsAdded, []string{"legacy"}) {
+		t.Fatalf("legacy added alias was not decoded: %+v", aliased)
 	}
 }
 

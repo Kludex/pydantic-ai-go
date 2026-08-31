@@ -192,7 +192,10 @@ type ToolDefinition struct {
 	Metadata map[string]any `json:"-"`
 	// ToolsetID identifies the dynamic toolset that owns this definition. It is
 	// local lifecycle metadata and is not sent to providers.
-	ToolsetID  string `json:"-"`
-	maxRetries *int
-	timeout    time.Duration
+	ToolsetID string `json:"-"`
+	// DeferLoading hides the tool until a rich tool return reveals its name.
+	// It is resolved by the agent and is not sent to providers.
+	DeferLoading bool `json:"-"`
+	maxRetries   *int
+	timeout      time.Duration
 }

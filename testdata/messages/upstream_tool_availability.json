@@ -1,0 +1,21 @@
+[
+  {
+    "parts": [
+      {
+        "tools_added": [
+          "secret",
+          "archive"
+        ],
+        "tool_call_id": "reveal-1",
+        "part_kind": "tool-availability-delta"
+      }
+    ],
+    "timestamp": null,
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

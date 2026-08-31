@@ -355,6 +355,12 @@ func WithoutStrict() ToolOption {
 	return func(d *ToolDefinition) { d.Strict = &strict }
 }
 
+// WithDeferredLoading hides a tool until another tool reveals its name through
+// ToolReturn.Tools. Hidden calls are rejected as unavailable.
+func WithDeferredLoading() ToolOption {
+	return func(d *ToolDefinition) { d.DeferLoading = true }
+}
+
 // WithToolMaxRetries overrides the function-tool retry budget for this tool.
 func WithToolMaxRetries(n int) ToolOption {
 	if n < 0 {

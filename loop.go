@@ -136,8 +136,8 @@ func (a *Agent[Deps, Output]) newRun(
 	}
 	r := &run[Deps, Output]{
 		agent: a, model: model, capabilities: capabilities, ctx: runCtx, cancellation: cancellation,
-		retryLimits: a.retryLimits, toolRetries: make(map[string]int), runSettings: cfg.settings,
-		tools: slices.Clone(a.tools), toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
+		retryLimits: a.retryLimits, toolRetries: make(map[string]int), availabilityRefused: make(map[string]struct{}),
+		runSettings: cfg.settings, tools: slices.Clone(a.tools), toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
 		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
@@ -213,6 +213,7 @@ func (a *Agent[Deps, Output]) newRun(
 		conversationID = newRunID()
 	}
 	history = mergeConsecutiveMessages(history)
+	r.revealedTools = revealedToolNames(history)
 	r.messages = append(r.messages, history...)
 	r.newMessages = len(r.messages)
 	settings := mergeModelSettings(a.settings, cfg.settings)
@@ -481,9 +482,12 @@ type run[Deps, Output any] struct {
 	outputTool             OutputToolConfig
 	outputMaxRetries       int
 	toolRetries            map[string]int
+	availabilityRefused    map[string]struct{}
 	outputRetry            int
 	retriesMu              sync.Mutex
 	currentTools           map[string]struct{}
+	currentDeferredTools   map[string]struct{}
+	revealedTools          map[string]struct{}
 	currentToolValidators  map[string]*schema.Validator
 	currentOutputTool      *ToolDefinition
 	currentOutputValidator *schema.Validator
@@ -642,6 +646,9 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 				case ToolReturnPart:
 					part.Metadata = cloneSchemaMap(part.Metadata)
 					message.Parts[partIndex] = part
+				case ToolAvailabilityDeltaPart:
+					part.ToolsAdded = slices.Clone(part.ToolsAdded)
+					message.Parts[partIndex] = part
 				}
 			}
 			cloned[index] = message
@@ -657,6 +664,26 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 		}
 	}
 	return cloned
+}
+
+func revealedToolNames(messages []ModelMessage) map[string]struct{} {
+	revealed := make(map[string]struct{})
+	for _, message := range messages {
+		request, ok := message.(ModelRequest)
+		if !ok {
+			continue
+		}
+		for _, requestPart := range request.Parts {
+			part, ok := requestPart.(ToolAvailabilityDeltaPart)
+			if !ok {
+				continue
+			}
+			for _, name := range part.ToolsAdded {
+				revealed[name] = struct{}{}
+			}
+		}
+	}
+	return revealed
 }
 
 func cloneUserContents(contents []UserContent) []UserContent {
@@ -922,7 +949,18 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		}
 		seen[def.Name] = struct{}{}
 	}
-	params.Tools = tools
+	r.currentDeferredTools = make(map[string]struct{})
+	visibleTools := make([]ToolDefinition, 0, len(tools))
+	for _, definition := range tools {
+		if definition.DeferLoading {
+			r.currentDeferredTools[definition.Name] = struct{}{}
+			if _, revealed := r.revealedTools[definition.Name]; !revealed {
+				continue
+			}
+		}
+		visibleTools = append(visibleTools, definition)
+	}
+	params.Tools = visibleTools
 	if err := r.compileCurrentSchemas(params); err != nil {
 		return ModelRequestParams{}, err
 	}
@@ -1223,7 +1261,7 @@ func (r *run[Deps, Output]) executeCallsEarly(
 		}
 		outcomes[i] = r.executeOne(ctx, call)
 		if outcomes[i].err != nil {
-			return completedCallParts(outcomes), nil, outcomes[i].err
+			return r.completedCallParts(outcomes), nil, outcomes[i].err
 		}
 		winner = outcomes[i].output
 	}
@@ -1239,10 +1277,10 @@ func (r *run[Deps, Output]) executeCallsEarly(
 		return r.collectCallOutcomes(outcomes, false)
 	}
 	if err := r.checkToolCallLimit(calls); err != nil {
-		return completedCallParts(outcomes), nil, err
+		return r.completedCallParts(outcomes), nil, err
 	}
 	if err := r.executeSelected(ctx, calls, outcomes, r.functionCallIndexes(calls), false); err != nil {
-		return completedCallParts(outcomes), nil, err
+		return r.completedCallParts(outcomes), nil, err
 	}
 	return r.collectCallOutcomes(outcomes, false)
 }
@@ -1262,7 +1300,7 @@ func (r *run[Deps, Output]) executeCallsGraceful(
 			continue
 		}
 		if err := r.executeIndexBatch(ctx, calls, outcomes, batch); err != nil {
-			return completedCallParts(outcomes), nil, err
+			return r.completedCallParts(outcomes), nil, err
 		}
 		batch = batch[:0]
 		if r.isOutputCall(call) && winner != nil {
@@ -1274,14 +1312,14 @@ func (r *run[Deps, Output]) executeCallsGraceful(
 		}
 		outcomes[i] = r.executeOne(ctx, call)
 		if outcomes[i].err != nil {
-			return completedCallParts(outcomes), nil, outcomes[i].err
+			return r.completedCallParts(outcomes), nil, outcomes[i].err
 		}
 		if outcomes[i].output != nil {
 			winner = outcomes[i].output
 		}
 	}
 	if err := r.executeIndexBatch(ctx, calls, outcomes, batch); err != nil {
-		return completedCallParts(outcomes), nil, err
+		return r.completedCallParts(outcomes), nil, err
 	}
 	return r.collectCallOutcomes(outcomes, true)
 }
@@ -1298,7 +1336,7 @@ func (r *run[Deps, Output]) executeCallsExhaustive(
 		indexes[i] = i
 	}
 	if err := r.executeSelected(ctx, calls, outcomes, indexes, true); err != nil {
-		return completedCallParts(outcomes), nil, err
+		return r.completedCallParts(outcomes), nil, err
 	}
 	return r.collectCallOutcomes(outcomes, true)
 }
@@ -1413,16 +1451,14 @@ func (r *run[Deps, Output]) callIsBarrier(call ToolCallPart, outputToolsConcurre
 	return ok && entry.def.Sequential
 }
 
-func completedCallParts[Output any](outcomes []callOutcome[Output]) []RequestPart {
+func (r *run[Deps, Output]) completedCallParts(outcomes []callOutcome[Output]) []RequestPart {
 	parts := make([]RequestPart, 0, len(outcomes))
-	var extraParts []RequestPart
 	for _, outcome := range outcomes {
 		if outcome.err == nil && outcome.part != nil {
 			parts = append(parts, outcome.part)
-			extraParts = append(extraParts, outcome.extraParts...)
 		}
 	}
-	return append(parts, extraParts...)
+	return append(parts, r.normalizeOutcomeExtraParts(outcomes)...)
 }
 
 func (r *run[Deps, Output]) collectCallOutcomes(
@@ -1436,12 +1472,10 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 	var winner *Output
 	winningPart := -1
 	functionRetry := false
-	var extraParts []RequestPart
 	for index, outcome := range outcomes {
 		if outcome.part != nil {
 			parts = append(parts, outcome.part)
 			partPositions[index] = len(parts) - 1
-			extraParts = append(extraParts, outcome.extraParts...)
 		}
 		if outcome.output != nil {
 			if winner == nil {
@@ -1470,7 +1504,42 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 	if err := r.emitPendingCallResults(outcomes); err != nil {
 		return nil, nil, err
 	}
-	return append(parts, extraParts...), winner, nil
+	return append(parts, r.normalizeOutcomeExtraParts(outcomes)...), winner, nil
+}
+
+func (r *run[Deps, Output]) normalizeOutcomeExtraParts(
+	outcomes []callOutcome[Output],
+) []RequestPart {
+	var deltas []RequestPart
+	var trailing []RequestPart
+	for _, outcome := range outcomes {
+		if outcome.err != nil || outcome.part == nil {
+			continue
+		}
+		for _, extra := range outcome.extraParts {
+			delta, ok := extra.(ToolAvailabilityDeltaPart)
+			if !ok {
+				trailing = append(trailing, extra)
+				continue
+			}
+			added := make([]string, 0, len(delta.ToolsAdded))
+			for _, name := range delta.ToolsAdded {
+				if _, deferred := r.currentDeferredTools[name]; !deferred {
+					continue
+				}
+				if _, revealed := r.revealedTools[name]; revealed {
+					continue
+				}
+				r.revealedTools[name] = struct{}{}
+				added = append(added, name)
+			}
+			if len(added) > 0 {
+				delta.ToolsAdded = added
+				deltas = append(deltas, delta)
+			}
+		}
+	}
+	return append(deltas, trailing...)
 }
 
 func (r *run[Deps, Output]) emitPendingCallResults(outcomes []callOutcome[Output]) error {
@@ -1501,6 +1570,24 @@ func (r *run[Deps, Output]) executeCall(
 	}
 	entry, registered := r.findTool(call.ToolName)
 	_, available := r.currentTools[call.ToolName]
+	if registered && !available {
+		if _, deferred := r.currentDeferredTools[call.ToolName]; deferred {
+			if _, refused := r.availabilityRefused[call.ToolName]; refused {
+				if err := r.countToolRetry(call.ToolName); err != nil {
+					return nil, nil, nil, err
+				}
+			} else {
+				r.availabilityRefused[call.ToolName] = struct{}{}
+			}
+			return RetryPromptPart{
+				Content: fmt.Sprintf(
+					"Tool %s is not available yet: search for it first, then call it again once you've seen its schema.",
+					quoteToolName(call.ToolName),
+				),
+				ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+			}, nil, nil, nil
+		}
+	}
 	if !registered || !available {
 		if err := r.countToolRetry(call.ToolName); err != nil {
 			return nil, nil, nil, err
@@ -1567,8 +1654,13 @@ func (r *run[Deps, Output]) executeCall(
 	if rich != nil {
 		returnValue = rich.ReturnValue
 		metadata = cloneSchemaMap(rich.Metadata)
+		if len(rich.Tools) > 0 {
+			extraParts = append(extraParts, ToolAvailabilityDeltaPart{
+				ToolsAdded: slices.Clone(rich.Tools), ToolCallID: call.ToolCallID,
+			})
+		}
 		if len(rich.Content) > 0 {
-			extraParts = []RequestPart{UserPromptPart{Contents: cloneUserContents(rich.Content)}}
+			extraParts = append(extraParts, UserPromptPart{Contents: cloneUserContents(rich.Content)})
 		}
 	} else if _, ok := content.(*ToolReturn); ok {
 		returnValue = nil

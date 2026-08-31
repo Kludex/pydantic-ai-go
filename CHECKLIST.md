@@ -41,21 +41,21 @@ Status:
 - [x] Implemented message subset uses upstream-compatible discriminators and validates with upstream `ModelMessagesTypeAdapter`.
 - [x] Text, thinking, tool call, tool return with success/failed outcome, retry prompt, and system/user prompt parts.
 - [x] Text, image URL, and inline binary user content.
-- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
+- [~] Pinned upstream fixtures cover basic, multimodal, interrupted, synthesized-return, request-instruction, dynamic-system-prompt, structured-retry, response/part-metadata, tool-availability, and arbitrary usage-detail histories; Go output validates with `ModelMessagesTypeAdapter`. Add fixtures as each remaining part type lands.
 - [x] Provider parameters preserve static/dynamic instruction boundaries, and each sent `ModelRequest` persists its effective joined instructions across serialization and compatible history merging.
 - [x] Legacy system prompts support static values, one-time functions, and explicit stable dynamic IDs; dynamic parts retain timestamps/IDs in serialized history and reevaluate after model selection when history resumes.
 - [x] System, user, tool-return, and retry request parts preserve upstream-compatible timestamps; generated parts receive UTC timestamps without rewriting history values.
 - [ ] Native tool call/return parts.
 - [ ] File, document, audio, video, speech, uploaded-file, and cache-point content, including provider prompt-cache placement from static instruction boundaries.
 - [ ] Compaction and builtin-tool return parts.
-- [ ] Tool availability delta parts.
+- [x] Tool availability delta parts, including the legacy `added` decode alias and upstream-compatible serialization.
 - [x] Implemented requests/responses preserve timestamps, local metadata, run/conversation IDs, normalized finish reasons, provider details/URLs/names, response IDs, and lifecycle state, including deprecated `vendor_*` aliases.
 - [x] Text, thinking, and function-tool-call parts preserve IDs, signatures, provider names/details, and typed tool kinds through serialization, fallback replay, keyed streaming accumulation, and consumer-safe copies.
 - [x] Retry prompts preserve structured validation errors and timestamps, format provider feedback consistently, and retain JSON Schema keyword, location, message, and offending input details.
 - [x] Failed, denied, and interrupted tool-return outcome values, typed return tool kinds, request state, and synthesized history repair after run cancellation.
 - [x] Synthesized-return metadata markers and deterministic, idempotent repair of trailing, interior, shadowed-ID, malformed-order, and empty-ID dangling calls.
 - [x] Orphaned tool results are removed while plain validation feedback is preserved; consecutive requests and synthetic responses are merged with tool results hoisted before user-facing content.
-- [~] Rich `ToolReturn` values separate the provider-facing return value, trailing multimodal user content, and local metadata while preserving provider-valid concurrent ordering. Revealed tools remain.
+- [x] Rich `ToolReturn` values separate the provider-facing return value, trailing multimodal user content, local metadata, and deferred-tool reveals while preserving provider-valid concurrent ordering.
 - [x] Stable stream part IDs and keyed/interleaved text, thinking, signature, provider-metadata, and tool-argument deltas across bundled providers and fallback replay.
 - [x] Explicit `PartStartEvent`, `PartDeltaEvent`, `PartEndEvent`, `FinalResultEvent`, and metadata-bearing `FinishEvent` with typed, applicable deltas.
 - [ ] Enqueued-message events.
@@ -79,13 +79,14 @@ Status:
 - [x] `ToolFailedf` terminal failure results with persisted `failed` outcome and no retry-budget cost.
 - [ ] Reflected tool return schemas and explicit rejection of nested rich `ToolReturn` values.
 - [x] Failed and interrupted tool returns use Anthropic error results and Gemini error responses.
-- [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets.
+- [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets; a deferred-but-hidden tool receives one free availability correction before later refusals charge its budget.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
 - [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
 - [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
 - [ ] Approval-required toolset wrapper.
 - [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.
-- [ ] Deferred/lazy tool loading and tool search.
+- [~] Deferred tools can be marked individually or through `DeferLoadingToolset`, remain unavailable until revealed, deduplicate concurrent reveals in model order, and retain visibility through serialized/resumed history. Search-driven discovery remains.
+- [ ] Provider-native deferred definitions and mid-conversation tool-addition rendering for Anthropic and OpenAI Responses; bundled providers currently use local withholding and persisted reveal deltas.
 - [ ] Native/builtin tools distinct from function tools.
 
 ### Deferred execution and approval
@@ -222,7 +223,7 @@ Status:
 
 1. Extend upstream message fixtures as remaining persisted part types land.
 2. Add per-run typed output specialization and stateful toolset lifecycle.
-3. Add revealed tools to rich tool returns, backed by deferred tool visibility and tool-availability delta history.
+3. Add search-driven discovery for deferred tools, then provider-native deferred definition and mid-conversation addition rendering.
 4. Design deferred tools and approvals around explicit pause/resume values rather than exceptions, building on pre-execution argument validation.
 5. Add streamed deferred request and result events with that lifecycle.
 6. Add MCP now that raw/dynamic toolsets have run and step lifecycle support, after deferred calls define the pause/resume boundary.

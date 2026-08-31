@@ -28,6 +28,12 @@ type ToolSearchStrategyModel interface {
 	SupportsToolSearchStrategy(strategy ToolSearchStrategy) bool
 }
 
+// NativeToolSearchHistoryModel is implemented by models that can replay
+// provider-native tool-search parts from their own provider.
+type NativeToolSearchHistoryModel interface {
+	NativeToolSearchProvider() string
+}
+
 // ModelCloseFunc releases resources acquired for one agent run.
 type ModelCloseFunc func(ctx context.Context) error
 

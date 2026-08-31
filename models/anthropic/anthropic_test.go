@@ -1282,3 +1282,48 @@ func TestAnthropicNativeToolSearchResponseErrors(t *testing.T) {
 		t.Fatalf("unexpected empty native search call: %+v", call)
 	}
 }
+
+func TestAnthropicReplaysForeignNativeSearchLocally(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{
+			"model":"claude-sonnet-4-6","stop_reason":"end_turn",
+			"content":[{"type":"text","text":"done"}],"usage":{}
+		}`))
+	})
+	hidden := ai.NewSimpleTool[struct{}](
+		"hidden", func(context.Context, struct{}) (string, error) { return "hidden", nil },
+		ai.WithDeferredLoading(),
+	)
+	agent := ai.NewAgent[struct{}, string](model)
+	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(hidden), ai.ToolSearchConfig[struct{}]{}))
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "openai", Args: []byte(`{"queries":["hidden"]}`),
+		},
+		ai.NativeToolReturnPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "openai",
+			Content:      ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "hidden"}}},
+		},
+	}}}
+	if _, err := agent.Run(t.Context(), "continue", struct{}{}, ai.WithMessageHistory(history)); err != nil {
+		t.Fatal(err)
+	}
+	messages := body["messages"].([]any)
+	call := messages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	result := messages[1].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if call["type"] != "tool_use" || call["name"] != ai.ToolSearchName ||
+		result["type"] != "tool_result" ||
+		result["content"].([]any)[0].(map[string]any)["tool_name"] != "hidden" {
+		t.Fatalf("unexpected foreign search replay: call=%+v result=%+v", call, result)
+	}
+	tools := body["tools"].([]any)
+	if tools[len(tools)-1].(map[string]any)["name"] != "tool_search_tool_bm25" {
+		t.Fatalf("current search did not remain hosted: %+v", tools)
+	}
+}

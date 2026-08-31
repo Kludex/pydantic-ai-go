@@ -1259,3 +1259,49 @@ func TestResponsesServerToolSearchReplayEdges(t *testing.T) {
 		t.Fatalf("unexpected replay defaults: call=%+v output=%+v", call, output)
 	}
 }
+
+func TestResponsesReplaysForeignNativeSearchThroughClientProtocol(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{
+			"model":"gpt-5.4","status":"completed",
+			"output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}],"usage":{}
+		}`))
+	})
+	hidden := ai.NewSimpleTool[struct{}](
+		"hidden", func(context.Context, struct{}) (string, error) { return "hidden", nil },
+		ai.WithDeferredLoading(),
+	)
+	agent := ai.NewAgent[struct{}, string](model)
+	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(hidden), ai.ToolSearchConfig[struct{}]{}))
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.NativeToolCallPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "anthropic", Args: []byte(`{"queries":["hidden"]}`),
+		},
+		ai.NativeToolReturnPart{
+			ToolName: ai.ToolSearchName, ToolCallID: "search", ToolKind: ai.ToolPartKindToolSearch,
+			ProviderName: "anthropic",
+			Content:      ai.ToolSearchResult{DiscoveredTools: []ai.ToolSearchMatch{{Name: "hidden"}}},
+		},
+	}}}
+	if _, err := agent.Run(t.Context(), "continue", struct{}{}, ai.WithMessageHistory(history)); err != nil {
+		t.Fatal(err)
+	}
+	input := body["input"].([]any)
+	if input[0].(map[string]any)["type"] != "tool_search_call" ||
+		input[0].(map[string]any)["execution"] != "client" ||
+		input[1].(map[string]any)["type"] != "tool_search_output" ||
+		input[1].(map[string]any)["execution"] != "client" ||
+		len(input[1].(map[string]any)["tools"].([]any)) != 1 {
+		t.Fatalf("unexpected foreign native search replay: %+v", input)
+	}
+	tools := body["tools"].([]any)
+	if tools[len(tools)-1].(map[string]any)["type"] != "tool_search" ||
+		tools[len(tools)-1].(map[string]any)["execution"] != nil {
+		t.Fatalf("current automatic search did not remain server-managed: %+v", tools)
+	}
+}

@@ -333,7 +333,9 @@ The zero-value configuration prefers provider-managed search and falls back to l
 
 OpenAI Responses runs the automatic strategy server-side. It normalizes hosted calls and results into `NativeToolCallPart` and `NativeToolReturnPart`, preserves nullable provider IDs for replay, and exposes the same lifecycle while streaming. Keyword and custom strategies use OpenAI's client-executed protocol. On providers without native search, automatic, keyword, and custom strategies use the local `search_tools` function. Required BM25 or regex strategies fail before the request.
 
-Anthropic uses hosted BM25 search for the automatic strategy and supports required BM25 or regex selection. Native calls and results preserve the selected variant, caller metadata, provider errors, and `tool_reference` results across static, streamed, and replayed histories. Keyword and custom strategies remain client-executed. Use each provider's `WithDeferredToolSupport(false)` option for compatible endpoints that do not implement its native wire protocol.
+Anthropic uses hosted BM25 search for the automatic strategy and supports required BM25 or regex selection. Native calls and results preserve the selected variant, caller metadata, provider errors, and `tool_reference` results across static, streamed, and replayed histories. Keyword and custom strategies remain client-executed.
+
+When you move history between providers, the agent converts foreign native search parts into ordinary typed `search_tools` call and return turns. It leaves durable history unchanged, preserves same-provider native identity, and splits inline provider results at valid request boundaries. Use each provider's `WithDeferredToolSupport(false)` option for compatible endpoints that do not implement its native wire protocol.
 
 ### Pause for approval or external execution
 

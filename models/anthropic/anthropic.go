@@ -919,6 +919,9 @@ func (m *Model) SupportsToolSearchStrategy(strategy ai.ToolSearchStrategy) bool 
 		(strategy == ai.ToolSearchStrategyBM25 || strategy == ai.ToolSearchStrategyRegex)
 }
 
+// NativeToolSearchProvider identifies histories this model can replay natively.
+func (*Model) NativeToolSearchProvider() string { return "anthropic" }
+
 func anthropicFinishReason(reason string) ai.FinishReason {
 	return map[string]ai.FinishReason{
 		"compaction": ai.FinishReasonStop, "end_turn": ai.FinishReasonStop,

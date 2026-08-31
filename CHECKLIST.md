@@ -90,7 +90,7 @@ Status:
 - [x] Provider-managed tool search for OpenAI Responses and Anthropic in static, streaming, and same-provider replay paths. OpenAI uses automatic hosted search or keyword/custom client execution, preserves nullable identities without guessing ambiguous pairs, and executes same-response discovered calls. Anthropic defaults to BM25, supports required BM25/regex variants, preserves caller/error details, and retains client-executed keyword/custom search. Both keep deferred definitions stable on the wire.
 - [x] Reset derived deferred-tool discovery visibility at compaction part boundaries while allowing calls generated in the compacting response to use the request-time visibility snapshot; post-boundary reveals remain visible.
 - [~] `NativeToolCallPart` and `NativeToolReturnPart` are distinct non-executable response parts with upstream `builtin-tool-call`/`builtin-tool-return` serialization, provider identity, typed tool kinds, outcomes, timestamps, metadata, defensive cloning, and normalized streaming start/delta/return lifecycle. General native-tool registration and remaining provider rendering/parsing remain.
-- [ ] Translate typed native tool-search history to local call/return history when switching to a provider without a compatible native replay protocol, while retaining same-provider wire identity.
+- [x] Translate foreign or untagged native tool-search histories into provider-neutral function call/return turns before model requests, including return-boundary splitting and request merging. Same-provider models retain native wire identity, while OpenAI and Anthropic can replay translated discoveries alongside a currently hosted search configuration.
 
 ### Deferred execution and approval
 
@@ -234,6 +234,6 @@ Status:
 
 1. Expose external enqueue through an iterative/manual run driver; run-context queues now survive deferred pauses.
 2. Add MCP now that raw/dynamic toolsets have run/step lifecycle and deferred calls have an explicit pause/resume boundary.
-3. Translate native tool-search histories when switching to providers without a compatible native replay protocol.
-4. Add token-aware trimming and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
+3. Add token-aware trimming, model-wrapper unwrapping, and provider-neutral summarization helpers; request-only message processors and provider-native compaction are complete.
+4. Add provider-profile output defaults, provider-specific prompted templates, and union output alternatives.
 5. Extend upstream message fixtures as remaining persisted part types land.

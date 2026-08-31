@@ -1916,6 +1916,11 @@ func (r *run[Deps, Output]) doModelRequest(
 func (r *run[Deps, Output]) requestModelSegment(
 	ctx context.Context, msgs []ModelMessage, params ModelRequestParams, emit func(StreamEvent) bool,
 ) (*ModelResponse, error) {
+	provider := ""
+	if model, ok := r.model.(NativeToolSearchHistoryModel); ok {
+		provider = model.NativeToolSearchProvider()
+	}
+	msgs = adaptNativeToolSearchHistory(msgs, provider)
 	if params.Settings.RequestTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, params.Settings.RequestTimeout)

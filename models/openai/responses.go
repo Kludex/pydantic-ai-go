@@ -331,7 +331,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 	}
 	converter := responsesMessageConverter{
-		clientToolSearch: clientToolSearch,
+		clientToolSearch: activeToolSearch,
 		serverToolSearch: serverToolSearch,
 		deferred:         deferred,
 		rendered:         make(map[string]struct{}),
@@ -734,9 +734,13 @@ func (m *ResponsesModel) SupportsToolSearchStrategy(strategy ai.ToolSearchStrate
 	return strategy != ai.ToolSearchStrategyBM25 && strategy != ai.ToolSearchStrategyRegex
 }
 
+// NativeToolSearchProvider identifies histories this model can replay natively.
+func (*ResponsesModel) NativeToolSearchProvider() string { return "openai" }
+
 var (
-	_ ai.Model                     = (*ResponsesModel)(nil)
-	_ ai.ToolSearchStrategyModel   = (*ResponsesModel)(nil)
-	_ ai.ModelContinuationDelayer  = (*ResponsesModel)(nil)
-	_ ai.SuspendedResponseCanceler = (*ResponsesModel)(nil)
+	_ ai.Model                        = (*ResponsesModel)(nil)
+	_ ai.ToolSearchStrategyModel      = (*ResponsesModel)(nil)
+	_ ai.NativeToolSearchHistoryModel = (*ResponsesModel)(nil)
+	_ ai.ModelContinuationDelayer     = (*ResponsesModel)(nil)
+	_ ai.SuspendedResponseCanceler    = (*ResponsesModel)(nil)
 )

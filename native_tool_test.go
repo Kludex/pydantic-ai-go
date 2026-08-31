@@ -110,6 +110,51 @@ func TestFileSearchToolIsDetached(t *testing.T) {
 	}
 }
 
+func TestMCPServerTool(t *testing.T) {
+	tool := ai.MCPServerTool{
+		ID: "docs", URL: "https://example.com/mcp", AuthorizationToken: "secret",
+		Description: "Documentation", AllowedTools: []string{"search"},
+		Headers: map[string]string{"X-Tenant": "acme"}, Optional: true,
+	}
+	if tool.Kind() != "mcp_server" || tool.UniqueID() != "mcp_server:docs" || !tool.IsOptional() {
+		t.Fatalf("unexpected MCP server identity: %+v", tool)
+	}
+	clone := tool.CloneNativeTool().(ai.MCPServerTool)
+	clone.AllowedTools[0] = "changed"
+	clone.Headers["X-Tenant"] = "changed"
+	if tool.AllowedTools[0] != "search" || tool.Headers["X-Tenant"] != "acme" {
+		t.Fatal("MCP server clone shares mutable state")
+	}
+
+	tests := []struct {
+		name string
+		tool ai.MCPServerTool
+		want string
+	}{
+		{name: "ID", tool: ai.MCPServerTool{URL: "https://example.com/mcp"}, want: "ID must not be empty"},
+		{name: "URL", tool: ai.MCPServerTool{ID: "docs"}, want: "URL must not be empty"},
+		{name: "connector", tool: ai.MCPServerTool{ID: "docs", URL: "x-openai-connector:"}, want: "connector ID"},
+		{name: "tool", tool: ai.MCPServerTool{ID: "docs", URL: "https://example.com", AllowedTools: []string{""}}, want: "allowed tool name"},
+		{name: "header", tool: ai.MCPServerTool{ID: "docs", URL: "https://example.com", Headers: map[string]string{"": "value"}}, want: "header name"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := ai.ValidateNativeTools([]ai.NativeTool{test.tool})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected validation error: %v", err)
+			}
+		})
+	}
+	if err := ai.ValidateNativeTools([]ai.NativeTool{&tool}); err != nil {
+		t.Fatal(err)
+	}
+	invalidPointer := &ai.MCPServerTool{URL: "https://example.com/mcp"}
+	if err := ai.ValidateNativeTools([]ai.NativeTool{invalidPointer}); err == nil ||
+		!strings.Contains(err.Error(), "ID must not be empty") {
+		t.Fatalf("unexpected pointer validation error: %v", err)
+	}
+}
+
 func TestMemoryToolIdentity(t *testing.T) {
 	tool := ai.MemoryTool{Optional: true}
 	if !tool.IsOptional() || tool.Kind() != "memory" || tool.UniqueID() != "memory" ||

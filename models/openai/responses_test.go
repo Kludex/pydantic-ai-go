@@ -346,6 +346,153 @@ func TestResponsesCodeExecutionOutputErrors(t *testing.T) {
 	}
 }
 
+func TestResponsesMCPServerTool(t *testing.T) {
+	var bodies []map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[
+				{"type":"mcp_list_tools","id":"list-1","server_label":"docs","tools":[{
+					"name":"search","description":"Search docs","input_schema":{"type":"object"},
+					"annotations":{"read_only":true}}],"error":null},
+				{"type":"mcp_call","id":"call-1","server_label":"docs","name":"search",
+					"arguments":"{\"query\":\"Go\"}","output":{"text":"result"},"error":null}
+			],"usage":{}
+		}`))
+	})
+	emptyAllowed := []string{}
+	params := ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.MCPServerTool{
+			ID: "docs", URL: "https://example.com/mcp", Description: "Documentation",
+			AllowedTools: emptyAllowed, Headers: map[string]string{"X-Tenant": "acme"},
+		},
+		&ai.MCPServerTool{
+			ID: "calendar", URL: "x-openai-connector:connector_googlecalendar",
+			AuthorizationToken: "token", AllowedTools: []string{"events"},
+		},
+	}}
+	response, err := model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := bodies[0]["tools"].([]any)
+	first := tools[0].(map[string]any)
+	second := tools[1].(map[string]any)
+	if first["type"] != "mcp" || first["server_label"] != "docs" ||
+		first["server_url"] != "https://example.com/mcp" || first["require_approval"] != "never" ||
+		first["server_description"] != "Documentation" || len(first["allowed_tools"].([]any)) != 0 ||
+		first["headers"].(map[string]any)["X-Tenant"] != "acme" ||
+		second["connector_id"] != "connector_googlecalendar" || second["server_url"] != nil ||
+		second["authorization"] != "token" || second["allowed_tools"].([]any)[0] != "events" {
+		t.Fatalf("unexpected MCP tools: %#v", tools)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	listed := response.Parts[1].(ai.NativeToolReturnPart)
+	called := response.Parts[2].(ai.NativeToolCallPart)
+	returned := response.Parts[3].(ai.NativeToolReturnPart)
+	listedContent := listed.Content.(map[string]any)
+	listedTools := listedContent["tools"].([]map[string]any)
+	if call.ToolName != "mcp_server:docs" || call.ToolKind != ai.ToolPartKindMCPServer ||
+		string(call.Args) != `{"action":"list_tools"}` || listed.ToolCallID != "list-1" ||
+		listedTools[0]["input_schema"].(map[string]any)["type"] != "object" || listedContent["error"] != nil ||
+		called.ToolName != "mcp_server:docs" || called.ToolCallID != "call-1" ||
+		string(called.Args) != `{"action":"call_tool","tool_args":{"query":"Go"},"tool_name":"search"}` ||
+		returned.Content.(map[string]any)["output"].(map[string]any)["text"] != "result" {
+		t.Fatalf("unexpected MCP parts: %#v", response.Parts)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	input := bodies[1]["input"].([]any)
+	listReplay := input[0].(map[string]any)
+	callReplay := input[1].(map[string]any)
+	if listReplay["type"] != "mcp_list_tools" || listReplay["server_label"] != "docs" ||
+		len(listReplay["tools"].([]any)) != 0 || callReplay["type"] != "mcp_call" ||
+		callReplay["server_label"] != "docs" || callReplay["name"] != "search" ||
+		callReplay["arguments"] != `{"query":"Go"}` {
+		t.Fatalf("unexpected MCP replay: %#v", input)
+	}
+}
+
+func TestResponsesMCPServerErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		part ai.NativeToolCallPart
+		want string
+	}{
+		{name: "server name", part: ai.NativeToolCallPart{
+			ToolName: "mcp_server", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{"action":"list_tools"}`), ProviderName: "openai",
+		}, want: "invalid MCP server tool name"},
+		{name: "arguments", part: ai.NativeToolCallPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{`), ProviderName: "openai",
+		}, want: "parse MCP server arguments"},
+		{name: "tool name", part: ai.NativeToolCallPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{"action":"call_tool"}`), ProviderName: "openai",
+		}, want: "call tool name must not be empty"},
+		{name: "action", part: ai.NativeToolCallPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{"action":"approve"}`), ProviderName: "openai",
+		}, want: "invalid MCP server action"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(`{"model":"gpt-5","output":[]}`))
+			})
+			_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{
+				ProviderName: "openai", Parts: []ai.ResponsePart{test.part},
+			}}, ai.ModelRequestParams{})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unexpected MCP history error: %v", err)
+			}
+		})
+	}
+
+	model := newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"model":"gpt-5","output":[{
+			"type":"mcp_call","id":"call","server_label":"docs","name":"search","arguments":"{"
+		}]}`))
+	})
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err == nil || !strings.Contains(err.Error(), "parse MCP tool arguments") {
+		t.Fatalf("unexpected malformed MCP response error: %v", err)
+	}
+	model = newResponsesServer(t, func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"model":"gpt-5","output":[{"type":"mcp_approval_request"}]}`))
+	})
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err == nil || !strings.Contains(err.Error(), "MCP approval requests are not supported") {
+		t.Fatalf("unexpected MCP approval error: %v", err)
+	}
+
+	var body map[string]any
+	model = newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"gpt-5","output":[]}`))
+	})
+	_, err = model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{
+		ProviderName: "openai", Parts: []ai.ResponsePart{ai.NativeToolCallPart{
+			ToolName: "mcp_server:docs", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+			Args: json.RawMessage(`{"action":"call_tool","tool_name":"search"}`), ProviderName: "openai",
+		}},
+	}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["input"].([]any)[0].(map[string]any)["arguments"] != `{}` {
+		t.Fatalf("empty MCP arguments were not replayed: %#v", body)
+	}
+}
+
 func TestResponsesFileSearchNativeTool(t *testing.T) {
 	var body map[string]any
 	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {

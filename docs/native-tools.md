@@ -206,6 +206,45 @@ Google sends the same IDs as Gemini file-search store names. Older Gemini respon
 
 `MaxNumResults`, `Instructions`, and `RetrievalMode` are portable fields reserved for providers that expose those controls. OpenAI and Google ignore them. xAI collections-search rendering remains provider-parity work.
 
+## Connect a provider-hosted MCP server
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewResponsesModel("gpt-5"),
+		ai.WithNativeTools(ai.MCPServerTool{
+			ID:                 "docs",
+			URL:                "https://example.com/mcp",
+			AuthorizationToken: os.Getenv("MCP_AUTH_TOKEN"),
+			Description:        "Search the product documentation.",
+			AllowedTools:       []string{"search"},
+		}),
+	)
+
+	result, err := agent.Run(context.Background(), "How do I rotate an API key?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`MCPServerTool` delegates the connection and tool execution to the model provider. OpenAI Responses accepts remote URLs and `x-openai-connector:<connector-id>` references. It normalizes server discovery and tool calls as `NativeToolCallPart` and `NativeToolReturnPart` values and replays their provider IDs on later requests.
+
+The provider receives `AuthorizationToken` and `Headers`. Treat both as secrets. Restrict `AllowedTools` to operations the model may execute without local approval. Use the [`mcp`](mcp.md) package instead when your application must own the session, inspect every call, or request approval locally.
+
 ## Add client-managed memory
 
 ```go

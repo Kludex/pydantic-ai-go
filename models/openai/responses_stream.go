@@ -156,6 +156,7 @@ func (m *ResponsesModel) responsesEventStream(
 		textPhases := make(map[string]string)
 		textAnnotations := make(map[string][]map[string]any)
 		imageFiles := make(map[string]bool)
+		mcpListReturns := make(map[string]struct{})
 		if seed != nil {
 			if sequence, ok := seed.ProviderDetails["sequence_number"].(int); ok {
 				lastSequence = &sequence
@@ -347,6 +348,26 @@ func (m *ResponsesModel) responsesEventStream(
 					}, nil) {
 						return
 					}
+				case "mcp_approval_request":
+					yield(nil, fmt.Errorf("openai: MCP approval requests are not supported"))
+					return
+				case "mcp_list_tools", "mcp_call":
+					emittedParts = true
+					partID := responsesToolPartID(event)
+					if !yield(ai.ToolCallStartEvent{
+						PartID: partID, ToolName: "mcp_server:" + event.Item.ServerLabel,
+						ToolCallID: event.Item.ID, ToolKind: ai.ToolPartKindMCPServer, ID: event.Item.ID,
+						ProviderName: m.providerName, Native: true,
+					}, nil) {
+						return
+					}
+					arguments := `{"action":"list_tools"}`
+					if event.Item.Type == "mcp_call" {
+						arguments = responsesMCPCallArgumentPrefix(event.Item)
+					}
+					if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: arguments}, nil) {
+						return
+					}
 				case "image_generation_call":
 					emittedParts = true
 					if !yield(ai.ToolCallStartEvent{
@@ -407,8 +428,12 @@ func (m *ResponsesModel) responsesEventStream(
 						return
 					}
 				}
-			case "response.function_call_arguments.delta":
+			case "response.function_call_arguments.delta", "response.mcp_call_arguments.delta":
 				if !yield(ai.ToolCallDeltaEvent{PartID: responsesToolPartID(event), ArgsDelta: event.Delta}, nil) {
+					return
+				}
+			case "response.mcp_call_arguments.done":
+				if !yield(ai.ToolCallDeltaEvent{PartID: responsesToolPartID(event), ArgsDelta: `}`}, nil) {
 					return
 				}
 			case "response.code_interpreter_call_code.delta":
@@ -465,6 +490,26 @@ func (m *ResponsesModel) responsesEventStream(
 						PartID: "return:" + event.Item.ID, Part: returned,
 					}, nil) {
 						return
+					}
+					continue
+				}
+				if event.Item.Type == "mcp_approval_request" {
+					yield(nil, fmt.Errorf("openai: MCP approval requests are not supported"))
+					return
+				}
+				if event.Item.Type == "mcp_list_tools" || event.Item.Type == "mcp_call" {
+					_, returned, err := responsesMCPParts(event.Item, responseTimestamp)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					if !yield(ai.NativeToolReturnEvent{
+						PartID: "return:" + event.Item.ID, Part: returned,
+					}, nil) {
+						return
+					}
+					if event.Item.Type == "mcp_list_tools" {
+						mcpListReturns[event.Item.ID] = struct{}{}
 					}
 					continue
 				}
@@ -536,6 +581,25 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 				}
 			case "response.completed":
+				mcpTimestamp := responseTimestamp
+				if mcpTimestamp.IsZero() {
+					_, _, mcpTimestamp, _ = responsesMetadata(
+						event.Response.Status, event.Response.IncompleteDetails,
+						event.Response.CreatedAt, event.Response.Background,
+					)
+				}
+				for _, item := range event.Response.Output {
+					if item.Type != "mcp_list_tools" {
+						continue
+					}
+					if _, emitted := mcpListReturns[item.ID]; emitted {
+						continue
+					}
+					_, returned, _ := responsesMCPParts(item, mcpTimestamp)
+					if !yield(ai.NativeToolReturnEvent{PartID: "return:" + item.ID, Part: returned}, nil) {
+						return
+					}
+				}
 				var snapshotParts []ai.ResponsePart
 				compacted := false
 				if len(event.Response.Output) > 0 {
@@ -609,6 +673,9 @@ func (m *ResponsesModel) responsesEventStream(
 				"response.image_generation_call.completed",
 				"response.file_search_call.in_progress", "response.file_search_call.searching",
 				"response.file_search_call.completed",
+				"response.mcp_list_tools.in_progress", "response.mcp_list_tools.completed",
+				"response.mcp_list_tools.failed", "response.mcp_call.in_progress",
+				"response.mcp_call.completed", "response.mcp_call.failed",
 				"response.reasoning_summary_part.done", "response.reasoning_summary_text.done",
 				"response.reasoning_text.done":
 			default:
@@ -733,6 +800,11 @@ func yieldStaticResponsesParts(
 		}
 	}
 	return true
+}
+
+func responsesMCPCallArgumentPrefix(item responsesOutputItem) string {
+	name, _ := json.Marshal(item.Name)
+	return `{"action":"call_tool","tool_name":` + string(name) + `,"tool_args":`
 }
 
 func responsesCodeArgumentPrefix(item responsesOutputItem) string {

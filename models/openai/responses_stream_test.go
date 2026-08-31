@@ -144,6 +144,160 @@ func TestResponsesStaticCodeExecutionFileStream(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamMCPServer(t *testing.T) {
+	chunks := []string{
+		`{"type":"response.created","response":{"id":"response","model":"gpt-5","created_at":100,"status":"in_progress","output":[],"usage":{}}}`,
+		`{"type":"response.output_item.added","item":{"type":"mcp_list_tools","id":"list","server_label":"docs","tools":[]}}`,
+		`{"type":"response.mcp_list_tools.in_progress","item_id":"list"}`,
+		`{"type":"response.mcp_list_tools.completed","item_id":"list"}`,
+		`{"type":"response.mcp_list_tools.failed","item_id":"ignored"}`,
+		`{"type":"response.output_item.done","item":{"type":"mcp_list_tools","id":"list","server_label":"docs","tools":[{"name":"search","input_schema":{"type":"object"}}],"error":null}}`,
+		`{"type":"response.output_item.added","item":{"type":"mcp_call","id":"call","server_label":"docs","name":"search","arguments":""}}`,
+		`{"type":"response.mcp_call.in_progress","item_id":"call"}`,
+		`{"type":"response.mcp_call_arguments.delta","item_id":"call","delta":"{\"query\":"}`,
+		`{"type":"response.mcp_call_arguments.delta","item_id":"call","delta":"\"Go\"}"}`,
+		`{"type":"response.mcp_call_arguments.done","item_id":"call"}`,
+		`{"type":"response.mcp_call.completed","item_id":"call"}`,
+		`{"type":"response.mcp_call.failed","item_id":"ignored"}`,
+		`{"type":"response.output_item.done","item":{"type":"mcp_call","id":"call","server_label":"docs","name":"search","arguments":"{\"query\":\"Go\"}","output":"result","error":null}}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[{"type":"mcp_list_tools","id":"list","server_label":"docs","tools":[{"name":"search","input_schema":{"type":"object"}}],"error":null},{"type":"mcp_call","id":"call","server_label":"docs","name":"search","arguments":"{\"query\":\"Go\"}","output":"result","error":null}],"usage":{}}}`,
+	}
+	model := newResponsesServer(t, sseHandler(t, chunks))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.MCPServerTool{ID: "docs", URL: "https://example.com/mcp"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ai.ModelStreamEvent
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	var starts []ai.ToolCallStartEvent
+	var deltas []ai.ToolCallDeltaEvent
+	var returns []ai.NativeToolReturnEvent
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			starts = append(starts, event)
+		case ai.ToolCallDeltaEvent:
+			deltas = append(deltas, event)
+		case ai.NativeToolReturnEvent:
+			returns = append(returns, event)
+		}
+	}
+	if len(starts) != 2 || len(deltas) != 5 || len(returns) != 2 ||
+		starts[0].ToolName != "mcp_server:docs" || starts[0].ToolKind != ai.ToolPartKindMCPServer ||
+		!starts[0].Native || deltas[0].ArgsDelta != `{"action":"list_tools"}` ||
+		deltas[1].ArgsDelta != `{"action":"call_tool","tool_name":"search","tool_args":` ||
+		deltas[4].ArgsDelta != `}` || returns[0].Part.ToolCallID != "list" ||
+		returns[1].Part.Content.(map[string]any)["output"] != "result" {
+		t.Fatalf("unexpected MCP stream events: %#v", events)
+	}
+}
+
+func TestResponsesStreamMCPListToolsBackfill(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_item.added","item":{"type":"mcp_list_tools","id":"list","server_label":"docs","tools":[]}}`,
+		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[{"type":"mcp_list_tools","id":"list","server_label":"docs","tools":[],"error":"unavailable"}],"usage":{}}}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var returned *ai.NativeToolReturnEvent
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event, ok := event.(ai.NativeToolReturnEvent); ok {
+			returned = &event
+			break
+		}
+	}
+	if returned == nil || returned.Part.Content.(map[string]any)["error"] != "unavailable" ||
+		returned.Part.Timestamp.Unix() != 100 {
+		t.Fatalf("missing MCP list-tools backfill: %#v", returned)
+	}
+}
+
+func TestResponsesStreamMCPServerCanStop(t *testing.T) {
+	chunks := []string{
+		`{"type":"response.output_item.added","item":{"type":"mcp_call","id":"call","server_label":"docs","name":"search"}}`,
+		`{"type":"response.mcp_call_arguments.delta","item_id":"call","delta":"{}"}`,
+		`{"type":"response.mcp_call_arguments.done","item_id":"call"}`,
+		`{"type":"response.output_item.done","item":{"type":"mcp_call","id":"call","server_label":"docs","name":"search","arguments":"{}","output":"ok"}}`,
+	}
+	for stopAfter := 1; stopAfter <= 5; stopAfter++ {
+		t.Run(fmt.Sprint(stopAfter), func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, chunks))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			count := 0
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				count++
+				if count == stopAfter {
+					break
+				}
+			}
+			if count != stopAfter {
+				t.Fatalf("stream ended after %d events", count)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamMCPApprovalErrors(t *testing.T) {
+	for _, eventType := range []string{"response.output_item.added", "response.output_item.done"} {
+		t.Run(eventType, func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, []string{
+				fmt.Sprintf(`{"type":%q,"item":{"type":"mcp_approval_request"}}`, eventType),
+			}))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got error
+			for _, err := range stream {
+				if err != nil {
+					got = err
+				}
+			}
+			if got == nil || !strings.Contains(got.Error(), "MCP approval requests are not supported") {
+				t.Fatalf("unexpected MCP approval stream error: %v", got)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamMCPServerMalformedArguments(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_item.added","item":{"type":"mcp_call","id":"call","server_label":"docs","name":"search"}}`,
+		`{"type":"response.output_item.done","item":{"type":"mcp_call","id":"call","server_label":"docs","name":"search","arguments":"{"}}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got error
+	for _, err := range stream {
+		if err != nil {
+			got = err
+		}
+	}
+	if got == nil || !strings.Contains(got.Error(), "parse MCP tool arguments") {
+		t.Fatalf("unexpected malformed MCP stream error: %v", got)
+	}
+}
+
 func TestResponsesStreamFileSearch(t *testing.T) {
 	model := newResponsesServerWithOptions(t, sseHandler(t, []string{
 		`{"type":"response.created","response":{"id":"response","model":"gpt-5","created_at":100,"status":"in_progress"}}`,

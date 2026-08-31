@@ -263,6 +263,40 @@ func (tool FileSearchTool) CloneNativeTool() NativeTool {
 	return tool
 }
 
+// MCPServerTool asks a compatible provider to connect to a remote MCP server.
+// The authorization token and headers are sent by the provider, not by this process.
+type MCPServerTool struct {
+	ID                 string
+	URL                string
+	AuthorizationToken string
+	Description        string
+	AllowedTools       []string
+	Headers            map[string]string
+	Optional           bool
+}
+
+// Kind returns the stable native-tool discriminator.
+func (MCPServerTool) Kind() string { return "mcp_server" }
+
+// UniqueID identifies this MCP server within one model request.
+func (tool MCPServerTool) UniqueID() string { return "mcp_server:" + tool.ID }
+
+// IsOptional reports whether an unsupported model may omit the tool.
+func (tool MCPServerTool) IsOptional() bool { return tool.Optional }
+
+// CloneNativeTool returns a detached definition.
+func (tool MCPServerTool) CloneNativeTool() NativeTool {
+	tool.AllowedTools = slices.Clone(tool.AllowedTools)
+	if tool.Headers != nil {
+		headers := make(map[string]string, len(tool.Headers))
+		for name, value := range tool.Headers {
+			headers[name] = value
+		}
+		tool.Headers = headers
+	}
+	return tool
+}
+
 // MemoryTool asks a compatible provider to use an application-defined memory tool.
 // Providers may require a local function tool named "memory" to execute commands.
 type MemoryTool struct {
@@ -395,6 +429,37 @@ func ValidateNativeTools(tools []NativeTool) error {
 			if err := validateFileSearchTool(*tool); err != nil {
 				return err
 			}
+		case MCPServerTool:
+			if err := validateMCPServerTool(tool); err != nil {
+				return err
+			}
+		case *MCPServerTool:
+			if err := validateMCPServerTool(*tool); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateMCPServerTool(tool MCPServerTool) error {
+	if tool.ID == "" {
+		return fmt.Errorf("ai: MCP server ID must not be empty")
+	}
+	if tool.URL == "" {
+		return fmt.Errorf("ai: MCP server URL must not be empty")
+	}
+	if tool.URL == "x-openai-connector:" {
+		return fmt.Errorf("ai: OpenAI MCP connector ID must not be empty")
+	}
+	for _, name := range tool.AllowedTools {
+		if name == "" {
+			return fmt.Errorf("ai: MCP server allowed tool name must not be empty")
+		}
+	}
+	for name := range tool.Headers {
+		if name == "" {
+			return fmt.Errorf("ai: MCP server header name must not be empty")
 		}
 	}
 	return nil

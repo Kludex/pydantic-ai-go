@@ -382,23 +382,24 @@ type responsesInput struct {
 	Role    string `json:"role,omitempty"`
 	Content any    `json:"content,omitempty"`
 	// function_call and function_call_output items
-	Type             string          `json:"type,omitempty"`
-	ID               string          `json:"id,omitempty"`
-	CallID           any             `json:"call_id,omitempty"`
-	Name             string          `json:"name,omitempty"`
-	Arguments        any             `json:"arguments,omitempty"`
-	Action           json.RawMessage `json:"action,omitempty"`
-	Namespace        string          `json:"namespace,omitempty"`
-	Output           string          `json:"output,omitempty"`
-	Execution        string          `json:"execution,omitempty"`
-	Status           string          `json:"status,omitempty"`
-	Phase            string          `json:"phase,omitempty"`
-	Tools            []responsesTool `json:"tools,omitempty"`
-	EncryptedContent string          `json:"encrypted_content,omitempty"`
-	ContainerID      string          `json:"container_id,omitempty"`
-	Code             string          `json:"code,omitempty"`
-	Outputs          any             `json:"outputs,omitempty"`
-	Queries          []string        `json:"queries,omitempty"`
+	Type             string           `json:"type,omitempty"`
+	ID               string           `json:"id,omitempty"`
+	CallID           any              `json:"call_id,omitempty"`
+	Name             string           `json:"name,omitempty"`
+	Arguments        any              `json:"arguments,omitempty"`
+	Action           json.RawMessage  `json:"action,omitempty"`
+	Namespace        string           `json:"namespace,omitempty"`
+	Output           string           `json:"output,omitempty"`
+	Execution        string           `json:"execution,omitempty"`
+	Status           string           `json:"status,omitempty"`
+	Phase            string           `json:"phase,omitempty"`
+	Tools            *[]responsesTool `json:"tools,omitempty"`
+	EncryptedContent string           `json:"encrypted_content,omitempty"`
+	ContainerID      string           `json:"container_id,omitempty"`
+	Code             string           `json:"code,omitempty"`
+	Outputs          any              `json:"outputs,omitempty"`
+	Queries          []string         `json:"queries,omitempty"`
+	ServerLabel      string           `json:"server_label,omitempty"`
 }
 
 type responsesInputContent struct {
@@ -433,6 +434,16 @@ type responsesTool struct {
 	PartialImages     int                             `json:"partial_images"`
 	Quality           ai.ImageGenerationQuality       `json:"quality,omitempty"`
 	Size              ai.ImageGenerationSize          `json:"size,omitempty"`
+	ServerLabel       string                          `json:"server_label,omitempty"`
+	ServerURL         string                          `json:"server_url,omitempty"`
+	ConnectorID       string                          `json:"connector_id,omitempty"`
+	RequireApproval   string                          `json:"require_approval,omitempty"`
+	Authorization     string                          `json:"authorization,omitempty"`
+	AllowedTools      *[]string                       `json:"allowed_tools,omitempty"`
+	ServerDescription string                          `json:"server_description,omitempty"`
+	Headers           map[string]string               `json:"headers,omitempty"`
+	InputSchema       map[string]any                  `json:"input_schema,omitempty"`
+	Annotations       map[string]any                  `json:"annotations,omitempty"`
 }
 
 type responsesCodeContainer struct {
@@ -473,6 +484,10 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 		return responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}, true, nil
 	case *ai.FileSearchTool:
 		return responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}, true, nil
+	case ai.MCPServerTool:
+		return responsesMCPServerTool(tool), true, nil
+	case *ai.MCPServerTool:
+		return responsesMCPServerTool(*tool), true, nil
 	default:
 		if nativeTool.IsOptional() {
 			return responsesTool{}, false, nil
@@ -498,6 +513,29 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 		tool.ExternalWebAccess = &external
 	}
 	return tool, true, nil
+}
+
+func responsesMCPServerTool(tool ai.MCPServerTool) responsesTool {
+	prepared := responsesTool{
+		Type: "mcp", ServerLabel: tool.ID, RequireApproval: "never",
+		Authorization: tool.AuthorizationToken, ServerDescription: tool.Description,
+	}
+	if strings.HasPrefix(tool.URL, "x-openai-connector:") {
+		prepared.ConnectorID = strings.TrimPrefix(tool.URL, "x-openai-connector:")
+	} else {
+		prepared.ServerURL = tool.URL
+	}
+	if tool.AllowedTools != nil {
+		allowed := slices.Clone(tool.AllowedTools)
+		prepared.AllowedTools = &allowed
+	}
+	if len(tool.Headers) > 0 {
+		prepared.Headers = make(map[string]string, len(tool.Headers))
+		for name, value := range tool.Headers {
+			prepared.Headers[name] = value
+		}
+	}
+	return prepared
 }
 
 func responsesCodeExecutionTool(tool ai.CodeExecutionTool, providerName string) responsesTool {
@@ -764,7 +802,7 @@ type responsesOutputItem struct {
 	Execution        string           `json:"execution"`
 	Status           string           `json:"status"`
 	Phase            string           `json:"phase"`
-	Tools            []responsesTool  `json:"tools"`
+	Tools            []map[string]any `json:"tools"`
 	EncryptedContent string           `json:"encrypted_content"`
 	ContainerID      string           `json:"container_id"`
 	Code             string           `json:"code"`
@@ -776,6 +814,9 @@ type responsesOutputItem struct {
 	Result           string           `json:"result"`
 	Queries          []string         `json:"queries"`
 	Results          []map[string]any `json:"results"`
+	ServerLabel      string           `json:"server_label"`
+	Error            any              `json:"error"`
+	Output           any              `json:"output"`
 	Outputs          []struct {
 		Type string `json:"type"`
 		Logs string `json:"logs"`
@@ -902,6 +943,39 @@ func responsesCodeExecutionParts(
 			ToolKind: ai.ToolPartKindCodeExecution, ID: item.ID, ProviderName: "openai",
 		}, files, ai.NativeToolReturnPart{
 			ToolName: "code_execution", ToolCallID: item.ID, ToolKind: ai.ToolPartKindCodeExecution,
+			Content: content, Timestamp: timestamp, ProviderName: "openai",
+		}, nil
+}
+
+func responsesMCPParts(
+	item responsesOutputItem, timestamp time.Time,
+) (ai.NativeToolCallPart, ai.NativeToolReturnPart, error) {
+	toolName := "mcp_server:" + item.ServerLabel
+	var args json.RawMessage
+	var content map[string]any
+	switch item.Type {
+	case "mcp_list_tools":
+		args = json.RawMessage(`{"action":"list_tools"}`)
+		content = map[string]any{"tools": item.Tools, "error": item.Error}
+	case "mcp_call":
+		toolArgs, err := normalizeResponsesArguments(item.Arguments)
+		if err != nil {
+			return ai.NativeToolCallPart{}, ai.NativeToolReturnPart{}, fmt.Errorf("openai: parse MCP tool arguments: %w", err)
+		}
+		var decoded any = map[string]any{}
+		if len(toolArgs) > 0 {
+			_ = json.Unmarshal(toolArgs, &decoded)
+		}
+		args, _ = json.Marshal(map[string]any{
+			"action": "call_tool", "tool_name": item.Name, "tool_args": decoded,
+		})
+		content = map[string]any{"output": item.Output, "error": item.Error}
+	}
+	return ai.NativeToolCallPart{
+			ToolName: toolName, Args: args, ToolCallID: item.ID, ToolKind: ai.ToolPartKindMCPServer,
+			ID: item.ID, ProviderName: "openai",
+		}, ai.NativeToolReturnPart{
+			ToolName: toolName, ToolCallID: item.ID, ToolKind: ai.ToolPartKindMCPServer,
 			Content: content, Timestamp: timestamp, ProviderName: "openai",
 		}, nil
 }
@@ -1067,6 +1141,14 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 		case "file_search_call":
 			call, returned := responsesFileSearchParts(item, timestamp)
 			resp.Parts = append(resp.Parts, call, returned)
+		case "mcp_approval_request":
+			return nil, fmt.Errorf("openai: MCP approval requests are not supported")
+		case "mcp_list_tools", "mcp_call":
+			call, returned, err := responsesMCPParts(item, timestamp)
+			if err != nil {
+				return nil, err
+			}
+			resp.Parts = append(resp.Parts, call, returned)
 		case "image_generation_call":
 			call, file, returned, err := responsesImageGenerationParts(item, timestamp)
 			if err != nil {
@@ -1200,8 +1282,10 @@ func responsesToolSearchReturn(
 ) ai.NativeToolReturnPart {
 	matches := make([]ai.ToolSearchMatch, 0, len(item.Tools))
 	for _, tool := range item.Tools {
-		if tool.Type == "function" && tool.Name != "" {
-			matches = append(matches, ai.ToolSearchMatch{Name: tool.Name})
+		toolType, _ := tool["type"].(string)
+		name, _ := tool["name"].(string)
+		if toolType == "function" && name != "" {
+			matches = append(matches, ai.ToolSearchMatch{Name: name})
 		}
 	}
 	return ai.NativeToolReturnPart{

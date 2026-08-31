@@ -112,7 +112,7 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 				}
 				out = append(out, responsesInput{
 					Type: "tool_search_output", CallID: part.ToolCallID, Execution: "client",
-					Status: "completed", Tools: tools,
+					Status: "completed", Tools: &tools,
 				})
 				continue
 			}
@@ -127,7 +127,7 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 				return nil, err
 			}
 			if len(tools) > 0 {
-				out = append(out, responsesInput{Type: "additional_tools", Role: "developer", Tools: tools})
+				out = append(out, responsesInput{Type: "additional_tools", Role: "developer", Tools: &tools})
 			}
 		case ai.RetryPromptPart:
 			content := part.ModelResponse()
@@ -286,6 +286,41 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				})
 				continue
 			}
+			if part.ToolKind == ai.ToolPartKindMCPServer && part.ToolCallID != "" {
+				serverLabel, ok := strings.CutPrefix(part.ToolName, "mcp_server:")
+				if !ok || serverLabel == "" {
+					return nil, fmt.Errorf("openai: invalid MCP server tool name %q", part.ToolName)
+				}
+				var arguments struct {
+					Action   string          `json:"action"`
+					ToolName string          `json:"tool_name"`
+					ToolArgs json.RawMessage `json:"tool_args"`
+				}
+				if err := json.Unmarshal(part.Args, &arguments); err != nil {
+					return nil, fmt.Errorf("openai: parse MCP server arguments: %w", err)
+				}
+				switch arguments.Action {
+				case "list_tools":
+					empty := []responsesTool{}
+					out = append(out, responsesInput{
+						Type: "mcp_list_tools", ID: part.ToolCallID, ServerLabel: serverLabel, Tools: &empty,
+					})
+				case "call_tool":
+					if arguments.ToolName == "" {
+						return nil, fmt.Errorf("openai: MCP call tool name must not be empty")
+					}
+					if len(arguments.ToolArgs) == 0 {
+						arguments.ToolArgs = json.RawMessage(`{}`)
+					}
+					out = append(out, responsesInput{
+						Type: "mcp_call", ID: part.ToolCallID, ServerLabel: serverLabel,
+						Name: arguments.ToolName, Arguments: string(arguments.ToolArgs),
+					})
+				default:
+					return nil, fmt.Errorf("openai: invalid MCP server action %q", arguments.Action)
+				}
+				continue
+			}
 			if !c.serverToolSearch || part.ToolKind != ai.ToolPartKindToolSearch {
 				continue
 			}
@@ -316,7 +351,7 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 			callID, status := openAIToolSearchReplayDetails(part.ToolCallID, part.ProviderDetails)
 			out = append(out, responsesInput{
 				Type: "tool_search_output", ID: outputID, CallID: callID,
-				Execution: "server", Status: status, Tools: tools,
+				Execution: "server", Status: status, Tools: &tools,
 			})
 		}
 	}

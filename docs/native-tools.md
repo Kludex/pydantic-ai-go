@@ -564,11 +564,15 @@ import (
 func main() {
 	agent := ai.NewAgent[struct{}, string](
 		openai.NewResponsesModel("gpt-5.4"),
-		ai.WithNativeTools(ai.ImageGenerationTool{
-			Quality:       ai.ImageGenerationQualityHigh,
-			AspectRatio:   ai.ImageAspectRatio3x2,
-			PartialImages: 2,
-		}),
+		ai.WithCapabilities(ai.NewImageGenerationCapability(
+			ai.ImageGenerationCapabilityConfig[struct{}]{
+				Native: ai.ImageGenerationTool{
+					Quality:       ai.ImageGenerationQualityHigh,
+					AspectRatio:   ai.ImageAspectRatio3x2,
+					PartialImages: 2,
+				},
+			},
+		)),
 	)
 
 	result, err := agent.Run(context.Background(), "Create a watercolor painting of a Go gopher.", struct{}{})
@@ -589,6 +593,8 @@ func main() {
 	}
 }
 ```
+
+`NewImageGenerationCapability` requires native support when `Local` is nil. Supply a local toolset to select it only for models without native image generation. Use `NewDynamicImageGenerationCapability` when dependencies choose native settings before each request.
 
 `ImageGenerationTool` exposes portable action, background, input-fidelity, moderation, model, compression, format, partial-image, quality, size, and aspect-ratio settings. OpenAI Responses maps `1:1`, `2:3`, and `3:2` aspect ratios to supported pixel sizes. Unsupported or conflicting OpenAI dimensions fail before transport.
 

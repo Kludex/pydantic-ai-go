@@ -178,6 +178,14 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		for _, tool := range reg.nativeTools {
 			a.nativeToolEntries = append(a.nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
 		}
+		if len(reg.nativeOrLocal) > 0 {
+			entries, toolsets, err := registerNativeOrLocal(a.nativeToolEntries, a.toolsets, reg.nativeOrLocal)
+			if err != nil {
+				panic(fmt.Sprintf("ai: capability native-or-local setup: %v", err))
+			}
+			a.nativeToolEntries = entries
+			a.toolsets = toolsets
+		}
 		a.capSettings = append(a.capSettings, capabilitySettingsLayer{
 			static: reg.modelSettings, provider: capabilityModelSettingsProvider(capability),
 		})
@@ -392,6 +400,21 @@ func (a *Agent[Deps, Output]) AddNativeToolFunc(fn NativeToolFunc[Deps]) {
 		panic("ai: native tool function must not be nil")
 	}
 	a.nativeToolEntries = append(a.nativeToolEntries, nativeToolEntry[Deps]{fn: fn})
+}
+
+// AddNativeOrLocal atomically registers a provider-native tool and its local fallback.
+func (a *Agent[Deps, Output]) AddNativeOrLocal(tool *NativeOrLocalTool[Deps]) {
+	a.checkNotStarted()
+	registry := &CapabilityRegistry{}
+	if err := tool.Setup(registry); err != nil {
+		panic(err.Error())
+	}
+	entries, toolsets, err := registerNativeOrLocal(a.nativeToolEntries, a.toolsets, registry.nativeOrLocal)
+	if err != nil {
+		panic(err.Error())
+	}
+	a.nativeToolEntries = entries
+	a.toolsets = toolsets
 }
 
 func (a *Agent[Deps, Output]) checkNotStarted() {

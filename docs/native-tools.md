@@ -81,20 +81,17 @@ type SearchArgs struct {
 }
 
 func main() {
-	webSearch := ai.WebSearchTool{}
 	localSearch := ai.NewSimpleTool[struct{}](
 		"local_search",
 		func(_ context.Context, args SearchArgs) (string, error) {
 			return "Local search result for: " + args.Query, nil
 		},
-		ai.WithNativeFallback(webSearch),
 	)
 
 	agent := ai.NewAgent[struct{}, string](
 		openai.NewModel("gpt-5"),
-		ai.WithNativeTools(webSearch),
+		ai.WithCapabilities(ai.NewNativeOrLocalTool(ai.WebSearchTool{}, localSearch)),
 	)
-	agent.AddTool(localSearch)
 	result, err := agent.Run(context.Background(), "Search for the Go release notes", struct{}{})
 	if err != nil {
 		log.Fatal(err)
@@ -103,9 +100,11 @@ func main() {
 }
 ```
 
-`WithNativeFallback` pairs one local function tool with a native tool. Built-in provider models receive exactly one implementation. Use `NativeFallbackToolset` to pair every function in a toolset. Fallback model chains resolve the pair separately for each candidate.
+`NewNativeOrLocalTool` registers both paths atomically. Built-in provider models receive exactly one implementation. Use `NewNativeOrLocalToolset` when the fallback has multiple functions or a run-scoped lifecycle. You can register the pair with `WithCapabilities`, `WithRunCapabilities`, or `Agent.AddNativeOrLocal`. Fallback model chains resolve it separately for each candidate.
 
-Use `WithNativeCompanion` or `NativeCompanionToolset` when function definitions belong to a native tool's managed corpus. The marker remains only while that native tool is supported.
+Use `WithNativeRequired("constraint name")` when a native-only constraint makes the local implementation unsafe. The local tool is then suppressed, and an unsupported provider fails before its request. The native definition cannot be optional.
+
+`WithNativeFallback` and `NativeFallbackToolset` remain available when you intentionally register both paths separately. Use `WithNativeCompanion` or `NativeCompanionToolset` when function definitions belong to a native tool's managed corpus. The marker remains only while that native tool is supported.
 
 Custom models implement `NativeToolSupportModel` to participate in selection. A model without that interface receives both paths because the library cannot safely guess its native support.
 
@@ -191,22 +190,38 @@ import (
 )
 
 type Deps struct {
-	DocumentationDomain string
+	Country string
+}
+
+type SearchArgs struct {
+	Query string `json:"query"`
 }
 
 func main() {
-	agent := ai.NewAgent[Deps, string](openai.NewResponsesModel("gpt-5"))
-	agent.AddNativeToolFunc(func(
-		_ context.Context,
-		runContext *ai.RunContext[Deps],
-	) (ai.NativeTool, error) {
-		return ai.WebSearchTool{
-			AllowedDomains: []string{runContext.Deps.DocumentationDomain},
-		}, nil
-	})
+	localSearch := ai.NewSimpleTool[Deps](
+		"local_search",
+		func(_ context.Context, args SearchArgs) (string, error) {
+			return "Local result for: " + args.Query, nil
+		},
+	)
+	search := ai.NewDynamicNativeOrLocalTool(
+		"web_search",
+		func(_ context.Context, runContext *ai.RunContext[Deps]) (ai.NativeTool, error) {
+			return ai.WebSearchTool{
+				UserLocation: &ai.WebSearchUserLocation{
+					Country: runContext.Deps.Country,
+				},
+			}, nil
+		},
+		localSearch,
+	)
+	agent := ai.NewAgent[Deps, string](
+		openai.NewResponsesModel("gpt-5"),
+		ai.WithCapabilities(search),
+	)
 
 	result, err := agent.Run(context.Background(), "Find the latest release notes.", Deps{
-		DocumentationDomain: "go.dev",
+		Country: "GB",
 	})
 	if err != nil {
 		log.Fatal(err)
@@ -215,9 +230,9 @@ func main() {
 }
 ```
 
-`AddNativeToolFunc` runs before every model request. This lets a tool follow dependencies, selected-model state, usage, or retry state. The callback can run concurrently across agent runs and must return detached state.
+`NewDynamicNativeOrLocalTool` runs its resolver once before every model request. The declared ID is durable and must match every returned native tool. This lets configuration follow dependencies without allowing the local marker to drift. The callback can run concurrently across agent runs and must return detached state.
 
-Use `WithRunNativeToolFunc` for a callback scoped to one run. Static tools remain in registration order with dynamic tools. Every resolved request is cloned and revalidated, including tools changed by model-request hooks.
+Use `AddNativeToolFunc` or `WithRunNativeToolFunc` when there is no local fallback. Static tools remain in registration order with dynamic tools. Every resolved request is cloned and revalidated, including tools changed by model-request hooks.
 
 ## Fetch URLs
 

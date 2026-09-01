@@ -268,6 +268,7 @@ type ModelRequestParams struct {
 	Settings  ModelSettings
 
 	nativeToolPreferencesResolved bool
+	nativeToolSupportRequired     bool
 }
 
 // InstructionPart is one independently addressable model instruction block.

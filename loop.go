@@ -149,6 +149,7 @@ func (a *Agent[Deps, Output]) newRun(
 	capSettings := slices.Clone(a.capSettings)
 	var runCapabilityTools []capabilityTool
 	var runCapabilityNativeTools []NativeTool
+	var runNativeOrLocal []any
 	capInstructionIDs := make(map[string]struct{}, len(a.capInstructionIDs)+len(runCapabilities))
 	for id := range a.capInstructionIDs {
 		capInstructionIDs[id] = struct{}{}
@@ -181,6 +182,7 @@ func (a *Agent[Deps, Output]) newRun(
 		runCapabilityInstructions = append(runCapabilityInstructions, instructions...)
 		runCapabilityTools = append(runCapabilityTools, registry.tools...)
 		runCapabilityNativeTools = append(runCapabilityNativeTools, CloneNativeTools(registry.nativeTools)...)
+		runNativeOrLocal = append(runNativeOrLocal, registry.nativeOrLocal...)
 		capSettings = append(capSettings, capabilitySettingsLayer{
 			static: registry.modelSettings, provider: capabilityModelSettingsProvider(capability),
 		})
@@ -205,9 +207,12 @@ func (a *Agent[Deps, Output]) newRun(
 	for _, tool := range runCapabilityNativeTools {
 		nativeToolEntries = append(nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
 	}
-	if err := ValidateNativeTools(staticNativeTools(nativeToolEntries)); err != nil {
+	nativeToolEntries, runNativeOrLocalToolsets, err := registerNativeOrLocal(
+		nativeToolEntries, nil, runNativeOrLocal,
+	)
+	if err != nil {
 		cancellation.finish()
-		return nil, err
+		return nil, fmt.Errorf("ai: run capability native-or-local setup: %w", err)
 	}
 	if limits != (UsageLimits{}) {
 		postRequestLimits := usageLimitsCapability{limits: limits}
@@ -222,7 +227,7 @@ func (a *Agent[Deps, Output]) newRun(
 		retryLimits: a.retryLimits, toolRetries: make(map[string]int), availabilityRefused: make(map[string]struct{}),
 		runSettings: cfg.settings, usageLimits: limits,
 		tools: slices.Clone(a.tools), nativeToolEntries: nativeToolEntries,
-		toolsets: slices.Clone(a.toolsets), capSettings: capSettings,
+		toolsets: append(slices.Clone(a.toolsets), runNativeOrLocalToolsets...), capSettings: capSettings,
 		runSettingsFuncs: slices.Clone(cfg.settingsFuncs), runInstructionsFuncs: slices.Clone(cfg.instructionsFuncs),
 		runMetadata: cloneSchemaMap(cfg.metadata), runMetadataFuncs: slices.Clone(cfg.metadataFuncs),
 		prompt:           cloneUserPromptPart(prompt),
@@ -1739,6 +1744,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.outputMaxRetries
 	for _, entry := range r.nativeToolEntries {
+		if entry.requiredReason != "" {
+			params.nativeToolSupportRequired = true
+		}
 		if entry.fn == nil {
 			params.NativeTools = append(params.NativeTools, cloneNativeTool(entry.tool))
 			continue
@@ -1746,6 +1754,17 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		tool, err := entry.fn(ctx, rc.clone())
 		if err != nil {
 			return ModelRequestParams{}, fmt.Errorf("ai: resolve native tool: %w", err)
+		}
+		if err := ValidateNativeTools([]NativeTool{tool}); err != nil {
+			return ModelRequestParams{}, fmt.Errorf("ai: resolve native tool: %w", err)
+		}
+		if entry.expectedID != "" && tool.UniqueID() != entry.expectedID {
+			return ModelRequestParams{}, fmt.Errorf(
+				"ai: dynamic native-or-local resolver returned ID %q, expected %q", tool.UniqueID(), entry.expectedID,
+			)
+		}
+		if entry.requiredReason != "" && tool.IsOptional() {
+			return ModelRequestParams{}, nativeRequiredOptionalError(entry.expectedID, entry.requiredReason)
 		}
 		params.NativeTools = append(params.NativeTools, cloneNativeTool(tool))
 	}

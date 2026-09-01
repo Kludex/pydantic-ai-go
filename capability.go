@@ -30,6 +30,7 @@ type CapabilityIDProvider interface {
 type CapabilityRegistry struct {
 	tools         []capabilityTool
 	nativeTools   []NativeTool
+	nativeOrLocal []any
 	instructions  []InstructionPart
 	modelSettings []ModelSettings
 }

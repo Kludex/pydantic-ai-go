@@ -21,14 +21,19 @@ type NativeTool interface {
 type NativeToolFunc[Deps any] func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error)
 
 type nativeToolEntry[Deps any] struct {
-	tool NativeTool
-	fn   NativeToolFunc[Deps]
+	tool           NativeTool
+	fn             NativeToolFunc[Deps]
+	expectedID     string
+	requiredReason string
 }
 
 func cloneNativeToolEntries[Deps any](entries []nativeToolEntry[Deps]) []nativeToolEntry[Deps] {
 	cloned := make([]nativeToolEntry[Deps], len(entries))
 	for index, entry := range entries {
-		cloned[index] = nativeToolEntry[Deps]{tool: cloneNativeTool(entry.tool), fn: entry.fn}
+		cloned[index] = nativeToolEntry[Deps]{
+			tool: cloneNativeTool(entry.tool), fn: entry.fn,
+			expectedID: entry.expectedID, requiredReason: entry.requiredReason,
+		}
 	}
 	return cloned
 }

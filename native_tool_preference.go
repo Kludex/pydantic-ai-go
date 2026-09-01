@@ -86,6 +86,9 @@ func resolveNativeFunctionTools(
 }
 
 func hasNativeToolPreferences(params ModelRequestParams) bool {
+	if params.nativeToolSupportRequired {
+		return true
+	}
 	for _, definition := range params.Tools {
 		if definition.NativeFallbackFor != "" || definition.NativeCompanionFor != "" {
 			return true

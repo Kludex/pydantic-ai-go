@@ -9,8 +9,9 @@ import (
 
 // Embedder provides query and document operations over one embedding model.
 type Embedder struct {
-	model    Model
-	settings Settings
+	model           Model
+	settings        Settings
+	instrumentation *instrumentationSelection
 }
 
 // Option configures an Embedder.

@@ -392,8 +392,11 @@ import (
 )
 
 func main() {
-	model := embeddings.InstrumentModel(openai.NewModel("text-embedding-3-small"))
-	result, err := embeddings.New(model).EmbedQuery(context.Background(), "What is structured concurrency?")
+	embedder := embeddings.New(
+		openai.NewModel("text-embedding-3-small"),
+		embeddings.WithInstrumentation(),
+	)
+	result, err := embedder.EmbedQuery(context.Background(), "What is structured concurrency?")
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -401,9 +404,11 @@ func main() {
 }
 ```
 
-`InstrumentModel` emits one `embeddings <model>` client span. It records provider and model identity, usage, dimensions, cost, and OpenTelemetry token and cost histograms. Input and vector content are enabled by default. Pass `embeddings.WithInstrumentationContent(false)` before you export telemetry outside your trust boundary.
+`WithInstrumentation` emits one `embeddings <model>` client span for each operation. It records provider and model identity, usage, dimensions, cost, and OpenTelemetry token and cost histograms. Input and vector content are enabled by default. Pass `embeddings.WithInstrumentationContent(false)` before you export telemetry outside your trust boundary.
 
-Instrumentation preserves optional token-counting and input-limit capabilities through model wrappers.
+Use `InstrumentAll` to instrument existing and future embedders without an explicit instrumentation option. It returns a function that restores the previous process default. `WithoutInstrumentation` keeps one embedder disabled when the process default is enabled. `DisableInstrumentation` temporarily disables the process default.
+
+Use `InstrumentModel` when you need the lower-level model decorator. Instrumentation preserves optional token-counting and input-limit capabilities through model wrappers.
 
 ## Tests
 

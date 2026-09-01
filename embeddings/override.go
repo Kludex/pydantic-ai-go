@@ -15,7 +15,7 @@ func WithModel(ctx context.Context, model Model) context.Context {
 
 func (embedder *Embedder) modelForContext(ctx context.Context) Model {
 	if model, ok := ctx.Value(modelOverrideContextKey{}).(Model); ok && !embeddingModelIsNil(model) {
-		return model
+		return embedder.instrumentModel(model)
 	}
-	return embedder.model
+	return embedder.instrumentModel(embedder.model)
 }

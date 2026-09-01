@@ -18,6 +18,79 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+func TestEmbedderInstrumentationDefaults(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tracerProvider.Shutdown(t.Context()) })
+	base := &embeddingModel{
+		name: "model", provider: "provider", providerURL: "https://example.com",
+		embed: func(
+			_ context.Context, inputs []string, inputType embeddings.InputType, _ embeddings.Settings,
+		) (*embeddings.Result, error) {
+			vectors := make([][]float64, len(inputs))
+			for index := range vectors {
+				vectors[index] = []float64{float64(index)}
+			}
+			return &embeddings.Result{
+				Embeddings: vectors, Inputs: inputs, InputType: inputType, ModelName: "model", ProviderName: "provider",
+			}, nil
+		},
+	}
+	embedder := embeddings.New(base)
+	restore := embeddings.InstrumentAll(embeddings.WithInstrumentationTracerProvider(tracerProvider))
+	t.Cleanup(restore)
+	if _, err := embedder.EmbedQuery(t.Context(), "global"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exporter.GetSpans()) != 1 {
+		t.Fatalf("global instrumentation emitted %d spans", len(exporter.GetSpans()))
+	}
+
+	disabled := embeddings.New(base, embeddings.WithoutInstrumentation())
+	if _, err := disabled.EmbedQuery(t.Context(), "disabled"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exporter.GetSpans()) != 1 {
+		t.Fatal("explicitly disabled embedder emitted a span")
+	}
+
+	restore()
+	if _, err := embedder.EmbedQuery(t.Context(), "restored"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exporter.GetSpans()) != 1 {
+		t.Fatal("restored global default emitted a span")
+	}
+
+	explicit := embeddings.New(base, embeddings.WithInstrumentation(
+		embeddings.WithInstrumentationTracerProvider(tracerProvider),
+	))
+	ctx := embeddings.WithModel(t.Context(), base)
+	if _, err := explicit.EmbedQuery(ctx, "explicit"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exporter.GetSpans()) != 2 {
+		t.Fatal("explicit or overridden model was not instrumented")
+	}
+
+	restoreEnabled := embeddings.InstrumentAll(embeddings.WithInstrumentationTracerProvider(tracerProvider))
+	restoreDisabled := embeddings.DisableInstrumentation()
+	if _, err := embedder.EmbedQuery(t.Context(), "globally disabled"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exporter.GetSpans()) != 2 {
+		t.Fatal("disabled global default emitted a span")
+	}
+	restoreDisabled()
+	if _, err := embedder.EmbedQuery(t.Context(), "nested restore"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exporter.GetSpans()) != 3 {
+		t.Fatal("nested default restoration did not restore instrumentation")
+	}
+	restoreEnabled()
+}
+
 func TestInstrumentedEmbedding(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))

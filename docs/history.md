@@ -54,9 +54,67 @@ Use `ResolvedToolCallIDs` only for tool calls that your server is resuming in th
 
 Nested file references in ordinary tool-return maps and slices are sanitized too.
 `UnmarshalMessages` restores their concrete `ImageURL`, `AudioURL`, `DocumentURL`, `VideoURL`, `BinaryContent`, and `UploadedFile` types before sanitization.
+Retained audio and provider details in `SpeechPart` values are detached as well.
 
 Invalid allowlist values or malformed URLs return an error and no partial history.
 Reject the client request instead of passing the original history to an agent.
+
+## Replay realtime speech
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func pointer[T any](value T) *T {
+	return &value
+}
+
+func main() {
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.SpeechPart{
+			Speaker:    ai.SpeechSpeakerUser,
+			Transcript: pointer("What time is it?"),
+		}}},
+		ai.ModelResponse{
+			State: ai.ModelResponseStateInterrupted,
+			Parts: []ai.ResponsePart{ai.SpeechPart{
+				Speaker:    ai.SpeechSpeakerAssistant,
+				Transcript: pointer("It is nearly"),
+			}},
+		},
+	}
+
+	agent := ai.NewAgent[struct{}, string](openai.NewResponsesModel("gpt-5-mini"))
+	result, err := agent.Run(
+		context.Background(),
+		"Please finish the answer.",
+		struct{}{},
+		ai.WithMessageHistory(history),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`SpeechPart` preserves the speaker, optional transcript, retained audio, interruption offset, provider identity, and provider details from a realtime session. Request parts require `SpeechSpeakerUser`. Response parts require `SpeechSpeakerAssistant`.
+
+Before a standard model request, `PrepareModelMessages` converts user speech to a `UserPromptPart` and assistant speech to a `TextPart`. An interrupted assistant turn gains `[Interrupted]` or `[Interrupted after N ms]`. This request-only conversion does not rewrite the durable history returned by `Result.Messages()`.
+
+Agents, `RequestModel`, `StreamModel`, token counting, and compaction apply this conversion automatically. Calling a provider's low-level `Model.Request` method does not. Standard provider adapters return `ErrUnpreparedSpeech` instead of silently dropping an unprepared part.
+
+The default model profile uses the transcript. Set `ModelProfile.SupportsAudioInput` on a `ProfiledModel` only when its adapter accepts the retained audio format. Empty speech parts are omitted from the prepared request.
+
+Streams expose `SpeechPartDelta`. Its `Transcript` field replaces a revised transcript. `TranscriptDelta` appends new text. `AudioChunk` is retained only when the starting `SpeechPart` already owns an audio buffer.
 
 ## Trim history by input tokens
 

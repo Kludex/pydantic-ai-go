@@ -42,6 +42,8 @@ func telemetryRequestMessageGroups(
 		nextRole := "user"
 		var nextParts []any
 		switch part := part.(type) {
+		case SpeechPart:
+			nextParts = telemetrySpeechParts(part, includeContent, includeBinary, version)
 		case SystemPromptPart:
 			nextRole = "system"
 			nextParts = []any{telemetryText(part.Content, includeContent)}
@@ -194,6 +196,8 @@ func telemetryResponseParts(parts []ResponsePart, includeContent, includeBinary 
 		switch part := part.(type) {
 		case TextPart:
 			output = append(output, telemetryText(part.Content, includeContent))
+		case SpeechPart:
+			output = append(output, telemetrySpeechParts(part, includeContent, includeBinary, version)...)
 		case FilePart:
 			value := map[string]any{"type": "blob", "mime_type": part.Content.MediaType}
 			if slash := strings.IndexByte(part.Content.MediaType, '/'); slash > 0 {
@@ -228,6 +232,17 @@ func telemetryResponseParts(parts []ResponsePart, includeContent, includeBinary 
 		}
 	}
 	return output
+}
+
+func telemetrySpeechParts(part SpeechPart, includeContent, includeBinary bool, version int) []any {
+	var parts []any
+	if part.Transcript != nil {
+		parts = append(parts, telemetryText(*part.Transcript, includeContent))
+	}
+	if part.Audio != nil {
+		parts = append(parts, telemetryUserContent(*part.Audio, includeContent, includeBinary, version))
+	}
+	return parts
 }
 
 func telemetryToolCall(name, id string, arguments json.RawMessage, includeContent bool) map[string]any {

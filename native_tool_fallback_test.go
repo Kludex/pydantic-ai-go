@@ -61,7 +61,7 @@ func TestNativeFallbackToolOption(t *testing.T) {
 	), &precedence); err != nil || precedence.NativeFallbackFor != "" || precedence.NativeCompanionFor != "manager" {
 		t.Fatalf("canonical native preference did not win: %#v, %v", precedence, err)
 	}
-	if err := json.Unmarshal([]byte(`{"name":`), &precedence); err == nil {
+	if err := json.Unmarshal([]byte(`{"name":[]}`), &precedence); err == nil {
 		t.Fatal("expected malformed tool definition to fail")
 	}
 

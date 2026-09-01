@@ -61,6 +61,16 @@ type TextDeltaEvent struct {
 
 func (TextDeltaEvent) modelStreamEventKind() string { return "text-delta" }
 
+// SpeechDeltaEvent starts or updates one streamed speech part. Part seeds a
+// new PartID; Delta applies to the accumulated part and is emitted to consumers.
+type SpeechDeltaEvent struct {
+	PartID string
+	Part   SpeechPart
+	Delta  SpeechPartDelta
+}
+
+func (SpeechDeltaEvent) modelStreamEventKind() string { return "speech-delta" }
+
 // ThinkingDeltaEvent carries a provider chunk of reasoning content.
 type ThinkingDeltaEvent struct {
 	// PartID identifies the response part this delta updates. A stable,

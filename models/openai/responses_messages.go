@@ -99,6 +99,8 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 	var out []responsesInput
 	for _, requestPart := range message.Parts {
 		switch part := requestPart.(type) {
+		case ai.SpeechPart:
+			return nil, ai.ErrUnpreparedSpeech
 		case ai.SystemPromptPart:
 			out = append(out, responsesInput{Role: "system", Content: part.Content})
 		case ai.UserPromptPart:
@@ -268,6 +270,8 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 	var out []responsesInput
 	for _, responsePart := range message.Parts {
 		switch part := responsePart.(type) {
+		case ai.SpeechPart:
+			return nil, ai.ErrUnpreparedSpeech
 		case ai.TextPart:
 			id := ""
 			phase := ""

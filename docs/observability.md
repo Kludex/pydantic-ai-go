@@ -82,7 +82,7 @@ Disable content before you send telemetry outside your trust boundary. Pass `Wit
 
 Application run metadata is still exported in the `metadata` attribute because it is intended for trace filtering and evaluation. Do not put secrets in metadata. `WithInstrumentationBinaryContent(false)` redacts `BinaryContent` values nested inside metadata.
 
-`WithInstrumentationBinaryContent(false)` keeps media types but removes inline bytes. It follows maps, slices, `ToolReturn`, and deferred metadata. It does not inspect fields inside your own struct types.
+`WithInstrumentationBinaryContent(false)` keeps media types but removes inline bytes. It applies to files, retained `SpeechPart` audio, maps, slices, `ToolReturn`, and deferred metadata. It does not inspect fields inside your own struct types.
 
 `WithInstrumentationModelRequestParameters(false)` removes the complete request-parameter snapshot. Tool names and public JSON Schemas remain available through `gen_ai.tool.definitions`.
 

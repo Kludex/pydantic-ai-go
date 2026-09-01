@@ -70,6 +70,10 @@ type wireResponse struct {
 type wirePart struct {
 	PartKind        string            `json:"part_kind"`
 	Content         json.RawMessage   `json:"content,omitempty"`
+	Speaker         SpeechSpeaker     `json:"speaker,omitempty"`
+	Transcript      *string           `json:"transcript,omitempty"`
+	Audio           *BinaryContent    `json:"audio,omitempty"`
+	InterruptedAtMS *int              `json:"interrupted_at_ms,omitempty"`
 	ToolName        string            `json:"tool_name,omitempty"`
 	ToolCallID      string            `json:"tool_call_id,omitempty"`
 	ToolKind        ToolPartKind      `json:"tool_kind,omitempty"`
@@ -135,6 +139,11 @@ func marshalMessage(m ModelMessage) ([]byte, error) {
 
 func marshalRequestPart(p RequestPart) (wirePart, error) {
 	switch part := p.(type) {
+	case SpeechPart:
+		if part.Speaker != SpeechSpeakerUser {
+			return wirePart{}, speechSpeakerError("ModelRequest", SpeechSpeakerUser, part.Speaker)
+		}
+		return marshalSpeechPart(part), nil
 	case SystemPromptPart:
 		wire := wirePart{PartKind: "system-prompt", Content: mustJSON(part.Content), DynamicRef: part.DynamicRef}
 		return wirePartWithTimestamp(wire, part.Timestamp), nil
@@ -178,6 +187,11 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 
 func marshalResponsePart(p ResponsePart) (wirePart, error) {
 	switch part := p.(type) {
+	case SpeechPart:
+		if part.Speaker != SpeechSpeakerAssistant {
+			return wirePart{}, speechSpeakerError("ModelResponse", SpeechSpeakerAssistant, part.Speaker)
+		}
+		return marshalSpeechPart(part), nil
 	case TextPart:
 		return wirePart{
 			PartKind: "text", Content: mustJSON(part.Content), ID: part.ID,
@@ -238,6 +252,22 @@ func marshalResponsePart(p ResponsePart) (wirePart, error) {
 	default:
 		return wirePart{}, fmt.Errorf("ai: unknown response part type %T", p)
 	}
+}
+
+func marshalSpeechPart(part SpeechPart) wirePart {
+	return wirePart{
+		PartKind: "speech", Speaker: part.Speaker, Transcript: clonePointer(part.Transcript),
+		Audio: part.Audio, InterruptedAtMS: clonePointer(part.InterruptedAtMS), ID: part.ID,
+		ProviderName: part.ProviderName, ProviderDetails: cloneSchemaMap(part.ProviderDetails),
+	}
+}
+
+func unmarshalSpeechPart(part wirePart) SpeechPart {
+	return cloneSpeechPart(SpeechPart{
+		Speaker: part.Speaker, Transcript: part.Transcript, Audio: part.Audio,
+		InterruptedAtMS: part.InterruptedAtMS, ID: part.ID,
+		ProviderName: part.ProviderName, ProviderDetails: part.ProviderDetails,
+	})
 }
 
 func unmarshalMessage(data []byte) (ModelMessage, error) {
@@ -308,6 +338,12 @@ func unmarshalMessage(data []byte) (ModelMessage, error) {
 
 func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 	switch wp.PartKind {
+	case "speech":
+		part := unmarshalSpeechPart(wp)
+		if part.Speaker != SpeechSpeakerUser {
+			return nil, speechSpeakerError("ModelRequest", SpeechSpeakerUser, part.Speaker)
+		}
+		return part, nil
 	case "system-prompt":
 		part := SystemPromptPart{Content: stringContent(wp.Content), DynamicRef: wp.DynamicRef}
 		if wp.Timestamp != nil {
@@ -368,6 +404,12 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 
 func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 	switch wp.PartKind {
+	case "speech":
+		part := unmarshalSpeechPart(wp)
+		if part.Speaker != SpeechSpeakerAssistant {
+			return nil, speechSpeakerError("ModelResponse", SpeechSpeakerAssistant, part.Speaker)
+		}
+		return part, nil
 	case "text":
 		return TextPart{
 			Content: stringContent(wp.Content), ID: wp.ID,

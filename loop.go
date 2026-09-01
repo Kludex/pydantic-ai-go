@@ -863,6 +863,8 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 			message.Metadata = cloneSchemaMap(message.Metadata)
 			for partIndex, part := range message.Parts {
 				switch part := part.(type) {
+				case SpeechPart:
+					message.Parts[partIndex] = cloneSpeechPart(part)
 				case UserPromptPart:
 					part.Contents = cloneUserContents(part.Contents)
 					message.Parts[partIndex] = part
@@ -1034,6 +1036,11 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		r.recordSelectedModel(r.model.Name())
 	}
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+		var err error
+		msgs, err = PrepareModelMessages(r.model, msgs)
+		if err != nil {
+			return nil, err
+		}
 		setLatestRequestContext(msgs, params.Instructions, r.rc.RunID, r.rc.ConversationID)
 		if r.resumeSeed == nil {
 			setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
@@ -1225,6 +1232,9 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		}
 	}
 	r.stampModelResponse(response)
+	if err := validateResponseSpeech(response); err != nil {
+		return response, err
+	}
 	r.resumeSeed = nil
 	return response, nil
 }

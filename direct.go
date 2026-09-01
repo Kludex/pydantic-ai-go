@@ -239,6 +239,10 @@ func prepareDirectRequest(
 	if err != nil {
 		return nil, ModelRequestParams{}, err
 	}
+	messages, err = PrepareModelMessages(model, messages)
+	if err != nil {
+		return nil, ModelRequestParams{}, err
+	}
 	return messages, params, nil
 }
 
@@ -335,6 +339,9 @@ func requestModelDirect(
 		if segment != nil {
 			stampDirectResponse(model, segment)
 			fillResponseCost(ctx, segment)
+			if speechErr := validateResponseSpeech(segment); speechErr != nil && err == nil {
+				err = speechErr
+			}
 		}
 		if err != nil {
 			partial := response

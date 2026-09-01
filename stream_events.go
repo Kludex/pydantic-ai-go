@@ -15,6 +15,7 @@ type ResponsePartKind string
 
 const (
 	ResponsePartKindText             ResponsePartKind = "text"
+	ResponsePartKindSpeech           ResponsePartKind = "speech"
 	ResponsePartKindFile             ResponsePartKind = "file"
 	ResponsePartKindThinking         ResponsePartKind = "thinking"
 	ResponsePartKindCompaction       ResponsePartKind = "compaction"
@@ -51,6 +52,39 @@ func (d TextPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 	}
 	text.ProviderDetails = mergeProviderDetails(text.ProviderDetails, d.ProviderDetails)
 	return text, nil
+}
+
+// SpeechPartDelta updates a speech transcript and appends retained audio.
+type SpeechPartDelta struct {
+	Speaker         SpeechSpeaker
+	TranscriptDelta string
+	Transcript      *string
+	AudioChunk      []byte
+}
+
+func (SpeechPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindSpeech }
+
+// Apply applies the speech delta without mutating the existing part.
+func (delta SpeechPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
+	speech, ok := part.(SpeechPart)
+	if !ok {
+		return nil, fmt.Errorf("ai: cannot apply SpeechPartDelta to %T", part)
+	}
+	return applySpeechPartDelta(speech, delta), nil
+}
+
+func applySpeechPartDelta(speech SpeechPart, delta SpeechPartDelta) SpeechPart {
+	speech = cloneSpeechPart(speech)
+	if delta.Transcript != nil {
+		speech.Transcript = clonePointer(delta.Transcript)
+	} else if delta.TranscriptDelta != "" {
+		transcript := speech.Content() + delta.TranscriptDelta
+		speech.Transcript = &transcript
+	}
+	if len(delta.AudioChunk) > 0 && speech.Audio != nil {
+		speech.Audio.Data = append(speech.Audio.Data, delta.AudioChunk...)
+	}
+	return speech
 }
 
 // ThinkingPartDelta appends content to a ThinkingPart.

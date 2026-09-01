@@ -3,6 +3,7 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -94,16 +95,67 @@ func (r ModelResponse) ToolCalls() []ToolCallPart {
 	return calls
 }
 
-// Text returns the concatenated text content of the response.
+// Text returns text content, including speech transcripts. Adjacent text and
+// speech parts are joined; non-text parts separate groups with blank lines.
 func (r ModelResponse) Text() string {
-	var s string
-	for _, p := range r.Parts {
-		if t, ok := p.(TextPart); ok {
-			s += t.Content
+	var groups []string
+	adjacent := false
+	for _, responsePart := range r.Parts {
+		content := ""
+		switch part := responsePart.(type) {
+		case TextPart:
+			content = part.Content
+		case SpeechPart:
+			content = part.Content()
 		}
+		if content == "" {
+			adjacent = false
+			continue
+		}
+		if adjacent {
+			groups[len(groups)-1] += content
+		} else {
+			groups = append(groups, content)
+		}
+		adjacent = true
 	}
-	return s
+	return strings.Join(groups, "\n\n")
 }
+
+// SpeechSpeaker identifies who produced a SpeechPart.
+type SpeechSpeaker string
+
+const (
+	SpeechSpeakerUser      SpeechSpeaker = "user"
+	SpeechSpeakerAssistant SpeechSpeaker = "assistant"
+)
+
+// SpeechPart is spoken audio from a realtime session with its optional transcript.
+// Request messages require SpeechSpeakerUser. Response messages require SpeechSpeakerAssistant.
+type SpeechPart struct {
+	Speaker         SpeechSpeaker
+	Transcript      *string
+	Audio           *BinaryContent
+	InterruptedAtMS *int
+	ID              string
+	ProviderName    string
+	ProviderDetails map[string]any
+}
+
+// Content returns the transcript or an empty string when no transcript is available.
+func (part SpeechPart) Content() string {
+	if part.Transcript == nil {
+		return ""
+	}
+	return *part.Transcript
+}
+
+// HasContent reports whether the part has a non-empty transcript or retained audio.
+func (part SpeechPart) HasContent() bool { return part.Content() != "" || part.Audio != nil }
+
+func (SpeechPart) requestPartKind() string  { return "speech" }
+func (SpeechPart) responsePartKind() string { return "speech" }
+func (SpeechPart) enqueueItemKind() string  { return "request-part" }
 
 // RequestPart is one part of a ModelRequest.
 type RequestPart interface {

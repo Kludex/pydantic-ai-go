@@ -6,6 +6,8 @@ func (state *messageSanitizer) request(message ModelRequest) (ModelRequest, bool
 	parts := make([]RequestPart, 0, len(message.Parts))
 	for _, requestPart := range message.Parts {
 		switch part := requestPart.(type) {
+		case SpeechPart:
+			parts = append(parts, cloneSpeechPart(part))
 		case SystemPromptPart:
 			if !state.allowSystemPrompts {
 				state.strippedSystems++

@@ -152,6 +152,8 @@ func (s *StreamedRun[Output]) yieldPartialOutput(
 	switch part := part.(type) {
 	case TextPart:
 		raw = part.Content
+	case SpeechPart:
+		raw = part.Content()
 	case ToolCallPart:
 		raw, toolCallID = string(part.Args), part.ToolCallID
 	default:
@@ -384,6 +386,10 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 					PartID: partID, Delta: part.Content, ID: part.ID,
 					ProviderName: part.ProviderName, ProviderDetails: cloneSchemaMap(part.ProviderDetails),
 				}, nil) {
+					return
+				}
+			case SpeechPart:
+				if !yield(SpeechDeltaEvent{PartID: partID, Part: cloneSpeechPart(part)}, nil) {
 					return
 				}
 			case FilePart:

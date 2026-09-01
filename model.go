@@ -58,6 +58,11 @@ func CountModelTokens(
 	if err := validateModelSettings(request.Params.Settings); err != nil {
 		return Usage{}, err
 	}
+	preparedMessages, err := PrepareModelMessages(model, request.Messages)
+	if err != nil {
+		return Usage{}, err
+	}
+	request.Messages = preparedMessages
 	if request.Params.Settings.RequestTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, request.Params.Settings.RequestTimeout)
@@ -83,6 +88,11 @@ func CompactModelMessages(
 	if err := validateModelSettings(request.Params.Settings); err != nil {
 		return nil, err
 	}
+	preparedMessages, err := PrepareModelMessages(model, request.Messages)
+	if err != nil {
+		return nil, err
+	}
+	request.Messages = preparedMessages
 	if request.Params.Settings.RequestTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, request.Params.Settings.RequestTimeout)

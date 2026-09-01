@@ -1,0 +1,66 @@
+[
+  {
+    "parts": [
+      {
+        "speaker": "user",
+        "transcript": "Hello",
+        "audio": {
+          "data": "AQI=",
+          "media_type": "audio/pcm",
+          "vendor_metadata": null,
+          "kind": "binary",
+          "identifier": "0ca623"
+        },
+        "interrupted_at_ms": null,
+        "id": "item-1",
+        "provider_name": "openai",
+        "provider_details": null,
+        "part_kind": "speech"
+      }
+    ],
+    "timestamp": null,
+    "instructions": null,
+    "kind": "request",
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  },
+  {
+    "parts": [
+      {
+        "speaker": "assistant",
+        "transcript": "Hi!",
+        "audio": null,
+        "interrupted_at_ms": 420,
+        "id": null,
+        "provider_name": null,
+        "provider_details": null,
+        "part_kind": "speech"
+      }
+    ],
+    "usage": {
+      "input_tokens": 0,
+      "cache_write_tokens": 0,
+      "cache_read_tokens": 0,
+      "output_tokens": 0,
+      "input_audio_tokens": 0,
+      "cache_audio_read_tokens": 0,
+      "output_audio_tokens": 0,
+      "details": {},
+      "cost": null
+    },
+    "model_name": null,
+    "timestamp": "2026-09-01T01:09:52.790571Z",
+    "kind": "response",
+    "provider_name": null,
+    "provider_url": null,
+    "provider_details": null,
+    "provider_response_id": null,
+    "finish_reason": null,
+    "run_id": null,
+    "conversation_id": null,
+    "metadata": null,
+    "state": "complete"
+  }
+]

@@ -46,6 +46,10 @@ func TestInstrumentedModelRequest(t *testing.T) {
 			Parts: []ai.ResponsePart{
 				ai.TextPart{Content: "done"},
 				ai.FilePart{Content: ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"}},
+				ai.SpeechPart{
+					Speaker: ai.SpeechSpeakerAssistant, Transcript: speechPointer("spoken"),
+					Audio: &ai.BinaryContent{Data: []byte("voice"), MediaType: "audio/pcm"},
+				},
 				ai.ThinkingPart{Content: "thought"},
 				ai.CompactionPart{Content: "summary"},
 				ai.ToolCallPart{ToolName: "lookup", ToolCallID: "call", Args: json.RawMessage(`{"city":"Paris"}`)},
@@ -71,6 +75,10 @@ func TestInstrumentedModelRequest(t *testing.T) {
 	messages := []ai.ModelMessage{
 		ai.ModelRequest{Parts: []ai.RequestPart{
 			ai.SystemPromptPart{Content: "system"},
+			ai.SpeechPart{
+				Speaker: ai.SpeechSpeakerUser, Transcript: speechPointer("spoken input"),
+				Audio: &ai.BinaryContent{Data: []byte("input voice"), MediaType: "audio/pcm"},
+			},
 			ai.UserPromptPart{Content: "plain user prompt"},
 			ai.UserPromptPart{Contents: []ai.UserContent{
 				ai.TextContent{Text: "hello"}, ai.ImageURL{URL: "https://example.com/image.png"},
@@ -103,7 +111,7 @@ func TestInstrumentedModelRequest(t *testing.T) {
 			PresencePenalty: &presence, FrequencyPenalty: &frequency, StopSequences: []string{"stop"},
 		},
 	})
-	if err != nil || !called || response.Text() != "done" {
+	if err != nil || !called || response.Text() != "done\n\nspoken" {
 		t.Fatalf("unexpected instrumented response: response=%+v called=%v err=%v", response, called, err)
 	}
 	if ai.UnwrapModel(model) != base || model.Name() != "request-model" {
@@ -137,13 +145,16 @@ func TestInstrumentedModelRequest(t *testing.T) {
 	definitions, _ := attributes["gen_ai.tool.definitions"].(string)
 	parameters, _ := attributes["model_request_parameters"].(string)
 	for _, fragment := range []string{
-		"system", "plain user prompt", "hello", "c2VjcmV0", "prior-id", "plain retry", "new_tool", "history",
+		"system", "spoken input", "aW5wdXQgdm9pY2U=", "plain user prompt", "hello", "c2VjcmV0",
+		"prior-id", "plain retry", "new_tool", "history",
 	} {
 		if !strings.Contains(input, fragment) {
 			t.Fatalf("input telemetry omitted %q: %s", fragment, input)
 		}
 	}
-	for _, fragment := range []string{"done", "thought", "summary", `"city":"Paris"`, "not-json", "result"} {
+	for _, fragment := range []string{
+		"done", "spoken", "dm9pY2U=", "thought", "summary", `"city":"Paris"`, "not-json", "result",
+	} {
 		if !strings.Contains(output, fragment) {
 			t.Fatalf("output telemetry omitted %q: %s", fragment, output)
 		}
@@ -347,6 +358,10 @@ func TestInstrumentedModelPrivacyControls(t *testing.T) {
 		base, ai.WithInstrumentationTracerProvider(provider), ai.WithInstrumentationBinaryContent(false),
 	)
 	if _, err := binaryModel.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.SpeechPart{
+			Speaker: ai.SpeechSpeakerUser, Transcript: speechPointer("speech text"),
+			Audio: &ai.BinaryContent{Data: []byte("speech secret"), MediaType: "audio/pcm"},
+		},
 		ai.UserPromptPart{Contents: []ai.UserContent{
 			ai.BinaryContent{Data: []byte("secret"), MediaType: "image/png"},
 		}},
@@ -354,7 +369,9 @@ func TestInstrumentedModelPrivacyControls(t *testing.T) {
 		t.Fatal(err)
 	}
 	binaryInput, _ := instrumentationSpanAttributes(exporter.GetSpans()[0].Attributes)["gen_ai.input.messages"].(string)
-	if !strings.Contains(binaryInput, "image/png") || strings.Contains(binaryInput, "c2VjcmV0") {
+	if !strings.Contains(binaryInput, "image/png") || !strings.Contains(binaryInput, "audio/pcm") ||
+		!strings.Contains(binaryInput, "speech text") || strings.Contains(binaryInput, "c2VjcmV0") ||
+		strings.Contains(binaryInput, "c3BlZWNoIHNlY3JldA==") {
 		t.Fatalf("binary content was not redacted: %s", binaryInput)
 	}
 

@@ -1,15 +1,18 @@
 package ai
 
-// ModelProfile describes model-specific structured-output behavior. The zero
-// value defaults reflected output to a function tool and uses the standard
-// prompted-output template.
+// ModelProfile describes model-specific output and message-preparation behavior.
+// The zero value defaults reflected output to a function tool, uses the standard
+// prompted-output template, and converts realtime speech to transcripts.
 type ModelProfile struct {
 	DefaultOutputMode          OutputMode
 	PromptedOutputTemplate     string
 	NativeOutputRequiresPrompt bool
+	// SupportsAudioInput allows retained SpeechPart audio to replace its transcript
+	// when realtime history is prepared for a standard model.
+	SupportsAudioInput bool
 }
 
-// ModelProfiler is implemented by models that expose structured-output defaults.
+// ModelProfiler is implemented by models that expose output and message-preparation defaults.
 type ModelProfiler interface {
 	ModelProfile() ModelProfile
 }
@@ -18,6 +21,12 @@ type ModelProfiler interface {
 // OutputModeAuto independently for each selected child model.
 type ModelOutputProfileDispatcher interface {
 	DispatchesOutputProfile() bool
+}
+
+// ModelMessageProfileDispatcher is implemented by composite models that prepare
+// message histories independently for each selected child model.
+type ModelMessageProfileDispatcher interface {
+	DispatchesMessageProfile() bool
 }
 
 // ProfiledModel applies a profile to any model while preserving optional model capabilities.
@@ -42,6 +51,9 @@ func (model *ProfiledModel) ModelProfile() ModelProfile { return model.profile }
 // DispatchesOutputProfile reports that this explicit outer profile resolves before delegation.
 func (*ProfiledModel) DispatchesOutputProfile() bool { return false }
 
+// DispatchesMessageProfile reports that this explicit outer profile prepares messages before delegation.
+func (*ProfiledModel) DispatchesMessageProfile() bool { return false }
+
 func (wrapper *ModelWrapper) ModelProfile() ModelProfile {
 	if model, ok := wrapper.wrapped.(ModelProfiler); ok {
 		return model.ModelProfile()
@@ -53,6 +65,12 @@ func (wrapper *ModelWrapper) ModelProfile() ModelProfile {
 func (wrapper *ModelWrapper) DispatchesOutputProfile() bool {
 	model, ok := wrapper.wrapped.(ModelOutputProfileDispatcher)
 	return ok && model.DispatchesOutputProfile()
+}
+
+// DispatchesMessageProfile reports whether the wrapped composite prepares messages per child model.
+func (wrapper *ModelWrapper) DispatchesMessageProfile() bool {
+	model, ok := wrapper.wrapped.(ModelMessageProfileDispatcher)
+	return ok && model.DispatchesMessageProfile()
 }
 
 func modelProfile(model Model) ModelProfile {

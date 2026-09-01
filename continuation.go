@@ -77,6 +77,8 @@ func cloneModelResponse(response *ModelResponse) *ModelResponse {
 		case TextPart:
 			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
 			cloned.Parts[index] = part
+		case SpeechPart:
+			cloned.Parts[index] = cloneSpeechPart(part)
 		case ThinkingPart:
 			part.ProviderDetails = cloneSchemaMap(part.ProviderDetails)
 			cloned.Parts[index] = part

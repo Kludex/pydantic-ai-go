@@ -1,11 +1,29 @@
 package openai_test
 
 import (
+	"errors"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
+
+func TestModelsRejectUnpreparedSpeech(t *testing.T) {
+	models := []ai.Model{openai.NewModel("gpt-5"), openai.NewResponsesModel("gpt-5")}
+	histories := [][]ai.ModelMessage{
+		{ai.ModelRequest{Parts: []ai.RequestPart{ai.SpeechPart{Speaker: ai.SpeechSpeakerUser}}}},
+		{ai.ModelResponse{Parts: []ai.ResponsePart{ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant}}}},
+	}
+	for _, model := range models {
+		for _, history := range histories {
+			if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); !errors.Is(
+				err, ai.ErrUnpreparedSpeech,
+			) {
+				t.Fatalf("%T accepted unprepared speech: %v", model, err)
+			}
+		}
+	}
+}
 
 func TestNativeToolSupport(t *testing.T) {
 	search := openai.NewModel("gpt-4o-search-preview")

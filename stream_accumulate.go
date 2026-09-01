@@ -20,12 +20,16 @@ type accumulatedPart struct {
 	toolArgs        string
 	providerName    string
 	providerDetails map[string]any
+	speech          *SpeechPart
 	complete        ResponsePart
 }
 
 func (p *accumulatedPart) responsePart() ResponsePart {
 	if p.complete != nil {
 		return cloneResponsePart(p.complete)
+	}
+	if p.kind == ResponsePartKindSpeech {
+		return cloneSpeechPart(*p.speech)
 	}
 	if p.kind == ResponsePartKindText {
 		return TextPart{
@@ -144,6 +148,11 @@ func accumulate(
 				finalResultSent = true
 				return emitEvent(FinalResultEvent{})
 			}
+		case SpeechPart:
+			if params.AllowText && value.Content() != "" {
+				finalResultSent = true
+				return emitEvent(FinalResultEvent{})
+			}
 		case ToolCallPart:
 			if params.OutputTool != nil && value.ToolName == params.OutputTool.Name {
 				finalResultSent = true
@@ -161,7 +170,7 @@ func accumulate(
 					part.providerName != "" || len(part.providerDetails) > 0 {
 					response.Parts = append(response.Parts, part.responsePart())
 				}
-			case ResponsePartKindFile, ResponsePartKindCompaction, ResponsePartKindToolCall,
+			case ResponsePartKindSpeech, ResponsePartKindFile, ResponsePartKindCompaction, ResponsePartKindToolCall,
 				ResponsePartKindNativeToolCall, ResponsePartKindNativeToolReturn:
 				response.Parts = append(response.Parts, part.responsePart())
 			}
@@ -220,6 +229,34 @@ func accumulate(
 				},
 			}); err != nil {
 				return partialResponse(), err
+			}
+		case SpeechDeltaEvent:
+			part, started, err := partForDelta(event.PartID, ResponsePartKindSpeech)
+			if err != nil {
+				return nil, err
+			}
+			if started {
+				speech := cloneSpeechPart(event.Part)
+				if speech.Speaker == "" {
+					speech.Speaker = event.Delta.Speaker
+				}
+				part.speech = &speech
+			}
+			speech := applySpeechPartDelta(part.responsePart().(SpeechPart), event.Delta)
+			part.speech = &speech
+			if started {
+				if err := startPart(part); err != nil {
+					return partialResponse(), err
+				}
+			} else {
+				delta := event.Delta
+				delta.Transcript = clonePointer(delta.Transcript)
+				delta.AudioChunk = append([]byte(nil), delta.AudioChunk...)
+				if err := emitEvent(PartDeltaEvent{
+					Index: part.index, PartID: part.id, Delta: delta,
+				}); err != nil {
+					return partialResponse(), err
+				}
 			}
 		case ThinkingDeltaEvent:
 			part, started, err := partForDelta(event.PartID, ResponsePartKindThinking)

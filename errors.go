@@ -27,6 +27,10 @@ var ErrTokenCountingUnsupported = errors.New("ai: token counting is not supporte
 // ErrCompactionUnsupported is returned when a model has no explicit compaction API.
 var ErrCompactionUnsupported = errors.New("ai: compaction is not supported")
 
+// ErrUnpreparedSpeech reports realtime speech passed directly to a standard provider adapter.
+// Use PrepareModelMessages or the agent and direct request APIs to convert it first.
+var ErrUnpreparedSpeech = errors.New("ai: SpeechPart cannot be sent to a standard model as-is")
+
 // ErrNoSuspendedResponse is returned when Resume receives history that does
 // not end with a suspended model response.
 var ErrNoSuspendedResponse = errors.New("ai: message history does not end with a suspended model response")

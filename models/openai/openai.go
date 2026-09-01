@@ -693,7 +693,7 @@ func (model *Model) convertMessage(
 	case ai.ModelRequest:
 		return model.convertRequest(ctx, message, cache)
 	case ai.ModelResponse:
-		return model.convertResponse(message), nil
+		return model.convertResponse(message)
 	default:
 		return nil, fmt.Errorf("openai: unknown message type %T", msg)
 	}
@@ -705,6 +705,8 @@ func (model *Model) convertRequest(
 	var out []chatMessage
 	for _, part := range m.Parts {
 		switch p := part.(type) {
+		case ai.SpeechPart:
+			return nil, ai.ErrUnpreparedSpeech
 		case ai.SystemPromptPart:
 			out = append(out, chatMessage{Role: "system", Content: p.Content})
 		case ai.UserPromptPart:
@@ -734,10 +736,12 @@ func (model *Model) convertRequest(
 	return out, nil
 }
 
-func (model *Model) convertResponse(m ai.ModelResponse) []chatMessage {
+func (model *Model) convertResponse(m ai.ModelResponse) ([]chatMessage, error) {
 	msg := chatMessage{Role: "assistant"}
 	for _, part := range m.Parts {
 		switch p := part.(type) {
+		case ai.SpeechPart:
+			return nil, ai.ErrUnpreparedSpeech
 		case ai.TextPart:
 			msg.Content = p.Content
 		case ai.ThinkingPart:
@@ -763,7 +767,7 @@ func (model *Model) convertResponse(m ai.ModelResponse) []chatMessage {
 			})
 		}
 	}
-	return []chatMessage{msg}
+	return []chatMessage{msg}, nil
 }
 
 func convertTool(def ai.ToolDefinition, supportsStrict bool) (chatTool, error) {

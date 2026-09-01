@@ -1196,6 +1196,8 @@ func convertRequest(
 	searchReveals := make(map[string]struct{})
 	for _, part := range m.Parts {
 		switch p := part.(type) {
+		case ai.SpeechPart:
+			return nil, ai.ErrUnpreparedSpeech
 		case ai.SystemPromptPart:
 			// Anthropic takes the system prompt at the top level; a
 			// system part in history becomes user-visible context.
@@ -1318,6 +1320,8 @@ func convertResponse(
 	var blocks []contentBlock
 	for _, part := range m.Parts {
 		switch p := part.(type) {
+		case ai.SpeechPart:
+			return nil, ai.ErrUnpreparedSpeech
 		case ai.TextPart:
 			blocks = append(blocks, contentBlock{Type: "text", Text: p.Content})
 		case ai.CompactionPart:

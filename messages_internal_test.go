@@ -12,6 +12,7 @@ func TestKindMarkers(t *testing.T) {
 		part RequestPart
 		want string
 	}{
+		{SpeechPart{}, "speech"},
 		{SystemPromptPart{}, "system-prompt"},
 		{UserPromptPart{}, "user-prompt"},
 		{ToolReturnPart{}, "tool-return"},
@@ -23,11 +24,15 @@ func TestKindMarkers(t *testing.T) {
 			t.Fatalf("expected %q, got %q", tc.want, tc.part.requestPartKind())
 		}
 	}
+	if (SpeechPart{}).enqueueItemKind() != "request-part" {
+		t.Fatal("unexpected speech enqueue kind")
+	}
 	responseKinds := []struct {
 		part ResponsePart
 		want string
 	}{
 		{TextPart{}, "text"},
+		{SpeechPart{}, "speech"},
 		{FilePart{}, "file"},
 		{ToolCallPart{}, "tool-call"},
 		{NativeToolCallPart{}, "builtin-tool-call"},
@@ -48,6 +53,7 @@ func TestStreamEventKinds(t *testing.T) {
 		want  string
 	}{
 		{TextDeltaEvent{}, "text-delta"},
+		{SpeechDeltaEvent{}, "speech-delta"},
 		{ThinkingDeltaEvent{}, "thinking-delta"},
 		{CompactionEvent{}, "compaction"},
 		{ToolCallStartEvent{}, "tool-call-start"},
@@ -85,6 +91,7 @@ func TestStreamEventKinds(t *testing.T) {
 		want  ResponsePartKind
 	}{
 		{TextPartDelta{}, ResponsePartKindText},
+		{SpeechPartDelta{}, ResponsePartKindSpeech},
 		{ThinkingPartDelta{}, ResponsePartKindThinking},
 		{FilePartDelta{}, ResponsePartKindFile},
 		{ToolCallPartDelta{}, ResponsePartKindToolCall},

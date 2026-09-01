@@ -796,6 +796,8 @@ func (model *Model) convertRequest(ctx context.Context, m ai.ModelRequest) ([]co
 	var parts []part
 	for _, p := range m.Parts {
 		switch rp := p.(type) {
+		case ai.SpeechPart:
+			return nil, ai.ErrUnpreparedSpeech
 		case ai.SystemPromptPart:
 			parts = append(parts, part{Text: rp.Content})
 		case ai.UserPromptPart:
@@ -835,6 +837,8 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 	var parts []part
 	for _, p := range m.Parts {
 		switch rp := p.(type) {
+		case ai.SpeechPart:
+			return nil, ai.ErrUnpreparedSpeech
 		case ai.TextPart:
 			parts = append(parts, part{Text: rp.Content, ThoughtSignature: model.googleThoughtSignature(
 				rp.ProviderName, rp.ProviderDetails,

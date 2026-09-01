@@ -89,6 +89,9 @@ func NewFallbackModel(primary Model, options ...FallbackModelOption) *FallbackMo
 // DispatchesOutputProfile reports that each fallback candidate resolves OutputModeAuto independently.
 func (*FallbackModel) DispatchesOutputProfile() bool { return true }
 
+// DispatchesMessageProfile reports that each fallback candidate prepares message history independently.
+func (*FallbackModel) DispatchesMessageProfile() bool { return true }
+
 // Name identifies the ordered fallback chain.
 func (fallback *FallbackModel) Name() string {
 	names := make([]string, len(fallback.models))

@@ -9,8 +9,10 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
+	"time"
 )
 
 type failingReader struct{}
@@ -67,7 +69,8 @@ func TestFetchDownloadsValidatedResponses(t *testing.T) {
 	t.Cleanup(server.Close)
 
 	result, err := Fetch(t.Context(), strings.Replace(server.URL, "127.0.0.1", "localhost", 1)+"/redirect", true)
-	if err != nil || string(result.Data) != "video" || result.MediaType != "video/mp4" {
+	if err != nil || string(result.Data) != "video" || result.MediaType != "video/mp4" ||
+		result.ContentType != "video/mp4; charset=binary" || !strings.HasSuffix(result.URL, "/gzip") {
 		t.Fatalf("unexpected download result=%+v err=%v", result, err)
 	}
 	result, err = Fetch(t.Context(), strings.Replace(server.URL, "http://", "HTTP://", 1)+"/octet", true)
@@ -124,11 +127,153 @@ func TestFetchRejectsUnsafeURLs(t *testing.T) {
 	}
 }
 
+func TestFetchWithOptions(t *testing.T) {
+	var secondURL string
+	second := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Header.Get("Authorization") != "" || request.Header.Get("Cookie") != "" ||
+			request.Header.Get("Proxy-Authorization") != "" {
+			t.Error("sensitive headers crossed origins")
+		}
+		writer.Header().Set("Content-Type", "text/plain")
+		_, _ = writer.Write([]byte("second"))
+	}))
+	t.Cleanup(second.Close)
+	secondURL = strings.Replace(second.URL, "127.0.0.1", "localhost", 1)
+	first := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		switch request.URL.Path {
+		case "/redirect":
+			if request.Header.Get("X-Test") != "configured" || request.Header.Get("Authorization") != "secret" {
+				t.Error("configured headers were not sent to the initial origin")
+			}
+			http.Redirect(writer, request, secondURL, http.StatusFound)
+		case "/same":
+			http.Redirect(writer, request, "/same-target", http.StatusFound)
+		case "/same-target":
+			if request.Header.Get("Authorization") != "secret" {
+				t.Error("sensitive header was removed on a same-origin redirect")
+			}
+			_, _ = writer.Write([]byte("same"))
+		case "/octet":
+			writer.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = writer.Write([]byte("binary"))
+		case "/large":
+			_, _ = writer.Write([]byte("12345"))
+		case "/gzip-large":
+			writer.Header().Set("Content-Encoding", "gzip")
+			compressed := gzip.NewWriter(writer)
+			_, _ = compressed.Write([]byte("12345"))
+			_ = compressed.Close()
+		case "/slow":
+			time.Sleep(50 * time.Millisecond)
+			_, _ = writer.Write([]byte("late"))
+		}
+	}))
+	t.Cleanup(first.Close)
+
+	options := Options{
+		AllowLocal: true, Timeout: time.Second, MaxBytes: 1024,
+		Headers: map[string]string{
+			"X-Test": "configured", "Authorization": "secret", "Cookie": "configured=1",
+			"Proxy-Authorization": "proxy-secret",
+		},
+		AllowedDomains: []string{"127.0.0.1.", " LOCALHOST "},
+	}
+	result, err := FetchWithOptions(t.Context(), first.URL+"/redirect", options)
+	if err != nil || string(result.Data) != "second" || !strings.HasPrefix(result.URL, "http://localhost:") {
+		t.Fatalf("unexpected redirected result=%+v err=%v", result, err)
+	}
+	result, err = FetchWithOptions(t.Context(), first.URL+"/same", options)
+	if err != nil || string(result.Data) != "same" {
+		t.Fatalf("unexpected same-origin result=%+v err=%v", result, err)
+	}
+	preserveOctet := options
+	preserveOctet.PreserveOctetStream = true
+	result, err = FetchWithOptions(t.Context(), first.URL+"/octet", preserveOctet)
+	if err != nil || result.MediaType != "application/octet-stream" {
+		t.Fatalf("unexpected octet-stream result=%+v err=%v", result, err)
+	}
+	for path := range map[string]struct{}{"/large": {}, "/gzip-large": {}} {
+		limited := options
+		limited.MaxBytes = 4
+		if _, err := FetchWithOptions(t.Context(), first.URL+path, limited); err == nil ||
+			!strings.Contains(err.Error(), "exceeds 4 bytes") {
+			t.Fatalf("unexpected size error for %s: %v", path, err)
+		}
+	}
+	blocked := options
+	blocked.BlockedDomains = []string{"127.0.0.1"}
+	if _, err := FetchWithOptions(t.Context(), first.URL, blocked); err == nil ||
+		!strings.Contains(err.Error(), "is blocked") {
+		t.Fatalf("unexpected blocked-domain error: %v", err)
+	}
+	disallowed := options
+	disallowed.AllowedDomains = []string{"example.com"}
+	if _, err := FetchWithOptions(t.Context(), first.URL, disallowed); err == nil ||
+		!strings.Contains(err.Error(), "is not allowed") {
+		t.Fatalf("unexpected allowed-domain error: %v", err)
+	}
+	disallowedRedirect := options
+	disallowedRedirect.AllowedDomains = []string{"127.0.0.1"}
+	if _, err := FetchWithOptions(t.Context(), first.URL+"/redirect", disallowedRedirect); err == nil ||
+		!strings.Contains(err.Error(), "is not allowed") {
+		t.Fatalf("unexpected redirect-domain error: %v", err)
+	}
+	timed := options
+	timed.Timeout = time.Millisecond
+	if _, err := FetchWithOptions(t.Context(), first.URL+"/slow", timed); err == nil ||
+		!strings.Contains(err.Error(), "Client.Timeout") {
+		t.Fatalf("unexpected timeout error: %v", err)
+	}
+	for name, test := range map[string]struct {
+		options  Options
+		contains string
+	}{
+		"timeout":  {Options{Timeout: -1}, "must not be negative"},
+		"maximum":  {Options{MaxBytes: -1}, "must not be negative"},
+		"overflow": {Options{MaxBytes: 1<<63 - 1}, "too large"},
+	} {
+		if _, err := FetchWithOptions(t.Context(), first.URL, test.options); err == nil ||
+			!strings.Contains(err.Error(), test.contains) {
+			t.Fatalf("%s validation error: %v", name, err)
+		}
+	}
+}
+
+func TestSensitiveHeaderOrigins(t *testing.T) {
+	parse := func(rawURL string) *url.URL {
+		parsed, err := url.Parse(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parsed
+	}
+	for name, test := range map[string]struct {
+		previous string
+		next     string
+		allowed  bool
+	}{
+		"same origin":         {"https://example.com/a", "https://example.com/b", true},
+		"different host":      {"https://example.com", "https://other.example.com", false},
+		"different port":      {"https://example.com", "https://example.com:8443", false},
+		"HTTPS downgrade":     {"https://example.com", "http://example.com", false},
+		"HTTPS upgrade":       {"http://example.com", "https://example.com", true},
+		"nonstandard upgrade": {"http://example.com:8080", "https://example.com", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := mayForwardSensitiveHeaders(parse(test.previous), parse(test.next)); got != test.allowed {
+				t.Fatalf("mayForwardSensitiveHeaders()=%t, want %t", got, test.allowed)
+			}
+		})
+	}
+}
+
 func TestReadLimitedErrors(t *testing.T) {
-	if _, err := readLimited(failingReader{}); err == nil || !strings.Contains(err.Error(), "read failed") {
+	if _, err := readLimited(failingReader{}, maxResponseBytes); err == nil ||
+		!strings.Contains(err.Error(), "read failed") {
 		t.Fatalf("unexpected read error: %v", err)
 	}
-	if _, err := readLimited(io.LimitReader(bytes.NewReader(make([]byte, maxResponseBytes+1)), maxResponseBytes+1)); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if _, err := readLimited(bytes.NewReader(make([]byte, maxResponseBytes+1)), maxResponseBytes); err == nil ||
+		!strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("unexpected size error: %v", err)
 	}
 }

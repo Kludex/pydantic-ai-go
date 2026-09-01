@@ -258,12 +258,14 @@ import (
 func main() {
 	agent := ai.NewAgent[struct{}, string](
 		anthropic.NewModel("claude-sonnet-4-6"),
-		ai.WithNativeTools(ai.WebFetchTool{
-			AllowedDomains:   []string{"go.dev"},
-			MaxUses:          3,
-			MaxContentTokens: 4096,
-			EnableCitations:  true,
-		}),
+		ai.WithCapabilities(ai.NewWebFetchCapabilityWithLocal[struct{}](
+			ai.WebFetchTool{
+				AllowedDomains:   []string{"go.dev"},
+				MaxContentTokens: 4096,
+				EnableCitations:  true,
+			},
+			ai.LocalWebFetchConfig{},
+		)),
 	)
 
 	result, err := agent.Run(context.Background(), "Summarize https://go.dev/doc/go1.25", struct{}{})
@@ -276,7 +278,13 @@ func main() {
 
 `WebFetchTool` lets Anthropic or Gemini retrieve URL content. Anthropic sends domain filters, maximum uses, content limits, and citation configuration. Gemini renders the portable tool as `urlContext` and leaves unsupported settings out.
 
-Use `NewWebFetchCapability` to pair this declaration with a local toolset. `AllowedDomains` and `BlockedDomains` can be enforced by the local implementation. `MaxUses` requires native support, so the focused capability suppresses the local path when it is set. A nil local toolset also requires native support.
+`NewWebFetchCapabilityWithLocal` adds the built-in local fallback shown above. It validates each URL and redirect, resolves every destination before dialing, blocks private and cloud-metadata addresses, limits compressed and decompressed bodies, converts HTML to Markdown, formats JSON, and returns other media as binary model content. Native domain filters override the local config so both paths enforce the same boundary.
+
+The zero-value local config uses a 30-second timeout, a 50 MiB download limit, and a 50,000-character model-content limit. Set `DisableContentLimit` to retain all downloaded text without removing the download limit.
+
+Set `LocalWebFetchConfig.AllowLocalURLs` only for trusted local services. Cloud metadata remains blocked. Custom headers may contain credentials, so restrict them with `AllowedDomains`. Sensitive headers survive same-origin redirects and same-host HTTP-to-HTTPS upgrades only.
+
+Use `NewWebFetchCapability` to supply your own local toolset. `MaxUses` requires native support, so the focused capability suppresses every local path when it is set. A nil local toolset also requires native support.
 
 Provider responses use `ToolPartKindWebFetch`. Gemini reconstructs calls and returns from `urlContextMetadata` while retaining the complete metadata in `ModelResponse.ProviderDetails`. Anthropic preserves native result payloads and caller metadata.
 

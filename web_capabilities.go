@@ -38,6 +38,23 @@ func NewWebFetchCapability[Deps any](
 	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
 }
 
+// NewWebFetchCapabilityWithLocal adds the built-in SSRF-protected local fallback.
+// Native domain filters override matching local config fields so both paths enforce them.
+func NewWebFetchCapabilityWithLocal[Deps any](
+	native WebFetchTool, local LocalWebFetchConfig,
+) *NativeOrLocalTool[Deps] {
+	if native.AllowedDomains != nil {
+		local.AllowedDomains = append([]string(nil), native.AllowedDomains...)
+	}
+	if native.BlockedDomains != nil {
+		local.BlockedDomains = append([]string(nil), native.BlockedDomains...)
+	}
+	tool := NewLocalWebFetchTool[Deps](local)
+	return NewWebFetchCapability(WebFetchCapabilityConfig[Deps]{
+		Native: native, Local: NewFunctionToolset(tool),
+	})
+}
+
 func webSearchNativeRequirement(tool WebSearchTool) string {
 	requirements := make([]string, 0, 4)
 	if tool.BlockedDomains != nil {

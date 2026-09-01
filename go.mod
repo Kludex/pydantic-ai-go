@@ -3,6 +3,7 @@ module github.com/Kludex/pydantic-ai-go
 go 1.25.0
 
 require (
+	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/Kludex/pydantic-evals-go v0.1.1
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
@@ -13,12 +14,14 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/sdk/metric v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
+	golang.org/x/net v0.55.0
 	golang.org/x/oauth2 v0.35.0
 	gopkg.in/dnaeon/go-vcr.v4 v4.0.7
 )
 
 require (
 	cloud.google.com/go/compute/metadata v0.3.0 // indirect
+	github.com/JohannesKaufmann/dom v0.3.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect

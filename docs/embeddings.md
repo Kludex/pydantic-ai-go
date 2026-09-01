@@ -67,6 +67,39 @@ func main() {
 
 `EmbedQuery` and `EmbedDocument` accept one string. `EmbedQueries` and `EmbedDocuments` preserve batch order. `Result.At` and `Result.ForInput` return detached vectors.
 
+## Model names and temporary overrides
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Kludex/pydantic-ai-go/embeddings"
+	"github.com/Kludex/pydantic-ai-go/embeddings/fakes"
+	"github.com/Kludex/pydantic-ai-go/embeddings/infer"
+)
+
+func main() {
+	model, err := infer.Model("openai:text-embedding-3-small")
+	if err != nil {
+		log.Fatal(err)
+	}
+	embedder := embeddings.New(model)
+
+	ctx := embeddings.WithModel(context.Background(), fakes.NewModel())
+	_, err = embedder.EmbedQuery(ctx, "test without an API request")
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+`infer.Model` requires a provider prefix. It supports `openai`, `azure`, `cohere`, `google`, `google-cloud`, and `voyageai`. Use `infer.WithProvider` to register a custom resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
+
+`WithModel` scopes an override to one context tree. It does not mutate the reusable `Embedder`, so concurrent requests can select different models safely.
+
 ## Settings
 
 Pass defaults to `embeddings.New`. Pass one `embeddings.Settings` value to override them for one call.

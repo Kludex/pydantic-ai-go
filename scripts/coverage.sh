@@ -13,6 +13,7 @@ packages=(
     ./embeddings/cohere
     ./embeddings/fakes
     ./embeddings/google
+    ./embeddings/infer
     ./embeddings/openai
     ./embeddings/voyageai
     ./models/fakes

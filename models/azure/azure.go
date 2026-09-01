@@ -35,7 +35,7 @@ type Config struct {
 // Additional OpenAI options tune model behavior. Config always owns transport,
 // endpoint, authentication, provider identity, and deferred-tool support.
 func NewModel(deployment string, config Config, opts ...openai.Option) (*openai.Model, error) {
-	provider, err := providerConfig(deployment, config, false)
+	provider, err := NewProviderConfig(deployment, config)
 	if err != nil {
 		return nil, err
 	}
@@ -60,6 +60,11 @@ func NewResponsesModel(
 	}
 	opts = append(opts, openai.WithProvider(provider), openai.WithDeferredToolSupport(false))
 	return openai.NewResponsesModel(deployment, opts...), nil
+}
+
+// NewProviderConfig resolves reusable Azure OpenAI configuration for Chat Completions and embeddings.
+func NewProviderConfig(deployment string, config Config) (openai.ProviderConfig, error) {
+	return providerConfig(deployment, config, false)
 }
 
 func providerConfig(deployment string, config Config, responses bool) (openai.ProviderConfig, error) {

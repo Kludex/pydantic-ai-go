@@ -81,7 +81,7 @@ func (embedder *Embedder) Embed(
 	if err := merged.Validate(); err != nil {
 		return nil, err
 	}
-	result, err := embedder.model.Embed(ctx, slices.Clone(inputs), inputType, merged)
+	result, err := embedder.modelForContext(ctx).Embed(ctx, slices.Clone(inputs), inputType, merged)
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +98,7 @@ func (embedder *Embedder) Embed(
 
 // MaxInputTokens returns the selected model's known input limit.
 func (embedder *Embedder) MaxInputTokens(ctx context.Context) (int, bool, error) {
-	model, ok := modelCapability[MaxInputTokensModel](embedder.model)
+	model, ok := modelCapability[MaxInputTokensModel](embedder.modelForContext(ctx))
 	if !ok {
 		return 0, false, nil
 	}
@@ -107,7 +107,7 @@ func (embedder *Embedder) MaxInputTokens(ctx context.Context) (int, bool, error)
 
 // CountTokens counts input tokens when the selected model supports it.
 func (embedder *Embedder) CountTokens(ctx context.Context, text string) (int, error) {
-	model, ok := modelCapability[TokenCountingModel](embedder.model)
+	model, ok := modelCapability[TokenCountingModel](embedder.modelForContext(ctx))
 	if !ok {
 		return 0, ErrTokenCountingUnsupported
 	}

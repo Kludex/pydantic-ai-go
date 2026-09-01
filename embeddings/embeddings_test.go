@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -48,6 +49,17 @@ func (wrapper valueWrapper) UnwrapModel() Model { return wrapper.Model }
 type nilWrapper struct{ Model }
 
 func (nilWrapper) UnwrapModel() Model { return (*testModel)(nil) }
+
+type staticEmbeddingModel float64
+
+func (model staticEmbeddingModel) Embed(
+	_ context.Context, inputs []string, inputType InputType, _ Settings,
+) (*Result, error) {
+	return &Result{Embeddings: [][]float64{{float64(model)}}, Inputs: inputs, InputType: inputType}, nil
+}
+func (staticEmbeddingModel) Name() string         { return "static" }
+func (staticEmbeddingModel) ProviderName() string { return "test" }
+func (staticEmbeddingModel) ProviderURL() string  { return "" }
 
 func TestEmbedderOperationsAndDetachment(t *testing.T) {
 	dimensions := 2
@@ -255,6 +267,58 @@ func TestSettingsCloneAndMerge(t *testing.T) {
 	emptyResult := (Result{}).Clone()
 	if emptySettings.ExtraBody != nil || emptyResult.Embeddings != nil {
 		t.Fatal("nil clones should remain nil")
+	}
+}
+
+func TestContextModelOverride(t *testing.T) {
+	base := &capableModel{testModel: &testModel{result: &Result{Embeddings: [][]float64{{1}}}}}
+	override := &capableModel{testModel: &testModel{result: &Result{Embeddings: [][]float64{{2}}}}}
+	embedder := New(base)
+	ctx := WithModel(context.Background(), override)
+	result, err := embedder.EmbedQuery(ctx, "text")
+	if err != nil || result.Embeddings[0][0] != 2 || embedder.Model() != base {
+		t.Fatalf("unexpected override result: %#v %v", result, err)
+	}
+	if count, err := embedder.CountTokens(ctx, "text"); err != nil || count != 7 {
+		t.Fatalf("unexpected override token count: %d %v", count, err)
+	}
+	if maximum, known, err := embedder.MaxInputTokens(ctx); err != nil || !known || maximum != 42 {
+		t.Fatalf("unexpected override limit: %d %v %v", maximum, known, err)
+	}
+	if result, err := embedder.EmbedQuery(context.Background(), "text"); err != nil || result.Embeddings[0][0] != 1 {
+		t.Fatalf("base model was not restored: %#v %v", result, err)
+	}
+
+	for _, function := range []func(){
+		func() { WithModel(context.Background(), nil) },
+	} {
+		if panicValue := capturePanic(function); panicValue == nil {
+			t.Fatal("invalid override did not panic")
+		}
+	}
+	concurrent := New(staticEmbeddingModel(1))
+	var group sync.WaitGroup
+	failures := make(chan float64, 40)
+	for index := range 40 {
+		index := index
+		group.Go(func() {
+			selected := staticEmbeddingModel(float64(index + 2))
+			result, err := concurrent.EmbedQuery(WithModel(context.Background(), selected), "text")
+			if err != nil {
+				failures <- 0
+				return
+			}
+			failures <- result.Embeddings[0][0]
+		})
+	}
+	group.Wait()
+	close(failures)
+	seen := map[float64]bool{}
+	for value := range failures {
+		seen[value] = true
+	}
+	if len(seen) != 40 {
+		t.Fatalf("concurrent overrides crossed requests: %#v", seen)
 	}
 }
 

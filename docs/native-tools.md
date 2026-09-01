@@ -76,24 +76,13 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
-type SearchArgs struct {
-	Query string `json:"query"`
-}
-
 func main() {
-	localSearch := ai.NewSimpleTool[struct{}](
-		"local_search",
-		func(_ context.Context, args SearchArgs) (string, error) {
-			return "Local search result for: " + args.Query, nil
-		},
-	)
-
 	agent := ai.NewAgent[struct{}, string](
 		openai.NewModel("gpt-5"),
-		ai.WithCapabilities(ai.NewWebSearchCapability(ai.WebSearchCapabilityConfig[struct{}]{
-			Native: ai.WebSearchTool{},
-			Local:  ai.NewFunctionToolset(localSearch),
-		})),
+		ai.WithCapabilities(ai.NewWebSearchCapabilityWithDuckDuckGo[struct{}](
+			ai.WebSearchTool{},
+			ai.LocalWebSearchConfig{MaxResults: 5},
+		)),
 	)
 	result, err := agent.Run(context.Background(), "Search for the Go release notes", struct{}{})
 	if err != nil {
@@ -103,7 +92,11 @@ func main() {
 }
 ```
 
-`NewWebSearchCapability` registers both paths atomically. Built-in provider models receive exactly one implementation. A nil `Local` field requires native support.
+`NewWebSearchCapabilityWithDuckDuckGo` uses provider-native search when available. Otherwise, it runs the local `duckduckgo_search` function tool. `MaxResults` limits results from DuckDuckGo's first response. Zero keeps the complete first page.
+
+The zero config uses a 30-second timeout. You can pass a concurrency-safe, caller-owned `HTTPClient` or a trusted compatible `Endpoint`.
+
+Use `NewWebSearchCapability` when you provide your own local toolset. It registers both paths atomically. Built-in provider models receive exactly one implementation. A nil `Local` field requires native support.
 
 The focused capability classifies `AllowedDomains`, `BlockedDomains`, `MaxUses`, and a false `ExternalWebAccess` value as native-only constraints. It suppresses the local implementation rather than silently ignoring one of those fields. Context size and user location may fall back locally because they only tune native results.
 

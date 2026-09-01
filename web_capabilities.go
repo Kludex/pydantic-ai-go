@@ -20,6 +20,16 @@ func NewWebSearchCapability[Deps any](
 	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
 }
 
+// NewWebSearchCapabilityWithDuckDuckGo adds the built-in DuckDuckGo local fallback.
+func NewWebSearchCapabilityWithDuckDuckGo[Deps any](
+	native WebSearchTool, local LocalWebSearchConfig,
+) *NativeOrLocalTool[Deps] {
+	tool := NewLocalWebSearchTool[Deps](local)
+	return NewWebSearchCapability(WebSearchCapabilityConfig[Deps]{
+		Native: native, Local: NewFunctionToolset(tool),
+	})
+}
+
 // WebFetchCapabilityConfig configures native URL fetching and an optional local fallback.
 type WebFetchCapabilityConfig[Deps any] struct {
 	Native WebFetchTool

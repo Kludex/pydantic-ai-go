@@ -17,6 +17,8 @@ const (
 	OutputHookModeNative OutputHookMode = "native"
 	// OutputHookModePrompted identifies structured text requested through instructions.
 	OutputHookModePrompted OutputHookMode = "prompted"
+	// OutputHookModeImage identifies an image file returned as final output.
+	OutputHookModeImage OutputHookMode = "image"
 )
 
 // OutputHookContext describes one final or partial output candidate.
@@ -27,6 +29,7 @@ type OutputHookContext struct {
 	ToolCall       *ToolCallPart
 	ToolDefinition *ToolDefinition
 	AllowsText     bool
+	AllowsImage    bool
 	Structured     bool
 	Partial        bool
 	HasFunction    bool

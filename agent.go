@@ -42,6 +42,7 @@ type Agent[Deps, Output any] struct {
 	outputFunctionName string
 	outputInputType    reflect.Type
 	outputAllowsText   bool
+	outputAllowsImage  bool
 	outputOverrideErr  error
 	promptedTemplate   string
 	outputToolPrepare  []OutputToolPrepareFunc[Deps]

@@ -265,7 +265,9 @@ type ModelRequestParams struct {
 	OutputPrompt string
 	// AllowText reports whether plain text is an acceptable final output.
 	AllowText bool
-	Settings  ModelSettings
+	// AllowImageOutput reports whether an image file is an acceptable final output.
+	AllowImageOutput bool
+	Settings         ModelSettings
 
 	nativeToolPreferencesResolved bool
 	nativeToolSupportRequired     bool

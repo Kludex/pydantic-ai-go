@@ -938,9 +938,7 @@ func cloneUserContents(contents []UserContent) []UserContent {
 			content.Metadata = cloneSchemaValue(content.Metadata)
 			cloned[index] = content
 		case BinaryContent:
-			content.Data = slices.Clone(content.Data)
-			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
-			cloned[index] = content
+			cloned[index] = cloneBinaryContent(content)
 		case ImageURL:
 			content.VendorMetadata = cloneSchemaMap(content.VendorMetadata)
 			cloned[index] = content
@@ -1924,10 +1922,16 @@ func (r *run[Deps, Output]) prepareOutputParams(
 func resolveModelOutputParams(
 	model Model, params ModelRequestParams, outputTool OutputToolConfig, promptedTemplate string,
 ) (ModelRequestParams, error) {
+	profile := modelProfile(model)
+	if params.AllowImageOutput {
+		dispatcher, dispatches := model.(ModelOutputProfileDispatcher)
+		if (!dispatches || !dispatcher.DispatchesOutputProfile()) && !profile.SupportsImageOutput {
+			return ModelRequestParams{}, fmt.Errorf("ai: image output is not supported by model %q", modelName(model))
+		}
+	}
 	if params.OutputSchema == nil && params.OutputTool == nil {
 		return normalizeModelInstructionParams(params), nil
 	}
-	profile := modelProfile(model)
 	mode := params.OutputMode
 	if mode == OutputModeAuto {
 		if dispatcher, ok := model.(ModelOutputProfileDispatcher); ok && dispatcher.DispatchesOutputProfile() {
@@ -2363,6 +2367,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 				return nil, err
 			}
 			if resp != nil {
+				resp = cloneModelResponse(resp)
 				fillResponseCost(ctx, resp)
 				r.usage.Add(resp.Usage)
 				r.publishUsage(nil)
@@ -2380,6 +2385,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			}
 			return nil, &UnexpectedModelBehaviorError{Message: "model request returned no response"}
 		}
+		resp = cloneModelResponse(resp)
 		fillResponseCost(ctx, resp)
 		r.usage.Add(resp.Usage)
 		r.publishUsage(nil)
@@ -2420,7 +2426,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			}
 		}
 		if len(calls) == 0 {
-			result, retry, err := r.finalizeText(ctx, resp)
+			result, retry, err := r.finalizeResponse(ctx, resp)
 			if err != nil {
 				return nil, err
 			}
@@ -2436,7 +2442,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return result, nil
 		}
 
-		if output, ok, err := r.earlyNativeOutput(ctx, resp); err != nil {
+		if output, ok, err := r.earlyNonToolOutput(ctx, resp); err != nil {
 			return nil, err
 		} else if ok {
 			if !r.emitToolCallEvents(calls) {
@@ -2500,10 +2506,26 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 	}
 }
 
-func (r *run[Deps, Output]) earlyNativeOutput(
+func (r *run[Deps, Output]) earlyNonToolOutput(
 	ctx context.Context, resp *ModelResponse,
 ) (*Output, bool, error) {
-	if r.agent.endStrategy != EndStrategyEarly || r.params.OutputSchema == nil || resp.Text() == "" {
+	if r.agent.endStrategy != EndStrategyEarly {
+		return nil, false, nil
+	}
+	if r.params.AllowImageOutput {
+		if image, ok := responseImage(resp); ok {
+			out, err := r.processImageOutput(ctx, image)
+			var retry *RetryError
+			if errors.As(err, &retry) {
+				return nil, false, nil
+			}
+			if err != nil {
+				return nil, false, err
+			}
+			return &out, true, nil
+		}
+	}
+	if r.params.OutputSchema == nil || resp.Text() == "" {
 		return nil, false, nil
 	}
 	out, err := r.validateAndProcessOutput(
@@ -3268,6 +3290,14 @@ func (r *run[Deps, Output]) normalizeSuccessfulToolReturn(
 		}
 	} else if _, ok := content.(*ToolReturn); ok {
 		returnValue = nil
+	} else if binary, ok := content.(BinaryContent); ok {
+		binary = cloneBinaryContent(binary)
+		returnValue = binary
+		extraParts = append(extraParts, UserPromptPart{Contents: []UserContent{cloneBinaryContent(binary)}})
+	} else if binary, ok := content.(*BinaryContent); ok && binary != nil {
+		cloned := cloneBinaryContent(*binary)
+		returnValue = cloned
+		extraParts = append(extraParts, UserPromptPart{Contents: []UserContent{cloneBinaryContent(cloned)}})
 	}
 	return ToolReturnPart{
 		ToolName: call.ToolName, Content: returnValue, ToolCallID: call.ToolCallID, ToolKind: call.ToolKind,
@@ -3337,6 +3367,64 @@ func (r *run[Deps, Output]) finalizeOutputCall(ctx context.Context, call ToolCal
 		ToolName: call.ToolName, Content: finalResultProcessed, ToolCallID: call.ToolCallID,
 		ToolKind: call.ToolKind, Outcome: ToolReturnOutcomeSuccess,
 	}, &out, nil
+}
+
+func (r *run[Deps, Output]) finalizeResponse(
+	ctx context.Context, resp *ModelResponse,
+) (*RunResult[Output], *RetryPromptPart, error) {
+	if r.params.AllowImageOutput {
+		if image, ok := responseImage(resp); ok {
+			output, err := r.processImageOutput(ctx, image)
+			var retry *RetryError
+			if errors.As(err, &retry) {
+				if retryErr := r.countOutputRetry(); retryErr != nil {
+					return nil, nil, retryErr
+				}
+				return nil, &RetryPromptPart{Content: retry.Message}, nil
+			}
+			if err != nil {
+				return nil, nil, err
+			}
+			return r.result(output), nil, nil
+		}
+		if !r.params.AllowText {
+			if err := r.countOutputRetry(); err != nil {
+				return nil, nil, err
+			}
+			return nil, &RetryPromptPart{Content: "Please return an image."}, nil
+		}
+	}
+	return r.finalizeText(ctx, resp)
+}
+
+func (r *run[Deps, Output]) processImageOutput(ctx context.Context, image BinaryContent) (Output, error) {
+	hookContext := r.outputHookContext(nil, false, false)
+	hookContext.Mode = OutputHookModeImage
+	output, err := r.validateAndProcessOutput(
+		ctx, r.outputRunContext(""), hookContext, cloneBinaryContent(image),
+		func(any) (decodedOutput, error) {
+			return decodedOutput{value: cloneBinaryContent(image)}, nil
+		},
+	)
+	if err != nil {
+		return output, err
+	}
+	content := any(output).(BinaryContent)
+	if !strings.HasPrefix(strings.ToLower(content.MediaType), "image/") {
+		var zero Output
+		return zero, fmt.Errorf("ai: processed image output must have an image media type")
+	}
+	return any(cloneBinaryContent(content)).(Output), nil
+}
+
+func responseImage(response *ModelResponse) (BinaryContent, bool) {
+	for _, part := range response.Parts {
+		file, ok := part.(FilePart)
+		if ok && strings.HasPrefix(strings.ToLower(file.Content.MediaType), "image/") {
+			return cloneBinaryContent(file.Content), true
+		}
+	}
+	return BinaryContent{}, false
 }
 
 // finalizeText handles a response with no tool calls. String outputs take
@@ -3826,6 +3914,11 @@ func (a *Agent[Deps, Output]) buildParams(
 		_, isString := any(out).(string)
 		if isString || a.outputAllowsText {
 			params.AllowText = true
+		}
+		if a.outputAllowsImage {
+			params.AllowImageOutput = true
+		}
+		if params.AllowText || params.AllowImageOutput {
 			return params, nil
 		}
 		var err error

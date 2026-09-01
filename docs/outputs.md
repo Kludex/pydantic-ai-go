@@ -1,4 +1,4 @@
-# Structured output
+# Output
 
 Use a Go struct when your agent has one result shape:
 
@@ -191,6 +191,45 @@ func main() {
 ```
 
 The function name is used in telemetry. It does not register a model-facing tool. The callback receives partial text when you consume `StreamedRun.Outputs`.
+
+## Image output
+
+Use `NewImageOutputAgent` when the generated image itself is the result:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	agent := ai.NewImageOutputAgent[struct{}](
+		openai.NewResponsesModel("gpt-5.4"),
+		ai.WithCapabilities(ai.NewImageGenerationCapability(
+			ai.ImageGenerationCapabilityConfig[struct{}]{
+				Native: ai.ImageGenerationTool{Quality: ai.ImageGenerationQualityHigh},
+			},
+		)),
+	)
+	result, err := agent.Run(context.Background(), "Paint a watercolor Go gopher.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Printf("%s: %d bytes\n", result.Output.MediaType, len(result.Output.Data))
+}
+```
+
+The agent returns the first `FilePart` whose media type starts with `image/`. The `BinaryContent` result is detached from message history. A response without an image requests another model response and consumes the output retry budget.
+
+Image output uses output-processing hooks and validators, but skips JSON validation hooks because there is nothing to decode. `OutputHookContext.Mode` is `OutputHookModeImage`. With `EndStrategyEarly`, an image skips ordinary function calls emitted in the same response. Graceful and exhaustive strategies finish those calls first.
+
+The selected model must set `ModelProfile.SupportsImageOutput`. OpenAI Responses and supported Google image models provide this profile automatically. Custom models can use `NewProfiledModel`.
 
 ## Output modes
 

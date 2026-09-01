@@ -24,6 +24,9 @@ func TestModelRejectsUnpreparedSpeech(t *testing.T) {
 
 func TestNativeToolSupport(t *testing.T) {
 	model := google.NewModel("gemini-3-pro")
+	if profile := model.ModelProfile(); profile.SupportsImageOutput || profile.DefaultOutputMode != ai.OutputModeTool {
+		t.Fatalf("unexpected text model profile: %#v", profile)
+	}
 	if !model.SupportsNativeTool(ai.WebSearchTool{}) || !model.SupportsNativeTool(ai.FileSearchTool{
 		FileStoreIDs: []string{"store"},
 	}) || model.SupportsNativeTool(ai.ImageGenerationTool{}) || model.SupportsNativeTool(ai.MemoryTool{}) ||
@@ -31,6 +34,9 @@ func TestNativeToolSupport(t *testing.T) {
 		t.Fatal("unexpected Google native-tool support")
 	}
 	image := google.NewModel("gemini-3-pro-image-preview")
+	if profile := image.ModelProfile(); !profile.SupportsImageOutput || profile.DefaultOutputMode != ai.OutputModeTool {
+		t.Fatalf("unexpected image model profile: %#v", profile)
+	}
 	if !image.SupportsNativeTool(ai.ImageGenerationTool{}) {
 		t.Fatal("image model did not report image-generation support")
 	}

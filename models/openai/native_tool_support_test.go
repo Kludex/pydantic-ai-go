@@ -42,6 +42,10 @@ func TestNativeToolSupport(t *testing.T) {
 	}
 
 	responses := openai.NewResponsesModel("gpt-5")
+	if profile := responses.ModelProfile(); !profile.SupportsImageOutput ||
+		profile.DefaultOutputMode != ai.OutputModeTool {
+		t.Fatalf("unexpected Responses profile: %#v", profile)
+	}
 	if !responses.SupportsNativeTool(ai.WebSearchTool{}) || !responses.SupportsNativeTool(ai.MCPServerTool{
 		ID: "server", URL: "https://example.com/mcp",
 	}) || responses.SupportsNativeTool(ai.MemoryTool{}) || responses.SupportsNativeTool((*ai.WebSearchTool)(nil)) {

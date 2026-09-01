@@ -91,6 +91,11 @@ func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	}
 }
 
+// ModelProfile reports support for generated image output.
+func (m *Model) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, SupportsImageOutput: supportsImageOutput(m.name)}
+}
+
 // Transport returns the configured Gemini Developer API or Vertex AI route.
 func (m *Model) Transport() Transport { return m.transport }
 

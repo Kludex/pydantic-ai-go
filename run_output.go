@@ -94,7 +94,7 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 	if len(agent.outputValidators) != 0 {
 		return nil, ErrOutputTypeOverrideWithValidators
 	}
-	if agent.outputDecoder != nil || agent.outputProcessor != nil {
+	if agent.outputDecoder != nil || agent.outputProcessor != nil || agent.outputAllowsImage {
 		return nil, agent.outputOverrideErr
 	}
 	tools := make([]toolEntry[Deps], len(agent.tools))

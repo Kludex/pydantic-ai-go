@@ -54,6 +54,12 @@ var ErrOutputTypeOverrideWithUnion = errors.New(
 	"ai: per-run output type cannot be used when the agent has union output",
 )
 
+// ErrOutputTypeOverrideWithImageOutput is returned when RunAs or RunStreamAs
+// would discard an agent's image-output contract.
+var ErrOutputTypeOverrideWithImageOutput = errors.New(
+	"ai: per-run output type cannot be used when the agent has image output",
+)
+
 // ModelAPIError identifies a provider API response error suitable for model fallback.
 type ModelAPIError interface {
 	error

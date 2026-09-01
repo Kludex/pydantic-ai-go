@@ -59,7 +59,8 @@ func (r *run[Deps, Output]) outputHookContext(
 	}
 	context := OutputHookContext{
 		Mode: mode, OutputType: outputType, Schema: r.params.OutputSchema,
-		AllowsText: r.params.AllowText, Structured: structured, Partial: partial,
+		AllowsText: r.params.AllowText, AllowsImage: r.params.AllowImageOutput,
+		Structured: structured, Partial: partial,
 		HasFunction: r.agent.outputHasFunction, FunctionName: r.agent.outputFunctionName,
 	}
 	if call != nil {

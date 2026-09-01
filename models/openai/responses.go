@@ -76,6 +76,11 @@ func (*ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
 	}
 }
 
+// ModelProfile reports support for provider-generated image output.
+func (*ResponsesModel) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, SupportsImageOutput: true}
+}
+
 // ProviderName returns the durable provider identity.
 func (m *ResponsesModel) ProviderName() string { return m.providerName }
 

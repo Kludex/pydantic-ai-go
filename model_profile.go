@@ -7,6 +7,8 @@ type ModelProfile struct {
 	DefaultOutputMode          OutputMode
 	PromptedOutputTemplate     string
 	NativeOutputRequiresPrompt bool
+	// SupportsImageOutput allows a FilePart with an image media type as final output.
+	SupportsImageOutput bool
 	// SupportsAudioInput allows retained SpeechPart audio to replace its transcript
 	// when realtime history is prepared for a standard model.
 	SupportsAudioInput bool

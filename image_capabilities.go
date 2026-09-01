@@ -20,6 +20,17 @@ func NewImageGenerationCapability[Deps any](
 	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
 }
 
+// NewImageGenerationCapabilityWithFallback creates native-first image generation
+// with a generate_image tool backed by an image-output subagent.
+func NewImageGenerationCapabilityWithFallback[Deps any](
+	config ImageGenerationSubagentConfig[Deps],
+) *NativeOrLocalTool[Deps] {
+	return NewImageGenerationCapability(ImageGenerationCapabilityConfig[Deps]{
+		Native: config.Native,
+		Local:  NewFunctionToolset(NewImageGenerationSubagentTool(config)),
+	})
+}
+
 // ImageGenerationFunc resolves native image-generation settings before a model request.
 // It may run concurrently and must not return shared mutable state.
 type ImageGenerationFunc[Deps any] func(

@@ -379,13 +379,17 @@ import (
 func main() {
 	agent := ai.NewAgent[struct{}, string](
 		openai.NewResponsesModel("gpt-5"),
-		ai.WithNativeTools(ai.MCPServerTool{
-			ID:                 "docs",
-			URL:                "https://example.com/mcp",
-			AuthorizationToken: os.Getenv("MCP_AUTH_TOKEN"),
-			Description:        "Search the product documentation.",
-			AllowedTools:       []string{"search"},
-		}),
+		ai.WithCapabilities(ai.NewMCPServerCapability(
+			ai.MCPServerCapabilityConfig[struct{}]{
+				Native: ai.MCPServerTool{
+					ID:                 "docs",
+					URL:                "https://example.com/mcp",
+					AuthorizationToken: os.Getenv("MCP_AUTH_TOKEN"),
+					Description:        "Search the product documentation.",
+					AllowedTools:       []string{"search"},
+				},
+			},
+		)),
 	)
 
 	result, err := agent.Run(context.Background(), "How do I rotate an API key?", struct{}{})
@@ -395,6 +399,8 @@ func main() {
 	fmt.Println(result.Output)
 }
 ```
+
+`NewMCPServerCapability` requires native support when `Local` is nil. You can pass an application-managed MCP toolset in `Local` to use it as a fallback. `AllowedTools` filters both paths, including an empty allowlist. Configure local transport credentials on that toolset separately.
 
 `MCPServerTool` delegates the connection and tool execution to the model provider. OpenAI Responses accepts remote URLs and `x-openai-connector:<connector-id>` references. Anthropic accepts remote URLs and advertises its required MCP beta automatically. Both normalize provider-owned calls as `NativeToolCallPart` and `NativeToolReturnPart` values and replay their provider IDs on later requests. OpenAI also exposes server discovery as a native lifecycle.
 

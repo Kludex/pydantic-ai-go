@@ -1,6 +1,10 @@
 package ai
 
-import "strings"
+import (
+	"context"
+	"fmt"
+	"strings"
+)
 
 // WebSearchCapabilityConfig configures native web search and an optional local fallback.
 type WebSearchCapabilityConfig[Deps any] struct {
@@ -18,6 +22,37 @@ func NewWebSearchCapability[Deps any](
 	}
 	options := nativeRequirementOption(reason)
 	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
+}
+
+// WebSearchFunc resolves native web-search settings before a model request.
+// It may run concurrently and must not return shared mutable state.
+type WebSearchFunc[Deps any] func(
+	ctx context.Context, rc *RunContext[Deps],
+) (WebSearchTool, error)
+
+// NewDynamicWebSearchCapability creates dependency-aware native-first web search.
+func NewDynamicWebSearchCapability[Deps any](
+	resolve WebSearchFunc[Deps], local Toolset[Deps], options ...NativeOrLocalOption,
+) *NativeOrLocalTool[Deps] {
+	if resolve == nil {
+		panic("ai: dynamic web-search resolver must not be nil")
+	}
+	options = nativeRequiredWithoutLocal(local, "no local web-search fallback was configured", options)
+	requiresNative := applyNativeOrLocalOptions(options).requiredReason != ""
+	return NewDynamicNativeOrLocalToolset(
+		"web_search",
+		func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error) {
+			tool, err := resolve(ctx, rc)
+			if err == nil && !requiresNative {
+				if reason := webSearchNativeRequirement(tool); reason != "" {
+					return nil, dynamicWebConstraintError("search", reason)
+				}
+			}
+			return tool, err
+		},
+		local,
+		options...,
+	)
 }
 
 // NewWebSearchCapabilityWithDuckDuckGo adds the built-in DuckDuckGo local fallback.
@@ -46,6 +81,37 @@ func NewWebFetchCapability[Deps any](
 	}
 	options := nativeRequirementOption(reason)
 	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
+}
+
+// WebFetchFunc resolves native web-fetch settings before a model request.
+// It may run concurrently and must not return shared mutable state.
+type WebFetchFunc[Deps any] func(
+	ctx context.Context, rc *RunContext[Deps],
+) (WebFetchTool, error)
+
+// NewDynamicWebFetchCapability creates dependency-aware native-first URL fetching.
+func NewDynamicWebFetchCapability[Deps any](
+	resolve WebFetchFunc[Deps], local Toolset[Deps], options ...NativeOrLocalOption,
+) *NativeOrLocalTool[Deps] {
+	if resolve == nil {
+		panic("ai: dynamic web-fetch resolver must not be nil")
+	}
+	options = nativeRequiredWithoutLocal(local, "no local web-fetch fallback was configured", options)
+	requiresNative := applyNativeOrLocalOptions(options).requiredReason != ""
+	return NewDynamicNativeOrLocalToolset(
+		"web_fetch",
+		func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error) {
+			tool, err := resolve(ctx, rc)
+			if err == nil && !requiresNative {
+				if reason := webFetchNativeRequirement(tool); reason != "" {
+					return nil, dynamicWebConstraintError("fetch", reason)
+				}
+			}
+			return tool, err
+		},
+		local,
+		options...,
+	)
 }
 
 // NewWebFetchCapabilityWithLocal adds the built-in SSRF-protected local fallback.
@@ -94,4 +160,21 @@ func nativeRequirementOption(reason string) []NativeOrLocalOption {
 		return nil
 	}
 	return []NativeOrLocalOption{WithNativeRequired(reason)}
+}
+
+func dynamicWebConstraintError(kind string, reason string) error {
+	return fmt.Errorf(
+		"ai: dynamic web-%s returned native-only constraint(s) %s with a local fallback; use WithNativeRequired",
+		kind, reason,
+	)
+}
+
+func nativeRequiredWithoutLocal[Deps any](
+	local Toolset[Deps], reason string, options []NativeOrLocalOption,
+) []NativeOrLocalOption {
+	if !toolsetIsNil(local) || applyNativeOrLocalOptions(options).requiredReason != "" {
+		return options
+	}
+	cloned := append([]NativeOrLocalOption(nil), options...)
+	return append(cloned, WithNativeRequired(reason))
 }

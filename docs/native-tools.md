@@ -204,16 +204,15 @@ func main() {
 			return "Local result for: " + args.Query, nil
 		},
 	)
-	search := ai.NewDynamicNativeOrLocalTool(
-		"web_search",
-		func(_ context.Context, runContext *ai.RunContext[Deps]) (ai.NativeTool, error) {
+	search := ai.NewDynamicWebSearchCapability(
+		func(_ context.Context, runContext *ai.RunContext[Deps]) (ai.WebSearchTool, error) {
 			return ai.WebSearchTool{
 				UserLocation: &ai.WebSearchUserLocation{
 					Country: runContext.Deps.Country,
 				},
 			}, nil
 		},
-		localSearch,
+		ai.NewFunctionToolset(localSearch),
 	)
 	agent := ai.NewAgent[Deps, string](
 		openai.NewResponsesModel("gpt-5"),
@@ -230,9 +229,11 @@ func main() {
 }
 ```
 
-`NewDynamicNativeOrLocalTool` runs its resolver once before every model request. The declared ID is durable and must match every returned native tool. This lets configuration follow dependencies without allowing the local marker to drift. The callback can run concurrently across agent runs and must return detached state.
+`NewDynamicWebSearchCapability` and `NewDynamicWebFetchCapability` run their typed resolver once before every model request. The stable native identity cannot drift. A callback can run concurrently across agent runs and must return detached state.
 
-Use `AddNativeToolFunc` or `WithRunNativeToolFunc` when there is no local fallback. Static tools remain in registration order with dynamic tools. Every resolved request is cloned and revalidated, including tools changed by model-request hooks.
+A dynamic resolver with a local path must not introduce a native-only constraint conditionally. The request fails instead of ignoring the constraint. Pass `WithNativeRequired("constraint")` when the resolver can return one. This suppresses the local path for every request.
+
+Use `NewDynamicNativeOrLocalTool` for other native tools. Use `AddNativeToolFunc` or `WithRunNativeToolFunc` when there is no local fallback. Static tools remain in registration order with dynamic tools. Every resolved request is cloned and revalidated, including tools changed by model-request hooks.
 
 ## Fetch URLs
 

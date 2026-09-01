@@ -311,7 +311,8 @@ func TestStreamScannerError(t *testing.T) {
 		_, _ = w.Write(make([]byte, 2*1024*1024))
 	})
 	_, err := collect(t, model, ai.ModelRequestParams{})
-	if err == nil {
-		t.Fatal("expected scanner error")
+	var transportError *ai.ModelTransportError
+	if !errors.As(err, &transportError) || transportError.Operation != "read stream" {
+		t.Fatalf("unexpected scanner error: %v", err)
 	}
 }

@@ -39,23 +39,23 @@ func (m *Model) StreamRequest(
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("google: request: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "request", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		data, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("google: read error response: %w", err)
+			return nil, ai.NewModelTransportError(ctx, m, "read error response", err)
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
 	return m.eventStream(
-		resp.Body, resp.Header.Get("x-gemini-service-tier"), hasGoogleFileSearch(params.NativeTools),
+		ctx, resp.Body, resp.Header.Get("x-gemini-service-tier"), hasGoogleFileSearch(params.NativeTools),
 	), nil
 }
 
 func (m *Model) eventStream(
-	body io.ReadCloser, serviceTier string, fileSearchEnabled bool,
+	ctx context.Context, body io.ReadCloser, serviceTier string, fileSearchEnabled bool,
 ) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
@@ -325,7 +325,7 @@ func (m *Model) eventStream(
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(nil, fmt.Errorf("google: read stream: %w", err))
+			yield(nil, ai.NewModelTransportError(ctx, m, "read stream", err))
 			return
 		}
 		for _, pending := range pendingFileSearchReturns {

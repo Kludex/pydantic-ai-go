@@ -464,8 +464,18 @@ func TestRequestTransportError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	server.Close()
 	model := openai.NewModel("gpt-5", openai.WithAPIKey("k"), openai.WithBaseURL(server.URL))
-	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
-		t.Fatal("expected transport error")
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+	var transportError *ai.ModelTransportError
+	if !errors.As(err, &transportError) || transportError.ModelName != "gpt-5" ||
+		transportError.ProviderName != "openai" || transportError.Operation != "request" {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_, err = model.Request(ctx, nil, ai.ModelRequestParams{AllowText: true})
+	var apiError ai.ModelAPIError
+	if !errors.Is(err, context.Canceled) || errors.As(err, &apiError) {
+		t.Fatalf("caller cancellation was misclassified: %v", err)
 	}
 }
 
@@ -496,8 +506,10 @@ func TestTruncatedResponseBody(t *testing.T) {
 		w.Header().Set("Content-Length", "1000")
 		_, _ = w.Write([]byte(`{"model"`))
 	})
-	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
-		t.Fatal("expected read error")
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+	var transportError *ai.ModelTransportError
+	if !errors.As(err, &transportError) || transportError.Operation != "read response" {
+		t.Fatalf("unexpected read error: %v", err)
 	}
 }
 

@@ -124,12 +124,12 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: request: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("openai: read response: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
@@ -181,12 +181,12 @@ func (m *ResponsesModel) CountTokens(
 	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return ai.Usage{}, fmt.Errorf("openai: token count request: %w", err)
+		return ai.Usage{}, ai.NewModelTransportError(ctx, m, "token count request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return ai.Usage{}, fmt.Errorf("openai: read token count response: %w", err)
+		return ai.Usage{}, ai.NewModelTransportError(ctx, m, "read token count response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return ai.Usage{}, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
@@ -223,12 +223,12 @@ func (m *ResponsesModel) CompactMessages(
 	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: compact request: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "compact request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("openai: read compaction response: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "read compaction response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
@@ -276,12 +276,12 @@ func (m *ResponsesModel) CancelSuspendedResponse(ctx context.Context, response a
 	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return fmt.Errorf("openai: cancel background response: %w", err)
+		return ai.NewModelTransportError(ctx, m, "cancel background response", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return fmt.Errorf("openai: read cancel response: %w", err)
+		return ai.NewModelTransportError(ctx, m, "read cancel response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
@@ -303,12 +303,12 @@ func (m *ResponsesModel) retrieveResponse(
 	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: retrieve background response: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "retrieve background response", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("openai: read response: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}

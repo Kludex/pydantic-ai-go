@@ -1281,8 +1281,11 @@ func TestErrors(t *testing.T) {
 		server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 		server.Close()
 		model := google.NewModel("m", google.WithBaseURL(server.URL))
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil {
-			t.Fatal("expected transport error")
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		var transportError *ai.ModelTransportError
+		if !errors.As(err, &transportError) || transportError.ModelName != "m" ||
+			transportError.ProviderName != "google" || transportError.Operation != "request" {
+			t.Fatalf("unexpected transport error: %v", err)
 		}
 	})
 	t.Run("invalid URL", func(t *testing.T) {

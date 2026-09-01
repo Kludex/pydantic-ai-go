@@ -349,6 +349,9 @@ func (fallback *FallbackModel) streamModel(
 }
 
 func (fallback *FallbackModel) shouldFallbackError(ctx context.Context, requestErr error) (bool, error) {
+	if ctx.Err() != nil {
+		return false, nil
+	}
 	for _, predicate := range fallback.errorPredicates {
 		fallbackNow, err := predicate(ctx, requestErr)
 		if err != nil {
@@ -364,6 +367,9 @@ func (fallback *FallbackModel) shouldFallbackError(ctx context.Context, requestE
 func (fallback *FallbackModel) shouldFallbackResponse(
 	ctx context.Context, response *ModelResponse,
 ) (bool, error) {
+	if ctx.Err() != nil {
+		return false, nil
+	}
 	for _, predicate := range fallback.responsePredicates {
 		fallbackNow, err := predicate(ctx, cloneModelResponse(response))
 		if err != nil {

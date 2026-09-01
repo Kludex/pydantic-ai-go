@@ -67,3 +67,57 @@ A custom streaming body needs its own `Request.GetBody` function. If a retry is 
 Set `Config.BeforeRetry` to inspect the completed `Attempt`. It contains the one-based attempt number, response when available, and error. The callback can run concurrently when one client serves concurrent agent runs.
 
 Transport retries are below the agent loop. They do not add model messages, consume tool or output retry budgets, or increment model request usage. The provider sees each HTTP attempt, while the model sees one logical request.
+
+## Report failures from a custom model
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+)
+
+type primaryModel struct{}
+
+func (primaryModel) Name() string { return "primary" }
+
+func (model primaryModel) Request(
+	ctx context.Context,
+	_ []ai.ModelMessage,
+	_ ai.ModelRequestParams,
+) (*ai.ModelResponse, error) {
+	return nil, ai.NewModelTransportError(ctx, model, "request", errors.New("connection refused"))
+}
+
+type backupModel struct{}
+
+func (backupModel) Name() string { return "backup" }
+
+func (backupModel) Request(
+	_ context.Context,
+	_ []ai.ModelMessage,
+	_ ai.ModelRequestParams,
+) (*ai.ModelResponse, error) {
+	return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "available"}}}, nil
+}
+
+func main() {
+	model := ai.NewFallbackModel(primaryModel{}, ai.WithFallbackModels(backupModel{}))
+	response, err := ai.RequestModel(context.Background(), model, nil, ai.ModelRequestParams{AllowText: true})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(response.Text())
+}
+```
+
+Return `NewModelTransportError` for connection, client-timeout, and response-read failures.
+
+The error implements `ModelAPIError`. The default fallback policy can try another model when a request fails before streaming starts.
+
+If the passed context is already canceled or expired, the function preserves the cause without classifying it as a provider failure.

@@ -303,12 +303,12 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: request: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("openai: read response: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}

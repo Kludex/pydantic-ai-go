@@ -62,17 +62,17 @@ func (m *ResponsesModel) StreamRequest(
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: request: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "request", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		data, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("openai: read error response: %w", err)
+			return nil, ai.NewModelTransportError(ctx, m, "read error response", err)
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	return m.responsesEventStream(resp.Body, nil, payload.IncludeRawAnnotations), nil
+	return m.responsesEventStream(ctx, resp.Body, nil, payload.IncludeRawAnnotations), nil
 }
 
 func (m *ResponsesModel) retrieveResponseStream(
@@ -92,17 +92,17 @@ func (m *ResponsesModel) retrieveResponseStream(
 	}
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: retrieve background response stream: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "retrieve background response stream", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		data, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("openai: read error response: %w", err)
+			return nil, ai.NewModelTransportError(ctx, m, "read error response", err)
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	return m.responsesEventStream(resp.Body, &ai.ResponseMetadataEvent{
+	return m.responsesEventStream(ctx, resp.Body, &ai.ResponseMetadataEvent{
 		ModelName: m.name, ProviderName: m.providerName, ProviderURL: m.baseURL,
 		ProviderResponseID: responseID,
 		ProviderDetails:    map[string]any{"background": true, "sequence_number": sequence},
@@ -148,7 +148,7 @@ type responsesStreamEvent struct {
 }
 
 func (m *ResponsesModel) responsesEventStream(
-	body io.ReadCloser, seed *ai.ResponseMetadataEvent, includeRawAnnotations bool,
+	ctx context.Context, body io.ReadCloser, seed *ai.ResponseMetadataEvent, includeRawAnnotations bool,
 ) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
@@ -694,7 +694,7 @@ func (m *ResponsesModel) responsesEventStream(
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(nil, fmt.Errorf("openai: read Responses stream: %w", err))
+			yield(nil, ai.NewModelTransportError(ctx, m, "read Responses stream", err))
 			return
 		}
 		if latest != nil {

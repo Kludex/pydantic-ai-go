@@ -39,17 +39,17 @@ func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, param
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("openai: request: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "request", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		data, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
-			return nil, fmt.Errorf("openai: read error response: %w", err)
+			return nil, ai.NewModelTransportError(ctx, m, "read error response", err)
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	return m.eventStream(resp.Body), nil
+	return m.eventStream(ctx, resp.Body), nil
 }
 
 type streamOptions struct {
@@ -90,7 +90,9 @@ type chatChunk struct {
 	Error *chatError `json:"error"`
 }
 
-func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, error] {
+func (m *Model) eventStream(
+	ctx context.Context, body io.ReadCloser,
+) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
 		var usage ai.Usage
@@ -269,7 +271,7 @@ func (m *Model) eventStream(body io.ReadCloser) iter.Seq2[ai.ModelStreamEvent, e
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			yield(nil, fmt.Errorf("openai: read stream: %w", err))
+			yield(nil, ai.NewModelTransportError(ctx, m, "read stream", err))
 			return
 		}
 		yield(nil, fmt.Errorf("openai: stream ended without [DONE]"))

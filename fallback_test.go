@@ -93,6 +93,42 @@ func TestFallbackModelUsesDefaultAPIPolicy(t *testing.T) {
 	}
 }
 
+func TestFallbackModelDoesNotAdvanceAfterCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	predicateCalls, backupCalls := 0, 0
+	fallback := ai.NewFallbackModel(
+		requestModel{name: "primary", request: func(
+			context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			return nil, &fallbackAPIError{message: "unavailable"}
+		}},
+		ai.WithFallbackModels(fallbackTextModel("backup", "unused", &backupCalls)),
+		ai.WithFallbackOnError(func(context.Context, error) (bool, error) {
+			predicateCalls++
+			return true, nil
+		}),
+	)
+	if _, err := fallback.Request(ctx, nil, ai.ModelRequestParams{}); err == nil ||
+		predicateCalls != 0 || backupCalls != 0 {
+		t.Fatalf("canceled request advanced fallback: predicates=%d backup=%d err=%v", predicateCalls, backupCalls, err)
+	}
+
+	fallback = ai.NewFallbackModel(
+		fallbackTextModel("primary", "completed", nil),
+		ai.WithFallbackModels(fallbackTextModel("backup", "unused", &backupCalls)),
+		ai.WithFallbackOnResponse(func(context.Context, *ai.ModelResponse) (bool, error) {
+			predicateCalls++
+			return true, nil
+		}),
+	)
+	response, err := fallback.Request(ctx, nil, ai.ModelRequestParams{})
+	if err != nil || response.Text() != "completed" || predicateCalls != 0 || backupCalls != 0 {
+		t.Fatalf("canceled response advanced fallback: response=%#v predicates=%d backup=%d err=%v",
+			response, predicateCalls, backupCalls, err)
+	}
+}
+
 func TestFallbackModelCustomErrorAndResponsePolicies(t *testing.T) {
 	firstErr := errors.New("retry me")
 	primary := requestModel{name: "primary", request: func(

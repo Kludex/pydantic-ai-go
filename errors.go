@@ -1,6 +1,7 @@
 package ai
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -57,6 +58,66 @@ var ErrOutputTypeOverrideWithUnion = errors.New(
 type ModelAPIError interface {
 	error
 	IsModelAPIError() bool
+}
+
+// ModelTransportError reports a provider connection or response-read failure.
+type ModelTransportError struct {
+	ModelName    string
+	ProviderName string
+	Operation    string
+	Err          error
+}
+
+// NewModelTransportError preserves caller cancellation and classifies other transport failures for model fallback.
+func NewModelTransportError(ctx context.Context, model Model, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	modelName, providerName := "", ""
+	if !modelIsNil(model) {
+		modelName = model.Name()
+		if identity, ok := model.(ModelProviderIdentity); ok {
+			providerName = identity.ProviderName()
+		}
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s: %s: %w", transportErrorSource(modelName, providerName), transportOperation(operation), err)
+	}
+	return &ModelTransportError{
+		ModelName: modelName, ProviderName: providerName, Operation: operation, Err: err,
+	}
+}
+
+// Error describes the provider operation and underlying failure.
+func (e *ModelTransportError) Error() string {
+	source := transportErrorSource(e.ModelName, e.ProviderName)
+	if e.Err == nil {
+		return fmt.Sprintf("%s: %s failed", source, transportOperation(e.Operation))
+	}
+	return fmt.Sprintf("%s: %s: %v", source, transportOperation(e.Operation), e.Err)
+}
+
+// Unwrap returns the underlying transport failure.
+func (e *ModelTransportError) Unwrap() error { return e.Err }
+
+// IsModelAPIError marks the provider transport failure as eligible for default model fallback.
+func (*ModelTransportError) IsModelAPIError() bool { return true }
+
+func transportErrorSource(modelName string, providerName string) string {
+	if providerName != "" {
+		return providerName
+	}
+	if modelName != "" {
+		return modelName
+	}
+	return "model"
+}
+
+func transportOperation(operation string) string {
+	if operation == "" {
+		return "request"
+	}
+	return operation
 }
 
 // UnknownModelIDError reports an unresolved application model ID.

@@ -704,8 +704,10 @@ func TestStreamScannerError(t *testing.T) {
 		_, _ = w.Write([]byte("data: "))
 		_, _ = w.Write(make([]byte, 2*1024*1024))
 	})
-	if _, err := collectGoogleStream(t, model, ai.ModelRequestParams{}); err == nil {
-		t.Fatal("expected scanner error")
+	_, err := collectGoogleStream(t, model, ai.ModelRequestParams{})
+	var transportError *ai.ModelTransportError
+	if !errors.As(err, &transportError) || transportError.Operation != "read stream" {
+		t.Fatalf("unexpected scanner error: %v", err)
 	}
 }
 

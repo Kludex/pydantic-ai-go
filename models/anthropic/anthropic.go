@@ -156,12 +156,12 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: request: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("anthropic: read response: %w", err)
+		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
@@ -231,12 +231,12 @@ func (m *Model) CountTokens(
 	m.setRequestHeaders(req, &headerPayload, false)
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return ai.Usage{}, fmt.Errorf("anthropic: token count request: %w", err)
+		return ai.Usage{}, ai.NewModelTransportError(ctx, m, "token count request", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return ai.Usage{}, fmt.Errorf("anthropic: read token count response: %w", err)
+		return ai.Usage{}, ai.NewModelTransportError(ctx, m, "read token count response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		return ai.Usage{}, &APIError{StatusCode: resp.StatusCode, Body: string(data)}

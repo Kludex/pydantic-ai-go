@@ -2,9 +2,9 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@3a3e5612786c64e19312f20e3c998553edf1353b`.
+Audited upstream baseline: `pydantic/pydantic-ai@8c5838dd327f8b588525f6b2ee8605ba6426f410`.
 
-The two commits after the previous `f711f5376` runtime audit only shorten upstream test-suite and coverage hot spots. They require no Go runtime change. The prior 22-commit audit mapped stable instruction IDs, durable-operation APIs, CLI MCP/tool streaming, Z.AI behavior, AG-UI event ordering, transport-based Google routing, realtime audio iterables, and `genai-prices` 0.1.5.
+The seven commits after `3a3e56127` add durable-operation model ownership and cleanup, Temporal/DBOS per-run capability rejection, Prefect task-journaled dynamic tool discovery, and inactive-hook traceback elision. The durable requirements are recorded below. Go's optional hook interfaces already omit unimplemented wrappers and error hooks rather than adding no-op stack frames. The remaining changes remove an expired Anthropic dependency pin and clarify that `EqualsExpected` cannot fail when a case has no expected output; neither requires a Go runtime change.
 
 Status:
 
@@ -184,7 +184,7 @@ Status:
 ### Capability framework
 
 - [x] Setup contributions for static instructions, model settings, and raw tools.
-- [x] Run, model request, tool call, and dynamic instruction hooks.
+- [x] Run, model request, tool call, and dynamic instruction hooks. Optional Go hook interfaces naturally omit unimplemented wrappers and error hooks from call stacks, including combined and wrapped capabilities.
 - [x] Ordered middleware composition; first capability is outermost.
 - [x] `HistoryProcessor` provides composable request-only history middleware with detached input/output snapshots and `RunInfo`; durable history replacement remains an explicit model-request hook action. `TokenHistoryTrimmer` uses the selected model's complete request count and binary-searches whole user-turn boundaries while protecting current/recent turns, preserving tool call/result pairs, and returning an inspectable error when the protected suffix cannot fit. `HistorySummarizer` replaces complete old turns with one provider-neutral assistant response, reuses that durable summary through tool loops, detaches callback values, and attributes side-request usage before primary generation.
 - [x] Runs, prepared model requests, function-tool validation/execution, and output validation/processing have ordered before hooks plus reverse-ordered after/error hooks in addition to middleware wrappers. Model hooks can detach snapshots, edit stable instruction parts, modify requests, switch models, recover errors, and request budgeted retries that preserve rejected responses. Tool and output hooks transform raw or typed values, recover ordinary errors, and preserve retry/failure control flow. Run wrappers can short-circuit, transform, or recover type-checked outcomes while cancellation remains terminal.
@@ -230,7 +230,7 @@ Status:
 - [ ] Agent-to-agent delegation examples and usage propagation.
 - [ ] CLI and web chat entry points, including MCP configuration loading and streamed tool-call display.
 - [ ] Prompt templates and format helpers.
-- [ ] Durable execution integrations, including the public third-party backend contract, explicitly named durable operations for capabilities, operation serialization, and backend-specific cache identity.
+- [ ] Durable execution integrations, including the public third-party backend contract, explicitly named durable operations for capabilities, operation serialization, and backend-specific cache identity. Rebuilt models inside durable operations must be opened and closed in the operation, while registered or otherwise caller-owned model instances remain unmanaged and are never rebuilt or closed. Temporal and DBOS must reject runtime capabilities whose operations were not registered before workflow startup; Prefect may accept runtime observer capabilities but must reject late executing toolsets. Prefect dynamic-tool discovery, validation, and calls require separately journaled tasks with stable operation names and retry-safe re-resolution.
 - [-] Public graph API and graph-backed loop - excluded because this project intentionally uses a plain loop and capability middleware.
 
 ## Quality, documentation, and maintenance

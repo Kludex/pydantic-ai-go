@@ -108,6 +108,19 @@ func NewModel(name string, options ...Option) *Model {
 	return &Model{ModelWrapper: ai.WrapModel(model), model: model}
 }
 
+// SupportsNativeTool reports native tools rendered by OpenRouter.
+func (*Model) SupportsNativeTool(tool ai.NativeTool) bool {
+	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
+		return false
+	}
+	switch tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool, ai.AdvisorTool:
+		return true
+	default:
+		return false
+	}
+}
+
 // PromptCacheRetention reports the longest downstream prompt-cache lifetime.
 func (model *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
 	_, cache, err := extractCacheSettings(settings)
@@ -160,6 +173,10 @@ func (model *Model) StreamRequest(
 func (model *Model) prepareParams(
 	ctx context.Context, params ai.ModelRequestParams,
 ) (context.Context, ai.ModelRequestParams, error) {
+	params, err := ai.ResolveNativeToolPreferences(model, params)
+	if err != nil {
+		return ctx, ai.ModelRequestParams{}, err
+	}
 	name := strings.TrimPrefix(model.Name(), "~")
 	provider, routedModel, found := strings.Cut(name, "/")
 	if !found || provider == "" || routedModel == "" {

@@ -76,6 +76,21 @@ func NewModel(name string, opts ...Option) *Model {
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
 
+// SupportsNativeTool reports Google native-tool support.
+func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {
+	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
+		return false
+	}
+	switch tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool, ai.WebFetchTool, ai.CodeExecutionTool, ai.FileSearchTool:
+		return true
+	case ai.ImageGenerationTool:
+		return supportsImageOutput(m.name)
+	default:
+		return false
+	}
+}
+
 // Transport returns the configured Gemini Developer API or Vertex AI route.
 func (m *Model) Transport() Transport { return m.transport }
 
@@ -484,9 +499,6 @@ type thinkingConfig struct {
 func googleNativeTools(
 	nativeTools []ai.NativeTool, modelName string, transport Transport,
 ) ([]toolsParam, *imageConfig, error) {
-	if err := ai.ValidateNativeTools(nativeTools); err != nil {
-		return nil, nil, fmt.Errorf("google: native tools: %w", err)
-	}
 	var tools []toolsParam
 	var generatedImageConfig *imageConfig
 	for _, nativeTool := range nativeTools {
@@ -595,6 +607,10 @@ func supportsImageOutput(modelName string) bool {
 func (m *Model) buildPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*generateRequest, error) {
+	params, err := ai.ResolveNativeToolPreferences(m, params)
+	if err != nil {
+		return nil, err
+	}
 	nativeTools, generatedImageConfig, err := googleNativeTools(params.NativeTools, m.name, m.transport)
 	if err != nil {
 		return nil, err

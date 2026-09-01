@@ -111,6 +111,13 @@ type ToolSearchStrategyModel interface {
 	SupportsToolSearchStrategy(strategy ToolSearchStrategy) bool
 }
 
+// NativeToolSupportModel is implemented by models that can decide whether a
+// provider-native tool is available for the selected model and transport.
+// Calls may run concurrently and receive detached tool definitions.
+type NativeToolSupportModel interface {
+	SupportsNativeTool(tool NativeTool) bool
+}
+
 // NativeToolSearchHistoryModel is implemented by models that can replay
 // provider-native tool-search parts from their own provider.
 type NativeToolSearchHistoryModel interface {
@@ -249,6 +256,8 @@ type ModelRequestParams struct {
 	// AllowText reports whether plain text is an acceptable final output.
 	AllowText bool
 	Settings  ModelSettings
+
+	nativeToolPreferencesResolved bool
 }
 
 // InstructionPart is one independently addressable model instruction block.
@@ -485,6 +494,12 @@ type ToolDefinition struct {
 	// ToolSearchStrategy controls provider adaptation for the tool-search surface.
 	// It is local routing metadata and is not sent as a function-tool field.
 	ToolSearchStrategy ToolSearchStrategy `json:"-"`
+	// NativeFallbackFor removes this function tool when the identified native
+	// tool is supported. It remains available when that native tool is unsupported.
+	NativeFallbackFor string `json:"unless_native,omitempty"`
+	// NativeCompanionFor identifies a function tool managed by the named native
+	// tool. The marker is cleared when that native tool is unsupported.
+	NativeCompanionFor string `json:"with_native,omitempty"`
 	maxRetries         *int
 	timeout            time.Duration
 }

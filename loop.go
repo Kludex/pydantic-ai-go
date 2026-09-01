@@ -1166,6 +1166,10 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			return nil, err
 		}
 	}
+	request.Params, err = ResolveNativeToolPreferences(request.Model, request.Params)
+	if err != nil {
+		return nil, err
+	}
 	r.model = request.Model
 	r.rc.Model = request.Model
 	r.rc.ModelID = request.ModelID

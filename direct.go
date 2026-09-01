@@ -235,6 +235,10 @@ func prepareDirectRequest(
 	if err != nil {
 		return nil, ModelRequestParams{}, err
 	}
+	params, err = ResolveNativeToolPreferences(model, params)
+	if err != nil {
+		return nil, ModelRequestParams{}, err
+	}
 	return messages, params, nil
 }
 

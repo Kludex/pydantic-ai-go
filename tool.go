@@ -466,6 +466,20 @@ func WithDeferredLoading() ToolOption {
 	return func(d *ToolDefinition) { d.DeferLoading = true }
 }
 
+// WithNativeFallback keeps this function tool only when native is unsupported.
+// Register native separately with WithNativeTools, WithRunNativeTools, or AddNativeTool.
+func WithNativeFallback(native NativeTool) ToolOption {
+	uniqueID := nativeToolPreferenceID(native)
+	return func(definition *ToolDefinition) { definition.NativeFallbackFor = uniqueID }
+}
+
+// WithNativeCompanion marks this function tool as managed by native while it is supported.
+// Providers can use the marker to render a native corpus or another paired representation.
+func WithNativeCompanion(native NativeTool) ToolOption {
+	uniqueID := nativeToolPreferenceID(native)
+	return func(definition *ToolDefinition) { definition.NativeCompanionFor = uniqueID }
+}
+
 // WithApprovalRequired pauses before local execution until a caller approves.
 func WithApprovalRequired() ToolOption {
 	return func(d *ToolDefinition) { d.RequiresApproval = true }

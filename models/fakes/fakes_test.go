@@ -10,6 +10,17 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 )
 
+func TestFunctionModelNativeToolSupport(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{}, nil
+	})
+	if !model.SupportsNativeTool(ai.WebSearchTool{}) || model.SupportsNativeTool((*ai.WebSearchTool)(nil)) {
+		t.Fatal("unexpected function-model native-tool support")
+	}
+}
+
 func TestFunctionModelDefaults(t *testing.T) {
 	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "hi"}}}, nil

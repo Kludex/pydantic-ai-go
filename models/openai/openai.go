@@ -250,6 +250,20 @@ func NewModel(name string, opts ...Option) *Model {
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
 
+// SupportsNativeTool reports Chat Completions native-tool support.
+func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {
+	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
+		return false
+	}
+	tool = tool.CloneNativeTool()
+	if m.chatCompatibility.NativeToolFunc != nil {
+		_, include, err := m.chatCompatibility.NativeToolFunc(tool)
+		return err == nil && include
+	}
+	_, webSearch := tool.(ai.WebSearchTool)
+	return webSearch && supportsChatWebSearch(m.name, m.chatWebSearchSupport)
+}
+
 // ProviderName returns the durable provider identity.
 func (m *Model) ProviderName() string { return m.providerName }
 
@@ -426,6 +440,10 @@ type chatFunction struct {
 func (m *Model) buildPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*chatRequest, error) {
+	params, err := ai.ResolveNativeToolPreferences(m, params)
+	if err != nil {
+		return nil, err
+	}
 	settings, promptCache, err := extractPromptCacheSettings(params.Settings)
 	if err != nil {
 		return nil, err
@@ -442,9 +460,6 @@ func (m *Model) buildPayload(
 		return nil, fmt.Errorf("openai: include raw annotations is only supported by Responses")
 	}
 	params.Settings = settings
-	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
-		return nil, err
-	}
 	var webSearchOptions *chatWebSearchOptions
 	if m.chatCompatibility.NativeToolFunc == nil {
 		for _, nativeTool := range params.NativeTools {

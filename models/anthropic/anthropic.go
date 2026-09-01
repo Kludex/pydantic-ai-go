@@ -94,6 +94,21 @@ func NewModel(name string, opts ...Option) *Model {
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
 
+// SupportsNativeTool reports Anthropic native-tool support.
+func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {
+	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
+		return false
+	}
+	switch tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool, ai.WebFetchTool, ai.CodeExecutionTool, ai.MemoryTool, ai.MCPServerTool:
+		return true
+	case ai.AdvisorTool:
+		return anthropicSupportsAdvisor(m.name)
+	default:
+		return false
+	}
+}
+
 // ProviderName returns Anthropic's durable provider identity.
 func (*Model) ProviderName() string { return "anthropic" }
 
@@ -635,9 +650,6 @@ func limitAnthropicCachePoints(request *messagesRequest, automatic bool) error {
 }
 
 func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]toolParam, error) {
-	if err := ai.ValidateNativeTools(nativeTools); err != nil {
-		return nil, fmt.Errorf("anthropic: native tools: %w", err)
-	}
 	var tools []toolParam
 	for _, nativeTool := range nativeTools {
 		switch nativeTool := nativeTool.(type) {
@@ -781,6 +793,10 @@ func anthropicSupportsDynamicFiltering(modelName string) bool {
 func (m *Model) buildPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*messagesRequest, error) {
+	params, err := ai.ResolveNativeToolPreferences(m, params)
+	if err != nil {
+		return nil, err
+	}
 	settings, cache, err := extractCacheSettings(params.Settings)
 	if err != nil {
 		return nil, err

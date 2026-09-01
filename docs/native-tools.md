@@ -62,6 +62,53 @@ Gemini 3 can combine provider-native tools with function tools. Earlier Gemini m
 
 A required native tool fails before the provider request when the selected model adapter cannot render it. This prevents silent behavior changes. Set `Optional` only when your application has another valid path.
 
+## Provide a local fallback
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+type SearchArgs struct {
+	Query string `json:"query"`
+}
+
+func main() {
+	webSearch := ai.WebSearchTool{}
+	localSearch := ai.NewSimpleTool[struct{}](
+		"local_search",
+		func(_ context.Context, args SearchArgs) (string, error) {
+			return "Local search result for: " + args.Query, nil
+		},
+		ai.WithNativeFallback(webSearch),
+	)
+
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewModel("gpt-5"),
+		ai.WithNativeTools(webSearch),
+	)
+	agent.AddTool(localSearch)
+	result, err := agent.Run(context.Background(), "Search for the Go release notes", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`WithNativeFallback` pairs one local function tool with a native tool. Built-in provider models receive exactly one implementation. Use `NativeFallbackToolset` to pair every function in a toolset. Fallback model chains resolve the pair separately for each candidate.
+
+Use `WithNativeCompanion` or `NativeCompanionToolset` when function definitions belong to a native tool's managed corpus. The marker remains only while that native tool is supported.
+
+Custom models implement `NativeToolSupportModel` to participate in selection. A model without that interface receives both paths because the library cannot safely guess its native support.
+
 ## Use OpenAI Chat search models
 
 ```go

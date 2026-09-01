@@ -63,6 +63,19 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 // Name returns the model name.
 func (m *ResponsesModel) Name() string { return m.name }
 
+// SupportsNativeTool reports Responses native-tool support.
+func (*ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
+	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
+		return false
+	}
+	switch tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool, ai.CodeExecutionTool, ai.ImageGenerationTool, ai.FileSearchTool, ai.MCPServerTool:
+		return true
+	default:
+		return false
+	}
+}
+
 // ProviderName returns the durable provider identity.
 func (m *ResponsesModel) ProviderName() string { return m.providerName }
 
@@ -638,6 +651,10 @@ func responsesImageGenerationSize(size ai.ImageGenerationSize, aspectRatio ai.Im
 func (m *ResponsesModel) buildResponsesPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams, nativeDeferred bool,
 ) (*responsesRequest, error) {
+	params, err := ai.ResolveNativeToolPreferences(m, params)
+	if err != nil {
+		return nil, err
+	}
 	settings, promptCache, err := extractPromptCacheSettings(params.Settings)
 	if err != nil {
 		return nil, err
@@ -647,9 +664,6 @@ func (m *ResponsesModel) buildResponsesPayload(
 		return nil, err
 	}
 	params.Settings = settings
-	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
-		return nil, fmt.Errorf("openai: native tools: %w", err)
-	}
 	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
 	if err != nil {
 		return nil, err

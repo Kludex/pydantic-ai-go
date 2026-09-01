@@ -1,6 +1,7 @@
 package openai_test
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -41,14 +42,18 @@ func TestChatWebSearch(t *testing.T) {
 	model := openai.NewModel(
 		"gpt-4o-search-preview", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
 	)
-	agent := ai.NewAgent[struct{}, string](model, ai.WithNativeTools(ai.WebSearchTool{
+	webSearch := ai.WebSearchTool{
 		SearchContextSize: ai.WebSearchContextLow,
 		UserLocation:      location,
 		AllowedDomains:    []string{"example.com"},
 		BlockedDomains:    []string{"blocked.example"},
 		MaxUses:           2,
 		ExternalWebAccess: &externalWebAccess,
-	}))
+	}
+	agent := ai.NewAgent[struct{}, string](model, ai.WithNativeTools(webSearch))
+	agent.AddTool(ai.NewSimpleTool[struct{}]("local_search", func(context.Context, struct{}) (string, error) {
+		return "local", nil
+	}, ai.WithNativeFallback(webSearch)))
 	location.City = "changed"
 	if _, err := agent.Run(t.Context(), "search", struct{}{}); err != nil {
 		t.Fatal(err)
@@ -112,7 +117,17 @@ func TestChatWebSearchSupportOverride(t *testing.T) {
 	}); err == nil || !strings.Contains(err.Error(), `field "web_search_options" conflicts`) {
 		t.Fatalf("unexpected web search options conflict: %v", err)
 	}
-	if requests != 1 {
-		t.Fatalf("unsupported web search reached transport: %d requests", requests)
+	fallback := openai.NewModel("gpt-5", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+	if _, err := fallback.Request(t.Context(), nil, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{
+			Name: "local_search", Schema: map[string]any{"type": "object"},
+			NativeFallbackFor: ai.WebSearchTool{}.UniqueID(),
+		}},
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("unexpected transport requests: %d", requests)
 	}
 }

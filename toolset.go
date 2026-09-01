@@ -112,6 +112,32 @@ func WithToolReturnSchemas[Deps any](toolset Toolset[Deps]) Toolset[Deps] {
 	return returnSchemaToolset[Deps]{toolset: toolset}
 }
 
+// NativeFallbackToolset keeps every wrapped function tool only when native is unsupported.
+func NativeFallbackToolset[Deps any](toolset Toolset[Deps], native NativeTool) Toolset[Deps] {
+	uniqueID := nativeToolPreferenceID(native)
+	return PrepareToolset(toolset, func(
+		_ context.Context, _ *RunContext[Deps], definitions []ToolDefinition,
+	) ([]ToolDefinition, error) {
+		for index := range definitions {
+			definitions[index].NativeFallbackFor = uniqueID
+		}
+		return definitions, nil
+	})
+}
+
+// NativeCompanionToolset marks every wrapped function tool as managed by native while it is supported.
+func NativeCompanionToolset[Deps any](toolset Toolset[Deps], native NativeTool) Toolset[Deps] {
+	uniqueID := nativeToolPreferenceID(native)
+	return PrepareToolset(toolset, func(
+		_ context.Context, _ *RunContext[Deps], definitions []ToolDefinition,
+	) ([]ToolDefinition, error) {
+		for index := range definitions {
+			definitions[index].NativeCompanionFor = uniqueID
+		}
+		return definitions, nil
+	})
+}
+
 // DeferLoadingToolset hides all wrapped tools, or the selected names, until
 // another tool reveals them through ToolReturn.Tools.
 func DeferLoadingToolset[Deps any](toolset Toolset[Deps], names ...string) Toolset[Deps] {

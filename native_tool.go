@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"time"
 )
 
 // NativeTool is executed by a model provider rather than by the agent.
@@ -88,6 +89,36 @@ func (tool WebSearchTool) IsOptional() bool { return tool.Optional }
 
 // CloneNativeTool returns a detached definition.
 func (tool WebSearchTool) CloneNativeTool() NativeTool { return cloneWebSearchTool(tool) }
+
+// XSearchTool asks xAI to search X posts and content.
+type XSearchTool struct {
+	AllowedXHandles          []string
+	ExcludedXHandles         []string
+	FromDate                 *time.Time
+	ToDate                   *time.Time
+	EnableImageUnderstanding bool
+	EnableVideoUnderstanding bool
+	IncludeOutput            bool
+	Optional                 bool
+}
+
+// Kind returns the stable native-tool discriminator.
+func (XSearchTool) Kind() string { return "x_search" }
+
+// UniqueID identifies this native tool within one model request.
+func (XSearchTool) UniqueID() string { return "x_search" }
+
+// IsOptional reports whether an unsupported model may omit the tool.
+func (tool XSearchTool) IsOptional() bool { return tool.Optional }
+
+// CloneNativeTool returns a detached definition.
+func (tool XSearchTool) CloneNativeTool() NativeTool {
+	tool.AllowedXHandles = slices.Clone(tool.AllowedXHandles)
+	tool.ExcludedXHandles = slices.Clone(tool.ExcludedXHandles)
+	tool.FromDate = clonePointer(tool.FromDate)
+	tool.ToDate = clonePointer(tool.ToDate)
+	return tool
+}
 
 // CodeExecutionTool asks a compatible provider to execute model-generated code.
 type CodeExecutionTool struct {
@@ -449,6 +480,14 @@ func ValidateNativeTools(tools []NativeTool) error {
 			if err := validateWebSearchTool(*tool); err != nil {
 				return err
 			}
+		case XSearchTool:
+			if err := validateXSearchTool(tool); err != nil {
+				return err
+			}
+		case *XSearchTool:
+			if err := validateXSearchTool(*tool); err != nil {
+				return err
+			}
 		case WebFetchTool:
 			if err := validateWebFetchTool(tool); err != nil {
 				return err
@@ -545,6 +584,19 @@ func validateFileSearchTool(tool FileSearchTool) error {
 	if tool.RetrievalMode != "" && tool.RetrievalMode != FileSearchRetrievalHybrid &&
 		tool.RetrievalMode != FileSearchRetrievalSemantic && tool.RetrievalMode != FileSearchRetrievalKeyword {
 		return fmt.Errorf("ai: invalid file search retrieval mode %q", tool.RetrievalMode)
+	}
+	return nil
+}
+
+func validateXSearchTool(tool XSearchTool) error {
+	if tool.AllowedXHandles != nil && tool.ExcludedXHandles != nil {
+		return fmt.Errorf("ai: X search allowed and excluded handles are mutually exclusive")
+	}
+	if len(tool.AllowedXHandles) > 20 {
+		return fmt.Errorf("ai: X search allowed handles cannot contain more than 20 values")
+	}
+	if len(tool.ExcludedXHandles) > 20 {
+		return fmt.Errorf("ai: X search excluded handles cannot contain more than 20 values")
 	}
 	return nil
 }

@@ -10,6 +10,7 @@ packages=(
     ./retries
     ./evals
     ./embeddings
+    ./embeddings/cohere
     ./embeddings/fakes
     ./embeddings/google
     ./embeddings/openai
@@ -18,6 +19,7 @@ packages=(
     ./models/openrouter
     ./models/anthropic
     ./models/azure
+    ./models/cohere
     ./models/google
     ./models/zai
     ./mcp

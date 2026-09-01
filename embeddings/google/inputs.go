@@ -7,6 +7,22 @@ import (
 	"github.com/Kludex/pydantic-ai-go/embeddings"
 )
 
+func mergeSettings(base, override embeddings.Settings) embeddings.Settings {
+	merged := embeddings.MergeSettings(base, override)
+	if override.ExtraBody == nil || base.ExtraBody == nil {
+		return merged
+	}
+	for _, key := range []string{taskKey, taskTypeKey, titleKey} {
+		if _, overridden := override.ExtraBody[key]; overridden {
+			continue
+		}
+		if value, exists := base.ExtraBody[key]; exists {
+			merged.ExtraBody[key] = value
+		}
+	}
+	return merged
+}
+
 func (model *Model) prepareInputs(
 	inputs []string, inputType embeddings.InputType, settings localSettings,
 ) ([]string, string) {

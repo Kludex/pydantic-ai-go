@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 
 	"github.com/Kludex/pydantic-ai-go/embeddings"
@@ -47,7 +48,7 @@ type vertexParameters struct {
 func (model *Model) Embed(
 	ctx context.Context, inputs []string, inputType embeddings.InputType, settings embeddings.Settings,
 ) (*embeddings.Result, error) {
-	settings = embeddings.MergeSettings(model.settings, settings)
+	settings = mergeSettings(model.settings, settings)
 	if err := settings.Validate(); err != nil {
 		return nil, err
 	}
@@ -83,7 +84,10 @@ func (model *Model) Embed(
 			}
 		}
 	}
-	body, _ := json.Marshal(payload)
+	body, err := requestBody(payload, settings.ExtraBody)
+	if err != nil {
+		return nil, err
+	}
 	responseBody, err := model.doRequest(ctx, endpoint, body, settings.ExtraHeaders)
 	if err != nil {
 		return nil, err
@@ -94,4 +98,30 @@ func (model *Model) Embed(
 	}
 	result.Warnings = warnings
 	return result, nil
+}
+
+func requestBody(payload embedRequest, extraBody map[string]any) ([]byte, error) {
+	body := maps.Clone(extraBody)
+	if body == nil {
+		body = map[string]any{}
+	}
+	for _, key := range []string{"requests", "instances", "parameters"} {
+		if _, exists := body[key]; exists {
+			return nil, fmt.Errorf("google embeddings: extra body field %q conflicts with typed settings", key)
+		}
+	}
+	if payload.Requests != nil {
+		body["requests"] = payload.Requests
+	}
+	if payload.Instances != nil {
+		body["instances"] = payload.Instances
+	}
+	if payload.Parameters != nil {
+		body["parameters"] = payload.Parameters
+	}
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		return nil, fmt.Errorf("google embeddings: encode request: %w", err)
+	}
+	return encoded, nil
 }

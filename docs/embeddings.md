@@ -209,6 +209,45 @@ func main() {
 
 Vertex AI uses Application Default Credentials unless you pass a `TokenProvider` or an Express Mode API key. The same transport supports regional, global, multi-region, and custom endpoints.
 
+## Cohere
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Kludex/pydantic-ai-go/embeddings"
+	"github.com/Kludex/pydantic-ai-go/embeddings/cohere"
+)
+
+func main() {
+	model := cohere.NewModel("embed-v4.0")
+	embedder := embeddings.New(model)
+
+	maxTokens := 256
+	settings, err := (cohere.Settings{
+		InputType: cohere.InputTypeClassification,
+		MaxTokens: &maxTokens,
+		Truncate:  cohere.TruncationEnd,
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = embedder.EmbedDocuments(
+		context.Background(),
+		[]string{"Child tasks stay inside their parent scope."},
+		settings,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Set `CO_API_KEY` before you run the example. Cohere-specific input and truncation settings take precedence over the portable defaults. `CountTokens` uses Cohere's v1 tokenizer while embedding requests use the v2 API.
+
 ## Token limits
 
 ```go

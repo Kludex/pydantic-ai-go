@@ -305,6 +305,37 @@ func TestCountTokens(t *testing.T) {
 	}
 }
 
+func TestProviderDefaultSettingsMerge(t *testing.T) {
+	defaults, err := (Settings{Task: TaskQuestionAnswering, TaskType: "CUSTOM", Title: "Default"}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	override, err := (Settings{
+		Common: embeddings.Settings{ExtraBody: map[string]any{"per_call": true}},
+		Task:   TaskClassification,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := responseModel(t, "gemini-embedding-001", modelgoogle.TransportGeminiAPI, func(body map[string]any) {
+		request := body["requests"].([]any)[0].(map[string]any)
+		if request["taskType"] != "CUSTOM" || request["title"] != "Default" || body["per_call"] != true {
+			t.Errorf("unexpected merged request: %#v", body)
+		}
+	})
+	WithDefaultSettings(defaults)(model)
+	result, err := model.Embed(context.Background(), []string{"text"}, embeddings.InputTypeQuery, override)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(
+		result.Warnings,
+		[]string{"google embeddings: Task is only supported by gemini-embedding-2 and was ignored"},
+	) {
+		t.Fatalf("unexpected warnings: %#v", result.Warnings)
+	}
+}
+
 func TestSettings(t *testing.T) {
 	dimensions := 4
 	common := embeddings.Settings{

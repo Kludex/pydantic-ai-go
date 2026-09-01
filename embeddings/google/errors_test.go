@@ -31,6 +31,20 @@ func TestEmbeddingValidationErrors(t *testing.T) {
 	}
 }
 
+func TestEmbeddingRequestBodyErrors(t *testing.T) {
+	model := NewModel("model")
+	if _, err := model.Embed(context.Background(), []string{"x"}, embeddings.InputTypeQuery, embeddings.Settings{
+		ExtraBody: map[string]any{"requests": []any{}},
+	}); err == nil || !strings.Contains(err.Error(), "conflicts") {
+		t.Fatalf("unexpected conflict error: %v", err)
+	}
+	if _, err := model.Embed(context.Background(), []string{"x"}, embeddings.InputTypeQuery, embeddings.Settings{
+		ExtraBody: map[string]any{"unsupported": make(chan int)},
+	}); err == nil || !strings.Contains(err.Error(), "encode request") {
+		t.Fatalf("unexpected encoding error: %v", err)
+	}
+}
+
 func TestEmbeddingRequestErrors(t *testing.T) {
 	invalidURL := NewModel("model", WithBaseURL("http://[::1"))
 	if _, err := invalidURL.Embed(

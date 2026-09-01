@@ -32,6 +32,42 @@ Use `openai.NewResponsesModel` instead of `openai.NewModel` when you need the Re
 
 Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, and `gpt-5.6` model families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
 
+### Predicted output
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	settings, err := (openai.Settings{
+		Prediction: &openai.Prediction{Content: "package main\n\nfunc main() {\n}\n"},
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewModel("gpt-4.1"),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.Run(context.Background(), "Add a greeting to this Go program.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`Prediction` sends expected output to a compatible Chat Completions model. The provider can generate matching content faster and reports accepted and rejected prediction tokens in usage. Use `ContentParts` when the expected output has separately cacheable text boundaries. Predicted output is not supported by the Responses API.
+
 ### Prompt caching
 
 ```go

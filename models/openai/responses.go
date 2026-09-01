@@ -635,6 +635,13 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if err != nil {
 		return nil, err
 	}
+	settings, prediction, err := extractPredictionSettings(settings)
+	if err != nil {
+		return nil, err
+	}
+	if prediction != nil {
+		return nil, fmt.Errorf("openai: prediction is only supported by Chat Completions")
+	}
 	params.Settings = settings
 	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
 		return nil, fmt.Errorf("openai: native tools: %w", err)

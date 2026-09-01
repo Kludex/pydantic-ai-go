@@ -36,15 +36,17 @@ type PromptCacheOptions struct {
 	TTL  PromptCacheTTL  `json:"ttl,omitempty"`
 }
 
-// Settings combines portable settings with OpenAI-specific prompt caching.
+// Settings combines portable settings with OpenAI-specific request options.
 type Settings struct {
 	Common               ai.ModelSettings
+	Prediction           *Prediction
 	PromptCacheKey       string
 	PromptCacheRetention PromptCacheRetention
 	PromptCacheOptions   *PromptCacheOptions
 }
 
 const (
+	predictionSetting           = "openai_prediction"
 	promptCacheKeySetting       = "openai_prompt_cache_key"
 	promptCacheRetentionSetting = "openai_prompt_cache_retention"
 	promptCacheOptionsSetting   = "openai_prompt_cache_options"
@@ -66,14 +68,26 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	if err != nil {
 		return ai.ModelSettings{}, err
 	}
+	prediction, err := marshalPrediction(settings.Prediction)
+	if err != nil {
+		return ai.ModelSettings{}, err
+	}
 	extra := maps.Clone(common.ExtraBody)
 	if extra == nil {
 		extra = map[string]any{}
 	}
-	for _, name := range []string{promptCacheKeySetting, promptCacheRetentionSetting, promptCacheOptionsSetting} {
+	for _, name := range []string{
+		predictionSetting, promptCacheKeySetting, promptCacheRetentionSetting, promptCacheOptionsSetting,
+	} {
 		if _, exists := extra[name]; exists {
 			return ai.ModelSettings{}, fmt.Errorf("openai: setting field %q is reserved", name)
 		}
+	}
+	if prediction != nil {
+		if _, exists := extra["prediction"]; exists {
+			return ai.ModelSettings{}, fmt.Errorf("openai: extra body field %q conflicts with typed settings", "prediction")
+		}
+		extra[predictionSetting] = prediction
 	}
 	optionsValue := PromptCacheOptions{}
 	if options != nil {

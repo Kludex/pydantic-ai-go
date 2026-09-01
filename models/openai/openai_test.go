@@ -717,6 +717,9 @@ func TestChatFileContentCompatibility(t *testing.T) {
 		{name: "blocked audio", model: enabled, content: ai.AudioURL{
 			URL: "http://127.0.0.1/audio.mp3",
 		}},
+		{name: "invalid audio mode", model: enabled, content: ai.AudioURL{
+			URL: "https://example.com/audio.mp3", ForceDownload: "invalid",
+		}},
 		{name: "unsupported downloaded audio", model: enabled, content: ai.AudioURL{
 			URL: contentServer.URL + "/audio.ogg", ForceDownload: ai.FileDownloadAllowLocal,
 		}},

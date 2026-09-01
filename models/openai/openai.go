@@ -346,6 +346,7 @@ type chatRequest struct {
 	PromptCacheKey       string               `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention PromptCacheRetention `json:"prompt_cache_retention,omitempty"`
 	PromptCacheOptions   *PromptCacheOptions  `json:"prompt_cache_options,omitempty"`
+	Prediction           *chatPrediction      `json:"prediction,omitempty"`
 	ExtraBody            map[string]any       `json:"-"`
 }
 
@@ -420,6 +421,10 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
+	settings, prediction, err := extractPredictionSettings(settings)
+	if err != nil {
+		return nil, err
+	}
 	params.Settings = settings
 	if m.chatCompatibility.NativeToolFunc == nil {
 		for _, nativeTool := range params.NativeTools {
@@ -458,6 +463,7 @@ func (m *Model) buildPayload(
 		PromptCacheKey:       promptCache.Key,
 		PromptCacheRetention: promptCache.Retention,
 		PromptCacheOptions:   promptCache.Options,
+		Prediction:           prediction,
 		ExtraBody:            params.Settings.ExtraBody,
 	}
 	if m.chatCompatibility.LegacyMaxTokens {

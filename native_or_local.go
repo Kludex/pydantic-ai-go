@@ -41,7 +41,8 @@ func NewNativeOrLocalTool[Deps any](
 }
 
 // NewNativeOrLocalToolset pairs a static native tool with a local toolset.
-// Toolset lifecycle and instructions are preserved.
+// Toolset lifecycle and instructions are preserved. Local may be nil only when
+// WithNativeRequired suppresses the fallback.
 func NewNativeOrLocalToolset[Deps any](
 	native NativeTool, local Toolset[Deps], options ...NativeOrLocalOption,
 ) *NativeOrLocalTool[Deps] {
@@ -64,7 +65,8 @@ func NewDynamicNativeOrLocalTool[Deps any](
 
 // NewDynamicNativeOrLocalToolset pairs a dependency-aware native tool with a
 // local toolset. The resolver runs once before each model request and must be
-// safe for concurrent calls.
+// safe for concurrent calls. Local may be nil only when WithNativeRequired
+// suppresses the fallback.
 func NewDynamicNativeOrLocalToolset[Deps any](
 	nativeID string,
 	resolve NativeToolFunc[Deps],

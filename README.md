@@ -274,7 +274,7 @@ func TestAgent(t *testing.T) {
 | Sanitize, trim, or summarize conversation history | [`SanitizeMessages` and history capabilities](docs/history.md) |
 | Compact old provider history | [`ModelCompactor` and compaction capabilities](docs/compaction.md) |
 | Send images, documents, audio, video, or uploaded files | [`RunParts`](docs/multimodal.md) |
-| Use provider-native web tools | [`WebSearchTool` and `WebFetchTool`](docs/native-tools.md) |
+| Use native-first web tools with local fallbacks | [`NewWebSearchCapability` and `NewWebFetchCapability`](docs/native-tools.md) |
 | Configure a provider or compatible endpoint | [Provider configuration](docs/providers.md) |
 | Retry transient provider HTTP failures | [`retries.Transport`](docs/retries.md) |
 | Add fallback models | `NewFallbackModel` |

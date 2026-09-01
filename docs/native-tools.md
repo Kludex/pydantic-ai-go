@@ -90,7 +90,10 @@ func main() {
 
 	agent := ai.NewAgent[struct{}, string](
 		openai.NewModel("gpt-5"),
-		ai.WithCapabilities(ai.NewNativeOrLocalTool(ai.WebSearchTool{}, localSearch)),
+		ai.WithCapabilities(ai.NewWebSearchCapability(ai.WebSearchCapabilityConfig[struct{}]{
+			Native: ai.WebSearchTool{},
+			Local:  ai.NewFunctionToolset(localSearch),
+		})),
 	)
 	result, err := agent.Run(context.Background(), "Search for the Go release notes", struct{}{})
 	if err != nil {
@@ -100,9 +103,13 @@ func main() {
 }
 ```
 
-`NewNativeOrLocalTool` registers both paths atomically. Built-in provider models receive exactly one implementation. Use `NewNativeOrLocalToolset` when the fallback has multiple functions or a run-scoped lifecycle. You can register the pair with `WithCapabilities`, `WithRunCapabilities`, or `Agent.AddNativeOrLocal`. Fallback model chains resolve it separately for each candidate.
+`NewWebSearchCapability` registers both paths atomically. Built-in provider models receive exactly one implementation. A nil `Local` field requires native support.
 
-Use `WithNativeRequired("constraint name")` when a native-only constraint makes the local implementation unsafe. The local tool is then suppressed, and an unsupported provider fails before its request. The native definition cannot be optional.
+The focused capability classifies `AllowedDomains`, `BlockedDomains`, `MaxUses`, and a false `ExternalWebAccess` value as native-only constraints. It suppresses the local implementation rather than silently ignoring one of those fields. Context size and user location may fall back locally because they only tune native results.
+
+Use `NewNativeOrLocalTool` for other native tools. Use `NewNativeOrLocalToolset` when the fallback has multiple functions or a run-scoped lifecycle. You can register either pair with `WithCapabilities`, `WithRunCapabilities`, or `Agent.AddNativeOrLocal`. Fallback model chains resolve each pair separately for every candidate.
+
+Use `WithNativeRequired("constraint name")` with the generic constructors when a native-only constraint makes the local implementation unsafe. The local tool is then suppressed, and an unsupported provider fails before its request. The native definition cannot be optional.
 
 `WithNativeFallback` and `NativeFallbackToolset` remain available when you intentionally register both paths separately. Use `WithNativeCompanion` or `NativeCompanionToolset` when function definitions belong to a native tool's managed corpus. The marker remains only while that native tool is supported.
 
@@ -268,6 +275,8 @@ func main() {
 ```
 
 `WebFetchTool` lets Anthropic or Gemini retrieve URL content. Anthropic sends domain filters, maximum uses, content limits, and citation configuration. Gemini renders the portable tool as `urlContext` and leaves unsupported settings out.
+
+Use `NewWebFetchCapability` to pair this declaration with a local toolset. `AllowedDomains` and `BlockedDomains` can be enforced by the local implementation. `MaxUses` requires native support, so the focused capability suppresses the local path when it is set. A nil local toolset also requires native support.
 
 Provider responses use `ToolPartKindWebFetch`. Gemini reconstructs calls and returns from `urlContextMetadata` while retaining the complete metadata in `ModelResponse.ProviderDetails`. Anthropic preserves native result payloads and caller metadata.
 

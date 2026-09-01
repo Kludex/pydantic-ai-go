@@ -15,7 +15,7 @@ func registerNativeOrLocal[Deps any](
 		if !ok {
 			return nil, nil, fmt.Errorf("ai: native-or-local dependencies do not match agent")
 		}
-		if toolsetIsNil(registration.local) {
+		if toolsetIsNil(registration.local) && registration.requiredReason == "" {
 			return nil, nil, fmt.Errorf("ai: native-or-local local toolset must not be nil")
 		}
 		entry := nativeToolEntry[Deps]{

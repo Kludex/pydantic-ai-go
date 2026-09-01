@@ -536,7 +536,7 @@ func TestResponsesStreamEvents(t *testing.T) {
 			`[DONE]`,
 		})(w, r)
 	})
-	events, err := collect(t, model, ai.ModelRequestParams{})
+	events, err := collect(t, model, ai.ModelRequestParams{Settings: rawAnnotationSettings(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -616,7 +616,9 @@ func TestResponsesStreamMetadataReachesNormalizedEventsAndHistory(t *testing.T) 
 		`{"type":"response.output_text.done","item_id":"message","logprobs":[{"token":"Hi","logprob":-0.1}]}`,
 		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","status":"completed"}}`,
 	}))
-	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "go", struct{}{})
+	stream := ai.NewAgent[struct{}, string](
+		model, ai.WithModelSettings(rawAnnotationSettings(t)),
+	).RunStream(t.Context(), "go", struct{}{})
 	var started ai.TextPart
 	var metadataDelta ai.TextPartDelta
 	for event, err := range stream.Events() {
@@ -648,6 +650,35 @@ func TestResponsesStreamMetadataReachesNormalizedEventsAndHistory(t *testing.T) 
 		text.ProviderDetails["annotations"].([]map[string]any)[0]["url"] != "https://example.com" ||
 		len(text.ProviderDetails["logprobs"].([]map[string]any)) != 1 {
 		t.Fatalf("stream metadata was not retained in history: %+v", text)
+	}
+}
+
+func TestResponsesStreamRawAnnotationsDisabledByDefault(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.output_text.delta","item_id":"message","delta":"Hi"}`,
+		`{"type":"response.output_text.annotation.added","item_id":"message","annotation":{"type":"url_citation"}}`,
+		`{"type":"response.output_text.done","item_id":"message"}`,
+		`{"type":"response.completed","response":{"status":"completed","output":[` +
+			`{"id":"message","type":"message","content":[` +
+			`{"type":"output_text","text":"Hi","annotations":[{"type":"url_citation"}]}` +
+			`]}]}}`,
+	}))
+	events, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.TextDeltaEvent:
+			if _, exists := event.ProviderDetails["annotations"]; exists {
+				t.Fatalf("stream retained raw annotations by default: %+v", event)
+			}
+		case ai.FinishEvent:
+			text := event.Parts[0].(ai.TextPart)
+			if _, exists := text.ProviderDetails["annotations"]; exists {
+				t.Fatalf("snapshot retained raw annotations by default: %+v", text)
+			}
+		}
 	}
 }
 
@@ -859,10 +890,14 @@ func TestResponsesStreamContinuesBackgroundJob(t *testing.T) {
 		}
 		sseHandler(t, []string{
 			`{"type":"response.output_text.delta","sequence_number":5,"item_id":"message","delta":"done"}`,
+			`{"type":"response.output_text.annotation.added","item_id":"message","annotation":{"type":"url_citation"}}`,
+			`{"type":"response.output_text.done","item_id":"message"}`,
 			`{"type":"response.completed","sequence_number":8,"response":{"id":"job","model":"gpt-5","status":"completed","background":true,"usage":{"input_tokens":1,"output_tokens":1}}}`,
 		})(w, r)
 	}, openai.WithBackgroundPollInterval(0))
-	stream := ai.NewAgent[struct{}, string](model).RunStream(t.Context(), "go", struct{}{})
+	stream := ai.NewAgent[struct{}, string](
+		model, ai.WithModelSettings(rawAnnotationSettings(t)),
+	).RunStream(t.Context(), "go", struct{}{})
 	var finishes []ai.FinishEvent
 	for event, err := range stream.Events() {
 		if err != nil {
@@ -875,6 +910,11 @@ func TestResponsesStreamContinuesBackgroundJob(t *testing.T) {
 	result := stream.Result()
 	if result == nil || result.Output != "done" || result.Usage().Requests != 1 || len(finishes) != 2 {
 		t.Fatalf("unexpected streamed background result=%+v finishes=%+v", result, finishes)
+	}
+	response := result.NewMessages()[1].(ai.ModelResponse)
+	text := response.Parts[0].(ai.TextPart)
+	if len(text.ProviderDetails["annotations"].([]map[string]any)) != 1 {
+		t.Fatalf("resumed stream annotations were lost: %+v", text)
 	}
 	if len(methods) != 2 || methods[0] != http.MethodPost || methods[1] != http.MethodGet ||
 		!strings.Contains(queries[1], "starting_after=4") || !strings.Contains(queries[1], "stream=true") {

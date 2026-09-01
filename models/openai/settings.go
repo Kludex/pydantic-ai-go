@@ -38,18 +38,21 @@ type PromptCacheOptions struct {
 
 // Settings combines portable settings with OpenAI-specific request options.
 type Settings struct {
-	Common               ai.ModelSettings
-	Prediction           *Prediction
-	PromptCacheKey       string
-	PromptCacheRetention PromptCacheRetention
-	PromptCacheOptions   *PromptCacheOptions
+	Common     ai.ModelSettings
+	Prediction *Prediction
+	// IncludeRawAnnotations retains Responses text annotations such as citations.
+	IncludeRawAnnotations *bool
+	PromptCacheKey        string
+	PromptCacheRetention  PromptCacheRetention
+	PromptCacheOptions    *PromptCacheOptions
 }
 
 const (
-	predictionSetting           = "openai_prediction"
-	promptCacheKeySetting       = "openai_prompt_cache_key"
-	promptCacheRetentionSetting = "openai_prompt_cache_retention"
-	promptCacheOptionsSetting   = "openai_prompt_cache_options"
+	predictionSetting            = "openai_prediction"
+	includeRawAnnotationsSetting = "openai_include_raw_annotations"
+	promptCacheKeySetting        = "openai_prompt_cache_key"
+	promptCacheRetentionSetting  = "openai_prompt_cache_retention"
+	promptCacheOptionsSetting    = "openai_prompt_cache_options"
 )
 
 type promptCacheSettings struct {
@@ -77,7 +80,8 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 		extra = map[string]any{}
 	}
 	for _, name := range []string{
-		predictionSetting, promptCacheKeySetting, promptCacheRetentionSetting, promptCacheOptionsSetting,
+		predictionSetting, includeRawAnnotationsSetting,
+		promptCacheKeySetting, promptCacheRetentionSetting, promptCacheOptionsSetting,
 	} {
 		if _, exists := extra[name]; exists {
 			return ai.ModelSettings{}, fmt.Errorf("openai: setting field %q is reserved", name)
@@ -88,6 +92,9 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 			return ai.ModelSettings{}, fmt.Errorf("openai: extra body field %q conflicts with typed settings", "prediction")
 		}
 		extra[predictionSetting] = prediction
+	}
+	if settings.IncludeRawAnnotations != nil {
+		extra[includeRawAnnotationsSetting] = *settings.IncludeRawAnnotations
 	}
 	optionsValue := PromptCacheOptions{}
 	if options != nil {

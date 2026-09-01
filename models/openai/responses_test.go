@@ -25,6 +25,16 @@ func newResponsesServer(t *testing.T, handler http.HandlerFunc) *openai.Response
 	return newResponsesServerWithOptions(t, handler)
 }
 
+func rawAnnotationSettings(t *testing.T) ai.ModelSettings {
+	t.Helper()
+	enabled := true
+	settings, err := (openai.Settings{IncludeRawAnnotations: &enabled}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return settings
+}
+
 func newResponsesServerWithOptions(
 	t *testing.T, handler http.HandlerFunc, opts ...openai.Option,
 ) *openai.ResponsesModel {
@@ -1003,7 +1013,7 @@ func TestResponsesTextMetadataWithoutLogprobs(t *testing.T) {
 			]}]
 		}`))
 	})
-	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: rawAnnotationSettings(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1012,6 +1022,15 @@ func TestResponsesTextMetadataWithoutLogprobs(t *testing.T) {
 	if len(first.ProviderDetails["annotations"].([]map[string]any)) != 1 ||
 		first.ProviderDetails["phase"] != "commentary" || second.ProviderDetails["phase"] != "commentary" {
 		t.Fatalf("unexpected text metadata: first=%+v second=%+v", first, second)
+	}
+
+	withoutAnnotations, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first = withoutAnnotations.Parts[0].(ai.TextPart)
+	if _, exists := first.ProviderDetails["annotations"]; exists || first.ProviderDetails["phase"] != "commentary" {
+		t.Fatalf("raw annotations were retained by default: %+v", first)
 	}
 }
 
@@ -1045,19 +1064,25 @@ func TestResponsesTextResponse(t *testing.T) {
 	temperature := 0.5
 	logprobs := true
 	topLogprobs := 3
+	settings := rawAnnotationSettings(t)
+	settings.Thinking = &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}
+	settings.Temperature = &temperature
+	settings.Logprobs = &logprobs
+	settings.TopLogprobs = &topLogprobs
+	settings.ServiceTier = ai.ServiceTierPriority
+	settings.ExtraHeaders = map[string]string{"x-custom": "value"}
+	settings.ExtraBody["store"] = true
 	resp, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{
-		Instructions: "be brief", AllowText: true,
-		Settings: ai.ModelSettings{
-			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, Temperature: &temperature,
-			Logprobs: &logprobs, TopLogprobs: &topLogprobs, ServiceTier: ai.ServiceTierPriority,
-			ExtraHeaders: map[string]string{"x-custom": "value"}, ExtraBody: map[string]any{"store": true},
-		},
+		Instructions: "be brief", AllowText: true, Settings: settings,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if gotPath != "/responses" || gotCustom != "value" {
 		t.Fatalf("unexpected path %q or custom header %q", gotPath, gotCustom)
+	}
+	if _, exists := gotBody["openai_include_raw_annotations"]; exists {
+		t.Fatalf("local annotation setting entered provider body: %v", gotBody)
 	}
 	if gotBody["instructions"] != "be brief" || gotBody["temperature"] != nil ||
 		gotBody["reasoning"].(map[string]any)["effort"] != "high" ||
@@ -1193,11 +1218,15 @@ func TestResponsesAgentContinuesBackgroundResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"id":"job","model":"gpt-5","created_at":1735689601,
 			"status":"completed","background":true,
-			"output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"done"}]}],
+			"output":[{"id":"message","type":"message","content":[{
+				"type":"output_text","text":"done","annotations":[{"type":"url_citation","url":"https://example.com"}]
+			}]}],
 			"usage":{"input_tokens":2,"output_tokens":1}
 		}`))
 	}, openai.WithBackgroundMode(true), openai.WithBackgroundPollInterval(0))
-	result, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "go", struct{}{})
+	result, err := ai.NewAgent[struct{}, string](
+		model, ai.WithModelSettings(rawAnnotationSettings(t)),
+	).Run(t.Context(), "go", struct{}{})
 	if err != nil || result.Output != "done" {
 		t.Fatalf("unexpected background result=%+v err=%v", result, err)
 	}
@@ -1209,8 +1238,9 @@ func TestResponsesAgentContinuesBackgroundResponse(t *testing.T) {
 		t.Fatalf("background usage was double counted: %+v", usage)
 	}
 	response := result.NewMessages()[1].(ai.ModelResponse)
-	if response.Timestamp.IsZero() {
-		t.Fatalf("retrieved response timestamp was lost: %+v", response)
+	text := response.Parts[0].(ai.TextPart)
+	if response.Timestamp.IsZero() || len(text.ProviderDetails["annotations"].([]map[string]any)) != 1 {
+		t.Fatalf("retrieved response metadata was lost: %+v", response)
 	}
 }
 

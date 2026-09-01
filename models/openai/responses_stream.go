@@ -23,15 +23,23 @@ func (m *ResponsesModel) StreamRequest(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 	if responseID, ok := suspendedResponsesID(msgs, m.providerName); ok {
+		_, responseSettings, err := extractResponsesSettings(params.Settings)
+		if err != nil {
+			return nil, err
+		}
 		sequence, hasSequence := suspendedResponsesSequence(msgs)
 		if !hasSequence {
-			response, err := m.retrieveResponse(ctx, responseID, params.Settings.ExtraHeaders)
+			response, err := m.retrieveResponse(
+				ctx, responseID, params.Settings.ExtraHeaders, responseSettings.IncludeRawAnnotations,
+			)
 			if err != nil {
 				return nil, err
 			}
 			return staticResponsesEventStream(response), nil
 		}
-		return m.retrieveResponseStream(ctx, responseID, sequence, params.Settings.ExtraHeaders)
+		return m.retrieveResponseStream(
+			ctx, responseID, sequence, params.Settings.ExtraHeaders, responseSettings.IncludeRawAnnotations,
+		)
 	}
 	payload, err := m.buildResponsesPayload(ctx, msgs, params, true)
 	if err != nil {
@@ -64,11 +72,11 @@ func (m *ResponsesModel) StreamRequest(
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	return m.responsesEventStream(resp.Body, nil), nil
+	return m.responsesEventStream(resp.Body, nil, payload.IncludeRawAnnotations), nil
 }
 
 func (m *ResponsesModel) retrieveResponseStream(
-	ctx context.Context, responseID string, sequence int, headers map[string]string,
+	ctx context.Context, responseID string, sequence int, headers map[string]string, includeRawAnnotations bool,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 	query := url.Values{"stream": {"true"}, "starting_after": {strconv.Itoa(sequence)}}
 	req, err := http.NewRequestWithContext(
@@ -99,7 +107,7 @@ func (m *ResponsesModel) retrieveResponseStream(
 		ProviderResponseID: responseID,
 		ProviderDetails:    map[string]any{"background": true, "sequence_number": sequence},
 		State:              ai.ModelResponseStateSuspended,
-	}), nil
+	}, includeRawAnnotations), nil
 }
 
 func suspendedResponsesSequence(messages []ai.ModelMessage) (int, bool) {
@@ -140,7 +148,7 @@ type responsesStreamEvent struct {
 }
 
 func (m *ResponsesModel) responsesEventStream(
-	body io.ReadCloser, seed *ai.ResponseMetadataEvent,
+	body io.ReadCloser, seed *ai.ResponseMetadataEvent, includeRawAnnotations bool,
 ) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
@@ -251,7 +259,9 @@ func (m *ResponsesModel) responsesEventStream(
 					return
 				}
 			case "response.output_text.annotation.added":
-				textAnnotations[event.ItemID] = append(textAnnotations[event.ItemID], event.Annotation)
+				if includeRawAnnotations {
+					textAnnotations[event.ItemID] = append(textAnnotations[event.ItemID], event.Annotation)
+				}
 			case "response.output_text.done":
 				providerDetails := map[string]any{}
 				if annotations := textAnnotations[event.ItemID]; len(annotations) > 0 {
@@ -603,7 +613,7 @@ func (m *ResponsesModel) responsesEventStream(
 				var snapshotParts []ai.ResponsePart
 				compacted := false
 				if len(event.Response.Output) > 0 {
-					response, err := modelResponseFromResponses(event.Response)
+					response, err := modelResponseFromResponses(event.Response, includeRawAnnotations)
 					if err != nil {
 						yield(nil, err)
 						return
@@ -690,7 +700,7 @@ func (m *ResponsesModel) responsesEventStream(
 		if latest != nil {
 			var snapshotParts []ai.ResponsePart
 			if len(latest.Response.Output) > 0 {
-				response, err := modelResponseFromResponses(latest.Response)
+				response, err := modelResponseFromResponses(latest.Response, includeRawAnnotations)
 				if err != nil {
 					yield(nil, err)
 					return

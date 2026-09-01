@@ -14,8 +14,15 @@ import (
 
 func main() {
 	externalWebAccess := true
+	includeRawAnnotations := true
+	settings, err := (openai.Settings{IncludeRawAnnotations: &includeRawAnnotations}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	agent := ai.NewAgent[struct{}, string](
 		openai.NewResponsesModel("gpt-5"),
+		ai.WithModelSettings(settings),
 		ai.WithNativeTools(ai.WebSearchTool{
 			SearchContextSize: ai.WebSearchContextHigh,
 			AllowedDomains:    []string{"go.dev"},
@@ -34,6 +41,8 @@ func main() {
 A native tool runs inside the model provider. The agent records its calls and returns in history, but it does not execute them as local Go functions.
 
 `WebSearchTool` is provider-neutral. OpenAI Responses renders it as the hosted `web_search` tool. Gemini renders it as `googleSearch`. Anthropic renders the model-appropriate version of `web_search`. Static and streamed responses become `NativeToolCallPart` and `NativeToolReturnPart` values with `ToolPartKindWebSearch`.
+
+OpenAI Responses omits raw provider annotations by default. Set `Settings.IncludeRawAnnotations` as shown above to retain citation annotations in `TextPart.ProviderDetails["annotations"]`. The setting applies to static responses, streams, and resumed background responses without entering the provider request body.
 
 ## Configure search
 

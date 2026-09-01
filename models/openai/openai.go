@@ -425,6 +425,13 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
+	settings, responseSettings, err := extractRawAnnotationSettings(settings)
+	if err != nil {
+		return nil, err
+	}
+	if responseSettings.annotationsConfigured {
+		return nil, fmt.Errorf("openai: include raw annotations is only supported by Responses")
+	}
 	params.Settings = settings
 	if m.chatCompatibility.NativeToolFunc == nil {
 		for _, nativeTool := range params.NativeTools {

@@ -84,7 +84,13 @@ func (m *ResponsesModel) PromptCacheRetention(settings ai.ModelSettings) (time.D
 // Request implements ai.Model.
 func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 	if responseID, ok := suspendedResponsesID(msgs, m.providerName); ok {
-		return m.retrieveResponse(ctx, responseID, params.Settings.ExtraHeaders)
+		_, responseSettings, err := extractResponsesSettings(params.Settings)
+		if err != nil {
+			return nil, err
+		}
+		return m.retrieveResponse(
+			ctx, responseID, params.Settings.ExtraHeaders, responseSettings.IncludeRawAnnotations,
+		)
 	}
 	payload, err := m.buildResponsesPayload(ctx, msgs, params, true)
 	if err != nil {
@@ -115,7 +121,7 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	response, err := parseResponsesResponse(data)
+	response, err := parseResponsesResponse(data, payload.IncludeRawAnnotations)
 	if response != nil {
 		setResponsesProvider(response, m.providerName, m.baseURL)
 	}
@@ -214,7 +220,7 @@ func (m *ResponsesModel) CompactMessages(
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	compacted, err := parseResponsesResponse(data)
+	compacted, err := parseResponsesResponse(data, false)
 	if err != nil {
 		return nil, err
 	}
@@ -271,7 +277,7 @@ func (m *ResponsesModel) CancelSuspendedResponse(ctx context.Context, response a
 }
 
 func (m *ResponsesModel) retrieveResponse(
-	ctx context.Context, responseID string, headers map[string]string,
+	ctx context.Context, responseID string, headers map[string]string, includeRawAnnotations bool,
 ) (*ai.ModelResponse, error) {
 	req, err := http.NewRequestWithContext(
 		ctx, http.MethodGet, m.baseURL+"/responses/"+url.PathEscape(responseID), nil,
@@ -294,7 +300,7 @@ func (m *ResponsesModel) retrieveResponse(
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	response, err := parseResponsesResponse(data)
+	response, err := parseResponsesResponse(data, includeRawAnnotations)
 	if response != nil {
 		setResponsesProvider(response, m.providerName, m.baseURL)
 	}
@@ -353,26 +359,27 @@ func setResponsesProvider(response *ai.ModelResponse, providerName, providerURL 
 }
 
 type responsesRequest struct {
-	Model                string               `json:"model"`
-	Instructions         string               `json:"instructions,omitempty"`
-	Input                []responsesInput     `json:"input"`
-	Tools                []responsesTool      `json:"tools,omitempty"`
-	ToolChoice           any                  `json:"tool_choice,omitempty"`
-	ParallelToolCalls    *bool                `json:"parallel_tool_calls,omitempty"`
-	MaxTokens            int                  `json:"max_output_tokens,omitempty"`
-	Temperature          *float64             `json:"temperature,omitempty"`
-	TopP                 *float64             `json:"top_p,omitempty"`
-	Stream               bool                 `json:"stream,omitempty"`
-	Background           *bool                `json:"background,omitempty"`
-	Reasoning            *responsesReasoning  `json:"reasoning,omitempty"`
-	Text                 *responsesText       `json:"text,omitempty"`
-	TopLogprobs          *int                 `json:"top_logprobs,omitempty"`
-	Include              []string             `json:"include,omitempty"`
-	ServiceTier          ai.ServiceTier       `json:"service_tier,omitempty"`
-	PromptCacheKey       string               `json:"prompt_cache_key,omitempty"`
-	PromptCacheRetention PromptCacheRetention `json:"prompt_cache_retention,omitempty"`
-	PromptCacheOptions   *PromptCacheOptions  `json:"prompt_cache_options,omitempty"`
-	ExtraBody            map[string]any       `json:"-"`
+	Model                 string               `json:"model"`
+	Instructions          string               `json:"instructions,omitempty"`
+	Input                 []responsesInput     `json:"input"`
+	Tools                 []responsesTool      `json:"tools,omitempty"`
+	ToolChoice            any                  `json:"tool_choice,omitempty"`
+	ParallelToolCalls     *bool                `json:"parallel_tool_calls,omitempty"`
+	MaxTokens             int                  `json:"max_output_tokens,omitempty"`
+	Temperature           *float64             `json:"temperature,omitempty"`
+	TopP                  *float64             `json:"top_p,omitempty"`
+	Stream                bool                 `json:"stream,omitempty"`
+	Background            *bool                `json:"background,omitempty"`
+	Reasoning             *responsesReasoning  `json:"reasoning,omitempty"`
+	Text                  *responsesText       `json:"text,omitempty"`
+	TopLogprobs           *int                 `json:"top_logprobs,omitempty"`
+	Include               []string             `json:"include,omitempty"`
+	ServiceTier           ai.ServiceTier       `json:"service_tier,omitempty"`
+	PromptCacheKey        string               `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention  PromptCacheRetention `json:"prompt_cache_retention,omitempty"`
+	PromptCacheOptions    *PromptCacheOptions  `json:"prompt_cache_options,omitempty"`
+	IncludeRawAnnotations bool                 `json:"-"`
+	ExtraBody             map[string]any       `json:"-"`
 }
 
 type responsesReasoning struct {
@@ -635,12 +642,9 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if err != nil {
 		return nil, err
 	}
-	settings, prediction, err := extractPredictionSettings(settings)
+	settings, responseSettings, err := extractResponsesSettings(settings)
 	if err != nil {
 		return nil, err
-	}
-	if prediction != nil {
-		return nil, fmt.Errorf("openai: prediction is only supported by Chat Completions")
 	}
 	params.Settings = settings
 	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
@@ -655,18 +659,19 @@ func (m *ResponsesModel) buildResponsesPayload(
 		return nil, err
 	}
 	req := &responsesRequest{
-		Model:                m.name,
-		Instructions:         params.Instructions,
-		MaxTokens:            params.Settings.MaxTokens,
-		Temperature:          params.Settings.Temperature,
-		TopP:                 params.Settings.TopP,
-		Background:           m.background,
-		TopLogprobs:          params.Settings.TopLogprobs,
-		ServiceTier:          serviceTier,
-		PromptCacheKey:       promptCache.Key,
-		PromptCacheRetention: promptCache.Retention,
-		PromptCacheOptions:   promptCache.Options,
-		ExtraBody:            params.Settings.ExtraBody,
+		Model:                 m.name,
+		Instructions:          params.Instructions,
+		MaxTokens:             params.Settings.MaxTokens,
+		Temperature:           params.Settings.Temperature,
+		TopP:                  params.Settings.TopP,
+		Background:            m.background,
+		TopLogprobs:           params.Settings.TopLogprobs,
+		ServiceTier:           serviceTier,
+		PromptCacheKey:        promptCache.Key,
+		PromptCacheRetention:  promptCache.Retention,
+		PromptCacheOptions:    promptCache.Options,
+		IncludeRawAnnotations: responseSettings.IncludeRawAnnotations,
+		ExtraBody:             params.Settings.ExtraBody,
 	}
 	if params.Settings.Logprobs != nil && *params.Settings.Logprobs {
 		req.Include = append(req.Include, "message.output_text.logprobs")
@@ -938,12 +943,12 @@ func responsesMetadata(
 	return rawFinishReason, providerDetails, timestamp, openAIResponsesState(status, background)
 }
 
-func parseResponsesResponse(data []byte) (*ai.ModelResponse, error) {
+func parseResponsesResponse(data []byte, includeRawAnnotations bool) (*ai.ModelResponse, error) {
 	var rr responsesResponse
 	if err := json.Unmarshal(data, &rr); err != nil {
 		return nil, fmt.Errorf("openai: parse response: %w", err)
 	}
-	return modelResponseFromResponses(rr)
+	return modelResponseFromResponses(rr, includeRawAnnotations)
 }
 
 func responsesCodeExecutionParts(
@@ -1094,7 +1099,7 @@ func responsesDataURI(value string) (ai.BinaryContent, error) {
 	return ai.BinaryContent{Data: data, MediaType: strings.TrimSuffix(strings.TrimPrefix(header, "data:"), ";base64")}, nil
 }
 
-func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error) {
+func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool) (*ai.ModelResponse, error) {
 	rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
 		rr.Status, rr.IncompleteDetails, rr.CreatedAt, rr.Background,
 	)
@@ -1124,7 +1129,7 @@ func modelResponseFromResponses(rr responsesResponse) (*ai.ModelResponse, error)
 					if len(content.Logprobs) > 0 {
 						details = map[string]any{"logprobs": content.Logprobs}
 					}
-					if len(content.Annotations) > 0 {
+					if includeRawAnnotations && len(content.Annotations) > 0 {
 						if details == nil {
 							details = map[string]any{}
 						}

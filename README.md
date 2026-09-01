@@ -276,6 +276,7 @@ func TestAgent(t *testing.T) {
 | Send images, documents, audio, video, or uploaded files | [`RunParts`](docs/multimodal.md) |
 | Use provider-native web tools | [`WebSearchTool` and `WebFetchTool`](docs/native-tools.md) |
 | Configure a provider or compatible endpoint | [Provider configuration](docs/providers.md) |
+| Retry transient provider HTTP failures | [`retries.Transport`](docs/retries.md) |
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |
 | Add middleware | [`Capability` and its focused hook interfaces](docs/capabilities.md) |

@@ -7,6 +7,7 @@ packages=(
     .
     ./internal/download
     ./internal/schema
+    ./retries
     ./evals
     ./models/fakes
     ./models/openai

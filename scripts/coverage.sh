@@ -14,6 +14,7 @@ packages=(
     ./embeddings/fakes
     ./embeddings/google
     ./embeddings/openai
+    ./embeddings/voyageai
     ./models/fakes
     ./models/openai
     ./models/openrouter

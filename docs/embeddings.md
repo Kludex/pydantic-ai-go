@@ -248,6 +248,38 @@ func main() {
 
 Set `CO_API_KEY` before you run the example. Cohere-specific input and truncation settings take precedence over the portable defaults. `CountTokens` uses Cohere's v1 tokenizer while embedding requests use the v2 API.
 
+## VoyageAI
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Kludex/pydantic-ai-go/embeddings"
+	"github.com/Kludex/pydantic-ai-go/embeddings/voyageai"
+)
+
+func main() {
+	model := voyageai.NewModel("voyage-4")
+	embedder := embeddings.New(model)
+
+	settings, err := (voyageai.Settings{
+		InputType: voyageai.InputTypeNone,
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = embedder.EmbedQuery(context.Background(), "What is structured concurrency?", settings)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Set `VOYAGE_API_KEY` before you run the example. Use `InputTypeNone` when you do not want VoyageAI to add a retrieval prefix. The adapter requests compact base64 vectors and returns detached `float64` values.
+
 ## Token limits
 
 ```go

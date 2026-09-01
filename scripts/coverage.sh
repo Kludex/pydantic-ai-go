@@ -9,6 +9,9 @@ packages=(
     ./internal/schema
     ./retries
     ./evals
+    ./embeddings
+    ./embeddings/fakes
+    ./embeddings/openai
     ./models/fakes
     ./models/openai
     ./models/openrouter

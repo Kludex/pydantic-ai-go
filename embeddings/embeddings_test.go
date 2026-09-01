@@ -251,6 +251,7 @@ func TestResultPriceAndClone(t *testing.T) {
 		Embeddings: [][]float64{{1}}, Inputs: []string{"one"}, InputType: InputTypeQuery,
 		ModelName: "text-embedding-3-small", ProviderName: "openai",
 		Timestamp: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC), Usage: ai.Usage{InputTokens: 1},
+		Warnings: []string{"warning"},
 	}
 	calculation, err := result.Price()
 	if err != nil || calculation.TotalPrice <= 0 {
@@ -259,7 +260,8 @@ func TestResultPriceAndClone(t *testing.T) {
 	cloned := result.Clone()
 	cloned.Embeddings[0][0] = 2
 	cloned.Inputs[0] = "two"
-	if result.Embeddings[0][0] != 1 || result.Inputs[0] != "one" {
+	cloned.Warnings[0] = "changed"
+	if result.Embeddings[0][0] != 1 || result.Inputs[0] != "one" || result.Warnings[0] != "warning" {
 		t.Fatal("clone changed source result")
 	}
 }

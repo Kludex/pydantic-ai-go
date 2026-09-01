@@ -11,6 +11,7 @@ packages=(
     ./evals
     ./embeddings
     ./embeddings/fakes
+    ./embeddings/google
     ./embeddings/openai
     ./models/fakes
     ./models/openai

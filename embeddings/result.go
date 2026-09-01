@@ -19,6 +19,7 @@ type Result struct {
 	Usage              ai.Usage
 	ProviderDetails    map[string]any
 	ProviderResponseID string
+	Warnings           []string
 }
 
 // Clone returns a detached result.
@@ -27,6 +28,7 @@ func (result Result) Clone() Result {
 	result.Inputs = slices.Clone(result.Inputs)
 	result.Usage = result.Usage.Clone()
 	result.ProviderDetails = cloneMap(result.ProviderDetails)
+	result.Warnings = slices.Clone(result.Warnings)
 	return result
 }
 

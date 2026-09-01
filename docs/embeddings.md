@@ -138,6 +138,77 @@ func main() {
 
 The provider name and URL remain attached to each result. `Result.Price` uses them with the bundled `genai-prices` snapshot.
 
+## Google Gemini
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Kludex/pydantic-ai-go/embeddings"
+	embeddinggoogle "github.com/Kludex/pydantic-ai-go/embeddings/google"
+)
+
+func main() {
+	model := embeddinggoogle.NewModel("gemini-embedding-2")
+	embedder := embeddings.New(model)
+
+	settings, err := (embeddinggoogle.Settings{
+		Task:  embeddinggoogle.TaskQuestionAnswering,
+		Title: "Structured concurrency",
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = embedder.EmbedDocuments(
+		context.Background(),
+		[]string{"Child tasks remain inside their parent scope."},
+		settings,
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Set `GOOGLE_API_KEY` or `GEMINI_API_KEY` before you run the example. `gemini-embedding-2` uses a task prefix. Earlier models use Google's `taskType` request field. If you pass a setting that the selected family ignores, the result reports it in `Warnings`.
+
+## Google Cloud Vertex AI
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Kludex/pydantic-ai-go/embeddings"
+	embeddinggoogle "github.com/Kludex/pydantic-ai-go/embeddings/google"
+	modelgoogle "github.com/Kludex/pydantic-ai-go/models/google"
+)
+
+func main() {
+	model, err := embeddinggoogle.NewVertexModel(
+		"gemini-embedding-001",
+		modelgoogle.VertexConfig{
+			Project:  "my-project",
+			Location: "global",
+		},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	_, err = embeddings.New(model).EmbedQuery(context.Background(), "How are child tasks scoped?")
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Vertex AI uses Application Default Credentials unless you pass a `TokenProvider` or an Express Mode API key. The same transport supports regional, global, multi-region, and custom endpoints.
+
 ## Token limits
 
 ```go

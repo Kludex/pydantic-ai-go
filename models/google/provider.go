@@ -81,7 +81,7 @@ type VertexConfig struct {
 
 // NewVertexModel creates a model routed through Google Cloud Vertex AI.
 func NewVertexModel(name string, config VertexConfig, opts ...Option) (*Model, error) {
-	provider, err := vertexProviderConfig(config)
+	provider, err := NewVertexProviderConfig(config)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +89,9 @@ func NewVertexModel(name string, config VertexConfig, opts ...Option) (*Model, e
 	return NewModel(name, opts...), nil
 }
 
-func vertexProviderConfig(config VertexConfig) (ProviderConfig, error) {
+// NewVertexProviderConfig resolves a reusable Vertex AI provider configuration.
+// The returned configuration can be used by chat and embedding models.
+func NewVertexProviderConfig(config VertexConfig) (ProviderConfig, error) {
 	if config.APIKey != "" && config.TokenProvider != nil {
 		return ProviderConfig{}, fmt.Errorf("google: Vertex API key and token provider cannot both be set")
 	}

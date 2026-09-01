@@ -96,7 +96,7 @@ func main() {
 }
 ```
 
-`infer.Model` requires a provider prefix. It supports `openai`, `azure`, `cohere`, `google`, `google-cloud`, and `voyageai`. Use `infer.WithProvider` to register a custom resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
+`infer.Model` requires a provider prefix. It supports `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, and `voyageai`. Use `infer.WithProvider` to register a custom resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
 
 `WithModel` scopes an override to one context tree. It does not mutate the reusable `Embedder`, so concurrent requests can select different models safely.
 
@@ -312,6 +312,39 @@ func main() {
 ```
 
 Set `VOYAGE_API_KEY` before you run the example. Use `InputTypeNone` when you do not want VoyageAI to add a retrieval prefix. The adapter requests compact base64 vectors and returns detached `float64` values.
+
+## Amazon Bedrock
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Kludex/pydantic-ai-go/embeddings"
+	"github.com/Kludex/pydantic-ai-go/embeddings/bedrock"
+)
+
+func main() {
+	model, err := bedrock.NewModel("amazon.titan-embed-text-v2:0")
+	if err != nil {
+		log.Fatal(err)
+	}
+	embedder := embeddings.New(model)
+
+	_, err = embedder.EmbedDocuments(context.Background(), []string{"first document", "second document"})
+	if err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+The default client uses the AWS SDK credential and region chain. Use `bedrock.WithAWSConfig` with a loaded `aws.Config`. Use `bedrock.WithClient` to inject a transport client. The client supports Titan, Cohere, and Nova request formats.
+
+Titan and Nova require one request per input. The model preserves input order and allows five parallel requests by default. Set `bedrock.Settings.MaxConcurrency` when your Bedrock quota requires a different limit. Cohere batches all inputs in one request.
+
+Use `bedrock.Settings` for dimensions, normalization, input types, truncation, Nova purposes, and inference profiles. Provider-specific defaults merge field by field with per-call settings.
 
 ## Token limits
 

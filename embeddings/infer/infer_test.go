@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Kludex/pydantic-ai-go/embeddings"
+	"github.com/Kludex/pydantic-ai-go/embeddings/bedrock"
 	"github.com/Kludex/pydantic-ai-go/embeddings/cohere"
 	embeddinggoogle "github.com/Kludex/pydantic-ai-go/embeddings/google"
 	"github.com/Kludex/pydantic-ai-go/embeddings/infer"
@@ -24,6 +25,10 @@ func TestBuiltInModels(t *testing.T) {
 		providerName string
 		modelName    string
 	}{
+		{
+			name: "bedrock:amazon.titan-embed-text-v2:0", providerName: "bedrock", modelName: "amazon.titan-embed-text-v2:0",
+			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*bedrock.Model); return ok },
+		},
 		{
 			name: "openai:text-embedding-3-small", providerName: "openai", modelName: "text-embedding-3-small",
 			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*openai.Model); return ok },

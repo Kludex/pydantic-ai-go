@@ -10,6 +10,7 @@ packages=(
     ./retries
     ./evals
     ./embeddings
+    ./embeddings/bedrock
     ./embeddings/cohere
     ./embeddings/fakes
     ./embeddings/google

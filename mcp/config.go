@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"regexp"
@@ -98,19 +97,10 @@ func configuredToolset[Deps any](name string, server serverConfig, opts []Option
 			return &mcpsdk.CommandTransport{Command: command}, nil
 		}, options...), nil
 	case server.URL != "":
-		endpoint, err := url.ParseRequestURI(server.URL)
-		if err != nil || (endpoint.Scheme != "http" && endpoint.Scheme != "https") {
+		if _, err := parseHTTPURL(server.URL); err != nil {
 			return nil, fmt.Errorf("ai/mcp: server %q has invalid HTTP URL %q", name, server.URL)
 		}
-		return NewToolset(func(context.Context, *ai.RunContext[Deps]) (mcpsdk.Transport, error) {
-			client := &http.Client{Transport: headerTransport{
-				base: http.DefaultTransport, headers: cloneHeaders(server.Headers),
-			}}
-			if strings.HasSuffix(strings.TrimRight(endpoint.Path, "/"), "/sse") {
-				return &mcpsdk.SSEClientTransport{Endpoint: server.URL, HTTPClient: client}, nil
-			}
-			return &mcpsdk.StreamableClientTransport{Endpoint: server.URL, HTTPClient: client}, nil
-		}, options...), nil
+		return NewHTTPToolset[Deps](HTTPToolsetConfig{URL: server.URL, Headers: server.Headers}, options...), nil
 	default:
 		return nil, fmt.Errorf("ai/mcp: server %q must have either command or url", name)
 	}
@@ -181,13 +171,17 @@ func mergedEnvironment(overrides map[string]string) []string {
 type headerTransport struct {
 	base    http.RoundTripper
 	headers map[string]string
+	origin  string
 }
 
 func (t headerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
 	cloned := request.Clone(request.Context())
 	cloned.Header = request.Header.Clone()
-	for key, value := range t.headers {
-		cloned.Header.Set(key, value)
+	requestOrigin := request.URL.Scheme + "://" + request.URL.Host
+	if t.origin == "" || strings.EqualFold(requestOrigin, t.origin) {
+		for key, value := range t.headers {
+			cloned.Header.Set(key, value)
+		}
 	}
 	return t.base.RoundTrip(cloned)
 }

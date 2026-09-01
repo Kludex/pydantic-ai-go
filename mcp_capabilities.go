@@ -1,6 +1,9 @@
 package ai
 
-import "context"
+import (
+	"context"
+	"slices"
+)
 
 // MCPServerCapabilityConfig configures a provider-hosted MCP server and an optional local client toolset.
 type MCPServerCapabilityConfig[Deps any] struct {
@@ -13,22 +16,66 @@ type MCPServerCapabilityConfig[Deps any] struct {
 func NewMCPServerCapability[Deps any](
 	config MCPServerCapabilityConfig[Deps],
 ) *NativeOrLocalTool[Deps] {
-	local := config.Local
-	if !toolsetIsNil(local) && config.Native.AllowedTools != nil {
-		allowed := make(map[string]struct{}, len(config.Native.AllowedTools))
-		for _, name := range config.Native.AllowedTools {
-			allowed[name] = struct{}{}
-		}
-		local = FilterToolset(local, func(
-			_ context.Context, _ *RunContext[Deps], definition ToolDefinition,
-		) (bool, error) {
-			_, ok := allowed[definition.Name]
-			return ok, nil
-		})
-	}
+	local := filterMCPToolset(config.Local, config.Native.AllowedTools)
 	var options []NativeOrLocalOption
 	if toolsetIsNil(local) {
 		options = nativeRequirementOption("no local MCP fallback was configured")
 	}
 	return NewNativeOrLocalToolset(config.Native, local, options...)
+}
+
+// MCPServerFunc resolves a provider-hosted MCP server before a model request.
+// It may run concurrently and must not return shared mutable state.
+type MCPServerFunc[Deps any] func(
+	ctx context.Context, rc *RunContext[Deps],
+) (MCPServerTool, error)
+
+// DynamicMCPServerCapabilityConfig configures dependency-aware native MCP and a local fallback.
+type DynamicMCPServerCapabilityConfig[Deps any] struct {
+	ID           string
+	Resolve      MCPServerFunc[Deps]
+	Local        Toolset[Deps]
+	AllowedTools []string
+}
+
+// NewDynamicMCPServerCapability creates dependency-aware native-first MCP access.
+// ID is the stable MCP server ID every resolved definition must return.
+func NewDynamicMCPServerCapability[Deps any](
+	config DynamicMCPServerCapabilityConfig[Deps], options ...NativeOrLocalOption,
+) *NativeOrLocalTool[Deps] {
+	if config.ID == "" {
+		panic("ai: dynamic MCP server ID must not be empty")
+	}
+	if config.Resolve == nil {
+		panic("ai: dynamic MCP server resolver must not be nil")
+	}
+	allowedTools := slices.Clone(config.AllowedTools)
+	local := filterMCPToolset(config.Local, allowedTools)
+	options = nativeRequiredWithoutLocal(local, "no local MCP fallback was configured", options)
+	return NewDynamicNativeOrLocalToolset(
+		"mcp_server:"+config.ID,
+		func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error) {
+			tool, err := config.Resolve(ctx, rc)
+			tool.AllowedTools = slices.Clone(allowedTools)
+			return tool, err
+		},
+		local,
+		options...,
+	)
+}
+
+func filterMCPToolset[Deps any](local Toolset[Deps], allowedTools []string) Toolset[Deps] {
+	if toolsetIsNil(local) || allowedTools == nil {
+		return local
+	}
+	allowed := make(map[string]struct{}, len(allowedTools))
+	for _, name := range allowedTools {
+		allowed[name] = struct{}{}
+	}
+	return FilterToolset(local, func(
+		_ context.Context, _ *RunContext[Deps], definition ToolDefinition,
+	) (bool, error) {
+		_, ok := allowed[definition.Name]
+		return ok, nil
+	})
 }

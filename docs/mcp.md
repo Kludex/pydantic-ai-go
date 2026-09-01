@@ -21,8 +21,8 @@ import (
 
 func main() {
 	agent := ai.NewAgent[struct{}, string](openai.NewModel("gpt-5-mini"))
-	agent.AddToolset(aimcp.NewStreamableHTTPToolset[struct{}](
-		"http://localhost:8000/mcp",
+	agent.AddToolset(aimcp.NewHTTPToolset[struct{}](
+		aimcp.HTTPToolsetConfig{URL: "http://localhost:8000/mcp"},
 		aimcp.WithID("catalog"),
 	))
 
@@ -40,7 +40,52 @@ func main() {
 
 The toolset opens a fresh MCP session for the run. It closes the session after the run completes, fails, pauses, or is canceled. This default prevents state and credentials from leaking between concurrent runs.
 
-The server's tools and instructions are refreshed before each model step. Tool input and output schemas, annotations, and metadata are preserved.
+The server's tools and instructions are refreshed before each model step. Tool input and output schemas, annotations, and metadata are preserved. `NewHTTPToolset` uses legacy SSE for URLs ending in `/sse` and Streamable HTTP for every other HTTP URL.
+
+## Prefer native MCP with a local fallback
+
+Use one capability when the provider should manage MCP where supported and your application should connect otherwise:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	server := ai.MCPServerTool{
+		ID:                 "catalog",
+		URL:                "https://mcp.example.com/mcp",
+		AuthorizationToken: os.Getenv("MCP_AUTH_TOKEN"),
+		AllowedTools:       []string{"search"},
+	}
+	capability := aimcp.NewHTTPServerCapability[struct{}](
+		aimcp.HTTPServerCapabilityConfig{Native: server},
+	)
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewResponsesModel("gpt-5"),
+		ai.WithCapabilities(capability),
+	)
+
+	result, err := agent.Run(context.Background(), "Find the installation guide.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`NewHTTPServerCapability` applies the URL, authorization value, headers, server ID, and allowlist to both paths. It keeps provider-owned calls out of local function-tool execution. Cross-origin redirects never receive configured headers. Pass a caller-owned `http.Client` in `HTTPServerCapabilityConfig` when you need custom TLS, cookies, proxy behavior, or retries.
+
+Use `ai.NewMCPServerCapability` when you already have a local toolset. Use `ai.NewDynamicMCPServerCapability` when dependencies select the provider-hosted URL or credentials for each request. Its stable `ID` must match every resolved `MCPServerTool.ID`; its `AllowedTools` value is authoritative for both paths.
 
 ## Share an explicit session
 

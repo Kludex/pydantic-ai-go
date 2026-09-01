@@ -4,6 +4,7 @@ package embeddings
 import (
 	"context"
 	"errors"
+	"reflect"
 )
 
 // InputType describes how an embedding will be used.
@@ -42,10 +43,31 @@ type Wrapper struct {
 	Model
 }
 
+// ModelUnwrapper exposes the model wrapped by a decorator.
+type ModelUnwrapper interface {
+	UnwrapModel() Model
+}
+
 // WrapModel creates a transparent embedding model wrapper.
 func WrapModel(model Model) *Wrapper {
-	if model == nil {
+	if embeddingModelIsNil(model) {
 		panic("embeddings: cannot wrap a nil model")
 	}
 	return &Wrapper{Model: model}
+}
+
+// UnwrapModel returns the directly wrapped model.
+func (wrapper *Wrapper) UnwrapModel() Model { return wrapper.Model }
+
+func embeddingModelIsNil(model Model) bool {
+	if model == nil {
+		return true
+	}
+	value := reflect.ValueOf(model)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }

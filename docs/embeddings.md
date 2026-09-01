@@ -312,6 +312,33 @@ func main() {
 
 OpenAI token counting runs locally with the model's tokenizer. Models without token counting return `embeddings.ErrTokenCountingUnsupported`. An unknown maximum returns `known == false`.
 
+## OpenTelemetry
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"github.com/Kludex/pydantic-ai-go/embeddings"
+	"github.com/Kludex/pydantic-ai-go/embeddings/openai"
+)
+
+func main() {
+	model := embeddings.InstrumentModel(openai.NewModel("text-embedding-3-small"))
+	result, err := embeddings.New(model).EmbedQuery(context.Background(), "What is structured concurrency?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	log.Printf("dimensions: %d", len(result.Embeddings[0]))
+}
+```
+
+`InstrumentModel` emits one `embeddings <model>` client span. It records provider and model identity, usage, dimensions, cost, and OpenTelemetry token and cost histograms. Input and vector content are enabled by default. Pass `embeddings.WithInstrumentationContent(false)` before you export telemetry outside your trust boundary.
+
+Instrumentation preserves optional token-counting and input-limit capabilities through model wrappers.
+
 ## Tests
 
 Use `fakes.Model` for deterministic vectors without network access.

@@ -37,6 +37,18 @@ type capableModel struct{ *testModel }
 func (*capableModel) MaxInputTokens(context.Context) (int, bool, error) { return 42, true, nil }
 func (*capableModel) CountTokens(context.Context, string) (int, error)  { return 7, nil }
 
+type cyclicModel struct{ Model }
+
+func (model *cyclicModel) UnwrapModel() Model { return model }
+
+type valueWrapper struct{ Model }
+
+func (wrapper valueWrapper) UnwrapModel() Model { return wrapper.Model }
+
+type nilWrapper struct{ Model }
+
+func (nilWrapper) UnwrapModel() Model { return (*testModel)(nil) }
+
 func TestEmbedderOperationsAndDetachment(t *testing.T) {
 	dimensions := 2
 	baseHeader := map[string]string{"base": "one"}
@@ -243,6 +255,28 @@ func TestSettingsCloneAndMerge(t *testing.T) {
 	emptyResult := (Result{}).Clone()
 	if emptySettings.ExtraBody != nil || emptyResult.Embeddings != nil {
 		t.Fatal("nil clones should remain nil")
+	}
+}
+
+func TestWrapperOptionalCapabilities(t *testing.T) {
+	base := &capableModel{testModel: &testModel{}}
+	embedder := New(WrapModel(WrapModel(base)))
+	if maximum, known, err := embedder.MaxInputTokens(context.Background()); err != nil || !known || maximum != 42 {
+		t.Fatalf("unexpected wrapped limit: %d %v %v", maximum, known, err)
+	}
+	if count, err := embedder.CountTokens(context.Background(), "text"); err != nil || count != 7 {
+		t.Fatalf("unexpected wrapped token count: %d %v", count, err)
+	}
+
+	cycle := &cyclicModel{Model: &testModel{}}
+	if _, err := New(cycle).CountTokens(context.Background(), "text"); !errors.Is(err, ErrTokenCountingUnsupported) {
+		t.Fatalf("unexpected cycle error: %v", err)
+	}
+	if maximum, known, err := New(valueWrapper{Model: &testModel{}}).MaxInputTokens(context.Background()); err != nil || known || maximum != 0 {
+		t.Fatalf("unexpected value-wrapper limit: %d %v %v", maximum, known, err)
+	}
+	if _, err := New(nilWrapper{Model: &testModel{}}).CountTokens(context.Background(), "text"); !errors.Is(err, ErrTokenCountingUnsupported) {
+		t.Fatalf("unexpected nil-wrapper error: %v", err)
 	}
 }
 

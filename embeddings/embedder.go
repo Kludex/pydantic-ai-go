@@ -3,6 +3,7 @@ package embeddings
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"slices"
 )
 
@@ -23,7 +24,7 @@ func WithSettings(settings Settings) Option {
 
 // New creates an Embedder.
 func New(model Model, options ...Option) *Embedder {
-	if model == nil {
+	if embeddingModelIsNil(model) {
 		panic("embeddings: model must not be nil")
 	}
 	embedder := &Embedder{model: model}
@@ -97,7 +98,7 @@ func (embedder *Embedder) Embed(
 
 // MaxInputTokens returns the selected model's known input limit.
 func (embedder *Embedder) MaxInputTokens(ctx context.Context) (int, bool, error) {
-	model, ok := embedder.model.(MaxInputTokensModel)
+	model, ok := modelCapability[MaxInputTokensModel](embedder.model)
 	if !ok {
 		return 0, false, nil
 	}
@@ -106,11 +107,50 @@ func (embedder *Embedder) MaxInputTokens(ctx context.Context) (int, bool, error)
 
 // CountTokens counts input tokens when the selected model supports it.
 func (embedder *Embedder) CountTokens(ctx context.Context, text string) (int, error) {
-	model, ok := embedder.model.(TokenCountingModel)
+	model, ok := modelCapability[TokenCountingModel](embedder.model)
 	if !ok {
 		return 0, ErrTokenCountingUnsupported
 	}
 	return model.CountTokens(ctx, text)
+}
+
+func modelCapability[T any](model Model) (T, bool) {
+	seen := map[modelIdentity]struct{}{}
+	for range 100 {
+		if embeddingModelIsNil(model) {
+			break
+		}
+		if capability, ok := any(model).(T); ok {
+			return capability, true
+		}
+		wrapper, ok := model.(ModelUnwrapper)
+		if !ok {
+			break
+		}
+		identity, identifiable := embeddingModelIdentity(model)
+		if identifiable {
+			if _, exists := seen[identity]; exists {
+				break
+			}
+			seen[identity] = struct{}{}
+		}
+		model = wrapper.UnwrapModel()
+	}
+	var zero T
+	return zero, false
+}
+
+type modelIdentity struct {
+	typeOf  reflect.Type
+	pointer uintptr
+}
+
+func embeddingModelIdentity(model Model) (modelIdentity, bool) {
+	value := reflect.ValueOf(model)
+	if value.Kind() != reflect.Pointer {
+		return modelIdentity{}, false
+	}
+	return modelIdentity{typeOf: value.Type(), pointer: value.Pointer()}, true
 }
 
 func validateRequest(inputs []string, inputType InputType) error {

@@ -230,6 +230,16 @@ func TestChatNativeToolCompatibility(t *testing.T) {
 			t.Fatalf("unexpected nil native-tool error: %v", err)
 		}
 	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{Optional: true}, ai.WebSearchTool{Optional: true}},
+	}); err == nil || !strings.Contains(err.Error(), "duplicate native tool ID") {
+		t.Fatalf("unexpected duplicate native-tool error: %v", err)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	}); err == nil || !strings.Contains(err.Error(), `does not support native tool "code_execution"`) {
+		t.Fatalf("unexpected unsupported native-tool error: %v", err)
+	}
 }
 
 func TestRequestToolCallRoundTrip(t *testing.T) {

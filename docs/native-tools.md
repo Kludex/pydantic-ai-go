@@ -62,6 +62,40 @@ Gemini 3 can combine provider-native tools with function tools. Earlier Gemini m
 
 A required native tool fails before the provider request when the selected model adapter cannot render it. This prevents silent behavior changes. Set `Optional` only when your application has another valid path.
 
+## Use OpenAI Chat search models
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewModel("gpt-4o-search-preview"),
+		ai.WithNativeTools(ai.WebSearchTool{
+			SearchContextSize: ai.WebSearchContextLow,
+			UserLocation: &ai.WebSearchUserLocation{
+				City: "Utrecht", Country: "NL",
+			},
+		}),
+	)
+	result, err := agent.Run(context.Background(), "What is the weather today?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+OpenAI search-preview Chat models receive `WebSearchTool` as `web_search_options`, not as a function tool. Chat supports context size and approximate user location. It ignores the portable domain, usage-limit, and live-access fields. Other Chat models fail before transport and direct you to `NewResponsesModel`. Use `WithChatWebSearchSupport` only when a future model or compatible gateway implements the same wire field.
+
 ## Scope a tool to one run
 
 ```go

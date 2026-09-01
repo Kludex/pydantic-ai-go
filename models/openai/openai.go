@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"reflect"
 	"strings"
 	"time"
 
@@ -37,6 +36,7 @@ type Model struct {
 	responsesPhaseSupport         *bool
 	responsesCodeExecutionOutputs bool
 	responsesFileSearchResults    bool
+	chatWebSearchSupport          *bool
 	chatCompatibility             ChatCompatibility
 }
 
@@ -122,6 +122,14 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 // WithChatDocumentInput controls document input for a compatible Chat Completions endpoint.
 func WithChatDocumentInput(enabled bool) Option {
 	return func(model *Model) { model.chatCompatibility.DisableDocumentInput = !enabled }
+}
+
+// WithChatWebSearchSupport overrides Chat Completions web-search support detection.
+func WithChatWebSearchSupport(enabled bool) Option {
+	return func(model *Model) {
+		supported := enabled
+		model.chatWebSearchSupport = &supported
+	}
 }
 
 // WithResponsesCodeExecutionOutputs includes code-interpreter logs and image outputs in Responses results.
@@ -322,32 +330,33 @@ func (e *APIError) Error() string {
 func (*APIError) IsModelAPIError() bool { return true }
 
 type chatRequest struct {
-	Model                string               `json:"model"`
-	Messages             []chatMessage        `json:"messages"`
-	Tools                []any                `json:"tools,omitempty"`
-	ToolChoice           any                  `json:"tool_choice,omitempty"`
-	ParallelToolCalls    *bool                `json:"parallel_tool_calls,omitempty"`
-	MaxTokens            int                  `json:"max_completion_tokens,omitempty"`
-	LegacyMaxTokens      int                  `json:"max_tokens,omitempty"`
-	Temperature          *float64             `json:"temperature,omitempty"`
-	TopP                 *float64             `json:"top_p,omitempty"`
-	Seed                 *int                 `json:"seed,omitempty"`
-	Stop                 []string             `json:"stop,omitempty"`
-	Stream               bool                 `json:"stream,omitempty"`
-	StreamOptions        *streamOptions       `json:"stream_options,omitempty"`
-	ResponseFormat       *responseFormat      `json:"response_format,omitempty"`
-	ReasoningEffort      string               `json:"reasoning_effort,omitempty"`
-	PresencePenalty      *float64             `json:"presence_penalty,omitempty"`
-	FrequencyPenalty     *float64             `json:"frequency_penalty,omitempty"`
-	LogitBias            map[string]int       `json:"logit_bias,omitempty"`
-	Logprobs             *bool                `json:"logprobs,omitempty"`
-	TopLogprobs          *int                 `json:"top_logprobs,omitempty"`
-	ServiceTier          ai.ServiceTier       `json:"service_tier,omitempty"`
-	PromptCacheKey       string               `json:"prompt_cache_key,omitempty"`
-	PromptCacheRetention PromptCacheRetention `json:"prompt_cache_retention,omitempty"`
-	PromptCacheOptions   *PromptCacheOptions  `json:"prompt_cache_options,omitempty"`
-	Prediction           *chatPrediction      `json:"prediction,omitempty"`
-	ExtraBody            map[string]any       `json:"-"`
+	Model                string                `json:"model"`
+	Messages             []chatMessage         `json:"messages"`
+	Tools                []any                 `json:"tools,omitempty"`
+	ToolChoice           any                   `json:"tool_choice,omitempty"`
+	ParallelToolCalls    *bool                 `json:"parallel_tool_calls,omitempty"`
+	MaxTokens            int                   `json:"max_completion_tokens,omitempty"`
+	LegacyMaxTokens      int                   `json:"max_tokens,omitempty"`
+	Temperature          *float64              `json:"temperature,omitempty"`
+	TopP                 *float64              `json:"top_p,omitempty"`
+	Seed                 *int                  `json:"seed,omitempty"`
+	Stop                 []string              `json:"stop,omitempty"`
+	Stream               bool                  `json:"stream,omitempty"`
+	StreamOptions        *streamOptions        `json:"stream_options,omitempty"`
+	ResponseFormat       *responseFormat       `json:"response_format,omitempty"`
+	ReasoningEffort      string                `json:"reasoning_effort,omitempty"`
+	PresencePenalty      *float64              `json:"presence_penalty,omitempty"`
+	FrequencyPenalty     *float64              `json:"frequency_penalty,omitempty"`
+	LogitBias            map[string]int        `json:"logit_bias,omitempty"`
+	Logprobs             *bool                 `json:"logprobs,omitempty"`
+	TopLogprobs          *int                  `json:"top_logprobs,omitempty"`
+	ServiceTier          ai.ServiceTier        `json:"service_tier,omitempty"`
+	PromptCacheKey       string                `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention PromptCacheRetention  `json:"prompt_cache_retention,omitempty"`
+	PromptCacheOptions   *PromptCacheOptions   `json:"prompt_cache_options,omitempty"`
+	Prediction           *chatPrediction       `json:"prediction,omitempty"`
+	WebSearchOptions     *chatWebSearchOptions `json:"web_search_options,omitempty"`
+	ExtraBody            map[string]any        `json:"-"`
 }
 
 type chatMessage struct {
@@ -433,17 +442,45 @@ func (m *Model) buildPayload(
 		return nil, fmt.Errorf("openai: include raw annotations is only supported by Responses")
 	}
 	params.Settings = settings
+	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
+		return nil, err
+	}
+	var webSearchOptions *chatWebSearchOptions
 	if m.chatCompatibility.NativeToolFunc == nil {
 		for _, nativeTool := range params.NativeTools {
-			if nativeToolIsNil(nativeTool) {
-				return nil, fmt.Errorf("openai: native tool must not be nil")
+			webSearch, isWebSearch := nativeTool.CloneNativeTool().(ai.WebSearchTool)
+			if !isWebSearch {
+				if nativeTool.IsOptional() {
+					continue
+				}
+				return nil, fmt.Errorf(
+					"%s: Chat Completions does not support native tool %q", m.providerName, nativeTool.Kind(),
+				)
 			}
-			if !nativeTool.IsOptional() {
-				return nil, fmt.Errorf("openai: Chat Completions does not support native tool %q", nativeTool.Kind())
+			if !supportsChatWebSearch(m.name, m.chatWebSearchSupport) {
+				if webSearch.Optional {
+					continue
+				}
+				return nil, fmt.Errorf(
+					"%s: Chat Completions does not support native tool %q for model %q; use NewResponsesModel instead",
+					m.providerName, webSearch.Kind(), m.name,
+				)
+			}
+			contextSize := webSearch.SearchContextSize
+			if contextSize == "" {
+				contextSize = ai.WebSearchContextMedium
+			}
+			webSearchOptions = &chatWebSearchOptions{SearchContextSize: contextSize}
+			if webSearch.UserLocation != nil {
+				webSearchOptions.UserLocation = &chatWebSearchUserLocation{
+					Type: "approximate",
+					Approximate: chatWebSearchUserLocationApproximate{
+						City: webSearch.UserLocation.City, Country: webSearch.UserLocation.Country,
+						Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
+					},
+				}
 			}
 		}
-	} else if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
-		return nil, err
 	}
 	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
 	if err != nil {
@@ -471,6 +508,7 @@ func (m *Model) buildPayload(
 		PromptCacheRetention: promptCache.Retention,
 		PromptCacheOptions:   promptCache.Options,
 		Prediction:           prediction,
+		WebSearchOptions:     webSearchOptions,
 		ExtraBody:            params.Settings.ExtraBody,
 	}
 	if m.chatCompatibility.LegacyMaxTokens {
@@ -601,14 +639,6 @@ type jsonSchemaFormat struct {
 	Name   string         `json:"name"`
 	Schema map[string]any `json:"schema"`
 	Strict *bool          `json:"strict,omitempty"`
-}
-
-func nativeToolIsNil(tool ai.NativeTool) bool {
-	if tool == nil {
-		return true
-	}
-	value := reflect.ValueOf(tool)
-	return value.Kind() == reflect.Pointer && value.IsNil()
 }
 
 func openAIServiceTier(tier ai.ServiceTier) (ai.ServiceTier, error) {

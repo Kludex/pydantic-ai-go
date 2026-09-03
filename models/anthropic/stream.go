@@ -24,6 +24,20 @@ func (m *Model) StreamRequest(
 	if err != nil {
 		return nil, err
 	}
+	if m.legacyBedrockClient != nil {
+		response, err := m.requestLegacyBedrock(ctx, payload, params.Settings.ExtraHeaders)
+		if err != nil {
+			return nil, err
+		}
+		return func(yield func(ai.ModelStreamEvent, error) bool) {
+			yield(ai.FinishEvent{
+				Parts: response.Parts, Usage: response.Usage, ModelName: response.ModelName,
+				Timestamp: response.Timestamp, ProviderName: response.ProviderName, ProviderURL: response.ProviderURL,
+				ProviderDetails: response.ProviderDetails, ProviderResponseID: response.ProviderResponseID,
+				FinishReason: response.FinishReason, State: response.State,
+			}, nil)
+		}, nil
+	}
 	payload.Stream = true
 	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {

@@ -110,6 +110,51 @@ A custom client implements `bedrock.Client` for static generation. It can also i
 
 `WithProviderURL` records endpoint identity for telemetry when you supply a custom client. It does not change where that client sends requests.
 
+## Use the legacy Anthropic InvokeModel transport
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "github.com/aws/aws-sdk-go-v2/config"
+    "github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+
+    ai "github.com/Kludex/pydantic-ai-go"
+    "github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+func main() {
+    awsConfig, err := config.LoadDefaultConfig(context.Background())
+    if err != nil {
+        panic(err)
+    }
+    client := bedrockruntime.NewFromConfig(awsConfig)
+    model := anthropic.NewLegacyBedrockModel(
+        "anthropic.claude-sonnet-4-20250514-v1:0",
+        anthropic.LegacyBedrockConfig{
+            Client:      client,
+            ProviderURL: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        },
+    )
+    agent := ai.NewAgent[struct{}, string](model)
+
+    result, err := agent.Run(context.Background(), "Say hello.", struct{}{})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result.Output)
+}
+```
+
+`NewLegacyBedrockModel` reuses Anthropic message normalization with Bedrock's `InvokeModel` request body. It uses Bedrock's `CountTokens` operation because Anthropic's Messages token-count endpoint is unavailable on this transport.
+
+The legacy transport defaults provider-native deferred tool search to regex. Bedrock rejects BM25 on this API, so an explicit BM25 strategy fails before transport. `RunStream` falls back to one complete `InvokeModel` response because legacy streaming is not yet implemented.
+
+You own the AWS client and its lifecycle. `ProviderURL` records telemetry identity and does not reconfigure the client.
+
 ## Messages and files
 
 The Converse adapter maps these provider-neutral values:
@@ -176,4 +221,4 @@ Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and ext
 
 ## Current scope
 
-Native Bedrock tools, guardrails, performance settings, request metadata, streamed image and provider-tool blocks, and legacy Anthropic `InvokeModel` transport remain outside this implementation.
+Native Bedrock tools, guardrails, performance settings, request metadata, streamed image and provider-tool blocks, and legacy Anthropic `InvokeModelWithResponseStream` remain outside this implementation.

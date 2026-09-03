@@ -30,6 +30,7 @@ type Model struct {
 	deferredToolSupport bool
 	schemaWarning       func(SchemaWarning)
 	defaultSettings     ai.ModelSettings
+	legacyBedrockClient LegacyBedrockClient
 }
 
 // Option configures a Model.
@@ -143,6 +144,9 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if err != nil {
 		return nil, err
 	}
+	if m.legacyBedrockClient != nil {
+		return m.requestLegacyBedrock(ctx, payload, params.Settings.ExtraHeaders)
+	}
 	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
@@ -181,6 +185,9 @@ func (m *Model) CountTokens(
 	payload, err := m.buildPayload(ctx, messages, params)
 	if err != nil {
 		return ai.Usage{}, err
+	}
+	if m.legacyBedrockClient != nil {
+		return m.countLegacyBedrock(ctx, payload, params.Settings.ExtraHeaders)
 	}
 	countTools := make([]toolParam, 0, len(payload.Tools))
 	for _, tool := range payload.Tools {
@@ -934,6 +941,13 @@ func (m *Model) buildPayload(
 			break
 		}
 	}
+	if m.legacyBedrockClient != nil && searchTool != nil &&
+		searchTool.ToolSearchStrategy == ai.ToolSearchStrategyBM25 {
+		return nil, fmt.Errorf(
+			"anthropic: tool search strategy %q is not supported by legacy Bedrock; use %q",
+			ai.ToolSearchStrategyBM25, ai.ToolSearchStrategyRegex,
+		)
+	}
 	nativeDeferred := m.deferredToolSupport && len(params.DeferredTools) > 0 && hasStableAnthropicTool(params)
 	serverToolSearch := searchTool != nil && nativeDeferred &&
 		(searchTool.ToolSearchStrategy == ai.ToolSearchStrategyAuto ||
@@ -1016,7 +1030,7 @@ func (m *Model) buildPayload(
 		}
 	}
 	if serverToolSearch {
-		if searchTool.ToolSearchStrategy == ai.ToolSearchStrategyRegex {
+		if searchTool.ToolSearchStrategy == ai.ToolSearchStrategyRegex || m.legacyBedrockClient != nil {
 			req.Tools = append(req.Tools, toolParam{
 				Type: "tool_search_tool_regex_20251119", Name: "tool_search_tool_regex",
 			})
@@ -1940,8 +1954,13 @@ func parseAnthropicToolSearchResult(block responseContentBlock) (ai.NativeToolRe
 
 // SupportsToolSearchStrategy reports Anthropic's named hosted search variants.
 func (m *Model) SupportsToolSearchStrategy(strategy ai.ToolSearchStrategy) bool {
-	return m.deferredToolSupport &&
-		(strategy == ai.ToolSearchStrategyBM25 || strategy == ai.ToolSearchStrategyRegex)
+	if !m.deferredToolSupport {
+		return false
+	}
+	if m.legacyBedrockClient != nil {
+		return strategy == ai.ToolSearchStrategyRegex
+	}
+	return strategy == ai.ToolSearchStrategyBM25 || strategy == ai.ToolSearchStrategyRegex
 }
 
 // NativeToolSearchProvider identifies histories this model can replay natively.

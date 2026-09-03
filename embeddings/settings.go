@@ -7,10 +7,14 @@ import (
 
 // Settings configures an embedding request.
 type Settings struct {
-	Dimensions   *int
-	Truncate     *bool
+	// Dimensions requests a vector size when the model supports configurable dimensions.
+	Dimensions *int
+	// Truncate controls whether over-limit inputs are shortened instead of rejected.
+	Truncate *bool
+	// ExtraHeaders contains request headers applied after provider defaults.
 	ExtraHeaders map[string]string
-	ExtraBody    map[string]any
+	// ExtraBody contains provider-specific request fields that do not conflict with typed settings.
+	ExtraBody map[string]any
 }
 
 // Validate checks portable embedding settings.

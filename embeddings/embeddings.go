@@ -22,19 +22,25 @@ var ErrTokenCountingUnsupported = errors.New("embeddings: token counting is not 
 
 // Model generates embeddings for one batch of text.
 type Model interface {
+	// Embed generates one vector for each input in the same order.
 	Embed(ctx context.Context, inputs []string, inputType InputType, settings Settings) (*Result, error)
+	// Name returns the provider-local model name.
 	Name() string
+	// ProviderName returns the stable provider identity used for pricing and telemetry.
 	ProviderName() string
+	// ProviderURL returns the configured provider endpoint.
 	ProviderURL() string
 }
 
 // MaxInputTokensModel reports a known input-token limit.
 type MaxInputTokensModel interface {
-	MaxInputTokens(ctx context.Context) (int, bool, error)
+	// MaxInputTokens returns the per-input limit and whether the model publishes one.
+	MaxInputTokens(ctx context.Context) (limit int, known bool, err error)
 }
 
 // TokenCountingModel counts model-specific input tokens.
 type TokenCountingModel interface {
+	// CountTokens returns the number of tokens the model assigns to text.
 	CountTokens(ctx context.Context, text string) (int, error)
 }
 
@@ -45,6 +51,7 @@ type Wrapper struct {
 
 // ModelUnwrapper exposes the model wrapped by a decorator.
 type ModelUnwrapper interface {
+	// UnwrapModel returns the directly wrapped model.
 	UnwrapModel() Model
 }
 

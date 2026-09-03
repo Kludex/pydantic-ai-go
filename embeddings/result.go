@@ -9,17 +9,28 @@ import (
 
 // Result contains one vector for each original input.
 type Result struct {
-	Embeddings         [][]float64
-	Inputs             []string
-	InputType          InputType
-	ModelName          string
-	ProviderName       string
-	ProviderURL        string
-	Timestamp          time.Time
-	Usage              ai.Usage
-	ProviderDetails    map[string]any
+	// Embeddings contains one vector for each input in input order.
+	Embeddings [][]float64
+	// Inputs contains the text represented by each vector.
+	Inputs []string
+	// InputType records whether the inputs were queries or documents.
+	InputType InputType
+	// ModelName identifies the model that produced the vectors.
+	ModelName string
+	// ProviderName identifies the provider that served the request.
+	ProviderName string
+	// ProviderURL identifies the configured provider endpoint.
+	ProviderURL string
+	// Timestamp records when the response was decoded.
+	Timestamp time.Time
+	// Usage contains request, token, and cost accounting.
+	Usage ai.Usage
+	// ProviderDetails contains detached provider-specific response metadata.
+	ProviderDetails map[string]any
+	// ProviderResponseID contains the provider's response identifier when available.
 	ProviderResponseID string
-	Warnings           []string
+	// Warnings describes settings the provider ignored or adjusted.
+	Warnings []string
 }
 
 // Clone returns a detached result.

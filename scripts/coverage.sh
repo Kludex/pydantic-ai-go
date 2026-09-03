@@ -25,6 +25,7 @@ packages=(
     ./models/bedrock
     ./models/cohere
     ./models/google
+    ./models/groq
     ./models/zai
     ./mcp
 )

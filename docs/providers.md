@@ -528,3 +528,42 @@ func main() {
 `OutputModeAuto` uses this profile. It is the default for reflected structured output. An explicit agent or run output mode always wins. Adaptive model selection resolves the profile after selecting each model, and fallback chains resolve it separately for every attempted model.
 
 Set `NativeOutputRequiresPrompt` when an endpoint supports native JSON Schema output but also requires the schema in its instructions. `NewProfiledModel` preserves streaming, lifecycle, tool-search, continuation, and other optional model behavior.
+
+## Groq
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/groq"
+)
+
+func main() {
+	settings, err := (groq.Settings{
+		ReasoningFormat: groq.ReasoningFormatParsed,
+		ReasoningEffort: groq.ReasoningEffortHigh,
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent := ai.NewAgent[struct{}, string](
+		groq.NewModel("openai/gpt-oss-20b"),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.Run(context.Background(), "Explain speculative decoding.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `GROQ_API_KEY`. `GROQ_BASE_URL` overrides the default `https://api.groq.com/openai/v1` endpoint.
+
+`ReasoningFormatParsed` returns reasoning as separate `ThinkingPart` values. Reasoning effort support depends on the selected Groq model family. `WithProvider` keeps Groq response parsing when you route requests through a gateway.

@@ -1,0 +1,168 @@
+// Package groq implements ai.Model against Groq's Chat Completions API.
+package groq
+
+import (
+	"fmt"
+	"maps"
+	"net/http"
+	"os"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+)
+
+const defaultBaseURL = "https://api.groq.com/openai/v1"
+
+// ReasoningFormat controls how Groq returns model reasoning.
+type ReasoningFormat string
+
+const (
+	// ReasoningFormatHidden suppresses reasoning output.
+	ReasoningFormatHidden ReasoningFormat = "hidden"
+	// ReasoningFormatRaw returns reasoning inside model text.
+	ReasoningFormatRaw ReasoningFormat = "raw"
+	// ReasoningFormatParsed returns reasoning as a separate part.
+	ReasoningFormatParsed ReasoningFormat = "parsed"
+)
+
+// ReasoningEffort controls Groq reasoning effort where supported.
+type ReasoningEffort string
+
+const (
+	// ReasoningEffortNone disables reasoning where supported.
+	ReasoningEffortNone ReasoningEffort = "none"
+	// ReasoningEffortDefault uses the model default.
+	ReasoningEffortDefault ReasoningEffort = "default"
+	// ReasoningEffortLow requests low effort.
+	ReasoningEffortLow ReasoningEffort = "low"
+	// ReasoningEffortMedium requests medium effort.
+	ReasoningEffortMedium ReasoningEffort = "medium"
+	// ReasoningEffortHigh requests high effort.
+	ReasoningEffortHigh ReasoningEffort = "high"
+)
+
+// Settings combines portable settings with Groq reasoning options.
+type Settings struct {
+	// Common contains portable model settings.
+	Common ai.ModelSettings
+	// ReasoningFormat controls reasoning representation.
+	ReasoningFormat ReasoningFormat
+	// ReasoningEffort controls model-specific reasoning effort.
+	ReasoningEffort ReasoningEffort
+}
+
+// Build returns detached portable settings accepted by agents and direct requests.
+func (settings Settings) Build() (ai.ModelSettings, error) {
+	common := settings.Common.Clone()
+	if err := validateReasoningFormat(settings.ReasoningFormat); err != nil {
+		return ai.ModelSettings{}, err
+	}
+	if err := validateReasoningEffort(settings.ReasoningEffort); err != nil {
+		return ai.ModelSettings{}, err
+	}
+	extra := maps.Clone(common.ExtraBody)
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	values := []struct {
+		name  string
+		value string
+	}{
+		{name: "reasoning_format", value: string(settings.ReasoningFormat)},
+		{name: "reasoning_effort", value: string(settings.ReasoningEffort)},
+	}
+	for _, value := range values {
+		if value.value == "" {
+			continue
+		}
+		if _, exists := extra[value.name]; exists {
+			return ai.ModelSettings{}, fmt.Errorf("groq: extra body field %q conflicts with typed settings", value.name)
+		}
+		extra[value.name] = value.value
+	}
+	if len(extra) == 0 {
+		extra = nil
+	}
+	common.ExtraBody = extra
+	return common, nil
+}
+
+// Model calls models served by Groq.
+type Model struct {
+	*ai.ModelWrapper
+}
+
+type config struct{ options []openai.Option }
+
+// Option configures a Groq model.
+type Option func(*config)
+
+// WithAPIKey sets the API key. The default is GROQ_API_KEY.
+func WithAPIKey(key string) Option {
+	return func(config *config) { config.options = append(config.options, openai.WithAPIKey(key)) }
+}
+
+// WithBaseURL points the model at a Groq-compatible endpoint.
+func WithBaseURL(baseURL string) Option {
+	return func(config *config) { config.options = append(config.options, openai.WithBaseURL(baseURL)) }
+}
+
+// WithHTTPClient sets the caller-owned HTTP client.
+func WithHTTPClient(client *http.Client) Option {
+	return func(config *config) { config.options = append(config.options, openai.WithHTTPClient(client)) }
+}
+
+// WithProvider configures a gateway while retaining Groq response semantics.
+func WithProvider(provider openai.ProviderConfig) Option {
+	option := openai.WithProvider(provider)
+	return func(config *config) { config.options = append(config.options, option) }
+}
+
+// WithDefaultSettings sets request defaults overridden by agent and run settings.
+func WithDefaultSettings(settings ai.ModelSettings) Option {
+	settings = settings.Clone()
+	return func(config *config) {
+		config.options = append(config.options, openai.WithDefaultSettings(settings))
+	}
+}
+
+// NewProviderConfig returns reusable Groq endpoint and environment configuration.
+func NewProviderConfig() openai.ProviderConfig {
+	baseURL := os.Getenv("GROQ_BASE_URL")
+	if baseURL == "" {
+		baseURL = defaultBaseURL
+	}
+	return openai.ProviderConfig{Name: "groq", BaseURL: baseURL, APIKey: os.Getenv("GROQ_API_KEY")}
+}
+
+// NewModel creates a model for a Groq-hosted model.
+func NewModel(name string, options ...Option) *Model {
+	configuration := config{}
+	for _, option := range options {
+		option(&configuration)
+	}
+	openAIOptions := []openai.Option{
+		openai.WithProvider(NewProviderConfig()),
+		openai.WithChatCompatibility(openai.ChatCompatibility{Reasoning: true}),
+	}
+	openAIOptions = append(openAIOptions, configuration.options...)
+	return &Model{ModelWrapper: ai.WrapModel(openai.NewModel(name, openAIOptions...))}
+}
+
+func validateReasoningFormat(format ReasoningFormat) error {
+	switch format {
+	case "", ReasoningFormatHidden, ReasoningFormatRaw, ReasoningFormatParsed:
+		return nil
+	default:
+		return fmt.Errorf("groq: invalid reasoning format %q", format)
+	}
+}
+
+func validateReasoningEffort(effort ReasoningEffort) error {
+	switch effort {
+	case "", ReasoningEffortNone, ReasoningEffortDefault, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh:
+		return nil
+	default:
+		return fmt.Errorf("groq: invalid reasoning effort %q", effort)
+	}
+}

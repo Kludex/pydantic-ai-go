@@ -279,7 +279,8 @@ func TestAgent(t *testing.T) {
 | Retry transient provider HTTP failures | [`retries.Transport`](docs/retries.md) |
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |
-| Add middleware | [`Capability` and its focused hook interfaces](docs/capabilities.md) |
+| Add agent middleware | [`Capability` and its focused hook interfaces](docs/capabilities.md) |
+| Wrap one model | [`ModelWrapper` and built-in decorators](docs/model-wrappers.md) |
 | Add OpenTelemetry or send telemetry to Logfire | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |
 | Evaluate an agent | [`evals.NewTextTask` or `evals.NewTask`](docs/evals.md) |
 | Generate query or document vectors | [`embeddings.Embedder`](docs/embeddings.md) |

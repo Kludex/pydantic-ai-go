@@ -28,6 +28,7 @@ packages=(
     ./models/groq
     ./models/zai
     ./mcp
+    ./ui/agui
 )
 for pkg in "${packages[@]}"; do
     profile=$(mktemp)

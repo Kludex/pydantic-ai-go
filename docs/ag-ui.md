@@ -1,0 +1,91 @@
+# AG-UI
+
+## Serve an agent
+
+```go
+package main
+
+import (
+    "net/http"
+
+    ai "github.com/Kludex/pydantic-ai-go"
+    "github.com/Kludex/pydantic-ai-go/models/openai"
+    "github.com/Kludex/pydantic-ai-go/ui/agui"
+)
+
+func main() {
+    agent := ai.NewAgent[struct{}, string](openai.NewModel("gpt-5-mini"))
+    adapter := agui.NewAdapter(agent, agui.Config{})
+
+    server := &http.Server{Addr: ":8080", Handler: adapter.Handler(struct{}{})}
+    if err := server.ListenAndServe(); err != nil {
+        panic(err)
+    }
+}
+```
+
+Set `OPENAI_API_KEY`, then run the server:
+
+```console
+$ go run ./examples/agui
+```
+
+Send AG-UI `RunAgentInput` JSON to `POST /`. The response uses `text/event-stream` and emits AG-UI JSON in SSE `data` records.
+
+## Trust client history
+
+`RunAgentInput.messages` is untrusted. The adapter converts it to model messages and always calls `SanitizeMessages` before the run. The secure default removes client-authored system prompts, uploaded-file references, unsafe file settings, and unresolved trailing tool calls.
+
+Pass `Config.Sanitization` only when your authenticated application deliberately grants more authority. The adapter is not an authentication boundary.
+
+The input's `threadId` becomes the agent conversation ID. Its `runId` remains the AG-UI protocol identity and is not forced onto the agent's run ID.
+
+## Transform an existing event stream
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+
+    ai "github.com/Kludex/pydantic-ai-go"
+    "github.com/Kludex/pydantic-ai-go/ui/agui"
+)
+
+func main() {
+    stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+        yield(ai.PartStartEvent{
+            Index:  0,
+            PartID: "text",
+            Part:   ai.TextPart{Content: "hello"},
+        }, nil)
+        yield(ai.FinishEvent{}, nil)
+    })
+
+    for event, err := range agui.TransformStream(stream, "thread-1", "run-1") {
+        if err != nil {
+            panic(err)
+        }
+        encoded, err := json.Marshal(event)
+        if err != nil {
+            panic(err)
+        }
+        fmt.Println(string(encoded))
+    }
+}
+```
+
+`TransformStream` is useful when agent events arrive through a queue or durable workflow instead of an HTTP request.
+
+## Event ordering
+
+Each model response owns one assistant message. The adapter emits `TEXT_MESSAGE_START` before text or tool-call events from that response. A tool call uses that message ID as `parentMessageId`, including responses that start with a tool and contain no text.
+
+Function and output tools emit start, argument, end, and result events. Provider-native tool calls use the same AG-UI lifecycle. Stopping the AG-UI consumer stops the underlying agent event iteration.
+
+## Current scope
+
+The adapter supports text messages, assistant function calls, tool results, secure client-held history, normalized text and tool streaming, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
+
+AG-UI multimodal messages, frontend tools, state snapshots and deltas, activities, reasoning events, file preservation, approval interrupts and resume entries, custom events, forwarded context, and protocol-version negotiation remain.

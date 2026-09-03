@@ -275,6 +275,7 @@ func TestAgent(t *testing.T) {
 | Require approval or external execution | [`WithApprovalRequired` and `DeferredToolResults`](docs/deferred-execution.md) |
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |
 | Expose an agent through MCP | [An official SDK server with a typed agent tool](docs/mcp-server.md) |
+| Stream an agent to an AG-UI frontend | [`agui.Adapter`](docs/ag-ui.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
 | Sanitize, trim, or summarize conversation history | [`SanitizeMessages` and history capabilities](docs/history.md) |
 | Compact old provider history | [`ModelCompactor` and compaction capabilities](docs/compaction.md) |

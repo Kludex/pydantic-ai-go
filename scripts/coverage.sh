@@ -22,6 +22,7 @@ packages=(
     ./models/openrouter
     ./models/anthropic
     ./models/azure
+    ./models/bedrock
     ./models/cohere
     ./models/google
     ./models/zai

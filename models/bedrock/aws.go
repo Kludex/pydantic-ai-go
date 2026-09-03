@@ -1,0 +1,84 @@
+package bedrock
+
+import (
+	"context"
+	"errors"
+	"strings"
+
+	"github.com/aws/aws-sdk-go-v2/aws"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+)
+
+// APIError reports an HTTP error returned by Bedrock Runtime.
+type APIError struct {
+	// StatusCode is the Bedrock HTTP response status.
+	StatusCode int
+	// Err is the AWS SDK operation failure.
+	Err error
+}
+
+// Error describes the failed Bedrock request.
+func (err *APIError) Error() string {
+	if err.Err == nil {
+		return "bedrock: API request failed"
+	}
+	return "bedrock: " + err.Err.Error()
+}
+
+// Unwrap returns the AWS SDK operation failure.
+func (err *APIError) Unwrap() error { return err.Err }
+
+// IsModelAPIError marks the response as eligible for model fallback.
+func (*APIError) IsModelAPIError() bool { return true }
+
+func modelError(ctx context.Context, model *Model, operation string, err error) error {
+	var responseError *smithyhttp.ResponseError
+	if errors.As(err, &responseError) {
+		return &APIError{StatusCode: responseError.HTTPStatusCode(), Err: err}
+	}
+	return ai.NewModelTransportError(ctx, model, operation, err)
+}
+
+func requestOptions(headers map[string]string) func(*bedrockruntime.Options) {
+	cloned := make(map[string]string, len(headers))
+	for name, value := range headers {
+		cloned[name] = value
+	}
+	return func(options *bedrockruntime.Options) {
+		if len(cloned) == 0 {
+			return
+		}
+		options.APIOptions = append(options.APIOptions, func(stack *middleware.Stack) error {
+			return stack.Build.Add(middleware.BuildMiddlewareFunc(
+				"PydanticAIBedrockHeaders",
+				func(
+					ctx context.Context, input middleware.BuildInput, next middleware.BuildHandler,
+				) (middleware.BuildOutput, middleware.Metadata, error) {
+					request := input.Request.(*smithyhttp.Request)
+					for name, value := range cloned {
+						request.Header.Set(name, value)
+					}
+					return next.HandleBuild(ctx, input)
+				},
+			), middleware.After)
+		})
+	}
+}
+
+func awsProviderURL(config aws.Config) string {
+	if config.BaseEndpoint != nil {
+		return strings.TrimRight(*config.BaseEndpoint, "/")
+	}
+	if config.Region == "" {
+		return ""
+	}
+	suffix := ".amazonaws.com"
+	if strings.HasPrefix(config.Region, "cn-") {
+		suffix = ".amazonaws.com.cn"
+	}
+	return "https://bedrock-runtime." + config.Region + suffix
+}

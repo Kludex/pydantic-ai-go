@@ -212,12 +212,13 @@ The bundled providers use the same `ai.Model` interface.
 | OpenAI Chat Completions | `openai.NewModel("gpt-5-mini")` | `OPENAI_API_KEY` |
 | OpenAI Responses | `openai.NewResponsesModel("gpt-5-mini")` | `OPENAI_API_KEY` |
 | Azure OpenAI | `azure.NewModel("deployment", azure.Config{})` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
+| Amazon Bedrock | `bedrock.NewModel("us.amazon.nova-lite-v1:0")` | Standard AWS SDK configuration |
 | Anthropic | `anthropic.NewModel("claude-sonnet-4-5")` | `ANTHROPIC_API_KEY` |
 | Google Gemini | `google.NewModel("gemini-2.5-flash")` | `GOOGLE_API_KEY` |
 | OpenRouter | `openrouter.NewModel("anthropic/claude-sonnet-4.6")` | `OPENROUTER_API_KEY` |
 | Z.AI | `zai.NewModel("glm-5.3-flash")` | `ZAI_API_KEY` |
 
-Each constructor supports custom HTTP clients and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints, Azure API versions, and provider-specific options.
+Provider options configure caller-owned clients, endpoints, credentials, and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints and Azure API versions. See [Amazon Bedrock](docs/bedrock.md) for AWS SDK configuration and Converse behavior.
 
 ## Test an agent without network calls
 
@@ -279,6 +280,7 @@ func TestAgent(t *testing.T) {
 | Send images, documents, audio, video, or uploaded files | [`RunParts`](docs/multimodal.md) |
 | Use native-first web tools with local fallbacks | [`NewWebSearchCapability` and `NewWebFetchCapability`](docs/native-tools.md) |
 | Configure a provider or compatible endpoint | [Provider configuration](docs/providers.md) |
+| Use Amazon Bedrock Converse | [`bedrock.NewModel`](docs/bedrock.md) |
 | Retry transient provider HTTP failures | [`retries.Transport`](docs/retries.md) |
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |

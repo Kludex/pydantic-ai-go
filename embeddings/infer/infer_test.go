@@ -12,6 +12,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/embeddings/cohere"
 	embeddinggoogle "github.com/Kludex/pydantic-ai-go/embeddings/google"
 	"github.com/Kludex/pydantic-ai-go/embeddings/infer"
+	"github.com/Kludex/pydantic-ai-go/embeddings/ollama"
 	"github.com/Kludex/pydantic-ai-go/embeddings/openai"
 	"github.com/Kludex/pydantic-ai-go/embeddings/voyageai"
 	modelazure "github.com/Kludex/pydantic-ai-go/models/azure"
@@ -32,6 +33,10 @@ func TestBuiltInModels(t *testing.T) {
 		{
 			name: "openai:text-embedding-3-small", providerName: "openai", modelName: "text-embedding-3-small",
 			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*openai.Model); return ok },
+		},
+		{
+			name: "ollama:nomic-embed-text", providerName: "ollama", modelName: "nomic-embed-text",
+			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*ollama.Model); return ok },
 		},
 		{
 			name: "cohere:embed-v4.0", providerName: "cohere", modelName: "embed-v4.0",

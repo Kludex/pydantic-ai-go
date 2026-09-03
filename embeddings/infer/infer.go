@@ -10,6 +10,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/embeddings/bedrock"
 	"github.com/Kludex/pydantic-ai-go/embeddings/cohere"
 	embeddinggoogle "github.com/Kludex/pydantic-ai-go/embeddings/google"
+	"github.com/Kludex/pydantic-ai-go/embeddings/ollama"
 	"github.com/Kludex/pydantic-ai-go/embeddings/openai"
 	"github.com/Kludex/pydantic-ai-go/embeddings/voyageai"
 	modelazure "github.com/Kludex/pydantic-ai-go/models/azure"
@@ -62,6 +63,9 @@ func Model(name string, options ...Option) (embeddings.Model, error) {
 	configuration := config{resolvers: map[string]Resolver{}}
 	configuration.resolvers["openai"] = func(modelName string) (embeddings.Model, error) {
 		return openai.NewModel(modelName), nil
+	}
+	configuration.resolvers["ollama"] = func(modelName string) (embeddings.Model, error) {
+		return ollama.NewModel(modelName), nil
 	}
 	configuration.resolvers["bedrock"] = func(modelName string) (embeddings.Model, error) {
 		return bedrock.NewModel(modelName)

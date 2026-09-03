@@ -96,7 +96,7 @@ func main() {
 }
 ```
 
-`infer.Model` requires a provider prefix. It supports `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, and `voyageai`. Use `infer.WithProvider` to register a custom resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
+`infer.Model` requires a provider prefix. It supports `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, `ollama`, and `voyageai`. Use `infer.WithProvider` to register a custom resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
 
 `WithModel` scopes an override to one context tree. It does not mutate the reusable `Embedder`, so concurrent requests can select different models safely.
 
@@ -170,6 +170,34 @@ func main() {
 ```
 
 The provider name and URL remain attached to each result. `Result.Price` uses them with the bundled `genai-prices` snapshot.
+
+## Local models with Ollama
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/Kludex/pydantic-ai-go/embeddings"
+	"github.com/Kludex/pydantic-ai-go/embeddings/ollama"
+)
+
+func main() {
+	model := ollama.NewModel("nomic-embed-text")
+	result, err := embeddings.New(model).EmbedQuery(context.Background(), "What is structured concurrency?")
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(len(result.Embeddings[0]))
+}
+```
+
+Run `ollama pull nomic-embed-text` before you run the example. The adapter uses Ollama's native `/api/embed` endpoint, so the model and text stay on the machine running Ollama. It reads `OLLAMA_HOST` and defaults to `http://localhost:11434`.
+
+Portable dimensions and truncation settings map to the native request. Use `ExtraBody` for Ollama options such as `keep_alive` and `options`. Use `ollama.WithProvider` when you need custom headers or request preparation for a remote Ollama endpoint.
 
 ## Google Gemini
 

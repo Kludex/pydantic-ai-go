@@ -176,6 +176,8 @@ type Operation[Params, Result any] struct {
 	Role Role
 	// Handler runs inside the durable unit from rebuilt parameters.
 	Handler func(ctx context.Context, params Params) (Result, error)
+	// Observer marks an operation that cannot execute model, tool, or external side effects.
+	Observer bool
 	// ParameterCodec overrides JSON parameter transport.
 	ParameterCodec Codec[Params]
 	// ResultCodec overrides JSON result transport.

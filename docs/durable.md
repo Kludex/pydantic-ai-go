@@ -101,8 +101,14 @@ A caller-owned model registered with `Register` is never rebuilt, opened, or clo
 
 Use stable registry IDs. Changing one can strand persisted workflows or send replayed work to different credentials and endpoints.
 
+## Registration policies
+
+Use `temporal.NewBackend` or `dbos.NewBackend` around your SDK registration callback. Call `Freeze` when worker registration is complete. Both adapters reject every operation introduced after that point, including runtime capabilities.
+
+Use `prefect.NewBackend` for task registration. After `Freeze`, it accepts only operations explicitly marked `Observer`. Late model, toolset, and executing capability operations fail before dispatch. Dynamic discovery, argument validation, and tool execution have distinct stable operation IDs and registrations.
+
 ## Current scope
 
-The package provides the public third-party backend contract, stable operation naming, parameter and result serialization, semantic cache identity, callable backend adaptation, and explicit model ownership.
+The package provides the public third-party backend contract, stable operation naming, parameter and result serialization, semantic cache identity, callable and registered backend adaptation, engine registration policies, and explicit model ownership.
 
-Agent-loop operation binding and concrete Temporal, DBOS, and Prefect packages remain. Startup registration checks, Prefect observer-only runtime capabilities, and separately journaled Prefect dynamic-tool discovery, validation, and calls remain.
+Agent-loop operation binding and direct SDK callback implementations remain. Applications currently adapt Temporal activity registration, DBOS steps, or Prefect task submission through `RegisterFunc`. Prefect retry configuration and worker-side dynamic-tool re-resolution remain backend responsibilities.

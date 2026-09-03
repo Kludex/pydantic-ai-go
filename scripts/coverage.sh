@@ -8,6 +8,9 @@ packages=(
     ./a2a
     ./cli
     ./durable
+    ./durable/dbos
+    ./durable/prefect
+    ./durable/temporal
     ./internal/download
     ./internal/schema
     ./retries

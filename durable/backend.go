@@ -17,6 +17,8 @@ type Registration struct {
 	Name string
 	// Role selects the backend configuration bucket.
 	Role Role
+	// Observer permits engines such as Prefect to bind this non-executing operation at runtime.
+	Observer bool
 	// Handler executes serialized parameters worker-side.
 	Handler WireHandler
 }
@@ -87,7 +89,7 @@ func Bind[Params, Result any](
 		cacheIdentity = CacheIdentityFunc[Params](func(params Params) (any, error) { return params, nil })
 	}
 	registration := Registration{
-		ID: operation.ID, Name: name, Role: operation.Role,
+		ID: operation.ID, Name: name, Role: operation.Role, Observer: operation.Observer,
 		Handler: func(ctx context.Context, payload []byte) ([]byte, error) {
 			params, err := parameterCodec.Decode(payload)
 			if err != nil {

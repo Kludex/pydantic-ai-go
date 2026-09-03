@@ -14,13 +14,21 @@ type EventStream iter.Seq2[StreamEvent, error]
 type ResponsePartKind string
 
 const (
-	ResponsePartKindText             ResponsePartKind = "text"
-	ResponsePartKindSpeech           ResponsePartKind = "speech"
-	ResponsePartKindFile             ResponsePartKind = "file"
-	ResponsePartKindThinking         ResponsePartKind = "thinking"
-	ResponsePartKindCompaction       ResponsePartKind = "compaction"
-	ResponsePartKindToolCall         ResponsePartKind = "tool-call"
-	ResponsePartKindNativeToolCall   ResponsePartKind = "builtin-tool-call"
+	// ResponsePartKindText identifies text output.
+	ResponsePartKindText ResponsePartKind = "text"
+	// ResponsePartKindSpeech identifies retained speech output.
+	ResponsePartKindSpeech ResponsePartKind = "speech"
+	// ResponsePartKindFile identifies generated file output.
+	ResponsePartKindFile ResponsePartKind = "file"
+	// ResponsePartKindThinking identifies provider reasoning.
+	ResponsePartKindThinking ResponsePartKind = "thinking"
+	// ResponsePartKindCompaction identifies a durable history boundary.
+	ResponsePartKindCompaction ResponsePartKind = "compaction"
+	// ResponsePartKindToolCall identifies a locally executed function call.
+	ResponsePartKindToolCall ResponsePartKind = "tool-call"
+	// ResponsePartKindNativeToolCall identifies a provider-executed call.
+	ResponsePartKindNativeToolCall ResponsePartKind = "builtin-tool-call"
+	// ResponsePartKindNativeToolReturn identifies a provider-executed result.
 	ResponsePartKindNativeToolReturn ResponsePartKind = "builtin-tool-return"
 )
 
@@ -33,8 +41,11 @@ type ResponsePartDelta interface {
 
 // TextPartDelta appends content to a TextPart.
 type TextPartDelta struct {
-	ContentDelta    string
-	ProviderName    string
+	// ContentDelta appends text to the part.
+	ContentDelta string
+	// ProviderName replaces the part provider when non-empty.
+	ProviderName string
+	// ProviderDetails merges detached provider-specific data.
 	ProviderDetails map[string]any
 }
 
@@ -56,10 +67,14 @@ func (d TextPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 
 // SpeechPartDelta updates a speech transcript and appends retained audio.
 type SpeechPartDelta struct {
-	Speaker         SpeechSpeaker
+	// Speaker identifies who produced the speech.
+	Speaker SpeechSpeaker
+	// TranscriptDelta appends an incremental transcript.
 	TranscriptDelta string
-	Transcript      *string
-	AudioChunk      []byte
+	// Transcript replaces the accumulated transcript when non-nil.
+	Transcript *string
+	// AudioChunk appends detached retained audio bytes.
+	AudioChunk []byte
 }
 
 func (SpeechPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindSpeech }
@@ -89,9 +104,13 @@ func applySpeechPartDelta(speech SpeechPart, delta SpeechPartDelta) SpeechPart {
 
 // ThinkingPartDelta appends content to a ThinkingPart.
 type ThinkingPartDelta struct {
-	ContentDelta    string
-	SignatureDelta  string
-	ProviderName    string
+	// ContentDelta appends reasoning text.
+	ContentDelta string
+	// SignatureDelta replaces the reasoning signature when non-empty.
+	SignatureDelta string
+	// ProviderName replaces the part provider when non-empty.
+	ProviderName string
+	// ProviderDetails merges detached provider-specific data.
 	ProviderDetails map[string]any
 }
 
@@ -116,6 +135,7 @@ func (d ThinkingPartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 
 // FilePartDelta replaces a complete generated file with a newer snapshot.
 type FilePartDelta struct {
+	// Part is the detached replacement file snapshot.
 	Part FilePart
 }
 
@@ -132,10 +152,14 @@ func (d FilePartDelta) Apply(part ResponsePart) (ResponsePart, error) {
 // ToolCallPartDelta updates a ToolCallPart. Names and JSON arguments append;
 // a non-empty tool-call ID fills an empty ID and must otherwise match it.
 type ToolCallPartDelta struct {
+	// ToolNameDelta appends a tool-name fragment.
 	ToolNameDelta string
-	ArgsDelta     string
-	ToolCallID    string
-	ProviderName  string
+	// ArgsDelta appends a JSON argument fragment.
+	ArgsDelta string
+	// ToolCallID fills an empty ID and must otherwise match.
+	ToolCallID string
+	// ProviderName replaces the call provider when non-empty.
+	ProviderName string
 }
 
 func (ToolCallPartDelta) responsePartDeltaKind() ResponsePartKind { return ResponsePartKindToolCall }
@@ -219,9 +243,13 @@ func mergeProviderDetails(base, update map[string]any) map[string]any {
 // PartStartEvent announces a new response part. Index is stable within the
 // model response and follows first-appearance order.
 type PartStartEvent struct {
-	Index            int
-	PartID           string
-	Part             ResponsePart
+	// Index is the stable first-appearance index within the response.
+	Index int
+	// PartID is the provider-facing identity used by later updates.
+	PartID string
+	// Part is the detached initial accumulated part.
+	Part ResponsePart
+	// PreviousPartKind identifies the preceding grouping boundary.
 	PreviousPartKind ResponsePartKind
 }
 
@@ -229,9 +257,12 @@ func (PartStartEvent) streamEventKind() string { return "part-start" }
 
 // PartDeltaEvent updates a response part previously announced at Index.
 type PartDeltaEvent struct {
-	Index  int
+	// Index identifies the accumulated response part.
+	Index int
+	// PartID is the provider-facing identity used by this update.
 	PartID string
-	Delta  ResponsePartDelta
+	// Delta is the detached update applied to the part.
+	Delta ResponsePartDelta
 }
 
 func (PartDeltaEvent) streamEventKind() string { return "part-delta" }
@@ -239,9 +270,13 @@ func (PartDeltaEvent) streamEventKind() string { return "part-delta" }
 // PartEndEvent marks the current grouping boundary for a response part. A
 // provider may still send keyed deltas for an earlier part after this event.
 type PartEndEvent struct {
-	Index        int
-	PartID       string
-	Part         ResponsePart
+	// Index identifies the accumulated response part.
+	Index int
+	// PartID is the provider-facing response-part identity.
+	PartID string
+	// Part is the detached complete snapshot at this boundary.
+	Part ResponsePart
+	// NextPartKind identifies the part that caused the grouping boundary.
 	NextPartKind ResponsePartKind
 }
 
@@ -250,7 +285,9 @@ func (PartEndEvent) streamEventKind() string { return "part-end" }
 // FinalResultEvent announces the first response part matching the configured
 // output. ToolName is empty for text and native output.
 type FinalResultEvent struct {
-	ToolName   string
+	// ToolName identifies structured tool output and is empty for text or native output.
+	ToolName string
+	// ToolCallID identifies the selected output-tool call.
 	ToolCallID string
 }
 
@@ -258,15 +295,19 @@ func (FinalResultEvent) streamEventKind() string { return "final-result" }
 
 // EnqueuedMessagesEvent announces one queued group when it enters history.
 type EnqueuedMessagesEvent struct {
+	// EnqueueID identifies one delivered queue group.
 	EnqueueID string
-	Messages  []ModelMessage
+	// Messages is the detached group appended to history.
+	Messages []ModelMessage
 }
 
 func (EnqueuedMessagesEvent) streamEventKind() string { return "enqueued-messages" }
 
 // FunctionToolCallEvent announces a function tool call before execution.
 type FunctionToolCallEvent struct {
-	Part      ToolCallPart
+	// Part is the detached function-tool call.
+	Part ToolCallPart
+	// ArgsValid reports schema validity when validation has completed.
 	ArgsValid *bool
 }
 
@@ -274,7 +315,9 @@ func (FunctionToolCallEvent) streamEventKind() string { return "function-tool-ca
 
 // OutputToolCallEvent announces an output tool call before validation.
 type OutputToolCallEvent struct {
-	Part      ToolCallPart
+	// Part is the detached output-tool call.
+	Part ToolCallPart
+	// ArgsValid reports schema validity when validation has completed.
 	ArgsValid *bool
 }
 
@@ -283,6 +326,7 @@ func (OutputToolCallEvent) streamEventKind() string { return "output-tool-call" 
 // FunctionToolResultEvent carries the request part produced by a function
 // tool. Part is a ToolReturnPart or RetryPromptPart.
 type FunctionToolResultEvent struct {
+	// Part is the detached tool return or retry prompt added to history.
 	Part RequestPart
 }
 
@@ -291,6 +335,7 @@ func (FunctionToolResultEvent) streamEventKind() string { return "function-tool-
 // OutputToolResultEvent carries the request part produced by an output tool.
 // Part is a ToolReturnPart or RetryPromptPart.
 type OutputToolResultEvent struct {
+	// Part is the detached output return or retry prompt added to history.
 	Part RequestPart
 }
 
@@ -299,6 +344,7 @@ func (OutputToolResultEvent) streamEventKind() string { return "output-tool-resu
 // DeferredToolRequestsEvent announces the batch of external calls and
 // approvals that paused the run.
 type DeferredToolRequestsEvent struct {
+	// Requests is the detached batch that paused the run.
 	Requests DeferredToolRequests
 }
 
@@ -306,6 +352,7 @@ func (DeferredToolRequestsEvent) streamEventKind() string { return "deferred-too
 
 // DeferredToolResultsEvent announces results returned by an inline handler.
 type DeferredToolResultsEvent struct {
+	// Results is the detached batch returned by an inline handler.
 	Results DeferredToolResults
 }
 

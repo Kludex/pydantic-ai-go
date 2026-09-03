@@ -29,13 +29,20 @@ const (
 
 // ModelRequest is a message sent to the model.
 type ModelRequest struct {
-	Parts          []RequestPart
-	Timestamp      time.Time
-	Instructions   string
-	RunID          string
+	// Parts contains user, system, tool-return, and retry content.
+	Parts []RequestPart
+	// Timestamp is the request creation time.
+	Timestamp time.Time
+	// Instructions records the standing instructions used for this request.
+	Instructions string
+	// RunID identifies the run that created the request.
+	RunID string
+	// ConversationID identifies related runs in one conversation.
 	ConversationID string
-	Metadata       map[string]any
-	State          RequestState
+	// Metadata contains detached application request data.
+	Metadata map[string]any
+	// State reports complete or interrupted request construction.
+	State RequestState
 }
 
 func (ModelRequest) messageKind() string     { return "request" }
@@ -45,38 +52,60 @@ func (ModelRequest) enqueueItemKind() string { return "message" }
 type FinishReason string
 
 const (
-	FinishReasonStop          FinishReason = "stop"
-	FinishReasonLength        FinishReason = "length"
+	// FinishReasonStop reports an ordinary model stop.
+	FinishReasonStop FinishReason = "stop"
+	// FinishReasonLength reports a token or context limit.
+	FinishReasonLength FinishReason = "length"
+	// FinishReasonContentFilter reports provider safety filtering.
 	FinishReasonContentFilter FinishReason = "content_filter"
-	FinishReasonToolCall      FinishReason = "tool_call"
-	FinishReasonError         FinishReason = "error"
+	// FinishReasonToolCall reports that generation requested tools.
+	FinishReasonToolCall FinishReason = "tool_call"
+	// FinishReasonError reports malformed or failed generation.
+	FinishReasonError FinishReason = "error"
 )
 
 // ModelResponseState describes the lifecycle of a model response.
 type ModelResponseState string
 
 const (
-	ModelResponseStateComplete    ModelResponseState = "complete"
-	ModelResponseStateIncomplete  ModelResponseState = "incomplete"
-	ModelResponseStateSuspended   ModelResponseState = "suspended"
+	// ModelResponseStateComplete marks a finished response.
+	ModelResponseStateComplete ModelResponseState = "complete"
+	// ModelResponseStateIncomplete marks provider-truncated output.
+	ModelResponseStateIncomplete ModelResponseState = "incomplete"
+	// ModelResponseStateSuspended marks provider work that can continue.
+	ModelResponseStateSuspended ModelResponseState = "suspended"
+	// ModelResponseStateInterrupted marks locally interrupted streaming output.
 	ModelResponseStateInterrupted ModelResponseState = "interrupted"
 )
 
 // ModelResponse is a message received from the model.
 type ModelResponse struct {
-	Parts              []ResponsePart
-	Usage              Usage
-	ModelName          string
-	Timestamp          time.Time
-	ProviderName       string
-	ProviderURL        string
-	ProviderDetails    map[string]any
+	// Parts contains detached model output in provider order.
+	Parts []ResponsePart
+	// Usage contains usage for this response segment.
+	Usage Usage
+	// ModelName is the provider's resolved model identity.
+	ModelName string
+	// Timestamp is the response creation time.
+	Timestamp time.Time
+	// ProviderName is the durable provider identity.
+	ProviderName string
+	// ProviderURL is the configured provider endpoint.
+	ProviderURL string
+	// ProviderDetails contains detached provider-specific response data.
+	ProviderDetails map[string]any
+	// ProviderResponseID identifies resumable provider-side state.
 	ProviderResponseID string
-	FinishReason       FinishReason
-	RunID              string
-	ConversationID     string
-	Metadata           map[string]any
-	State              ModelResponseState
+	// FinishReason is the normalized generation stop reason.
+	FinishReason FinishReason
+	// RunID identifies the run that received the response.
+	RunID string
+	// ConversationID identifies related runs in one conversation.
+	ConversationID string
+	// Metadata contains detached application response data.
+	Metadata map[string]any
+	// State reports the response lifecycle state.
+	State ModelResponseState
 
 	pricingAttempted bool
 }
@@ -126,19 +155,28 @@ func (r ModelResponse) Text() string {
 type SpeechSpeaker string
 
 const (
-	SpeechSpeakerUser      SpeechSpeaker = "user"
+	// SpeechSpeakerUser identifies user-produced audio.
+	SpeechSpeakerUser SpeechSpeaker = "user"
+	// SpeechSpeakerAssistant identifies model-produced audio.
 	SpeechSpeakerAssistant SpeechSpeaker = "assistant"
 )
 
 // SpeechPart is spoken audio from a realtime session with its optional transcript.
 // Request messages require SpeechSpeakerUser. Response messages require SpeechSpeakerAssistant.
 type SpeechPart struct {
-	Speaker         SpeechSpeaker
-	Transcript      *string
-	Audio           *BinaryContent
+	// Speaker identifies who produced the audio.
+	Speaker SpeechSpeaker
+	// Transcript is the retained current transcript when available.
+	Transcript *string
+	// Audio is detached retained audio when enabled.
+	Audio *BinaryContent
+	// InterruptedAtMS is the playback interruption offset.
 	InterruptedAtMS *int
-	ID              string
-	ProviderName    string
+	// ID is the provider's response-part identity.
+	ID string
+	// ProviderName identifies the provider that produced the speech.
+	ProviderName string
+	// ProviderDetails contains detached provider-specific speech data.
 	ProviderDetails map[string]any
 }
 
@@ -167,8 +205,11 @@ type RequestPart interface {
 // new applications. DynamicRef identifies a registered dynamic prompt that
 // is reevaluated when serialized history is resumed.
 type SystemPromptPart struct {
-	Content    string
-	Timestamp  time.Time
+	// Content is the legacy system prompt text.
+	Content string
+	// Timestamp is the part creation time.
+	Timestamp time.Time
+	// DynamicRef identifies a registered prompt reevaluated during history reuse.
 	DynamicRef string
 }
 
@@ -178,8 +219,11 @@ func (SystemPromptPart) enqueueItemKind() string { return "request-part" }
 // UserPromptPart carries user input. Content holds plain text; Contents,
 // when non-empty, holds multimodal items instead and Content is ignored.
 type UserPromptPart struct {
-	Content   string
-	Contents  []UserContent
+	// Content is plain text used when Contents is empty.
+	Content string
+	// Contents contains detached multimodal input and takes precedence over Content.
+	Contents []UserContent
+	// Timestamp is the prompt creation time.
 	Timestamp time.Time
 }
 
@@ -194,7 +238,9 @@ type UserContent interface {
 
 // TextContent is a text item with application metadata that providers do not receive.
 type TextContent struct {
-	Text     string
+	// Text is model-visible prompt content.
+	Text string
+	// Metadata is application-only data not sent to providers.
 	Metadata any
 }
 
@@ -205,13 +251,16 @@ func (TextContent) enqueueItemKind() string { return "user-content" }
 type CachePointTTL string
 
 const (
+	// CachePointTTL5Minutes requests five-minute prompt retention.
 	CachePointTTL5Minutes CachePointTTL = "5m"
-	CachePointTTL1Hour    CachePointTTL = "1h"
+	// CachePointTTL1Hour requests one-hour prompt retention.
+	CachePointTTL1Hour CachePointTTL = "1h"
 )
 
 // CachePoint marks the preceding user-content item as a prompt-cache boundary.
 // The zero value uses a five-minute lifetime. Unsupported providers omit the marker.
 type CachePoint struct {
+	// TTL selects prompt retention. Empty defaults to five minutes.
 	TTL CachePointTTL
 }
 
@@ -231,10 +280,15 @@ func (CachePoint) enqueueItemKind() string { return "user-content" }
 
 // UploadedFile references a file already hosted by a model provider.
 type UploadedFile struct {
-	FileID         string
-	ProviderName   string
-	MediaType      string
-	Identifier     string
+	// FileID is the provider-hosted file identifier or URI.
+	FileID string
+	// ProviderName identifies the provider that owns the file.
+	ProviderName string
+	// MediaType identifies the hosted content when known.
+	MediaType string
+	// Identifier is the stable application content identity.
+	Identifier string
+	// VendorMetadata contains detached provider-specific file data.
 	VendorMetadata map[string]any
 }
 
@@ -263,23 +317,34 @@ const SynthesizedToolReturnMetadataKey = "pydantic_ai_synthesized_tool_return"
 // content and application-only metadata. Return it directly from a function
 // tool when the result needs this richer shape.
 type ToolReturn struct {
+	// ReturnValue is the primary model-visible tool result.
 	ReturnValue any
-	Content     []UserContent
-	Metadata    map[string]any
-	Tools       []string
+	// Content adds model-visible rich user content beside the result.
+	Content []UserContent
+	// Metadata is detached application-only result data.
+	Metadata map[string]any
+	// Tools lists deferred tool names revealed by this result.
+	Tools []string
 	// Usage adds delegated model work to the parent run's totals and limits.
 	Usage Usage
 }
 
 // ToolReturnPart carries the result of a tool call back to the model.
 type ToolReturnPart struct {
-	ToolName   string
-	Content    any
+	// ToolName identifies the called function.
+	ToolName string
+	// Content is the model-visible return value.
+	Content any
+	// ToolCallID associates the result with a model call.
 	ToolCallID string
-	ToolKind   ToolPartKind
-	Outcome    ToolReturnOutcome
-	Metadata   map[string]any
-	Timestamp  time.Time
+	// ToolKind identifies a typed framework-managed tool surface.
+	ToolKind ToolPartKind
+	// Outcome reports success, failure, denial, or interruption.
+	Outcome ToolReturnOutcome
+	// Metadata contains detached application-only result data.
+	Metadata map[string]any
+	// Timestamp is the result creation time.
+	Timestamp time.Time
 }
 
 func (ToolReturnPart) requestPartKind() string { return "tool-return" }
@@ -288,7 +353,9 @@ func (ToolReturnPart) enqueueItemKind() string { return "request-part" }
 // ToolAvailabilityDeltaPart records deferred tools revealed at one point in
 // history. ToolsAdded contains model-facing tool names in reveal order.
 type ToolAvailabilityDeltaPart struct {
+	// ToolsAdded contains revealed model-facing names in order.
 	ToolsAdded []string
+	// ToolCallID identifies the result that revealed the tools.
 	ToolCallID string
 }
 
@@ -297,22 +364,33 @@ func (ToolAvailabilityDeltaPart) enqueueItemKind() string { return "request-part
 
 // ValidationError is one structured JSON Schema validation failure.
 type ValidationError struct {
-	Type     string         `json:"type"`
-	Location []any          `json:"loc"`
-	Message  string         `json:"msg"`
-	Input    any            `json:"input,omitempty"`
-	Context  map[string]any `json:"ctx,omitempty"`
-	URL      string         `json:"url,omitempty"`
+	// Type is the stable validation error discriminator.
+	Type string `json:"type"`
+	// Location is the path to the invalid value.
+	Location []any `json:"loc"`
+	// Message describes the validation failure.
+	Message string `json:"msg"`
+	// Input is the rejected value when safe to expose.
+	Input any `json:"input,omitempty"`
+	// Context contains detached validator-specific details.
+	Context map[string]any `json:"ctx,omitempty"`
+	// URL links to additional error documentation.
+	URL string `json:"url,omitempty"`
 }
 
 // RetryPromptPart asks the model to try again, carrying either plain content
 // or structured validation errors. Errors takes precedence when non-nil.
 type RetryPromptPart struct {
-	Content    string
-	Errors     []ValidationError
-	ToolName   string
+	// Content is plain corrective feedback used when Errors is nil.
+	Content string
+	// Errors is structured validation feedback and takes precedence over Content.
+	Errors []ValidationError
+	// ToolName identifies the tool whose arguments or result failed.
+	ToolName string
+	// ToolCallID associates feedback with a model call.
 	ToolCallID string
-	Timestamp  time.Time
+	// Timestamp is the feedback creation time.
+	Timestamp time.Time
 }
 
 func (RetryPromptPart) requestPartKind() string { return "retry-prompt" }
@@ -349,9 +427,13 @@ type ResponsePart interface {
 
 // TextPart is plain text produced by the model.
 type TextPart struct {
-	Content         string
-	ID              string
-	ProviderName    string
+	// Content is model-generated text.
+	Content string
+	// ID is the provider's response-part identity.
+	ID string
+	// ProviderName identifies the provider that produced the text.
+	ProviderName string
+	// ProviderDetails contains detached provider-specific part data.
 	ProviderDetails map[string]any
 }
 
@@ -359,9 +441,13 @@ func (TextPart) responsePartKind() string { return "text" }
 
 // FilePart is binary content produced by a model or provider-native tool.
 type FilePart struct {
-	Content         BinaryContent
-	ID              string
-	ProviderName    string
+	// Content contains detached generated bytes and media type.
+	Content BinaryContent
+	// ID is the provider's response-part identity.
+	ID string
+	// ProviderName identifies the provider that produced the file.
+	ProviderName string
+	// ProviderDetails contains detached provider-specific part data.
 	ProviderDetails map[string]any
 }
 
@@ -371,25 +457,41 @@ func (FilePart) responsePartKind() string { return "file" }
 type ToolPartKind string
 
 const (
-	ToolPartKindToolSearch      ToolPartKind = "tool-search"
-	ToolPartKindCapabilityLoad  ToolPartKind = "capability-load"
-	ToolPartKindWebSearch       ToolPartKind = "web-search"
-	ToolPartKindWebFetch        ToolPartKind = "web-fetch"
-	ToolPartKindCodeExecution   ToolPartKind = "code-execution"
+	// ToolPartKindToolSearch identifies deferred tool discovery.
+	ToolPartKindToolSearch ToolPartKind = "tool-search"
+	// ToolPartKindCapabilityLoad identifies capability discovery.
+	ToolPartKindCapabilityLoad ToolPartKind = "capability-load"
+	// ToolPartKindWebSearch identifies web search.
+	ToolPartKindWebSearch ToolPartKind = "web-search"
+	// ToolPartKindWebFetch identifies URL retrieval.
+	ToolPartKindWebFetch ToolPartKind = "web-fetch"
+	// ToolPartKindCodeExecution identifies provider code execution.
+	ToolPartKindCodeExecution ToolPartKind = "code-execution"
+	// ToolPartKindImageGeneration identifies image generation.
 	ToolPartKindImageGeneration ToolPartKind = "image-generation"
-	ToolPartKindFileSearch      ToolPartKind = "file-search"
-	ToolPartKindMCPServer       ToolPartKind = "mcp-server"
-	ToolPartKindAdvisor         ToolPartKind = "advisor"
+	// ToolPartKindFileSearch identifies managed file retrieval.
+	ToolPartKindFileSearch ToolPartKind = "file-search"
+	// ToolPartKindMCPServer identifies provider-hosted MCP calls.
+	ToolPartKindMCPServer ToolPartKind = "mcp-server"
+	// ToolPartKindAdvisor identifies provider advisor calls.
+	ToolPartKindAdvisor ToolPartKind = "advisor"
 )
 
 // ToolCallPart is a tool call requested by the model.
 type ToolCallPart struct {
-	ToolName        string
-	Args            json.RawMessage
-	ToolCallID      string
-	ToolKind        ToolPartKind
-	ID              string
-	ProviderName    string
+	// ToolName is the model-facing function name.
+	ToolName string
+	// Args contains generated JSON arguments.
+	Args json.RawMessage
+	// ToolCallID is the provider-assigned call identity.
+	ToolCallID string
+	// ToolKind identifies a typed framework-managed surface.
+	ToolKind ToolPartKind
+	// ID is the provider's response-part identity.
+	ID string
+	// ProviderName identifies the provider that produced the call.
+	ProviderName string
+	// ProviderDetails contains detached provider-specific call data.
 	ProviderDetails map[string]any
 }
 
@@ -398,12 +500,19 @@ func (ToolCallPart) responsePartKind() string { return "tool-call" }
 // NativeToolCallPart records a provider-executed tool call. The agent does not
 // execute it locally. ToolKind identifies a portable typed shape when available.
 type NativeToolCallPart struct {
-	ToolName        string
-	Args            json.RawMessage
-	ToolCallID      string
-	ToolKind        ToolPartKind
-	ID              string
-	ProviderName    string
+	// ToolName is the provider-native tool name.
+	ToolName string
+	// Args contains generated JSON arguments.
+	Args json.RawMessage
+	// ToolCallID is the provider-assigned call identity.
+	ToolCallID string
+	// ToolKind identifies the portable typed surface.
+	ToolKind ToolPartKind
+	// ID is the provider's response-part identity.
+	ID string
+	// ProviderName identifies the provider that executed the call.
+	ProviderName string
+	// ProviderDetails contains detached provider-specific call data.
 	ProviderDetails map[string]any
 }
 
@@ -411,14 +520,23 @@ func (NativeToolCallPart) responsePartKind() string { return "builtin-tool-call"
 
 // NativeToolReturnPart records the provider's result for a native tool call.
 type NativeToolReturnPart struct {
-	ToolName        string
-	Content         any
-	ToolCallID      string
-	ToolKind        ToolPartKind
-	Metadata        map[string]any
-	Timestamp       time.Time
-	Outcome         ToolReturnOutcome
-	ProviderName    string
+	// ToolName is the provider-native tool name.
+	ToolName string
+	// Content is the normalized provider result.
+	Content any
+	// ToolCallID associates the result with a provider call.
+	ToolCallID string
+	// ToolKind identifies the portable typed surface.
+	ToolKind ToolPartKind
+	// Metadata contains detached application-only result data.
+	Metadata map[string]any
+	// Timestamp is the result creation time.
+	Timestamp time.Time
+	// Outcome reports success or a normalized failure.
+	Outcome ToolReturnOutcome
+	// ProviderName identifies the provider that executed the tool.
+	ProviderName string
+	// ProviderDetails contains detached provider-specific result data.
 	ProviderDetails map[string]any
 }
 
@@ -426,10 +544,15 @@ func (NativeToolReturnPart) responsePartKind() string { return "builtin-tool-ret
 
 // ThinkingPart is reasoning content produced by the model.
 type ThinkingPart struct {
-	Content         string
-	ID              string
-	Signature       string
-	ProviderName    string
+	// Content is readable provider reasoning when available.
+	Content string
+	// ID is the provider's response-part identity.
+	ID string
+	// Signature is opaque verification state required for replay.
+	Signature string
+	// ProviderName identifies the provider that produced the reasoning.
+	ProviderName string
+	// ProviderDetails contains detached provider-specific reasoning data.
 	ProviderDetails map[string]any
 }
 
@@ -442,9 +565,13 @@ const StandingPromptPlantedKey = "pydantic_ai_standing_prompt_planted"
 // CompactionPart summarizes history that a provider compacted. ProviderDetails
 // may contain opaque data required when sending the part back to that provider.
 type CompactionPart struct {
-	Content         string
-	ID              string
-	ProviderName    string
+	// Content is the readable compacted summary when available.
+	Content string
+	// ID is the provider's compaction identity.
+	ID string
+	// ProviderName identifies the provider that created the boundary.
+	ProviderName string
+	// ProviderDetails contains detached opaque state required for replay.
 	ProviderDetails map[string]any
 }
 

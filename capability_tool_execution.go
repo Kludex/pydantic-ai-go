@@ -9,12 +9,14 @@ type ToolExecutionFunc func(ctx context.Context, args any) (any, error)
 // Return RequestToolApproval or RequestExternalToolExecution to defer without executing.
 // Independent calls invoke hooks concurrently.
 type BeforeToolExecutionHook interface {
+	// BeforeToolExecution returns arguments passed to the local function.
 	BeforeToolExecution(ctx context.Context, ri *RunInfo, hook ToolHookContext, args any) (any, error)
 }
 
 // AfterToolExecutionHook modifies a successful function-tool return value.
 // A deferred request returned here discards the result after the tool has already run.
 type AfterToolExecutionHook interface {
+	// AfterToolExecution returns the successful result passed onward.
 	AfterToolExecution(
 		ctx context.Context, ri *RunInfo, hook ToolHookContext, args any, result any,
 	) (any, error)
@@ -23,6 +25,7 @@ type AfterToolExecutionHook interface {
 // ToolExecutionErrorHook may replace an ordinary execution error with a result.
 // Retry, failure, cancellation, timeout, and direct before/after hook errors bypass it.
 type ToolExecutionErrorHook interface {
+	// OnToolExecutionError returns a recovered result or replacement error.
 	OnToolExecutionError(
 		ctx context.Context, ri *RunInfo, hook ToolHookContext, args any, executionErr error,
 	) (any, error)
@@ -30,6 +33,7 @@ type ToolExecutionErrorHook interface {
 
 // ToolExecutionWrapper wraps only local execution, after argument validation and deferral checks.
 type ToolExecutionWrapper interface {
+	// WrapToolExecution wraps only local function execution.
 	WrapToolExecution(
 		ctx context.Context, ri *RunInfo, hook ToolHookContext, args any, next ToolExecutionFunc,
 	) (any, error)

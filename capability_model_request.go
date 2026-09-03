@@ -4,10 +4,15 @@ import "context"
 
 // ModelRequestContext is the mutable request passed through model lifecycle hooks.
 type ModelRequestContext struct {
-	Model     Model
-	ModelID   string
-	Messages  []ModelMessage
-	Params    ModelRequestParams
+	// Model is the concrete selected model.
+	Model Model
+	// ModelID is the selected application model ID.
+	ModelID string
+	// Messages is the detached prospective history.
+	Messages []ModelMessage
+	// Params contains detached prepared request parameters.
+	Params ModelRequestParams
+	// Streaming reports whether the request expects provider deltas.
 	Streaming bool
 	// ReplaceHistory commits Messages as the run history before the request.
 	ReplaceHistory bool
@@ -36,11 +41,13 @@ func (request ModelRequestContext) Clone() ModelRequestContext {
 // InstructionParts is the source of truth when a hook changes it. Changing only
 // Instructions remains supported as an aggregate replacement for compatibility.
 type BeforeModelRequestHook interface {
+	// BeforeModelRequest returns the request passed to model middleware.
 	BeforeModelRequest(ctx context.Context, ri *RunInfo, request ModelRequestContext) (ModelRequestContext, error)
 }
 
 // AfterModelRequestHook modifies a successful response. Hooks run in reverse capability order.
 type AfterModelRequestHook interface {
+	// AfterModelRequest returns the successful response passed to outer hooks.
 	AfterModelRequest(
 		ctx context.Context, ri *RunInfo, request ModelRequestContext, response *ModelResponse,
 	) (*ModelResponse, error)
@@ -48,6 +55,7 @@ type AfterModelRequestHook interface {
 
 // ModelRequestErrorHook may replace a model or middleware error with a response. Hooks run in reverse capability order.
 type ModelRequestErrorHook interface {
+	// OnModelRequestError returns a recovered response or replacement error.
 	OnModelRequestError(
 		ctx context.Context, ri *RunInfo, request ModelRequestContext, requestErr error,
 	) (*ModelResponse, error)

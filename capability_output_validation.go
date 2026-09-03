@@ -23,17 +23,28 @@ const (
 
 // OutputHookContext describes one final or partial output candidate.
 type OutputHookContext struct {
-	Mode           OutputHookMode
-	OutputType     reflect.Type
-	Schema         map[string]any
-	ToolCall       *ToolCallPart
+	// Mode identifies how the candidate was delivered.
+	Mode OutputHookMode
+	// OutputType is the semantic Go result type.
+	OutputType reflect.Type
+	// Schema is the detached output JSON Schema when structured.
+	Schema map[string]any
+	// ToolCall is the detached originating output call when applicable.
+	ToolCall *ToolCallPart
+	// ToolDefinition is the detached output definition when applicable.
 	ToolDefinition *ToolDefinition
-	AllowsText     bool
-	AllowsImage    bool
-	Structured     bool
-	Partial        bool
-	HasFunction    bool
-	FunctionName   string
+	// AllowsText reports whether plain text can complete the run.
+	AllowsText bool
+	// AllowsImage reports whether an image can complete the run.
+	AllowsImage bool
+	// Structured reports whether parsing and schema validation apply.
+	Structured bool
+	// Partial reports whether this is an in-progress stream snapshot.
+	Partial bool
+	// HasFunction reports whether custom output processing applies.
+	HasFunction bool
+	// FunctionName identifies custom output processing for instrumentation.
+	FunctionName string
 }
 
 // Clone returns a context detached from schemas, tool calls, and definitions.
@@ -59,6 +70,7 @@ type OutputValidationFunc func(ctx context.Context, rawOutput any) (any, error)
 // Raw output is a string, json.RawMessage, []byte, or map[string]any. It runs
 // for tool, native, prompted, and partial structured outputs, but not plain text.
 type BeforeOutputValidationHook interface {
+	// BeforeOutputValidation returns raw structured content passed to parsing.
 	BeforeOutputValidation(
 		ctx context.Context, ri *RunInfo, hook OutputHookContext, rawOutput any,
 	) (any, error)
@@ -66,11 +78,13 @@ type BeforeOutputValidationHook interface {
 
 // AfterOutputValidationHook modifies a successfully parsed semantic output value.
 type AfterOutputValidationHook interface {
+	// AfterOutputValidation returns the parsed semantic value passed onward.
 	AfterOutputValidation(ctx context.Context, ri *RunInfo, hook OutputHookContext, output any) (any, error)
 }
 
 // OutputValidationErrorHook may replace a structured parsing or schema error.
 type OutputValidationErrorHook interface {
+	// OnOutputValidationError returns recovered output or a replacement error.
 	OnOutputValidationError(
 		ctx context.Context, ri *RunInfo, hook OutputHookContext, rawOutput any, validationErr error,
 	) (any, error)
@@ -78,6 +92,7 @@ type OutputValidationErrorHook interface {
 
 // OutputValidationWrapper wraps structured parsing and schema validation.
 type OutputValidationWrapper interface {
+	// WrapOutputValidation wraps parsing and schema validation.
 	WrapOutputValidation(
 		ctx context.Context, ri *RunInfo, hook OutputHookContext, rawOutput any, next OutputValidationFunc,
 	) (any, error)

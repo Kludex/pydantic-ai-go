@@ -8,8 +8,10 @@ import (
 
 // HistorySummary is the provider-neutral result of summarizing old turns.
 type HistorySummary struct {
+	// Content is the readable replacement for summarized turns.
 	Content string
-	Usage   Usage
+	// Usage attributes summarizer model work to the outer run.
+	Usage Usage
 }
 
 // HistorySummaryFunc summarizes a detached sequence of complete old turns.

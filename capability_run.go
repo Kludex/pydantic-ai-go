@@ -5,7 +5,9 @@ import "context"
 // RunOutcome is the untyped result passed through run lifecycle middleware.
 // Deferred takes precedence over Output when it is non-nil.
 type RunOutcome struct {
-	Output   any
+	// Output is the completed semantic value.
+	Output any
+	// Deferred is the detached batch that paused the run.
 	Deferred *DeferredToolRequests
 }
 
@@ -35,21 +37,25 @@ type RunFunc func(ctx context.Context) (RunOutcome, error)
 // RunWrapper wraps the entire run. A wrapper may transform or recover a result,
 // or skip next and return a short-circuit outcome. Cancellation remains terminal.
 type RunWrapper interface {
+	// WrapRun wraps or short-circuits the complete run lifecycle.
 	WrapRun(ctx context.Context, ri *RunInfo, next RunFunc) (RunOutcome, error)
 }
 
 // BeforeRunHook observes a run after its enclosing wrappers have entered and before the loop starts.
 type BeforeRunHook interface {
+	// BeforeRun observes the run before its model loop starts.
 	BeforeRun(ctx context.Context, ri *RunInfo) error
 }
 
 // AfterRunHook transforms a successful, recovered, or short-circuit outcome.
 type AfterRunHook interface {
+	// AfterRun returns the successful outcome passed to outer hooks.
 	AfterRun(ctx context.Context, ri *RunInfo, outcome RunOutcome) (RunOutcome, error)
 }
 
 // RunErrorHook may replace an error left by run wrappers with an outcome.
 type RunErrorHook interface {
+	// OnRunError returns a recovered outcome or replacement error.
 	OnRunError(ctx context.Context, ri *RunInfo, runErr error) (RunOutcome, error)
 }
 

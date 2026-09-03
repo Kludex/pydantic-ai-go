@@ -40,14 +40,19 @@ func CapabilityInstance(capability Capability) CapabilityReference {
 // Agent and per-run registrations are sorted independently; agent capabilities
 // remain outside per-run capabilities.
 type CapabilityOrdering struct {
-	Position  CapabilityPosition
-	Wraps     []CapabilityReference
+	// Position selects an outermost or innermost fixed tier.
+	Position CapabilityPosition
+	// Wraps places this capability outside matching references.
+	Wraps []CapabilityReference
+	// WrappedBy places this capability inside matching references.
 	WrappedBy []CapabilityReference
-	Requires  []CapabilityReference
+	// Requires rejects registration when a reference is unavailable.
+	Requires []CapabilityReference
 }
 
 // CapabilityOrderingProvider supplies ordering constraints for a capability.
 type CapabilityOrderingProvider interface {
+	// CapabilityOrdering returns detached ordering and dependency constraints.
 	CapabilityOrdering() CapabilityOrdering
 }
 
@@ -166,6 +171,7 @@ func (reference CapabilityReference) matches(capability Capability) bool {
 	return capabilityType == reference.typ
 }
 
+// String returns a diagnostic capability type or instance description.
 func (reference CapabilityReference) String() string {
 	if reference.typ == nil {
 		return "<invalid capability reference>"

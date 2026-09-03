@@ -7,16 +7,19 @@ type OutputProcessingFunc func(ctx context.Context, output any) (any, error)
 
 // BeforeOutputProcessingHook modifies validated output before final extraction.
 type BeforeOutputProcessingHook interface {
+	// BeforeOutputProcessing returns validated output passed to semantic processing.
 	BeforeOutputProcessing(ctx context.Context, ri *RunInfo, hook OutputHookContext, output any) (any, error)
 }
 
 // AfterOutputProcessingHook modifies the final output value.
 type AfterOutputProcessingHook interface {
+	// AfterOutputProcessing returns the final output value.
 	AfterOutputProcessing(ctx context.Context, ri *RunInfo, hook OutputHookContext, output any) (any, error)
 }
 
 // OutputProcessingErrorHook may replace an ordinary output processing error.
 type OutputProcessingErrorHook interface {
+	// OnOutputProcessingError returns recovered output or a replacement error.
 	OnOutputProcessingError(
 		ctx context.Context, ri *RunInfo, hook OutputHookContext, output any, processingErr error,
 	) (any, error)
@@ -24,6 +27,7 @@ type OutputProcessingErrorHook interface {
 
 // OutputProcessingWrapper wraps semantic validators and final output extraction.
 type OutputProcessingWrapper interface {
+	// WrapOutputProcessing wraps semantic validation and final extraction.
 	WrapOutputProcessing(
 		ctx context.Context, ri *RunInfo, hook OutputHookContext, output any, next OutputProcessingFunc,
 	) (any, error)

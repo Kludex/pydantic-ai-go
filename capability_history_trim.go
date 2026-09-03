@@ -12,7 +12,9 @@ var ErrHistoryTokenLimitExceeded = errors.New("ai: protected history exceeds the
 
 // HistoryTokenLimitError describes a history that cannot be trimmed enough.
 type HistoryTokenLimitError struct {
+	// Limit is the configured maximum input-token count.
 	Limit int
+	// Usage is the protected history's prospective request usage.
 	Usage Usage
 }
 

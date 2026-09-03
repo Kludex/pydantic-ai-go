@@ -8,9 +8,13 @@ import (
 
 // ToolHookContext identifies one prepared function-tool call.
 type ToolHookContext struct {
-	Call         ToolCallPart
-	Definition   ToolDefinition
-	Approved     bool
+	// Call is the detached provider tool call.
+	Call ToolCallPart
+	// Definition is the detached prepared function definition.
+	Definition ToolDefinition
+	// Approved reports whether the call resumed with approval.
+	Approved bool
+	// CallMetadata carries detached approval or external-execution data.
 	CallMetadata map[string]any
 }
 
@@ -29,6 +33,7 @@ type ToolValidationFunc func(ctx context.Context, rawArgs json.RawMessage) (any,
 // BeforeToolValidationHook modifies raw JSON before schema, decoding, and semantic validation.
 // Independent calls invoke hooks concurrently.
 type BeforeToolValidationHook interface {
+	// BeforeToolValidation returns JSON passed to core argument validation.
 	BeforeToolValidation(
 		ctx context.Context, ri *RunInfo, hook ToolHookContext, rawArgs json.RawMessage,
 	) (json.RawMessage, error)
@@ -37,12 +42,14 @@ type BeforeToolValidationHook interface {
 // AfterToolValidationHook modifies successfully decoded and validated arguments.
 // Return RequestToolApproval or RequestExternalToolExecution to defer the validated call.
 type AfterToolValidationHook interface {
+	// AfterToolValidation returns decoded arguments passed to deferral checks.
 	AfterToolValidation(ctx context.Context, ri *RunInfo, hook ToolHookContext, args any) (any, error)
 }
 
 // ToolValidationErrorHook may replace a core or wrapper validation error with validated arguments.
 // Errors returned directly by before and after hooks bypass error hooks.
 type ToolValidationErrorHook interface {
+	// OnToolValidationError returns recovered arguments or a replacement error.
 	OnToolValidationError(
 		ctx context.Context, ri *RunInfo, hook ToolHookContext, rawArgs json.RawMessage, validationErr error,
 	) (any, error)
@@ -50,6 +57,7 @@ type ToolValidationErrorHook interface {
 
 // ToolValidationWrapper wraps schema, decoding, and semantic argument validation.
 type ToolValidationWrapper interface {
+	// WrapToolValidation wraps schema, decoding, and semantic validation.
 	WrapToolValidation(
 		ctx context.Context, ri *RunInfo, hook ToolHookContext, rawArgs json.RawMessage, next ToolValidationFunc,
 	) (any, error)

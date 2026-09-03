@@ -30,10 +30,15 @@ func (mode FileDownloadMode) Validate() error {
 
 // ImageURL references an image by URL.
 type ImageURL struct {
-	URL            string
-	MediaType      string
-	Identifier     string
-	ForceDownload  FileDownloadMode
+	// URL is the provider-accessible or downloadable image location.
+	URL string
+	// MediaType overrides type inference from URL.
+	MediaType string
+	// Identifier overrides the stable URL-derived identity.
+	Identifier string
+	// ForceDownload controls local retrieval before provider transport.
+	ForceDownload FileDownloadMode
+	// VendorMetadata carries detached provider-specific data.
 	VendorMetadata map[string]any
 }
 
@@ -52,10 +57,15 @@ func (ImageURL) enqueueItemKind() string { return "user-content" }
 
 // VideoURL references a video by URL.
 type VideoURL struct {
-	URL            string
-	MediaType      string
-	Identifier     string
-	ForceDownload  FileDownloadMode
+	// URL is the provider-accessible or downloadable video location.
+	URL string
+	// MediaType overrides type inference from URL.
+	MediaType string
+	// Identifier overrides the stable URL-derived identity.
+	Identifier string
+	// ForceDownload controls local retrieval before provider transport.
+	ForceDownload FileDownloadMode
+	// VendorMetadata carries detached provider-specific data.
 	VendorMetadata map[string]any
 }
 
@@ -91,10 +101,15 @@ func (VideoURL) enqueueItemKind() string { return "user-content" }
 
 // AudioURL references an audio file by URL.
 type AudioURL struct {
-	URL            string
-	MediaType      string
-	Identifier     string
-	ForceDownload  FileDownloadMode
+	// URL is the provider-accessible or downloadable audio location.
+	URL string
+	// MediaType overrides type inference from URL.
+	MediaType string
+	// Identifier overrides the stable URL-derived identity.
+	Identifier string
+	// ForceDownload controls local retrieval before provider transport.
+	ForceDownload FileDownloadMode
+	// VendorMetadata carries detached provider-specific data.
 	VendorMetadata map[string]any
 }
 
@@ -113,10 +128,15 @@ func (AudioURL) enqueueItemKind() string { return "user-content" }
 
 // DocumentURL references a document by URL.
 type DocumentURL struct {
-	URL            string
-	MediaType      string
-	Identifier     string
-	ForceDownload  FileDownloadMode
+	// URL is the provider-accessible or downloadable document location.
+	URL string
+	// MediaType overrides type inference from URL.
+	MediaType string
+	// Identifier overrides the stable URL-derived identity.
+	Identifier string
+	// ForceDownload controls local retrieval before provider transport.
+	ForceDownload FileDownloadMode
+	// VendorMetadata carries detached provider-specific data.
 	VendorMetadata map[string]any
 }
 
@@ -135,9 +155,13 @@ func (DocumentURL) enqueueItemKind() string { return "user-content" }
 
 // BinaryContent carries inline file data.
 type BinaryContent struct {
-	Data           []byte
-	MediaType      string
-	Identifier     string
+	// Data contains detached inline bytes.
+	Data []byte
+	// MediaType identifies the byte representation.
+	MediaType string
+	// Identifier overrides the stable content-derived identity.
+	Identifier string
+	// VendorMetadata carries detached provider-specific data.
 	VendorMetadata map[string]any
 }
 

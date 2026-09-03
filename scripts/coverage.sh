@@ -6,6 +6,7 @@ fail=0
 packages=(
     .
     ./a2a
+    ./cli
     ./internal/download
     ./internal/schema
     ./retries
@@ -27,10 +28,12 @@ packages=(
     ./models/cohere
     ./models/google
     ./models/groq
+    ./models/infer
     ./models/zai
     ./mcp
     ./ui/agui
     ./ui/vercel
+    ./webchat
 )
 for pkg in "${packages[@]}"; do
     profile=$(mktemp)

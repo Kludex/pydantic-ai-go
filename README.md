@@ -278,6 +278,7 @@ func TestAgent(t *testing.T) {
 | Stream an agent to an AG-UI frontend | [`agui.Adapter`](docs/ag-ui.md) |
 | Stream an agent to Vercel AI UI | [`vercel.Adapter`](docs/vercel-ai.md) |
 | Serve an agent over A2A | [`a2a.Executor`](docs/a2a.md) |
+| Chat in a terminal or browser | [`cli.Run` and `webchat.NewHandler`](docs/chat.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
 | Sanitize, trim, or summarize conversation history | [`SanitizeMessages` and history capabilities](docs/history.md) |
 | Compact old provider history | [`ModelCompactor` and compaction capabilities](docs/compaction.md) |

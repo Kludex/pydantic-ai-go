@@ -1,0 +1,85 @@
+// Package infer resolves provider-prefixed generation model names.
+package infer
+
+import (
+	"fmt"
+	"reflect"
+	"strings"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/models/bedrock"
+	"github.com/Kludex/pydantic-ai-go/models/google"
+	"github.com/Kludex/pydantic-ai-go/models/groq"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/models/openrouter"
+	"github.com/Kludex/pydantic-ai-go/models/zai"
+)
+
+// Resolver creates a model from a provider-local name. It must be safe for concurrent calls.
+type Resolver func(modelName string) (ai.Model, error)
+
+// Option configures model-name inference.
+type Option func(*config)
+
+type config struct{ resolvers map[string]Resolver }
+
+// WithProvider registers or replaces one provider resolver.
+func WithProvider(name string, resolver Resolver) Option {
+	if name == "" {
+		panic("model inference: provider name must not be empty")
+	}
+	if resolver == nil {
+		panic("model inference: provider resolver must not be nil")
+	}
+	return func(config *config) { config.resolvers[name] = resolver }
+}
+
+// Model resolves a provider-prefixed name such as openai:gpt-5-mini.
+func Model(name string, options ...Option) (ai.Model, error) {
+	providerName, modelName, found := strings.Cut(name, ":")
+	if !found {
+		return nil, fmt.Errorf("model inference: model name %q must include a provider prefix", name)
+	}
+	if providerName == "" || modelName == "" {
+		return nil, fmt.Errorf("model inference: model name %q must include non-empty provider and model names", name)
+	}
+	configuration := config{resolvers: map[string]Resolver{
+		"openai":           func(name string) (ai.Model, error) { return openai.NewModel(name), nil },
+		"openai-responses": func(name string) (ai.Model, error) { return openai.NewResponsesModel(name), nil },
+		"anthropic":        func(name string) (ai.Model, error) { return anthropic.NewModel(name), nil },
+		"google":           func(name string) (ai.Model, error) { return google.NewModel(name), nil },
+		"bedrock":          func(name string) (ai.Model, error) { return bedrock.NewModel(name), nil },
+		"groq":             func(name string) (ai.Model, error) { return groq.NewModel(name), nil },
+		"openrouter":       func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
+		"zai":              func(name string) (ai.Model, error) { return zai.NewModel(name), nil },
+	}}
+	for _, option := range options {
+		option(&configuration)
+	}
+	resolver, exists := configuration.resolvers[providerName]
+	if !exists {
+		return nil, fmt.Errorf("model inference: unknown provider %q", providerName)
+	}
+	model, err := resolver(modelName)
+	if err != nil {
+		return nil, err
+	}
+	if modelIsNil(model) {
+		return nil, fmt.Errorf("model inference: provider %q returned a nil model", providerName)
+	}
+	return model, nil
+}
+
+func modelIsNil(model ai.Model) bool {
+	if model == nil {
+		return true
+	}
+	value := reflect.ValueOf(model)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
+}

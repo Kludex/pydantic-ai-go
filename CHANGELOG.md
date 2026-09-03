@@ -16,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - MCP server guidance and a client-sampling model with basic, multimodal, tool-enabled, and structured-output requests.
 - AG-UI and Vercel AI adapters with secure client-history sanitization, text, reasoning, and tool streaming, standalone transformation, and SSE HTTP serving.
 - An official A2A Go SDK executor with sanitized task history, streamed artifacts, dependency resolution, and task lifecycle states.
+- Terminal and browser chat entry points with provider-prefixed model inference, MCP configuration, streamed tool status, and session history.
 - Typed embedding clients for OpenAI-compatible APIs, Google Gemini and Vertex AI, Cohere, VoyageAI, Amazon Bedrock, and local Ollama models.
 - Typed prompt templates and deterministic XML formatting for structured prompt data.
 - Agent delegation through typed tools with nested usage and limit propagation.

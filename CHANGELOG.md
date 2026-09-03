@@ -14,7 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Capability middleware for runs, model requests, tool validation and execution, output validation and processing, instructions, history processing, event streams, and deferred calls.
 - MCP clients and toolsets for Streamable HTTP, SSE, stdio, shared sessions, OAuth, sampling, elicitation, prompts, resources, and configuration files.
 - MCP server guidance and a client-sampling model with basic, multimodal, tool-enabled, and structured-output requests.
-- AG-UI and Vercel AI adapters with secure client-history sanitization, text, reasoning, and tool streaming, standalone transformation, and SSE HTTP serving.
+- AG-UI and Vercel AI adapters with secure client-history sanitization, text, reasoning, and tool streaming, standalone transformation, and SSE HTTP serving. AG-UI also supports approval interrupts and strict resume decisions.
 - An official A2A Go SDK executor with sanitized task history, streamed artifacts, dependency resolution, and task lifecycle states.
 - Terminal and browser chat entry points with provider-prefixed model inference, MCP configuration, streamed tool status, and session history.
 - Durable operation backend contracts with stable naming, codecs, cache identity, explicit model ownership, and Temporal, DBOS, and Prefect registration policies.

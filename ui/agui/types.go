@@ -2,6 +2,8 @@
 package agui
 
 import (
+	"encoding/json"
+
 	ai "github.com/Kludex/pydantic-ai-go"
 )
 
@@ -55,6 +57,8 @@ type Event struct {
 	Content string `json:"content,omitempty"`
 	// Message describes a run error.
 	Message string `json:"message,omitempty"`
+	// Outcome describes a successful or interrupted run.
+	Outcome *RunOutcome `json:"outcome,omitempty"`
 }
 
 // RunAgentInput is the provider-neutral subset of an AG-UI run request.
@@ -65,6 +69,42 @@ type RunAgentInput struct {
 	RunID string `json:"runId"`
 	// Messages is untrusted client-held history.
 	Messages []Message `json:"messages"`
+	// Resume contains approval decisions for prior interrupts.
+	Resume []ResumeEntry `json:"resume,omitempty"`
+}
+
+// ResumeEntry resolves one prior approval interrupt.
+type ResumeEntry struct {
+	// InterruptID is the int-prefixed tool-call identity.
+	InterruptID string `json:"interruptId"`
+	// Status may be completed or cancelled.
+	Status string `json:"status"`
+	// Payload contains the strict approval decision.
+	Payload json.RawMessage `json:"payload"`
+}
+
+// RunOutcome is the terminal AG-UI run outcome.
+type RunOutcome struct {
+	// Type is success or interrupt.
+	Type string `json:"type"`
+	// Interrupts contains pending approval requests.
+	Interrupts []Interrupt `json:"interrupts,omitempty"`
+}
+
+// Interrupt describes one pending tool approval.
+type Interrupt struct {
+	// ID is the int-prefixed tool-call identity.
+	ID string `json:"id"`
+	// Reason is tool_call.
+	Reason string `json:"reason"`
+	// ToolCallID is the original model call identity.
+	ToolCallID string `json:"toolCallId"`
+	// Message is a human-readable approval question.
+	Message string `json:"message"`
+	// ResponseSchema describes the accepted ResumeEntry payload.
+	ResponseSchema map[string]any `json:"responseSchema"`
+	// Metadata contains detached approval metadata.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // Message is one inbound AG-UI text or tool message.

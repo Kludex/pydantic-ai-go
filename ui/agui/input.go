@@ -3,6 +3,7 @@ package agui
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -34,6 +35,60 @@ func PrepareInput(
 		return prompt, history, report, nil
 	}
 	return ai.UserPromptPart{}, nil, report, fmt.Errorf("agui: input requires a user message")
+}
+
+func prepareRunInput(
+	input RunAgentInput, options ai.MessageSanitizationOptions,
+) (ai.UserPromptPart, []ai.ModelMessage, *ai.DeferredToolResults, error) {
+	if len(input.Resume) == 0 {
+		prompt, history, _, err := PrepareInput(input, options)
+		return prompt, history, nil, err
+	}
+	messages, err := convertMessages(input.Messages)
+	if err != nil {
+		return ai.UserPromptPart{}, nil, nil, err
+	}
+	for _, entry := range input.Resume {
+		if strings.HasPrefix(entry.InterruptID, "int-") {
+			options.ResolvedToolCallIDs = append(options.ResolvedToolCallIDs, strings.TrimPrefix(entry.InterruptID, "int-"))
+		}
+	}
+	history, _, err := ai.SanitizeMessages(messages, options)
+	if err != nil {
+		return ai.UserPromptPart{}, nil, nil, err
+	}
+	results := ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{}}
+	for _, entry := range input.Resume {
+		if !strings.HasPrefix(entry.InterruptID, "int-") || len(entry.InterruptID) == len("int-") {
+			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("agui: invalid interrupt ID %q", entry.InterruptID)
+		}
+		results.Approvals[strings.TrimPrefix(entry.InterruptID, "int-")] = resumeApproval(entry)
+	}
+	return ai.UserPromptPart{}, history, &results, nil
+}
+
+func resumeApproval(entry ResumeEntry) ai.ToolApproval {
+	if entry.Status == "cancelled" {
+		return ai.ToolDenied{Message: "Cancelled by user."}
+	}
+	var payload struct {
+		Approved   *bool           `json:"approved"`
+		EditedArgs json.RawMessage `json:"editedArgs"`
+		Reason     string          `json:"reason"`
+	}
+	if json.Unmarshal(entry.Payload, &payload) != nil || payload.Approved == nil {
+		return ai.ToolDenied{}
+	}
+	if *payload.Approved {
+		if len(payload.EditedArgs) > 0 && json.Valid(payload.EditedArgs) && payload.EditedArgs[0] == '{' {
+			return ai.ToolApproved{OverrideArgs: append(json.RawMessage(nil), payload.EditedArgs...)}
+		}
+		if len(payload.EditedArgs) > 0 {
+			return ai.ToolDenied{}
+		}
+		return ai.ToolApproved{}
+	}
+	return ai.ToolDenied{Message: payload.Reason}
 }
 
 func convertMessages(messages []Message) ([]ai.ModelMessage, error) {

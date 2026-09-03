@@ -78,6 +78,25 @@ func main() {
 
 `TransformStream` is useful when agent events arrive through a queue or durable workflow instead of an HTTP request.
 
+## Approve deferred tools
+
+Tools registered with `WithApprovalRequired` finish the AG-UI run with an interrupt outcome. Each interrupt ID uses `int-<toolCallId>` and advertises the resume payload schema.
+
+Resume the same client-held history with a `resume` entry:
+
+```json
+{
+  "interruptId": "int-call_approve",
+  "status": "completed",
+  "payload": {
+    "approved": true,
+    "editedArgs": {"city": "London"}
+  }
+}
+```
+
+`approved` must be a JSON boolean. Missing or malformed decisions deny by default. `editedArgs` must be an object and fully replaces the original tool arguments. A cancelled entry denies with a cancellation message.
+
 ## Event ordering
 
 Each model response owns one assistant message. The adapter emits `TEXT_MESSAGE_START` before text or tool-call events from that response. A tool call uses that message ID as `parentMessageId`, including responses that start with a tool and contain no text.
@@ -88,4 +107,4 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 The adapter supports text messages, assistant function calls, tool results, secure client-held history, normalized text and tool streaming, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-AG-UI multimodal messages, frontend tools, state snapshots and deltas, activities, reasoning events, file preservation, approval interrupts and resume entries, custom events, forwarded context, and protocol-version negotiation remain.
+AG-UI multimodal messages, frontend tools, state snapshots and deltas, activities, reasoning events, file preservation, external-execution interrupts, custom events, forwarded context, and protocol-version negotiation remain.

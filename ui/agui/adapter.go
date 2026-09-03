@@ -44,13 +44,16 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		runID = nextID("run")
 	}
 	return func(yield func(Event, error) bool) {
-		prompt, history, _, err := PrepareInput(input, adapter.config.Sanitization)
+		prompt, history, deferred, err := prepareRunInput(input, adapter.config.Sanitization)
 		if err != nil {
 			yield(Event{Type: EventRunError, Message: err.Error()}, err)
 			return
 		}
 		runOptions := append([]ai.RunOption(nil), options...)
 		runOptions = append(runOptions, ai.WithMessageHistory(history), ai.WithConversationID(threadID))
+		if deferred != nil {
+			runOptions = append(runOptions, ai.WithDeferredToolResults(*deferred))
+		}
 		stream := adapter.agent.RunStream(ctx, prompt.Content, deps, runOptions...)
 		for event, eventErr := range TransformStream(stream.Events(), threadID, runID) {
 			if !yield(event, eventErr) || eventErr != nil {
@@ -72,7 +75,9 @@ func TransformStream(stream ai.EventStream, threadID string, runID string) iter.
 		if !yield(Event{Type: EventRunStarted, ThreadID: threadID, RunID: runID}, nil) {
 			return
 		}
-		transformer := eventTransformer{runID: runID, calls: map[string]bool{}, partCalls: map[string]string{}}
+		transformer := eventTransformer{
+			runID: runID, calls: map[string]bool{}, partCalls: map[string]string{}, outcome: RunOutcome{Type: "success"},
+		}
 		for event, eventErr := range stream {
 			if eventErr != nil {
 				if !transformer.closeMessage(yield) {
@@ -92,7 +97,7 @@ func TransformStream(stream ai.EventStream, threadID string, runID string) iter.
 		if !transformer.closeMessage(yield) {
 			return
 		}
-		yield(Event{Type: EventRunFinished, ThreadID: threadID, RunID: runID}, nil)
+		yield(Event{Type: EventRunFinished, ThreadID: threadID, RunID: runID, Outcome: &transformer.outcome}, nil)
 	}
 }
 

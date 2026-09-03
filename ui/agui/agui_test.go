@@ -172,6 +172,122 @@ func TestHandlerValidation(t *testing.T) {
 	}
 }
 
+func TestApprovalInterruptAndResume(t *testing.T) {
+	executions := 0
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	agent.AddRawTool(ai.ToolDefinition{
+		Name: "approve", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+	}, func(context.Context, json.RawMessage) (any, error) {
+		executions++
+		return "approved", nil
+	}, ai.WithApprovalRequired(), ai.WithApprovalMetadata(map[string]any{"risk": "low"}))
+	adapter := agui.NewAdapter(agent, agui.Config{})
+	input := agui.RunAgentInput{ThreadID: "thread", RunID: "first", Messages: []agui.Message{
+		{ID: "user", Role: "user", Content: "run"},
+	}}
+	var outcome *agui.RunOutcome
+	for event, err := range adapter.RunStream(context.Background(), input, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == agui.EventRunFinished {
+			outcome = event.Outcome
+		}
+	}
+	if executions != 0 || outcome == nil || outcome.Type != "interrupt" || len(outcome.Interrupts) != 1 ||
+		outcome.Interrupts[0].ID != "int-call_approve" || outcome.Interrupts[0].Metadata["risk"] != "low" {
+		t.Fatalf("unexpected interrupt: executions=%d outcome=%#v", executions, outcome)
+	}
+	resume := agui.RunAgentInput{ThreadID: "thread", RunID: "second", Messages: []agui.Message{
+		{ID: "user", Role: "user", Content: "run"},
+		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{{
+			ID: "call_approve", Type: "function", Function: agui.ToolCallFunction{Name: "approve", Arguments: `{}`},
+		}}},
+	}, Resume: []agui.ResumeEntry{{
+		InterruptID: "int-call_approve", Status: "completed", Payload: []byte(`{"approved":true,"editedArgs":{}}`),
+	}}}
+	resultSeen := false
+	for event, err := range adapter.RunStream(context.Background(), resume, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == agui.EventToolCallResult {
+			resultSeen = true
+		}
+	}
+	if executions != 1 || !resultSeen {
+		t.Fatalf("approval did not resume the tool: executions=%d result=%v", executions, resultSeen)
+	}
+}
+
+func TestApprovalResumeValidation(t *testing.T) {
+	executions := 0
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	agent.AddRawTool(ai.ToolDefinition{
+		Name: "approve", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+	}, func(context.Context, json.RawMessage) (any, error) {
+		executions++
+		return "done", nil
+	}, ai.WithApprovalRequired())
+	base := agui.RunAgentInput{ThreadID: "thread", Messages: []agui.Message{
+		{ID: "user", Role: "user", Content: "run"},
+		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{{
+			ID: "call_approve", Type: "function", Function: agui.ToolCallFunction{Name: "approve", Arguments: `{}`},
+		}}},
+	}}
+	tests := []struct {
+		name      string
+		entry     agui.ResumeEntry
+		executes  bool
+		wantError bool
+	}{
+		{name: "approved", entry: agui.ResumeEntry{InterruptID: "int-call_approve", Payload: []byte(`{"approved":true}`)}, executes: true},
+		{name: "cancelled", entry: agui.ResumeEntry{InterruptID: "int-call_approve", Status: "cancelled"}},
+		{name: "malformed", entry: agui.ResumeEntry{InterruptID: "int-call_approve", Payload: []byte(`{`)}},
+		{name: "missing decision", entry: agui.ResumeEntry{InterruptID: "int-call_approve", Payload: []byte(`{}`)}},
+		{name: "bad edits", entry: agui.ResumeEntry{InterruptID: "int-call_approve", Payload: []byte(`{"approved":true,"editedArgs":[]}`)}},
+		{name: "denied", entry: agui.ResumeEntry{InterruptID: "int-call_approve", Payload: []byte(`{"approved":false,"reason":"no"}`)}},
+		{name: "invalid ID", entry: agui.ResumeEntry{InterruptID: "bad", Payload: []byte(`{"approved":true}`)}, wantError: true},
+		{name: "empty ID", entry: agui.ResumeEntry{InterruptID: "int-", Payload: []byte(`{"approved":true}`)}, wantError: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			before := executions
+			input := base
+			input.Resume = []agui.ResumeEntry{test.entry}
+			var got error
+			for _, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(context.Background(), input, struct{}{}) {
+				if err != nil {
+					got = err
+				}
+			}
+			if (got != nil) != test.wantError {
+				t.Fatalf("unexpected error: %v", got)
+			}
+			if (executions > before) != test.executes {
+				t.Fatalf("unexpected execution count: before=%d after=%d", before, executions)
+			}
+		})
+	}
+
+	invalidMessage := base
+	invalidMessage.Messages[0].ID = ""
+	invalidMessage.Resume = []agui.ResumeEntry{{InterruptID: "int-call_approve", Payload: []byte(`{"approved":true}`)}}
+	for _, config := range []agui.Config{
+		{},
+		{Sanitization: ai.MessageSanitizationOptions{AllowedFileURLSchemes: []string{"bad scheme"}}},
+	} {
+		var got error
+		for _, err := range agui.NewAdapter(agent, config).RunStream(context.Background(), invalidMessage, struct{}{}) {
+			got = err
+		}
+		if got == nil {
+			t.Fatal("expected resume preparation error")
+		}
+		invalidMessage.Messages[0].ID = "user"
+	}
+}
+
 func TestRunErrorsAndGeneratedIDs(t *testing.T) {
 	modelErr := errors.New("model failed")
 	agent := ai.NewAgent[struct{}, string](fakes.NewFunctionModel(func(

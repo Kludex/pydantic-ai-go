@@ -18,6 +18,7 @@ type eventTransformer struct {
 	result      int
 	calls       map[string]bool
 	partCalls   map[string]string
+	outcome     RunOutcome
 	stopped     bool
 }
 
@@ -94,6 +95,16 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 			return err
 		}
 		transformer.toolResult(yield, toolCallID, content)
+	case ai.DeferredToolRequestsEvent:
+		transformer.outcome = RunOutcome{Type: "interrupt"}
+		for _, call := range value.Requests.Approvals {
+			transformer.outcome.Interrupts = append(transformer.outcome.Interrupts, Interrupt{
+				ID: "int-" + call.ToolCallID, Reason: "tool_call", ToolCallID: call.ToolCallID,
+				Message:        fmt.Sprintf("Approve %s(%s)?", call.ToolName, call.Args),
+				ResponseSchema: approvalResponseSchema(),
+				Metadata:       cloneMap(value.Requests.Metadata[call.ToolCallID]),
+			})
+		}
 	case ai.FinishEvent:
 		transformer.closeMessage(yield)
 		transformer.response++
@@ -165,6 +176,25 @@ func (transformer *eventTransformer) toolResult(yield func(Event, error) bool, t
 		Type: EventToolCallResult, MessageID: fmt.Sprintf("%s:tool:%d", transformer.runID, transformer.result),
 		Role: "tool", ToolCallID: toolCallID, Content: content,
 	}, nil)
+}
+
+func approvalResponseSchema() map[string]any {
+	return map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"approved":   map[string]any{"type": "boolean"},
+			"editedArgs": map[string]any{"type": "object"},
+			"reason":     map[string]any{"type": "string"},
+		},
+		"required": []string{"approved"},
+	}
+}
+
+func cloneMap(value map[string]any) map[string]any {
+	encoded, _ := json.Marshal(value)
+	var cloned map[string]any
+	_ = json.Unmarshal(encoded, &cloned)
+	return cloned
 }
 
 func encodeResult(content any) (string, error) {

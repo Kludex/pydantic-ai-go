@@ -10,24 +10,28 @@ import (
 // Toolset lists a dynamic collection of reusable tools for one model step.
 // Implementations may use RunContext to vary availability between steps.
 type Toolset[Deps any] interface {
+	// Tools returns detached definitions and callables for the current model step.
 	Tools(ctx context.Context, rc *RunContext[Deps]) ([]Tool[Deps], error)
 }
 
 // ToolsetIDProvider optionally gives a toolset a stable application ID. The
 // ID is copied onto its tool definitions for durable execution and tracing.
 type ToolsetIDProvider interface {
+	// ToolsetID returns the stable application identity copied to tool definitions.
 	ToolsetID() string
 }
 
 // ToolsetRunProvider optionally returns an isolated toolset for one run. It
 // is called once before the toolset is opened.
 type ToolsetRunProvider[Deps any] interface {
+	// ForRun returns a run-isolated toolset before resources are opened.
 	ForRun(ctx context.Context, rc *RunContext[Deps]) (Toolset[Deps], error)
 }
 
 // ToolsetStepProvider optionally replaces a toolset before one model request.
 // A provider returning a different open resource manages that transition.
 type ToolsetStepProvider[Deps any] interface {
+	// ForRunStep returns the toolset used for the current model request.
 	ForRunStep(ctx context.Context, rc *RunContext[Deps]) (Toolset[Deps], error)
 }
 
@@ -38,6 +42,7 @@ type ToolsetCloseFunc func(ctx context.Context) error
 // ToolsetOpener optionally acquires run-scoped resources and returns the
 // toolset used for the run plus its cleanup function.
 type ToolsetOpener[Deps any] interface {
+	// OpenToolset acquires one run-scoped toolset and its cleanup function.
 	OpenToolset(
 		ctx context.Context, rc *RunContext[Deps],
 	) (Toolset[Deps], ToolsetCloseFunc, error)
@@ -46,6 +51,7 @@ type ToolsetOpener[Deps any] interface {
 // ToolsetInstructionsProvider optionally contributes instructions before each
 // model request. Plain toolsets only need to implement Toolset.
 type ToolsetInstructionsProvider[Deps any] interface {
+	// ToolsetInstructions returns detached blocks prepared for the current request.
 	ToolsetInstructions(ctx context.Context, rc *RunContext[Deps]) ([]InstructionPart, error)
 }
 

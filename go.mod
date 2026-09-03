@@ -6,6 +6,7 @@ require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.2
 	github.com/Kludex/pydantic-evals-go v0.1.1
 	github.com/PuerkitoBio/goquery v1.13.0
+	github.com/a2aproject/a2a-go v0.3.15
 	github.com/aws/aws-sdk-go-v2 v1.45.1
 	github.com/aws/aws-sdk-go-v2/config v1.33.2
 	github.com/aws/aws-sdk-go-v2/credentials v1.20.2

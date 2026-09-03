@@ -277,6 +277,7 @@ func TestAgent(t *testing.T) {
 | Expose an agent through MCP | [An official SDK server with a typed agent tool](docs/mcp-server.md) |
 | Stream an agent to an AG-UI frontend | [`agui.Adapter`](docs/ag-ui.md) |
 | Stream an agent to Vercel AI UI | [`vercel.Adapter`](docs/vercel-ai.md) |
+| Serve an agent over A2A | [`a2a.Executor`](docs/a2a.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
 | Sanitize, trim, or summarize conversation history | [`SanitizeMessages` and history capabilities](docs/history.md) |
 | Compact old provider history | [`ModelCompactor` and compaction capabilities](docs/compaction.md) |

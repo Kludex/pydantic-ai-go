@@ -5,6 +5,7 @@ set -euo pipefail
 fail=0
 packages=(
     .
+    ./a2a
     ./internal/download
     ./internal/schema
     ./retries

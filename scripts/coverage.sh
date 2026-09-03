@@ -29,6 +29,7 @@ packages=(
     ./models/zai
     ./mcp
     ./ui/agui
+    ./ui/vercel
 )
 for pkg in "${packages[@]}"; do
     profile=$(mktemp)

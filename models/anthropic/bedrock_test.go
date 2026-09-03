@@ -174,7 +174,15 @@ func TestLegacyBedrockAWSClientHeaders(t *testing.T) {
 		if request.Header.Get("x-custom") != "present" {
 			t.Errorf("custom header missing: %v", request.Header)
 		}
+		if strings.HasSuffix(request.URL.Path, "/converse-stream") || strings.HasSuffix(request.URL.Path, "/invoke-with-response-stream") {
+			response.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+			return
+		}
 		response.Header().Set("Content-Type", "application/json")
+		if strings.HasSuffix(request.URL.Path, "/count-tokens") {
+			_, _ = response.Write([]byte(`{"inputTokens":5}`))
+			return
+		}
 		_, _ = response.Write([]byte(`{"model":"model","content":[],"usage":{}}`))
 	}))
 	defer server.Close()
@@ -185,11 +193,38 @@ func TestLegacyBedrockAWSClientHeaders(t *testing.T) {
 	model := anthropic.NewLegacyBedrockModel("model", anthropic.LegacyBedrockConfig{
 		Client: client, ProviderURL: server.URL,
 	})
-	_, err := model.Request(context.Background(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
-		ExtraHeaders: map[string]string{"x-custom": "present"},
-	}})
+	params := ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraHeaders: map[string]string{"x-custom": "present"}}}
+	_, err := model.Request(context.Background(), nil, params)
 	if err != nil {
 		t.Fatal(err)
+	}
+	usage, err := model.CountTokens(context.Background(), nil, params)
+	if err != nil || usage.InputTokens != 5 {
+		t.Fatalf("unexpected AWS token count: %#v err=%v", usage, err)
+	}
+	sequence, err := model.StreamRequest(context.Background(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamErr error
+	for _, eventErr := range sequence {
+		streamErr = eventErr
+	}
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "without message_stop") {
+		t.Fatalf("unexpected empty AWS stream error: %v", streamErr)
+	}
+
+	failureServer := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer failureServer.Close()
+	failureClient := bedrockruntime.NewFromConfig(aws.Config{
+		Region: "us-east-1", BaseEndpoint: aws.String(failureServer.URL), HTTPClient: failureServer.Client(),
+		Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""),
+	})
+	failureModel := anthropic.NewLegacyBedrockModel("model", anthropic.LegacyBedrockConfig{Client: failureClient})
+	if _, err := failureModel.StreamRequest(context.Background(), nil, ai.ModelRequestParams{}); err == nil {
+		t.Fatal("expected AWS stream-open error")
 	}
 }
 

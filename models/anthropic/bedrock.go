@@ -29,6 +29,25 @@ type LegacyBedrockClient interface {
 	) (*bedrockruntime.CountTokensOutput, error)
 }
 
+// LegacyBedrockEventStream is one InvokeModelWithResponseStream result.
+type LegacyBedrockEventStream interface {
+	// Events returns provider payload chunks until the channel closes.
+	Events() <-chan types.ResponseStream
+	// Close releases the stream and must permit repeated calls.
+	Close() error
+	// Err returns the terminal stream-reader error.
+	Err() error
+}
+
+// LegacyBedrockStreamingClient is the optional streaming AWS surface.
+type LegacyBedrockStreamingClient interface {
+	// InvokeModelWithResponseStream starts one Anthropic event stream.
+	InvokeModelWithResponseStream(
+		ctx context.Context, input *bedrockruntime.InvokeModelWithResponseStreamInput,
+		options ...func(*bedrockruntime.Options),
+	) (LegacyBedrockEventStream, error)
+}
+
 // LegacyBedrockConfig configures the Anthropic InvokeModel transport.
 type LegacyBedrockConfig struct {
 	// Client is caller-owned and must be safe for concurrent requests.
@@ -44,9 +63,45 @@ func NewLegacyBedrockModel(name string, config LegacyBedrockConfig, options ...O
 		panic("anthropic: legacy Bedrock client must not be nil")
 	}
 	model := NewModel(name, options...)
-	model.legacyBedrockClient = config.Client
+	if sdkClient, ok := config.Client.(*bedrockruntime.Client); ok {
+		model.legacyBedrockClient = &legacyAWSClient{client: sdkClient}
+	} else {
+		model.legacyBedrockClient = config.Client
+	}
 	model.baseURL = config.ProviderURL
 	return model
+}
+
+type legacyAWSRuntimeClient interface {
+	LegacyBedrockClient
+	InvokeModelWithResponseStream(
+		context.Context, *bedrockruntime.InvokeModelWithResponseStreamInput, ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.InvokeModelWithResponseStreamOutput, error)
+}
+
+type legacyAWSClient struct{ client legacyAWSRuntimeClient }
+
+func (client *legacyAWSClient) InvokeModel(
+	ctx context.Context, input *bedrockruntime.InvokeModelInput, options ...func(*bedrockruntime.Options),
+) (*bedrockruntime.InvokeModelOutput, error) {
+	return client.client.InvokeModel(ctx, input, options...)
+}
+
+func (client *legacyAWSClient) CountTokens(
+	ctx context.Context, input *bedrockruntime.CountTokensInput, options ...func(*bedrockruntime.Options),
+) (*bedrockruntime.CountTokensOutput, error) {
+	return client.client.CountTokens(ctx, input, options...)
+}
+
+func (client *legacyAWSClient) InvokeModelWithResponseStream(
+	ctx context.Context, input *bedrockruntime.InvokeModelWithResponseStreamInput,
+	options ...func(*bedrockruntime.Options),
+) (LegacyBedrockEventStream, error) {
+	output, err := client.client.InvokeModelWithResponseStream(ctx, input, options...)
+	if err != nil {
+		return nil, err
+	}
+	return output.GetStream(), nil
 }
 
 func (model *Model) requestLegacyBedrock(
@@ -102,7 +157,6 @@ func legacyBedrockBody(payload *messagesRequest) ([]byte, error) {
 	var fields map[string]any
 	_ = json.Unmarshal(body, &fields)
 	delete(fields, "model")
-	delete(fields, "stream")
 	fields["anthropic_version"] = "bedrock-2023-05-31"
 	encoded, _ := json.Marshal(fields)
 	return encoded, nil

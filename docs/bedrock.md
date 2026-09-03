@@ -151,7 +151,7 @@ func main() {
 
 `NewLegacyBedrockModel` reuses Anthropic message normalization with Bedrock's `InvokeModel` request body. It uses Bedrock's `CountTokens` operation because Anthropic's Messages token-count endpoint is unavailable on this transport.
 
-The legacy transport defaults provider-native deferred tool search to regex. Bedrock rejects BM25 on this API, so an explicit BM25 strategy fails before transport. `RunStream` falls back to one complete `InvokeModel` response because legacy streaming is not yet implemented.
+The legacy transport defaults provider-native deferred tool search to regex. Bedrock rejects BM25 on this API, so an explicit BM25 strategy fails before transport. `RunStream` uses `InvokeModelWithResponseStream` with the AWS SDK or a custom `LegacyBedrockStreamingClient`. A custom client without streaming support falls back to one complete `InvokeModel` response.
 
 You own the AWS client and its lifecycle. `ProviderURL` records telemetry identity and does not reconfigure the client.
 
@@ -221,4 +221,4 @@ Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and ext
 
 ## Current scope
 
-Native Bedrock tools, guardrails, performance settings, request metadata, streamed image and provider-tool blocks, and legacy Anthropic `InvokeModelWithResponseStream` remain outside this implementation.
+Native Bedrock tools, guardrails, performance settings, request metadata, and streamed image and provider-tool blocks remain outside this implementation.

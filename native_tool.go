@@ -11,9 +11,13 @@ import (
 // NativeTool is executed by a model provider rather than by the agent.
 // Implementations must be safe for concurrent inspection.
 type NativeTool interface {
+	// Kind returns the stable provider-neutral discriminator.
 	Kind() string
+	// UniqueID identifies one native tool within a model request.
 	UniqueID() string
+	// IsOptional reports whether an unsupported provider may omit the tool.
 	IsOptional() bool
+	// CloneNativeTool returns a detached definition.
 	CloneNativeTool() NativeTool
 }
 
@@ -53,29 +57,43 @@ func staticNativeTools[Deps any](entries []nativeToolEntry[Deps]) []NativeTool {
 type WebSearchContextSize string
 
 const (
-	WebSearchContextLow    WebSearchContextSize = "low"
+	// WebSearchContextLow requests minimal retrieved context.
+	WebSearchContextLow WebSearchContextSize = "low"
+	// WebSearchContextMedium requests the provider's balanced context size.
 	WebSearchContextMedium WebSearchContextSize = "medium"
-	WebSearchContextHigh   WebSearchContextSize = "high"
+	// WebSearchContextHigh requests the largest portable context size.
+	WebSearchContextHigh WebSearchContextSize = "high"
 )
 
 // WebSearchUserLocation localizes provider-native web search results.
 type WebSearchUserLocation struct {
-	City     string
-	Country  string
-	Region   string
+	// City is the approximate locality name.
+	City string
+	// Country is the country code or name accepted by the provider.
+	Country string
+	// Region is the first-level administrative area.
+	Region string
+	// Timezone is an IANA timezone name.
 	Timezone string
 }
 
 // WebSearchTool asks a compatible provider to perform web searches.
 // The zero value uses the provider's default medium context size.
 type WebSearchTool struct {
+	// SearchContextSize controls how much context the provider retrieves.
 	SearchContextSize WebSearchContextSize
-	UserLocation      *WebSearchUserLocation
-	BlockedDomains    []string
-	AllowedDomains    []string
-	MaxUses           int
+	// UserLocation localizes results when the provider supports it.
+	UserLocation *WebSearchUserLocation
+	// BlockedDomains excludes exact provider search domains.
+	BlockedDomains []string
+	// AllowedDomains restricts search to exact provider domains.
+	AllowedDomains []string
+	// MaxUses bounds provider search calls. Zero uses the provider default.
+	MaxUses int
+	// ExternalWebAccess controls live-web access when supported.
 	ExternalWebAccess *bool
-	Optional          bool
+	// Optional allows omission when the selected provider does not support search.
+	Optional bool
 }
 
 // Kind returns the stable native-tool discriminator.
@@ -92,14 +110,22 @@ func (tool WebSearchTool) CloneNativeTool() NativeTool { return cloneWebSearchTo
 
 // XSearchTool asks xAI to search X posts and content.
 type XSearchTool struct {
-	AllowedXHandles          []string
-	ExcludedXHandles         []string
-	FromDate                 *time.Time
-	ToDate                   *time.Time
+	// AllowedXHandles restricts results to these account handles.
+	AllowedXHandles []string
+	// ExcludedXHandles removes results from these account handles.
+	ExcludedXHandles []string
+	// FromDate is the inclusive lower publication-time bound.
+	FromDate *time.Time
+	// ToDate is the inclusive upper publication-time bound.
+	ToDate *time.Time
+	// EnableImageUnderstanding allows the provider to inspect post images.
 	EnableImageUnderstanding bool
+	// EnableVideoUnderstanding allows the provider to inspect post videos.
 	EnableVideoUnderstanding bool
-	IncludeOutput            bool
-	Optional                 bool
+	// IncludeOutput requests raw provider search output.
+	IncludeOutput bool
+	// Optional allows omission when the selected provider does not support X search.
+	Optional bool
 }
 
 // Kind returns the stable native-tool discriminator.
@@ -122,7 +148,9 @@ func (tool XSearchTool) CloneNativeTool() NativeTool {
 
 // CodeExecutionTool asks a compatible provider to execute model-generated code.
 type CodeExecutionTool struct {
-	Files    []UploadedFile
+	// Files contains detached provider-hosted inputs for the execution container.
+	Files []UploadedFile
+	// Optional allows omission when the selected provider does not support code execution.
 	Optional bool
 }
 
@@ -148,17 +176,23 @@ func (tool CodeExecutionTool) CloneNativeTool() NativeTool {
 type ImageGenerationAction string
 
 const (
-	ImageGenerationActionAuto     ImageGenerationAction = "auto"
+	// ImageGenerationActionAuto lets the provider infer generation or editing.
+	ImageGenerationActionAuto ImageGenerationAction = "auto"
+	// ImageGenerationActionGenerate requests a new image.
 	ImageGenerationActionGenerate ImageGenerationAction = "generate"
-	ImageGenerationActionEdit     ImageGenerationAction = "edit"
+	// ImageGenerationActionEdit requests an edit of supplied image input.
+	ImageGenerationActionEdit ImageGenerationAction = "edit"
 )
 
 // ImageGenerationBackground selects the generated image background.
 type ImageGenerationBackground string
 
 const (
-	ImageGenerationBackgroundAuto        ImageGenerationBackground = "auto"
-	ImageGenerationBackgroundOpaque      ImageGenerationBackground = "opaque"
+	// ImageGenerationBackgroundAuto lets the provider choose the background.
+	ImageGenerationBackgroundAuto ImageGenerationBackground = "auto"
+	// ImageGenerationBackgroundOpaque requests an opaque background.
+	ImageGenerationBackgroundOpaque ImageGenerationBackground = "opaque"
+	// ImageGenerationBackgroundTransparent requests transparency.
 	ImageGenerationBackgroundTransparent ImageGenerationBackground = "transparent"
 )
 
@@ -166,7 +200,9 @@ const (
 type ImageGenerationInputFidelity string
 
 const (
-	ImageGenerationInputFidelityLow  ImageGenerationInputFidelity = "low"
+	// ImageGenerationInputFidelityLow permits larger changes to input features.
+	ImageGenerationInputFidelityLow ImageGenerationInputFidelity = "low"
+	// ImageGenerationInputFidelityHigh preserves input features more closely.
 	ImageGenerationInputFidelityHigh ImageGenerationInputFidelity = "high"
 )
 
@@ -174,16 +210,21 @@ const (
 type ImageGenerationModeration string
 
 const (
+	// ImageGenerationModerationAuto uses provider-default moderation.
 	ImageGenerationModerationAuto ImageGenerationModeration = "auto"
-	ImageGenerationModerationLow  ImageGenerationModeration = "low"
+	// ImageGenerationModerationLow requests the least restrictive supported moderation.
+	ImageGenerationModerationLow ImageGenerationModeration = "low"
 )
 
 // ImageGenerationOutputFormat identifies the generated image encoding.
 type ImageGenerationOutputFormat string
 
 const (
-	ImageGenerationOutputPNG  ImageGenerationOutputFormat = "png"
+	// ImageGenerationOutputPNG requests PNG output.
+	ImageGenerationOutputPNG ImageGenerationOutputFormat = "png"
+	// ImageGenerationOutputWebP requests WebP output.
 	ImageGenerationOutputWebP ImageGenerationOutputFormat = "webp"
+	// ImageGenerationOutputJPEG requests JPEG output.
 	ImageGenerationOutputJPEG ImageGenerationOutputFormat = "jpeg"
 )
 
@@ -191,57 +232,91 @@ const (
 type ImageGenerationQuality string
 
 const (
-	ImageGenerationQualityAuto   ImageGenerationQuality = "auto"
-	ImageGenerationQualityLow    ImageGenerationQuality = "low"
+	// ImageGenerationQualityAuto lets the provider choose quality.
+	ImageGenerationQualityAuto ImageGenerationQuality = "auto"
+	// ImageGenerationQualityLow requests low generation effort.
+	ImageGenerationQualityLow ImageGenerationQuality = "low"
+	// ImageGenerationQualityMedium requests medium generation effort.
 	ImageGenerationQualityMedium ImageGenerationQuality = "medium"
-	ImageGenerationQualityHigh   ImageGenerationQuality = "high"
+	// ImageGenerationQualityHigh requests high generation effort.
+	ImageGenerationQualityHigh ImageGenerationQuality = "high"
 )
 
 // ImageGenerationSize is a provider-supported image dimension or quality tier.
 type ImageGenerationSize string
 
 const (
-	ImageGenerationSizeAuto      ImageGenerationSize = "auto"
+	// ImageGenerationSizeAuto lets the provider choose dimensions.
+	ImageGenerationSizeAuto ImageGenerationSize = "auto"
+	// ImageGenerationSize1024x1024 requests a square 1024-pixel image.
 	ImageGenerationSize1024x1024 ImageGenerationSize = "1024x1024"
+	// ImageGenerationSize1024x1536 requests a portrait image.
 	ImageGenerationSize1024x1536 ImageGenerationSize = "1024x1536"
+	// ImageGenerationSize1536x1024 requests a landscape image.
 	ImageGenerationSize1536x1024 ImageGenerationSize = "1536x1024"
-	ImageGenerationSize512       ImageGenerationSize = "512"
-	ImageGenerationSize1K        ImageGenerationSize = "1K"
-	ImageGenerationSize2K        ImageGenerationSize = "2K"
-	ImageGenerationSize4K        ImageGenerationSize = "4K"
+	// ImageGenerationSize512 requests the provider's 512-pixel tier.
+	ImageGenerationSize512 ImageGenerationSize = "512"
+	// ImageGenerationSize1K requests the provider's 1K tier.
+	ImageGenerationSize1K ImageGenerationSize = "1K"
+	// ImageGenerationSize2K requests the provider's 2K tier.
+	ImageGenerationSize2K ImageGenerationSize = "2K"
+	// ImageGenerationSize4K requests the provider's 4K tier.
+	ImageGenerationSize4K ImageGenerationSize = "4K"
 )
 
 // ImageAspectRatio identifies a portable generated-image aspect ratio.
 type ImageAspectRatio string
 
 const (
+	// ImageAspectRatio21x9 requests an ultrawide image.
 	ImageAspectRatio21x9 ImageAspectRatio = "21:9"
+	// ImageAspectRatio16x9 requests a widescreen image.
 	ImageAspectRatio16x9 ImageAspectRatio = "16:9"
-	ImageAspectRatio4x3  ImageAspectRatio = "4:3"
-	ImageAspectRatio3x2  ImageAspectRatio = "3:2"
-	ImageAspectRatio1x1  ImageAspectRatio = "1:1"
+	// ImageAspectRatio4x3 requests a standard landscape image.
+	ImageAspectRatio4x3 ImageAspectRatio = "4:3"
+	// ImageAspectRatio3x2 requests a photographic landscape image.
+	ImageAspectRatio3x2 ImageAspectRatio = "3:2"
+	// ImageAspectRatio1x1 requests a square image.
+	ImageAspectRatio1x1 ImageAspectRatio = "1:1"
+	// ImageAspectRatio9x16 requests a tall portrait image.
 	ImageAspectRatio9x16 ImageAspectRatio = "9:16"
-	ImageAspectRatio3x4  ImageAspectRatio = "3:4"
-	ImageAspectRatio2x3  ImageAspectRatio = "2:3"
-	ImageAspectRatio5x4  ImageAspectRatio = "5:4"
-	ImageAspectRatio4x5  ImageAspectRatio = "4:5"
+	// ImageAspectRatio3x4 requests a standard portrait image.
+	ImageAspectRatio3x4 ImageAspectRatio = "3:4"
+	// ImageAspectRatio2x3 requests a photographic portrait image.
+	ImageAspectRatio2x3 ImageAspectRatio = "2:3"
+	// ImageAspectRatio5x4 requests a near-square landscape image.
+	ImageAspectRatio5x4 ImageAspectRatio = "5:4"
+	// ImageAspectRatio4x5 requests a near-square portrait image.
+	ImageAspectRatio4x5 ImageAspectRatio = "4:5"
 )
 
 // ImageGenerationTool asks a compatible provider to generate or edit images.
 // The zero value lets the provider choose portable defaults.
 type ImageGenerationTool struct {
-	Action            ImageGenerationAction
-	Background        ImageGenerationBackground
-	InputFidelity     ImageGenerationInputFidelity
-	Moderation        ImageGenerationModeration
-	Model             string
+	// Action selects generation or editing.
+	Action ImageGenerationAction
+	// Background selects opaque or transparent output.
+	Background ImageGenerationBackground
+	// InputFidelity controls how closely edits preserve input features.
+	InputFidelity ImageGenerationInputFidelity
+	// Moderation selects the supported provider moderation level.
+	Moderation ImageGenerationModeration
+	// Model overrides the provider's image model.
+	Model string
+	// OutputCompression is the provider compression percentage when supported.
 	OutputCompression *int
-	OutputFormat      ImageGenerationOutputFormat
-	PartialImages     int
-	Quality           ImageGenerationQuality
-	Size              ImageGenerationSize
-	AspectRatio       ImageAspectRatio
-	Optional          bool
+	// OutputFormat selects the generated image encoding.
+	OutputFormat ImageGenerationOutputFormat
+	// PartialImages requests incremental image snapshots.
+	PartialImages int
+	// Quality selects portable generation effort.
+	Quality ImageGenerationQuality
+	// Size selects explicit dimensions or a provider resolution tier.
+	Size ImageGenerationSize
+	// AspectRatio selects portable output proportions.
+	AspectRatio ImageAspectRatio
+	// Optional allows omission when the selected provider does not support image generation.
+	Optional bool
 }
 
 // Kind returns the stable native-tool discriminator.
@@ -266,18 +341,26 @@ func (tool ImageGenerationTool) CloneNativeTool() NativeTool {
 type FileSearchRetrievalMode string
 
 const (
-	FileSearchRetrievalHybrid   FileSearchRetrievalMode = "hybrid"
+	// FileSearchRetrievalHybrid combines semantic and keyword matching.
+	FileSearchRetrievalHybrid FileSearchRetrievalMode = "hybrid"
+	// FileSearchRetrievalSemantic uses vector or semantic matching.
 	FileSearchRetrievalSemantic FileSearchRetrievalMode = "semantic"
-	FileSearchRetrievalKeyword  FileSearchRetrievalMode = "keyword"
+	// FileSearchRetrievalKeyword uses lexical matching.
+	FileSearchRetrievalKeyword FileSearchRetrievalMode = "keyword"
 )
 
 // FileSearchTool asks a compatible provider to search managed file stores.
 type FileSearchTool struct {
-	FileStoreIDs  []string
+	// FileStoreIDs identifies provider-managed stores to search.
+	FileStoreIDs []string
+	// MaxNumResults bounds returned matches when supported.
 	MaxNumResults *int
-	Instructions  string
+	// Instructions supplies provider-specific retrieval guidance.
+	Instructions string
+	// RetrievalMode selects a managed retrieval strategy.
 	RetrievalMode FileSearchRetrievalMode
-	Optional      bool
+	// Optional allows omission when the selected provider does not support file search.
+	Optional bool
 }
 
 // Kind returns the stable native-tool discriminator.
@@ -303,17 +386,24 @@ func (tool FileSearchTool) CloneNativeTool() NativeTool {
 type AdvisorCachingTTL string
 
 const (
+	// AdvisorCaching5Minutes requests five-minute context caching.
 	AdvisorCaching5Minutes AdvisorCachingTTL = "5m"
-	AdvisorCaching1Hour    AdvisorCachingTTL = "1h"
+	// AdvisorCaching1Hour requests one-hour context caching.
+	AdvisorCaching1Hour AdvisorCachingTTL = "1h"
 )
 
 // AdvisorTool lets a compatible provider consult a stronger model during generation.
 type AdvisorTool struct {
-	Model     string
-	MaxUses   *int
+	// Model selects the advisor model.
+	Model string
+	// MaxUses bounds advisor iterations when supported.
+	MaxUses *int
+	// MaxTokens bounds tokens generated by each advisor iteration.
 	MaxTokens *int
-	Caching   AdvisorCachingTTL
-	Optional  bool
+	// Caching selects ephemeral advisor-context retention.
+	Caching AdvisorCachingTTL
+	// Optional allows omission when the selected provider does not support advisors.
+	Optional bool
 }
 
 // Kind returns the stable native-tool discriminator.
@@ -341,13 +431,20 @@ func (tool AdvisorTool) CloneNativeTool() NativeTool {
 // MCPServerTool asks a compatible provider to connect to a remote MCP server.
 // The authorization token and headers are sent by the provider, not by this process.
 type MCPServerTool struct {
-	ID                 string
-	URL                string
+	// ID is the stable application server identity.
+	ID string
+	// URL is the provider-accessible MCP endpoint or connector identifier.
+	URL string
+	// AuthorizationToken is sent by the model provider to the server.
 	AuthorizationToken string
-	Description        string
-	AllowedTools       []string
-	Headers            map[string]string
-	Optional           bool
+	// Description explains the server's purpose to the model.
+	Description string
+	// AllowedTools restricts provider access to listed MCP tool names.
+	AllowedTools []string
+	// Headers are sent by providers that support custom MCP headers.
+	Headers map[string]string
+	// Optional allows omission when the selected provider does not support hosted MCP.
+	Optional bool
 }
 
 // Kind returns the stable native-tool discriminator.
@@ -375,6 +472,7 @@ func (tool MCPServerTool) CloneNativeTool() NativeTool {
 // MemoryTool asks a compatible provider to use an application-defined memory tool.
 // Providers may require a local function tool named "memory" to execute commands.
 type MemoryTool struct {
+	// Optional allows omission when the selected provider does not support memory.
 	Optional bool
 }
 
@@ -392,12 +490,18 @@ func (tool MemoryTool) CloneNativeTool() NativeTool { return tool }
 
 // WebFetchTool asks a compatible provider to retrieve content from URLs.
 type WebFetchTool struct {
-	MaxUses          int
-	AllowedDomains   []string
-	BlockedDomains   []string
-	EnableCitations  bool
+	// MaxUses bounds provider fetch calls. Zero uses the provider default.
+	MaxUses int
+	// AllowedDomains restricts fetches to exact domains.
+	AllowedDomains []string
+	// BlockedDomains excludes exact domains.
+	BlockedDomains []string
+	// EnableCitations requests source citations when supported.
+	EnableCitations bool
+	// MaxContentTokens bounds fetched content supplied to the model.
 	MaxContentTokens int
-	Optional         bool
+	// Optional allows omission when the selected provider does not support fetch.
+	Optional bool
 }
 
 // Kind returns the stable native-tool discriminator.

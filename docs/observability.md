@@ -53,6 +53,95 @@ go get go.opentelemetry.io/otel/exporters/stdout/stdouttrace
 
 Use an OTLP exporter instead when you send traces to an observability service. The instrumentation uses the standard OpenTelemetry tracer and meter providers.
 
+## Send telemetry to Logfire
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+)
+
+func main() {
+	ctx := context.Background()
+	traceExporter, err := otlptracehttp.New(ctx)
+	if err != nil {
+		log.Printf("create trace exporter: %v", err)
+		return
+	}
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithBatcher(traceExporter))
+	defer func() {
+		if err := tracerProvider.Shutdown(context.Background()); err != nil {
+			log.Printf("flush traces: %v", err)
+		}
+	}()
+
+	metricExporter, err := otlpmetrichttp.New(ctx)
+	if err != nil {
+		log.Printf("create metric exporter: %v", err)
+		return
+	}
+	meterProvider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter)),
+	)
+	defer func() {
+		if err := meterProvider.Shutdown(context.Background()); err != nil {
+			log.Printf("flush metrics: %v", err)
+		}
+	}()
+	otel.SetTracerProvider(tracerProvider)
+	otel.SetMeterProvider(meterProvider)
+
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewModel("gpt-5-mini"),
+		ai.WithAgentName("logfire-example"),
+		ai.WithCapabilities(ai.NewInstrumentation(
+			ai.WithInstrumentationContent(false),
+			ai.WithInstrumentationBinaryContent(false),
+			ai.WithInstrumentationModelRequestParameters(false),
+		)),
+	)
+	result, err := agent.Run(ctx, "What is 2 + 2?", struct{}{})
+	if err != nil {
+		log.Printf("run agent: %v", err)
+		return
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Install the OTLP exporters:
+
+```console
+go get go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp
+go get go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp
+```
+
+Create a Logfire write token. Then configure the standard OTLP environment variables:
+
+```console
+export OTEL_SERVICE_NAME=my-agent
+export OTEL_EXPORTER_OTLP_ENDPOINT=https://logfire-us.pydantic.dev
+export OTEL_EXPORTER_OTLP_PROTOCOL=http/protobuf
+export OTEL_EXPORTER_OTLP_HEADERS='Authorization=your-write-token'
+export OPENAI_API_KEY=your-openai-api-key
+go run ./examples/logfire
+```
+
+Use the endpoint for your Logfire region. An endpoint and token from different regions fail authentication. You can create and revoke write tokens in [Logfire project settings](https://pydantic.dev/docs/logfire/manage/create-write-tokens/).
+
+The example exports traces and metrics through OTLP. It disables prompts, outputs, binary values, and full request parameters because telemetry often leaves your trust boundary. Enable only the content your Logfire project is allowed to retain.
+
 ## Recorded spans
 
 `NewInstrumentation` records the complete agent hierarchy:

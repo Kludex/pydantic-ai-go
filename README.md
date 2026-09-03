@@ -280,7 +280,7 @@ func TestAgent(t *testing.T) {
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |
 | Add middleware | [`Capability` and its focused hook interfaces](docs/capabilities.md) |
-| Add OpenTelemetry | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |
+| Add OpenTelemetry or send telemetry to Logfire | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |
 | Evaluate an agent | [`evals.NewTextTask` or `evals.NewTask`](docs/evals.md) |
 | Generate query or document vectors | [`embeddings.Embedder`](docs/embeddings.md) |
 | Call a model without an agent | `RequestModel` or `StreamModel` |

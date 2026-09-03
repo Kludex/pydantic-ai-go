@@ -247,7 +247,7 @@ Status:
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
 - [x] Use the tagged `genai-prices` Go `v0.1.5` module release instead of a commit pseudo-version.
 - [x] Audited and mapped upstream runtime changes through `3a3e5612786c64e19312f20e3c998553edf1353b` without treating unimplemented changes as complete; the advance from the prior baseline changed only CI coverage collection.
-- [ ] Pin `.upstream-sync.json` to the audited upstream commit.
+- [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [ ] After parity, add the daily `gh-aw` upstream-sync workflow described in `PLAN.md`.
 
 ## Next work

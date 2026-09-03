@@ -9,6 +9,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -57,7 +58,7 @@ func (client *streamingClient) ConverseStream(
 }
 
 func TestModelStreamRequest(t *testing.T) {
-	index0, index1, index2 := int32(0), int32(1), int32(2)
+	index0, index1, index2, index3, index4 := int32(0), int32(1), int32(2), int32(3), int32(4)
 	stream := newFakeStream(
 		&types.ConverseStreamOutputMemberMessageStart{Value: types.MessageStartEvent{Role: types.ConversationRoleAssistant}},
 		&types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
@@ -88,6 +89,31 @@ func TestModelStreamRequest(t *testing.T) {
 			ContentBlockIndex: &index2, Delta: &types.ContentBlockDeltaMemberReasoningContent{Value: &types.ReasoningContentBlockDeltaMemberRedactedContent{Value: []byte("secret")}},
 		}},
 		&types.ConverseStreamOutputMemberContentBlockStop{Value: types.ContentBlockStopEvent{ContentBlockIndex: &index2}},
+		&types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
+			ContentBlockIndex: &index3, Start: &types.ContentBlockStartMemberToolUse{Value: types.ToolUseBlockStart{
+				Name: aws.String("nova_code_interpreter"), ToolUseId: aws.String("code-1"),
+				Type: types.ToolUseTypeServerToolUse,
+			}},
+		}},
+		&types.ConverseStreamOutputMemberContentBlockDelta{Value: types.ContentBlockDeltaEvent{
+			ContentBlockIndex: &index3, Delta: &types.ContentBlockDeltaMemberToolUse{Value: types.ToolUseBlockDelta{
+				Input: aws.String(`{"snippet":"print(1)"}`),
+			}},
+		}},
+		&types.ConverseStreamOutputMemberContentBlockStop{Value: types.ContentBlockStopEvent{ContentBlockIndex: &index3}},
+		&types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
+			ContentBlockIndex: &index4, Start: &types.ContentBlockStartMemberToolResult{Value: types.ToolResultBlockStart{
+				ToolUseId: aws.String("code-1"), Type: aws.String("nova_code_interpreter_result"),
+				Status: types.ToolResultStatusError,
+			}},
+		}},
+		&types.ConverseStreamOutputMemberContentBlockDelta{Value: types.ContentBlockDeltaEvent{
+			ContentBlockIndex: &index4, Delta: &types.ContentBlockDeltaMemberToolResult{Value: []types.ToolResultBlockDelta{
+				&types.ToolResultBlockDeltaMemberText{Value: "failed"},
+				&types.ToolResultBlockDeltaMemberJson{Value: document.NewLazyDocument(map[string]any{"exit": 1})},
+			}},
+		}},
+		&types.ConverseStreamOutputMemberContentBlockStop{Value: types.ContentBlockStopEvent{ContentBlockIndex: &index4}},
 		&types.ConverseStreamOutputMemberMessageStop{Value: types.MessageStopEvent{StopReason: types.StopReasonToolUse}},
 		&types.ConverseStreamOutputMemberMetadata{Value: types.ConverseStreamMetadataEvent{
 			Usage:       &types.TokenUsage{InputTokens: aws.Int32(10), OutputTokens: aws.Int32(4)},
@@ -117,7 +143,7 @@ func TestModelStreamRequest(t *testing.T) {
 		}
 		events = append(events, event)
 	}
-	if stream.closeCount != 1 || len(events) != 8 {
+	if stream.closeCount != 1 || len(events) != 11 {
 		t.Fatalf("unexpected stream lifecycle: closes=%d events=%#v", stream.closeCount, events)
 	}
 	start := events[0].(ai.ToolCallStartEvent)
@@ -132,7 +158,13 @@ func TestModelStreamRequest(t *testing.T) {
 	if string(redacted.ProviderDetails["redacted_content"].([]byte)) != "secret" {
 		t.Fatalf("unexpected reasoning delta: %#v", redacted)
 	}
-	finish := events[7].(ai.FinishEvent)
+	nativeStart := events[7].(ai.ToolCallStartEvent)
+	nativeResult := events[9].(ai.NativeToolReturnEvent)
+	if !nativeStart.Native || nativeStart.ToolKind != ai.ToolPartKindCodeExecution ||
+		nativeResult.Part.Outcome != ai.ToolReturnOutcomeFailed || len(nativeResult.Part.Content.([]any)) != 2 {
+		t.Fatalf("unexpected native stream events: start=%#v result=%#v", nativeStart, nativeResult)
+	}
+	finish := events[10].(ai.FinishEvent)
 	if finish.FinishReason != ai.FinishReasonToolCall || finish.Usage.InputTokens != 10 ||
 		finish.Usage.OutputTokens != 4 || finish.ProviderDetails["latency_ms"] != int64(25) ||
 		finish.ProviderDetails["service_tier"] != "flex" || finish.ProviderURL != "https://bedrock.example" {
@@ -257,10 +289,43 @@ func TestStreamConsumerStopsProviderIteration(t *testing.T) {
 			t.Fatalf("unexpected detached iteration: calls=%d closes=%d", calls, stream.closeCount)
 		}
 	}
+
+	nativeEvents := nativeResultStreamEvents(&index, &types.ToolResultBlockDeltaMemberText{Value: "ok"})
+	nativeEvents = append(nativeEvents, &types.ConverseStreamOutputMemberContentBlockStop{
+		Value: types.ContentBlockStopEvent{ContentBlockIndex: &index},
+	})
+	stream := newFakeStream(nativeEvents...)
+	client := &streamingClient{fakeClient: &fakeClient{}, stream: func(
+		*bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options),
+	) (bedrock.EventStream, error) {
+		return stream, nil
+	}}
+	sequence, err := bedrock.NewModel("model", bedrock.WithClient(client)).StreamRequest(
+		context.Background(), nil, ai.ModelRequestParams{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence(func(ai.ModelStreamEvent, error) bool { return false })
+	if stream.closeCount != 1 {
+		t.Fatalf("native-result stream was not closed: %d", stream.closeCount)
+	}
 }
 
 func TestValueStream(t *testing.T) {
-	events := make(chan types.ConverseStreamOutput, 1)
+	index := int32(0)
+	events := make(chan types.ConverseStreamOutput, 4)
+	events <- &types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
+		ContentBlockIndex: &index, Start: &types.ContentBlockStartMemberToolResult{Value: types.ToolResultBlockStart{
+			ToolUseId: aws.String("code"), Type: aws.String("nova_code_interpreter_result"),
+		}},
+	}}
+	events <- &types.ConverseStreamOutputMemberContentBlockDelta{Value: types.ContentBlockDeltaEvent{
+		ContentBlockIndex: &index, Delta: &types.ContentBlockDeltaMemberToolResult{Value: []types.ToolResultBlockDelta{
+			&types.ToolResultBlockDeltaMemberText{Value: "ok"},
+		}},
+	}}
+	events <- &types.ConverseStreamOutputMemberContentBlockStop{Value: types.ContentBlockStopEvent{ContentBlockIndex: &index}}
 	events <- &types.ConverseStreamOutputMemberMessageStop{Value: types.MessageStopEvent{StopReason: types.StopReasonEndTurn}}
 	close(events)
 	client := &streamingClient{fakeClient: &fakeClient{}, stream: func(
@@ -278,6 +343,22 @@ func TestValueStream(t *testing.T) {
 		if eventErr != nil {
 			t.Fatal(eventErr)
 		}
+	}
+}
+
+func nativeResultStreamEvents(
+	index *int32, delta types.ToolResultBlockDelta,
+) []types.ConverseStreamOutput {
+	return []types.ConverseStreamOutput{
+		&types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
+			ContentBlockIndex: index, Start: &types.ContentBlockStartMemberToolResult{Value: types.ToolResultBlockStart{
+				Type: aws.String("nova_code_interpreter_result"),
+			}},
+		}},
+		&types.ConverseStreamOutputMemberContentBlockDelta{Value: types.ContentBlockDeltaEvent{
+			ContentBlockIndex: index,
+			Delta:             &types.ContentBlockDeltaMemberToolResult{Value: []types.ToolResultBlockDelta{delta}},
+		}},
 	}
 }
 
@@ -302,6 +383,19 @@ func TestMalformedStreamEvents(t *testing.T) {
 				ContentBlockIndex: &index, Start: &types.ContentBlockStartMemberImage{},
 			}},
 		}, match: "unsupported stream content start"},
+		{name: "nil result start", events: []types.ConverseStreamOutput{
+			&types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
+				ContentBlockIndex: &index, Start: (*types.ContentBlockStartMemberToolResult)(nil),
+			}},
+		}, match: "unsupported stream native tool result start"},
+		{name: "unknown result start", events: []types.ConverseStreamOutput{
+			&types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
+				ContentBlockIndex: &index, Start: &types.ContentBlockStartMemberToolResult{},
+			}},
+		}, match: "unsupported stream native tool result start"},
+		{name: "stop index", events: []types.ConverseStreamOutput{
+			&types.ConverseStreamOutputMemberContentBlockStop{},
+		}, match: "stop omitted index"},
 		{name: "delta index", events: []types.ConverseStreamOutput{
 			&types.ConverseStreamOutputMemberContentBlockDelta{},
 		}, match: "delta omitted index"},
@@ -345,6 +439,25 @@ func TestMalformedStreamEvents(t *testing.T) {
 				ContentBlockIndex: &index, Delta: &types.ContentBlockDeltaMemberReasoningContent{},
 			}},
 		}, match: "unsupported stream reasoning delta"},
+		{name: "native result without start", events: []types.ConverseStreamOutput{
+			&types.ConverseStreamOutputMemberContentBlockDelta{Value: types.ContentBlockDeltaEvent{
+				ContentBlockIndex: &index, Delta: &types.ContentBlockDeltaMemberToolResult{},
+			}},
+		}, match: "has no matching start"},
+		{name: "nil result text", events: nativeResultStreamEvents(&index, (*types.ToolResultBlockDeltaMemberText)(nil)),
+			match: "nil text"},
+		{name: "nil result JSON", events: nativeResultStreamEvents(&index, (*types.ToolResultBlockDeltaMemberJson)(nil)),
+			match: "nil JSON"},
+		{name: "empty result JSON", events: nativeResultStreamEvents(&index, &types.ToolResultBlockDeltaMemberJson{}),
+			match: "nil JSON"},
+		{name: "unencodable result JSON", events: nativeResultStreamEvents(
+			&index, &types.ToolResultBlockDeltaMemberJson{Value: document.NewLazyDocument(map[string]any{"": 1})},
+		), match: "encode streamed native tool result"},
+		{name: "invalid result JSON", events: nativeResultStreamEvents(
+			&index, &types.ToolResultBlockDeltaMemberJson{Value: document.NewLazyDocument(make(chan int))},
+		), match: "decode streamed native tool result"},
+		{name: "unsupported result content", events: nativeResultStreamEvents(&index, nil),
+			match: "unsupported stream native tool result content"},
 		{name: "unsupported delta", events: []types.ConverseStreamOutput{
 			&types.ConverseStreamOutputMemberContentBlockDelta{Value: types.ContentBlockDeltaEvent{
 				ContentBlockIndex: &index, Delta: &types.ContentBlockDeltaMemberImage{},

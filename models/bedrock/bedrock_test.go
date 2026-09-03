@@ -197,6 +197,14 @@ func TestModelRequestAndCountTokens(t *testing.T) {
 	}
 }
 
+func nativeResultOutput(content []types.ToolResultContentBlock, resultType string) *bedrockruntime.ConverseOutput {
+	return &bedrockruntime.ConverseOutput{Output: &types.ConverseOutputMemberMessage{Value: types.Message{
+		Content: []types.ContentBlock{&types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{
+			Type: aws.String(resultType), Content: content,
+		}}},
+	}}}
+}
+
 func completeOutput(reason types.StopReason) *bedrockruntime.ConverseOutput {
 	return &bedrockruntime.ConverseOutput{
 		Output: &types.ConverseOutputMemberMessage{Value: types.Message{
@@ -253,6 +261,28 @@ func TestModelErrorsAndResponseShapes(t *testing.T) {
 		{name: "missing tool input", output: &bedrockruntime.ConverseOutput{Output: &types.ConverseOutputMemberMessage{Value: types.Message{
 			Content: []types.ContentBlock{&types.ContentBlockMemberToolUse{}},
 		}}}, match: "tool use omitted input"},
+		{name: "unknown native result", output: nativeResultOutput(nil, "other"), match: "unsupported native tool result"},
+		{name: "nil native result", output: &bedrockruntime.ConverseOutput{Output: &types.ConverseOutputMemberMessage{Value: types.Message{
+			Content: []types.ContentBlock{(*types.ContentBlockMemberToolResult)(nil)},
+		}}}, match: "unsupported native tool result"},
+		{name: "nil native result text", output: nativeResultOutput([]types.ToolResultContentBlock{
+			(*types.ToolResultContentBlockMemberText)(nil),
+		}, "nova_code_interpreter_result"), match: "nil text"},
+		{name: "nil native result JSON", output: nativeResultOutput([]types.ToolResultContentBlock{
+			(*types.ToolResultContentBlockMemberJson)(nil),
+		}, "nova_code_interpreter_result"), match: "nil JSON"},
+		{name: "empty native result JSON", output: nativeResultOutput([]types.ToolResultContentBlock{
+			&types.ToolResultContentBlockMemberJson{},
+		}, "nova_code_interpreter_result"), match: "nil JSON"},
+		{name: "unencodable native result", output: nativeResultOutput([]types.ToolResultContentBlock{
+			&types.ToolResultContentBlockMemberJson{Value: document.NewLazyDocument(map[string]any{"": 1})},
+		}, "nova_code_interpreter_result"), match: "encode native tool result"},
+		{name: "invalid native result JSON", output: nativeResultOutput([]types.ToolResultContentBlock{
+			&types.ToolResultContentBlockMemberJson{Value: document.NewLazyDocument(make(chan int))},
+		}, "nova_code_interpreter_result"), match: "decode native tool result"},
+		{name: "unsupported native result content", output: nativeResultOutput([]types.ToolResultContentBlock{
+			&types.ToolResultContentBlockMemberImage{},
+		}, "nova_code_interpreter_result"), match: "unsupported native tool result content"},
 		{name: "invalid tool input document", output: &bedrockruntime.ConverseOutput{Output: &types.ConverseOutputMemberMessage{Value: types.Message{
 			Content: []types.ContentBlock{&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{
 				Input: document.NewLazyDocument(make(chan int)),
@@ -398,6 +428,80 @@ func TestCachePointPlacementErrors(t *testing.T) {
 	}
 }
 
+func TestNativeCodeExecution(t *testing.T) {
+	client := &fakeClient{converse: func(
+		input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		if input.ToolConfig == nil || len(input.ToolConfig.Tools) != 1 {
+			t.Fatalf("native code tool missing: %#v", input.ToolConfig)
+		}
+		systemTool, ok := input.ToolConfig.Tools[0].(*types.ToolMemberSystemTool)
+		if !ok || *systemTool.Value.Name != "nova_code_interpreter" {
+			t.Fatalf("unexpected native tool: %#v", input.ToolConfig.Tools[0])
+		}
+		if len(input.Messages) == 1 && len(input.Messages[0].Content) != 3 {
+			t.Fatalf("native history was not replayed: %#v", input.Messages)
+		}
+		return &bedrockruntime.ConverseOutput{
+			Output: &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{
+				&types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{
+					Name: aws.String("nova_code_interpreter"), ToolUseId: aws.String("code-1"),
+					Type:  types.ToolUseTypeServerToolUse,
+					Input: document.NewLazyDocument(map[string]any{"snippet": "print(1)"}),
+				}},
+				&types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{
+					ToolUseId: aws.String("code-1"), Type: aws.String("nova_code_interpreter_result"),
+					Status: types.ToolResultStatusSuccess,
+					Content: []types.ToolResultContentBlock{&types.ToolResultContentBlockMemberJson{
+						Value: document.NewLazyDocument(map[string]any{"stdout": "1"}),
+					}},
+				}},
+				&types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{
+					ToolUseId: aws.String("code-2"), Type: aws.String("nova_code_interpreter_result"),
+					Status: types.ToolResultStatusError,
+					Content: []types.ToolResultContentBlock{
+						&types.ToolResultContentBlockMemberText{Value: "failed"},
+						&types.ToolResultContentBlockMemberJson{Value: document.NewLazyDocument(map[string]any{"exit": 1})},
+					},
+				}},
+			}}}, StopReason: types.StopReasonEndTurn,
+		}, nil
+	}}
+	model := bedrock.NewModel("model", bedrock.WithClient(client))
+	if !model.SupportsNativeTool(ai.CodeExecutionTool{}) || model.SupportsNativeTool(ai.WebSearchTool{}) ||
+		model.SupportsNativeTool(nil) {
+		t.Fatal("unexpected native-tool support")
+	}
+	response, err := model.Request(context.Background(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := response.Parts[0].(ai.NativeToolCallPart)
+	result := response.Parts[1].(ai.NativeToolReturnPart)
+	failed := response.Parts[2].(ai.NativeToolReturnPart)
+	if call.ToolCallID != "code-1" || call.ToolKind != ai.ToolPartKindCodeExecution ||
+		result.ToolCallID != "code-1" || result.ToolKind != ai.ToolPartKindCodeExecution ||
+		failed.Outcome != ai.ToolReturnOutcomeFailed || len(failed.Content.([]any)) != 2 {
+		t.Fatalf("unexpected native parts: %#v", response.Parts)
+	}
+	_, err = model.Request(context.Background(), []ai.ModelMessage{ai.ModelResponse{
+		ProviderName: "bedrock", Parts: []ai.ResponsePart{
+			call, result,
+			ai.NativeToolCallPart{ProviderName: "other", ToolKind: ai.ToolPartKindCodeExecution},
+			ai.NativeToolReturnPart{ProviderName: "other", ToolKind: ai.ToolPartKindCodeExecution},
+			ai.NativeToolReturnPart{
+				ProviderName: "bedrock", ToolKind: ai.ToolPartKindCodeExecution,
+				ToolCallID: "failed", Content: "failed", Outcome: ai.ToolReturnOutcomeFailed,
+			},
+		},
+	}}, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestUnsupportedRequestFeatures(t *testing.T) {
 	never := &fakeClient{converse: func(
 		*bedrockruntime.ConverseInput, ...func(*bedrockruntime.Options),
@@ -410,9 +514,15 @@ func TestUnsupportedRequestFeatures(t *testing.T) {
 		params ai.ModelRequestParams
 		match  string
 	}{
+		{name: "nil native tool", params: ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{nil},
+		}, match: "must not be nil"},
 		{name: "native tools", params: ai.ModelRequestParams{
 			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
-		}, match: "provider-native tools"},
+		}, match: "native tool"},
+		{name: "code execution files", params: ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file"}}}},
+		}, match: "file attachments"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -447,6 +557,16 @@ func TestRequestValidationErrors(t *testing.T) {
 		{name: "invalid tool JSON", message: ai.ModelResponse{Parts: []ai.ResponsePart{
 			ai.ToolCallPart{ToolName: "bad", Args: json.RawMessage("{")},
 		}}, match: "decode tool call"},
+		{name: "invalid native tool JSON", message: ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.NativeToolCallPart{
+				ProviderName: "bedrock", ToolKind: ai.ToolPartKindCodeExecution, Args: json.RawMessage("{"),
+			},
+		}}, match: "decode native tool call"},
+		{name: "invalid native tool result", message: ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.NativeToolReturnPart{
+				ProviderName: "bedrock", ToolKind: ai.ToolPartKindCodeExecution, Content: make(chan int),
+			},
+		}}, match: "marshal native tool result"},
 		{name: "unsupported media", message: ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
 			ai.BinaryContent{Data: []byte("x"), MediaType: "application/zip"},
 		}}}}, match: "unsupported binary content"},

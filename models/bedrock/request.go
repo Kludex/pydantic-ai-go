@@ -21,8 +21,17 @@ func buildConverseInput(
 		return nil, err
 	}
 	params.Settings = settings
-	if len(params.NativeTools) > 0 {
-		return nil, fmt.Errorf("bedrock: provider-native tools are not supported")
+	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
+		return nil, err
+	}
+	for _, nativeTool := range params.NativeTools {
+		codeExecution, ok := nativeTool.CloneNativeTool().(ai.CodeExecutionTool)
+		if !ok {
+			return nil, fmt.Errorf("bedrock: native tool %q is not supported", nativeTool.Kind())
+		}
+		if len(codeExecution.Files) > 0 {
+			return nil, fmt.Errorf("bedrock: code execution file attachments are not supported")
+		}
 	}
 	input := &bedrockruntime.ConverseInput{ModelId: aws.String(modelName)}
 	if params.Instructions != "" {

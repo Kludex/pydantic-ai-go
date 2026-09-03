@@ -126,6 +126,15 @@ func (model *Model) Name() string { return model.name }
 // ProviderName returns Bedrock's durable provider identity.
 func (*Model) ProviderName() string { return "bedrock" }
 
+// SupportsNativeTool reports support for Nova code interpreter.
+func (*Model) SupportsNativeTool(tool ai.NativeTool) bool {
+	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
+		return false
+	}
+	_, ok := tool.CloneNativeTool().(ai.CodeExecutionTool)
+	return ok
+}
+
 // ProviderURL returns the configured Bedrock Runtime endpoint when known.
 func (model *Model) ProviderURL() string {
 	model.providerURLMu.RLock()

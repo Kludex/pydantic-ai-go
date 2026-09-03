@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"iter"
 	"reflect"
@@ -58,6 +59,7 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 		finish := ai.FinishReason("")
 		stopReason := types.StopReason("")
 		providerDetails := map[string]any{}
+		results := map[string]*streamNativeToolResult{}
 		stopped := false
 		for event := range stream.Events() {
 			switch value := event.(type) {
@@ -75,11 +77,29 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 						yield(nil, fmt.Errorf("bedrock: stream contains nil tool-use start"))
 						return
 					}
+					toolName := stringValue(start.Value.Name)
+					toolKind := ai.ToolPartKind("")
+					native := false
+					var details map[string]any
+					if start.Value.Type == types.ToolUseTypeServerToolUse && toolName == "nova_code_interpreter" {
+						toolName = "code_execution"
+						toolKind = ai.ToolPartKindCodeExecution
+						native = true
+						details = map[string]any{"code_arg_name": "snippet", "code_arg_language": "python"}
+					}
 					if !yield(ai.ToolCallStartEvent{
-						PartID: partID, ToolName: stringValue(start.Value.Name), ToolCallID: stringValue(start.Value.ToolUseId),
-						ProviderName: "bedrock",
+						PartID: partID, ToolName: toolName, ToolCallID: stringValue(start.Value.ToolUseId),
+						ToolKind: toolKind, ProviderName: "bedrock", ProviderDetails: details, Native: native,
 					}, nil) {
 						return
+					}
+				case *types.ContentBlockStartMemberToolResult:
+					if start == nil || stringValue(start.Value.Type) != "nova_code_interpreter_result" {
+						yield(nil, fmt.Errorf("bedrock: unsupported stream native tool result start"))
+						return
+					}
+					results[partID] = &streamNativeToolResult{
+						toolCallID: stringValue(start.Value.ToolUseId), status: start.Value.Status,
 					}
 				default:
 					yield(nil, fmt.Errorf("bedrock: unsupported stream content start type %T", value.Value.Start))
@@ -107,6 +127,20 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 					}
 					if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: *delta.Value.Input}, nil) {
 						return
+					}
+				case *types.ContentBlockDeltaMemberToolResult:
+					result := results[partID]
+					if result == nil || delta == nil {
+						yield(nil, fmt.Errorf("bedrock: stream native tool result delta has no matching start"))
+						return
+					}
+					for _, block := range delta.Value {
+						content, err := streamToolResultDelta(block)
+						if err != nil {
+							yield(nil, err)
+							return
+						}
+						result.content = append(result.content, content)
 					}
 				case *types.ContentBlockDeltaMemberReasoningContent:
 					if delta == nil {
@@ -147,7 +181,31 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 					return
 				}
 			case *types.ConverseStreamOutputMemberContentBlockStop:
-				continue
+				if value == nil || value.Value.ContentBlockIndex == nil {
+					yield(nil, fmt.Errorf("bedrock: stream content stop omitted index"))
+					return
+				}
+				partID := strconv.Itoa(int(*value.Value.ContentBlockIndex))
+				result := results[partID]
+				if result == nil {
+					continue
+				}
+				content := any(result.content)
+				if len(result.content) == 1 {
+					content = result.content[0]
+				}
+				outcome := ai.ToolReturnOutcomeSuccess
+				if result.status == types.ToolResultStatusError {
+					outcome = ai.ToolReturnOutcomeFailed
+				}
+				if !yield(ai.NativeToolReturnEvent{PartID: partID, Part: ai.NativeToolReturnPart{
+					ToolName: "code_execution", ToolCallID: result.toolCallID, ToolKind: ai.ToolPartKindCodeExecution,
+					Content: content, Outcome: outcome, ProviderName: "bedrock",
+					ProviderDetails: map[string]any{"status": string(result.status)},
+				}}, nil) {
+					return
+				}
+				delete(results, partID)
 			case *types.ConverseStreamOutputMemberMessageStop:
 				if value == nil {
 					yield(nil, fmt.Errorf("bedrock: stream contains nil message stop"))
@@ -186,6 +244,37 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 			Usage: usage, ModelName: model.name, Timestamp: time.Now().UTC(), ProviderName: "bedrock",
 			ProviderURL: model.ProviderURL(), ProviderDetails: providerDetails, FinishReason: finish,
 		}, nil)
+	}
+}
+
+type streamNativeToolResult struct {
+	toolCallID string
+	status     types.ToolResultStatus
+	content    []any
+}
+
+func streamToolResultDelta(delta types.ToolResultBlockDelta) (any, error) {
+	switch value := delta.(type) {
+	case *types.ToolResultBlockDeltaMemberText:
+		if value == nil {
+			return nil, fmt.Errorf("bedrock: stream native tool result contains nil text")
+		}
+		return value.Value, nil
+	case *types.ToolResultBlockDeltaMemberJson:
+		if value == nil || value.Value == nil {
+			return nil, fmt.Errorf("bedrock: stream native tool result contains nil JSON")
+		}
+		encoded, err := value.Value.MarshalSmithyDocument()
+		if err != nil {
+			return nil, fmt.Errorf("bedrock: encode streamed native tool result: %w", err)
+		}
+		var decoded any
+		if err := json.Unmarshal(encoded, &decoded); err != nil {
+			return nil, fmt.Errorf("bedrock: decode streamed native tool result: %w", err)
+		}
+		return decoded, nil
+	default:
+		return nil, fmt.Errorf("bedrock: unsupported stream native tool result content %T", delta)
 	}
 }
 

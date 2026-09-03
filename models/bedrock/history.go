@@ -33,6 +33,26 @@ func toolResultBlock(
 	}}, nil
 }
 
+func nativeToolResultBlock(part ai.NativeToolReturnPart) (types.ContentBlock, error) {
+	var content types.ToolResultContentBlock
+	if text, ok := part.Content.(string); ok {
+		content = &types.ToolResultContentBlockMemberText{Value: text}
+	} else {
+		if _, err := json.Marshal(part.Content); err != nil {
+			return nil, fmt.Errorf("bedrock: marshal native tool result: %w", err)
+		}
+		content = &types.ToolResultContentBlockMemberJson{Value: document.NewLazyDocument(part.Content)}
+	}
+	status := types.ToolResultStatusSuccess
+	if part.Outcome == ai.ToolReturnOutcomeFailed {
+		status = types.ToolResultStatusError
+	}
+	return &types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{
+		ToolUseId: aws.String(part.ToolCallID), Type: aws.String("nova_code_interpreter_result"),
+		Content: []types.ToolResultContentBlock{content}, Status: status,
+	}}, nil
+}
+
 func responseBlocks(response ai.ModelResponse) ([]types.ContentBlock, error) {
 	blocks := make([]types.ContentBlock, 0, len(response.Parts))
 	for _, part := range response.Parts {
@@ -47,6 +67,27 @@ func responseBlocks(response ai.ModelResponse) ([]types.ContentBlock, error) {
 			blocks = append(blocks, &types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{
 				Name: aws.String(value.ToolName), ToolUseId: aws.String(value.ToolCallID), Input: document.NewLazyDocument(args),
 			}})
+		case ai.NativeToolCallPart:
+			if value.ProviderName != "bedrock" || value.ToolKind != ai.ToolPartKindCodeExecution {
+				continue
+			}
+			var args any
+			if err := json.Unmarshal(value.Args, &args); err != nil {
+				return nil, fmt.Errorf("bedrock: decode native tool call arguments: %w", err)
+			}
+			blocks = append(blocks, &types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{
+				Name: aws.String("nova_code_interpreter"), ToolUseId: aws.String(value.ToolCallID),
+				Input: document.NewLazyDocument(args), Type: types.ToolUseTypeServerToolUse,
+			}})
+		case ai.NativeToolReturnPart:
+			if value.ProviderName != "bedrock" || value.ToolKind != ai.ToolPartKindCodeExecution {
+				continue
+			}
+			block, err := nativeToolResultBlock(value)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, block)
 		case ai.ThinkingPart:
 			if value.ProviderName != "" && value.ProviderName != "bedrock" {
 				continue
@@ -68,7 +109,7 @@ func toolConfiguration(params ai.ModelRequestParams) *types.ToolConfiguration {
 	if params.OutputTool != nil && params.OutputMode == ai.OutputModeTool {
 		definitions = append(definitions, *params.OutputTool)
 	}
-	if len(definitions) == 0 {
+	if len(definitions) == 0 && len(params.NativeTools) == 0 {
 		return nil
 	}
 	tools := make([]types.Tool, len(definitions))
@@ -78,6 +119,11 @@ func toolConfiguration(params ai.ModelRequestParams) *types.ToolConfiguration {
 			InputSchema: &types.ToolInputSchemaMemberJson{Value: document.NewLazyDocument(definition.Schema)},
 			Strict:      definition.Strict,
 		}}
+	}
+	for range params.NativeTools {
+		tools = append(tools, &types.ToolMemberSystemTool{Value: types.SystemTool{
+			Name: aws.String("nova_code_interpreter"),
+		}})
 	}
 	choice := types.ToolChoice(&types.ToolChoiceMemberAuto{Value: types.AutoToolChoice{}})
 	if params.OutputTool != nil && params.OutputMode == ai.OutputModeTool && !params.AllowText {

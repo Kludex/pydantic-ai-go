@@ -159,7 +159,7 @@ You own the AWS client and its lifecycle. `ProviderURL` records telemetry identi
 
 The Converse adapter maps these provider-neutral values:
 
-- Text, function tool calls, tool results, validation retries, and signed reasoning.
+- Text, function tool calls, tool results, validation retries, signed reasoning, and Nova code interpreter calls and results.
 - Inline image, audio, video, and document content.
 - HTTP and HTTPS file URLs through the shared SSRF-safe downloader.
 - `UploadedFile` values that belong to `bedrock` and use an `s3://` URI.
@@ -221,4 +221,4 @@ Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and ext
 
 ## Current scope
 
-Native Bedrock tools, guardrails, performance settings, request metadata, and streamed image and provider-tool blocks remain outside this implementation.
+Guardrails, performance settings, request metadata, streamed image blocks, and native tools beyond Nova code interpreter remain outside this implementation.

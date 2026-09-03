@@ -41,9 +41,36 @@ func convertResponse(model *Model, output *bedrockruntime.ConverseOutput) (*ai.M
 			if !json.Valid(encoded) {
 				return nil, fmt.Errorf("bedrock: tool use input is not valid JSON")
 			}
-			parts = append(parts, ai.ToolCallPart{
-				ToolName: stringValue(value.Value.Name), ToolCallID: stringValue(value.Value.ToolUseId),
-				Args: append(json.RawMessage(nil), encoded...), ProviderName: "bedrock",
+			if value.Value.Type == types.ToolUseTypeServerToolUse && stringValue(value.Value.Name) == "nova_code_interpreter" {
+				parts = append(parts, ai.NativeToolCallPart{
+					ToolName: "code_execution", ToolCallID: stringValue(value.Value.ToolUseId),
+					ToolKind: ai.ToolPartKindCodeExecution, Args: append(json.RawMessage(nil), encoded...),
+					ProviderName: "bedrock", ProviderDetails: map[string]any{
+						"code_arg_name": "snippet", "code_arg_language": "python",
+					},
+				})
+			} else {
+				parts = append(parts, ai.ToolCallPart{
+					ToolName: stringValue(value.Value.Name), ToolCallID: stringValue(value.Value.ToolUseId),
+					Args: append(json.RawMessage(nil), encoded...), ProviderName: "bedrock",
+				})
+			}
+		case *types.ContentBlockMemberToolResult:
+			if value == nil || stringValue(value.Value.Type) != "nova_code_interpreter_result" {
+				return nil, fmt.Errorf("bedrock: unsupported native tool result")
+			}
+			content, err := bedrockToolResultContent(value.Value.Content)
+			if err != nil {
+				return nil, err
+			}
+			outcome := ai.ToolReturnOutcomeSuccess
+			if value.Value.Status == types.ToolResultStatusError {
+				outcome = ai.ToolReturnOutcomeFailed
+			}
+			parts = append(parts, ai.NativeToolReturnPart{
+				ToolName: "code_execution", ToolCallID: stringValue(value.Value.ToolUseId),
+				ToolKind: ai.ToolPartKindCodeExecution, Content: content, Outcome: outcome,
+				ProviderName: "bedrock", ProviderDetails: map[string]any{"status": string(value.Value.Status)},
 			})
 		case *types.ContentBlockMemberReasoningContent:
 			if value == nil || value.Value == nil {
@@ -82,6 +109,38 @@ func convertResponse(model *Model, output *bedrockruntime.ConverseOutput) (*ai.M
 		response.ProviderDetails["service_tier"] = string(output.ServiceTier.Type)
 	}
 	return response, nil
+}
+
+func bedrockToolResultContent(blocks []types.ToolResultContentBlock) (any, error) {
+	content := make([]any, 0, len(blocks))
+	for _, block := range blocks {
+		switch value := block.(type) {
+		case *types.ToolResultContentBlockMemberText:
+			if value == nil {
+				return nil, fmt.Errorf("bedrock: native tool result contains nil text")
+			}
+			content = append(content, value.Value)
+		case *types.ToolResultContentBlockMemberJson:
+			if value == nil || value.Value == nil {
+				return nil, fmt.Errorf("bedrock: native tool result contains nil JSON")
+			}
+			encoded, err := value.Value.MarshalSmithyDocument()
+			if err != nil {
+				return nil, fmt.Errorf("bedrock: encode native tool result: %w", err)
+			}
+			var decoded any
+			if err := json.Unmarshal(encoded, &decoded); err != nil {
+				return nil, fmt.Errorf("bedrock: decode native tool result: %w", err)
+			}
+			content = append(content, decoded)
+		default:
+			return nil, fmt.Errorf("bedrock: unsupported native tool result content %T", block)
+		}
+	}
+	if len(content) == 1 {
+		return content[0], nil
+	}
+	return content, nil
 }
 
 func responseUsage(usage *types.TokenUsage) ai.Usage {

@@ -15,8 +15,11 @@ var ErrDeferredRun = errors.New("ai/evals: agent run is deferred")
 
 // AgentInput is one prepared agent invocation for an evaluation case.
 type AgentInput[Deps any] struct {
-	Prompt  ai.UserPromptPart
-	Deps    Deps
+	// Prompt is the text or multimodal input for the case.
+	Prompt ai.UserPromptPart
+	// Deps supplies the agent's typed run dependencies.
+	Deps Deps
+	// Options applies case-specific run configuration.
 	Options []ai.RunOption
 }
 

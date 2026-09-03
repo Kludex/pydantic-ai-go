@@ -2,6 +2,7 @@ package bedrock
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -15,15 +16,25 @@ import (
 func buildConverseInput(
 	ctx context.Context, modelName string, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*bedrockruntime.ConverseInput, error) {
-	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
-		return nil, fmt.Errorf("bedrock: native JSON output mode is not supported; use OutputModeTool")
+	settings, cache, err := extractCacheSettings(params.Settings)
+	if err != nil {
+		return nil, err
 	}
+	params.Settings = settings
 	if len(params.NativeTools) > 0 {
 		return nil, fmt.Errorf("bedrock: provider-native tools are not supported")
 	}
 	input := &bedrockruntime.ConverseInput{ModelId: aws.String(modelName)}
 	if params.Instructions != "" {
 		input.System = append(input.System, &types.SystemContentBlockMemberText{Value: params.Instructions})
+	}
+	if cache.instructions != "" {
+		if len(input.System) == 0 {
+			return nil, fmt.Errorf("bedrock: instruction caching requires instructions")
+		}
+		input.System = append(input.System, &types.SystemContentBlockMemberCachePoint{
+			Value: providerCachePoint(cache.instructions),
+		})
 	}
 	for _, message := range messages {
 		switch value := message.(type) {
@@ -46,14 +57,63 @@ func buildConverseInput(
 			}
 		}
 	}
-	limitCachePoints(input.Messages, 4)
+	reservedCachePoints := 0
+	if cache.instructions != "" {
+		reservedCachePoints++
+	}
+	if cache.messages != "" {
+		point := &types.ContentBlockMemberCachePoint{Value: providerCachePoint(cache.messages)}
+		if err := attachCachePoint(input.Messages, point); err != nil {
+			return nil, fmt.Errorf("bedrock: message caching: %w", err)
+		}
+	}
 	input.ToolConfig = toolConfiguration(params)
+	if cache.toolDefinitions != "" {
+		if input.ToolConfig == nil {
+			return nil, fmt.Errorf("bedrock: tool-definition caching requires tools")
+		}
+		input.ToolConfig.Tools = append(input.ToolConfig.Tools, &types.ToolMemberCachePoint{
+			Value: providerCachePoint(cache.toolDefinitions),
+		})
+		reservedCachePoints++
+	}
+	limitCachePoints(input.Messages, 4-reservedCachePoints)
 	input.InferenceConfig = inferenceConfiguration(params.Settings)
+	input.OutputConfig, err = outputConfiguration(params)
+	if err != nil {
+		return nil, err
+	}
 	if len(params.Settings.ExtraBody) > 0 {
 		input.AdditionalModelRequestFields = document.NewLazyDocument(params.Settings.ExtraBody)
 	}
 	input.ServiceTier = serviceTier(params.Settings.ServiceTier)
 	return input, nil
+}
+
+func outputConfiguration(params ai.ModelRequestParams) (*types.OutputConfig, error) {
+	if params.OutputSchema == nil || params.OutputMode == ai.OutputModePrompted {
+		return nil, nil
+	}
+	schema, err := json.Marshal(params.OutputSchema)
+	if err != nil {
+		return nil, fmt.Errorf("bedrock: marshal output schema: %w", err)
+	}
+	name := "response"
+	description := "The structured final response."
+	if params.OutputTool != nil {
+		if params.OutputTool.Name != "" {
+			name = params.OutputTool.Name
+		}
+		if params.OutputTool.Description != "" {
+			description = params.OutputTool.Description
+		}
+	}
+	return &types.OutputConfig{TextFormat: &types.OutputFormat{
+		Type: types.OutputFormatTypeJsonSchema,
+		Structure: &types.OutputFormatStructureMemberJsonSchema{Value: types.JsonSchemaDefinition{
+			Name: aws.String(name), Description: aws.String(description), Schema: aws.String(string(schema)),
+		}},
+	}}, nil
 }
 
 func requestBlocks(

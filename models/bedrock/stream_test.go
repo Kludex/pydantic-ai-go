@@ -210,9 +210,9 @@ func TestModelStreamRequestFailures(t *testing.T) {
 	}
 
 	_, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{
-		OutputSchema: map[string]any{"type": "object"}, OutputMode: ai.OutputModeNative,
+		OutputSchema: map[string]any{"bad": make(chan int)}, OutputMode: ai.OutputModeNative,
 	})
-	if err == nil || !strings.Contains(err.Error(), "native JSON output") {
+	if err == nil || !strings.Contains(err.Error(), "marshal output schema") {
 		t.Fatalf("unexpected stream validation error: %v", err)
 	}
 }

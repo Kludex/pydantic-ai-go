@@ -14,13 +14,15 @@ func cachePointBlock(point ai.CachePoint) (types.ContentBlock, error) {
 	if err != nil {
 		return nil, err
 	}
+	return &types.ContentBlockMemberCachePoint{Value: providerCachePoint(CacheTTL(ttl))}, nil
+}
+
+func providerCachePoint(ttl CacheTTL) types.CachePointBlock {
 	cacheTTL := types.CacheTTLFiveMinutes
-	if ttl == ai.CachePointTTL1Hour {
+	if ttl == CacheTTL1Hour {
 		cacheTTL = types.CacheTTLOneHour
 	}
-	return &types.ContentBlockMemberCachePoint{Value: types.CachePointBlock{
-		Type: types.CachePointTypeDefault, Ttl: cacheTTL,
-	}}, nil
+	return types.CachePointBlock{Type: types.CachePointTypeDefault, Ttl: cacheTTL}
 }
 
 func attachCachePoint(messages []types.Message, point types.ContentBlock) error {

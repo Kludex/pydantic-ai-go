@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
@@ -134,6 +135,15 @@ func (model *Model) ProviderURL() string {
 
 // DefaultModelSettings returns detached request defaults.
 func (model *Model) DefaultModelSettings() ai.ModelSettings { return model.defaultSettings.Clone() }
+
+// PromptCacheRetention reports the longest requested Bedrock cache lifetime.
+func (*Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	_, cache, err := extractCacheSettings(settings)
+	if err != nil {
+		return 0, false
+	}
+	return cache.retention()
+}
 
 // Request implements ai.Model.
 func (model *Model) Request(

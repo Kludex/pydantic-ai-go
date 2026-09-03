@@ -65,7 +65,7 @@ func responseBlocks(response ai.ModelResponse) ([]types.ContentBlock, error) {
 
 func toolConfiguration(params ai.ModelRequestParams) *types.ToolConfiguration {
 	definitions := append([]ai.ToolDefinition(nil), params.Tools...)
-	if params.OutputTool != nil {
+	if params.OutputTool != nil && params.OutputMode == ai.OutputModeTool {
 		definitions = append(definitions, *params.OutputTool)
 	}
 	if len(definitions) == 0 {
@@ -80,7 +80,7 @@ func toolConfiguration(params ai.ModelRequestParams) *types.ToolConfiguration {
 		}}
 	}
 	choice := types.ToolChoice(&types.ToolChoiceMemberAuto{Value: types.AutoToolChoice{}})
-	if params.OutputTool != nil && !params.AllowText {
+	if params.OutputTool != nil && params.OutputMode == ai.OutputModeTool && !params.AllowText {
 		choice = &types.ToolChoiceMemberTool{Value: types.SpecificToolChoice{Name: aws.String(params.OutputTool.Name)}}
 	}
 	return &types.ToolConfiguration{Tools: tools, ToolChoice: choice}

@@ -410,9 +410,6 @@ func TestUnsupportedRequestFeatures(t *testing.T) {
 		params ai.ModelRequestParams
 		match  string
 	}{
-		{name: "native output", params: ai.ModelRequestParams{
-			OutputSchema: map[string]any{"type": "object"}, OutputMode: ai.OutputModeNative,
-		}, match: "native JSON output mode"},
 		{name: "native tools", params: ai.ModelRequestParams{
 			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
 		}, match: "provider-native tools"},

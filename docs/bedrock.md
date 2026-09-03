@@ -124,7 +124,51 @@ Bedrock requires text beside a document. The adapter inserts a neutral text bloc
 
 Bedrock receives detached byte slices. A request does not retain caller-owned file buffers.
 
-## Settings
+## Prompt caching and native output
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    ai "github.com/Kludex/pydantic-ai-go"
+    "github.com/Kludex/pydantic-ai-go/models/bedrock"
+)
+
+type Answer struct {
+    Summary string `json:"summary"`
+}
+
+func main() {
+    settings, err := (bedrock.Settings{
+        CacheInstructions: bedrock.CacheTTL5Minutes,
+        CacheMessages:     bedrock.CacheTTL5Minutes,
+    }).Build()
+    if err != nil {
+        panic(err)
+    }
+
+    model := bedrock.NewModel("us.amazon.nova-lite-v1:0")
+    agent := ai.NewAgent[struct{}, Answer](model,
+        ai.WithInstructions("Return a concise summary."),
+        ai.WithModelSettings(settings),
+        ai.WithOutputMode(ai.OutputModeNative),
+    )
+    result, err := agent.Run(context.Background(), "Explain prompt caching.", struct{}{})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result.Output.Summary)
+}
+```
+
+`bedrock.Settings` places typed cache points after instructions, on the newest user message, and after tool definitions. Fixed instruction and tool points reserve their share of Bedrock's four-point limit. The adapter keeps the newest remaining message points. `ResolvePromptCacheRetention` reports the longest typed lifetime.
+
+Native output sends your reflected JSON Schema through Converse `outputConfig.textFormat`. Use tool output for models that do not support Bedrock structured output.
+
+## Portable settings
 
 Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and extra-header settings map to Converse fields. `ModelSettings.ExtraBody` maps to `additionalModelRequestFields` for model-specific Bedrock parameters.
 
@@ -132,4 +176,4 @@ Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and ext
 
 ## Current scope
 
-Native Bedrock tools, native structured output, automatic cache placement, guardrails, performance settings, request metadata, streamed image and provider-tool blocks, and legacy Anthropic `InvokeModel` transport remain outside this implementation.
+Native Bedrock tools, guardrails, performance settings, request metadata, streamed image and provider-tool blocks, and legacy Anthropic `InvokeModel` transport remain outside this implementation.

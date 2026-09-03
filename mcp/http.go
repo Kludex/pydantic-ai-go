@@ -13,9 +13,12 @@ import (
 
 // HTTPToolsetConfig configures an inferred Streamable HTTP or legacy SSE MCP transport.
 type HTTPToolsetConfig struct {
-	URL     string
+	// URL is the absolute MCP endpoint.
+	URL string
+	// Headers are attached only to same-origin requests.
 	Headers map[string]string
-	Client  *http.Client
+	// Client supplies caller-owned HTTP behavior. The configuration is cloned.
+	Client *http.Client
 }
 
 // NewHTTPToolset creates an MCP toolset from an HTTP URL. URLs ending in /sse
@@ -36,7 +39,9 @@ func NewHTTPToolset[Deps any](config HTTPToolsetConfig, opts ...Option) *Toolset
 
 // HTTPServerCapabilityConfig configures one provider-hosted MCP server and its local HTTP fallback.
 type HTTPServerCapabilityConfig struct {
+	// Native describes the provider-hosted MCP server.
 	Native ai.MCPServerTool
+	// Client supplies HTTP behavior for the local fallback.
 	Client *http.Client
 }
 

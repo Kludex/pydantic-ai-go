@@ -585,7 +585,9 @@ func WithUsageLimits(limits UsageLimits) Option {
 // RetryLimits contains the independent function-tool and output retry
 // budgets. Both default to 1. Zero disables retries for that side.
 type RetryLimits struct {
-	Tools  int
+	// Tools bounds retries independently for each function-tool call.
+	Tools int
+	// Output bounds retries while decoding or validating final output.
 	Output int
 }
 
@@ -907,6 +909,7 @@ func validateOutputMode(mode OutputMode) {
 
 // RunResult is the outcome of a successful run.
 type RunResult[Output any] struct {
+	// Output is the typed final value. It is the zero value for deferred runs.
 	Output Output
 
 	usage       Usage

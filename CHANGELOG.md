@@ -1,0 +1,41 @@
+# Changelog
+
+All notable changes to this project are documented here.
+
+The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). This project follows [Semantic Versioning](https://semver.org/).
+
+## [Unreleased]
+
+### Added
+
+- A typed agent loop with structured output, tools, retries, usage limits, cancellation, deferred execution, message enqueueing, manual runs, and synchronous or streamed results.
+- OpenAI Chat Completions and Responses, Anthropic Messages, Google Gemini and Vertex AI, Azure OpenAI, OpenRouter, and Z.AI model providers.
+- Provider-neutral native tools for web search, web fetch, code execution, image generation, file search, MCP servers, advisors, memory, and X search where providers support them.
+- Capability middleware for runs, model requests, tool validation and execution, output validation and processing, instructions, history processing, event streams, and deferred calls.
+- MCP clients and toolsets for Streamable HTTP, SSE, stdio, shared sessions, OAuth, sampling, elicitation, prompts, resources, and configuration files.
+- Typed embedding clients for OpenAI-compatible APIs, Google Gemini and Vertex AI, Cohere, VoyageAI, Amazon Bedrock, and local Ollama models.
+- OpenTelemetry tracing and metrics for agents, model requests, tools, output functions, compaction, and embeddings.
+- A runnable Logfire OTLP export example with privacy-safe defaults.
+- PydanticAI-compatible message serialization, multimodal content, speech history, compaction boundaries, cache points, sanitization, and history repair.
+- Evaluation task adapters for `pydantic-evals-go`.
+- Recorded provider tests, deterministic fake models, race tests, and per-package 100% statement coverage.
+
+### Changed
+
+- No released behavior has changed yet.
+
+### Deprecated
+
+- Nothing is deprecated.
+
+### Removed
+
+- Nothing has been removed.
+
+### Fixed
+
+- No fixes have been released yet.
+
+### Security
+
+- No security fixes have been released yet.

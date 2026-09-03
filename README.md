@@ -320,6 +320,8 @@ The project requires 100% statement coverage for every tested package.
 
 The API is under active development while it approaches feature parity with [PydanticAI](https://ai.pydantic.dev/). Review [`CHECKLIST.md`](CHECKLIST.md) before depending on a provider-specific or advanced feature.
 
+See the [`COMPATIBILITY.md`](COMPATIBILITY.md) version guarantees and [`CHANGELOG.md`](CHANGELOG.md) before you upgrade.
+
 ## License
 
 This project is licensed under the MIT License. See [`LICENSE`](LICENSE).

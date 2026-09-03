@@ -243,7 +243,7 @@ Status:
 - [x] The README starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused instruction, output, provider, HTTP-retry, MCP, capability, history-sanitization/trimming/summarization, usage-limit/token-counting, multimodal-input, and OpenTelemetry guides cover stable source-qualified prompts, output functions and unions, OpenAI-compatible/Azure setup, transport retries, shared-session lifecycle, direct protocol operations, safe untrusted-history custody, image, video, audio, and document URLs plus inline media, privacy, format compatibility, and usage attribution.
 - [~] Focused instruction, output, OpenRouter/provider, MCP, capability, history, compaction, usage, multimodal, native-tool, evaluation, embedding, and OpenTelemetry guides now keep advanced setup out of the README. Add guides for deferred execution and model wrappers without turning the README into an exhaustive API dump.
 - [ ] Go package documentation for every public contract.
-- [ ] Compatibility policy, semantic versioning policy, and changelog.
+- [x] Compatibility and semantic-versioning policy for public Go APIs, supported Go versions, persisted messages, providers, deprecations, and inspectable errors, plus an unreleased changelog.
 - [ ] Benchmark loop overhead, streaming, schema reflection, and parallel tools.
 - [x] Use the tagged `genai-prices` Go `v0.1.5` module release instead of a commit pseudo-version.
 - [x] Audited and mapped upstream runtime changes through `3a3e5612786c64e19312f20e3c998553edf1353b` without treating unimplemented changes as complete; the advance from the prior baseline changed only CI coverage collection.

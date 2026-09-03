@@ -312,9 +312,10 @@ golangci-lint run ./...
 go test ./...
 scripts/coverage.sh
 go test -race ./...
+go test -run '^$' -bench . -benchmem .
 ```
 
-The project requires 100% statement coverage for every tested package.
+The project requires 100% statement coverage for every tested package. See the [benchmark guide](docs/benchmarks.md) to compare performance changes.
 
 ## Status
 

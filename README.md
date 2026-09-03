@@ -266,6 +266,7 @@ func TestAgent(t *testing.T) {
 | Attach application metadata to a run | `WithMetadata`, `AddMetadataFunc`, and `WithRunMetadata` |
 | Transform structured data or plain text | [`NewOutputFunction` or `NewTextOutputFunction`](docs/outputs.md) |
 | Return one of several typed outputs | [`NewUnionOutput` and `NewUnionAgent`](docs/outputs.md) |
+| Render instructions from typed dependencies | [`PromptTemplate` and `FormatAsXML`](docs/prompt-templates.md) |
 | Address and rewrite instruction blocks | [Stable instruction IDs](docs/instructions.md) |
 | Reuse or combine tools | `NewTool`, `NewFunctionToolset`, and the toolset wrappers |
 | Require approval or external execution | [`WithApprovalRequired` and `DeferredToolResults`](docs/deferred-execution.md) |

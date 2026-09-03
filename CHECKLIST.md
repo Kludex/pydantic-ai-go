@@ -229,7 +229,7 @@ Status:
 - [ ] MCP server support.
 - [ ] Agent-to-agent delegation examples and usage propagation.
 - [ ] CLI and web chat entry points, including MCP configuration loading and streamed tool-call display.
-- [ ] Prompt templates and format helpers.
+- [x] Typed, concurrency-safe `PromptTemplate` values compile standard Go templates once, render against run dependencies with strict missing-key errors, adapt directly to dynamic instructions and agent descriptions, and expose prompt-friendly XML through a built-in `xml` function. `FormatAsXML` adds deterministic nested maps, slices, arrays, structs with JSON field names, scalar/text-marshaler support, escaping, configurable root/item/null/indent behavior, and cycle and unsupported-value errors.
 - [ ] Durable execution integrations, including the public third-party backend contract, explicitly named durable operations for capabilities, operation serialization, and backend-specific cache identity. Rebuilt models inside durable operations must be opened and closed in the operation, while registered or otherwise caller-owned model instances remain unmanaged and are never rebuilt or closed. Temporal and DBOS must reject runtime capabilities whose operations were not registered before workflow startup; Prefect may accept runtime observer capabilities but must reject late executing toolsets. Prefect dynamic-tool discovery, validation, and calls require separately journaled tasks with stable operation names and retry-safe re-resolution.
 - [-] Public graph API and graph-backed loop - excluded because this project intentionally uses a plain loop and capability middleware.
 

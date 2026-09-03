@@ -81,8 +81,28 @@ func main() {
 
 `TransformStream` supports event delivery through queues and durable workflows without an HTTP request.
 
+## Approve deferred tools
+
+Set `SDKVersion` to 6 or 7 to emit `tool-approval-request` chunks for tools registered with `WithApprovalRequired`. Return the original assistant tool part with an approval response:
+
+```json
+{
+  "type": "tool-delete_record",
+  "toolCallId": "call_delete",
+  "state": "approval-responded",
+  "input": {"id": "record-1"},
+  "approval": {
+    "id": "call_delete",
+    "approved": false,
+    "reason": "Keep this record"
+  }
+}
+```
+
+`approved` is a strict JSON boolean. Missing decisions deny by default. The adapter resumes the original tool-call ID and does not create a second call.
+
 ## Current scope
 
 The adapter supports AI SDK UI versions 5 through 7 for text, reasoning, function and provider-native tool inputs and outputs, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
 
-Vercel AI file and source parts, data parts, provider metadata, message metadata, tool approval states, deferred resumes, compaction activities, tool-availability data, cancellation chunks, and version-specific fields remain.
+Vercel AI file and source parts, data parts, provider metadata, message metadata, approval argument replacement, external deferred resumes, compaction activities, tool-availability data, cancellation chunks, and remaining version-specific fields remain.

@@ -45,6 +45,8 @@ const (
 	ChunkToolOutputAvailable ChunkType = "tool-output-available"
 	// ChunkToolOutputError returns a failed, denied, or interrupted result.
 	ChunkToolOutputError ChunkType = "tool-output-error"
+	// ChunkToolApprovalRequest asks an AI SDK v6+ client to approve a tool.
+	ChunkToolApprovalRequest ChunkType = "tool-approval-request"
 )
 
 // Chunk is one JSON Vercel AI UI message stream value.
@@ -73,6 +75,8 @@ type Chunk struct {
 	FinishReason string `json:"finishReason,omitempty"`
 	// ProviderExecuted marks provider-native tool calls and results.
 	ProviderExecuted *bool `json:"providerExecuted,omitempty"`
+	// ApprovalID identifies one tool approval request.
+	ApprovalID string `json:"approvalId,omitempty"`
 }
 
 // RequestData is a Vercel AI submit-message or regenerate-message request.
@@ -113,6 +117,26 @@ type UIMessagePart struct {
 	Output json.RawMessage `json:"output,omitempty"`
 	// ErrorText describes an output-error tool result.
 	ErrorText string `json:"errorText,omitempty"`
+	// Approval contains a requested or completed tool decision.
+	Approval *ToolApproval `json:"approval,omitempty"`
+}
+
+// ToolApproval is one Vercel AI tool approval state.
+type ToolApproval struct {
+	// ID identifies the approval request.
+	ID string `json:"id"`
+	// Approved is a strict decision when the client has responded.
+	Approved *bool `json:"approved,omitempty"`
+	// Reason explains a denial.
+	Reason string `json:"reason,omitempty"`
+}
+
+// StreamConfig controls standalone stream transformation.
+type StreamConfig struct {
+	// SDKVersion targets AI SDK UI major 5, 6, or 7. Zero defaults to 5.
+	SDKVersion int
+	// ServerMessageID overrides the generated assistant message ID.
+	ServerMessageID string
 }
 
 // Config controls Vercel AI protocol and trust behavior.

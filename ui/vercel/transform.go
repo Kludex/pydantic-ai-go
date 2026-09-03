@@ -12,16 +12,29 @@ import (
 
 var generatedID atomic.Uint64
 
-// TransformStream converts agent events to Vercel AI UI message chunks.
+// TransformStream converts agent events to Vercel AI SDK UI v5 chunks.
 func TransformStream(stream ai.EventStream, serverMessageID string) iter.Seq2[Chunk, error] {
-	if serverMessageID == "" {
-		serverMessageID = nextID("message")
+	return TransformStreamWithConfig(stream, StreamConfig{SDKVersion: 5, ServerMessageID: serverMessageID})
+}
+
+// TransformStreamWithConfig converts agent events for AI SDK UI v5, v6, or v7.
+func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.Seq2[Chunk, error] {
+	if config.SDKVersion == 0 {
+		config.SDKVersion = 5
+	}
+	if config.ServerMessageID == "" {
+		config.ServerMessageID = nextID("message")
 	}
 	return func(yield func(Chunk, error) bool) {
-		if !yield(Chunk{Type: ChunkStart, MessageID: serverMessageID}, nil) {
+		if config.SDKVersion < 5 || config.SDKVersion > 7 {
+			err := fmt.Errorf("vercel: SDK version must be 5, 6, or 7")
+			yield(Chunk{Type: ChunkError, ErrorText: err.Error()}, err)
 			return
 		}
-		state := transformState{partIDs: map[string]string{}, toolIDs: map[string]string{}}
+		if !yield(Chunk{Type: ChunkStart, MessageID: config.ServerMessageID}, nil) {
+			return
+		}
+		state := transformState{sdkVersion: config.SDKVersion, partIDs: map[string]string{}, toolIDs: map[string]string{}}
 		for event, eventErr := range stream {
 			if eventErr != nil {
 				if !state.finishStep(yield) {
@@ -45,6 +58,7 @@ func TransformStream(stream ai.EventStream, serverMessageID string) iter.Seq2[Ch
 }
 
 type transformState struct {
+	sdkVersion   int
 	step         bool
 	finishReason string
 	partIDs      map[string]string
@@ -121,6 +135,16 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		return state.requestResult(yield, value.Part, false)
 	case ai.OutputToolResultEvent:
 		return state.requestResult(yield, value.Part, false)
+	case ai.DeferredToolRequestsEvent:
+		if state.sdkVersion >= 6 {
+			for _, call := range value.Requests.Approvals {
+				if !yield(Chunk{
+					Type: ChunkToolApprovalRequest, ApprovalID: call.ToolCallID, ToolCallID: call.ToolCallID,
+				}, nil) {
+					return false
+				}
+			}
+		}
 	case ai.FinishEvent:
 		state.finishReason = vercelFinishReason(value.FinishReason)
 		return state.finishStep(yield)

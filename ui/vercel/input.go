@@ -42,6 +42,45 @@ func PrepareInput(
 	return ai.UserPromptPart{}, nil, report, fmt.Errorf("vercel: input requires a user message")
 }
 
+func prepareRunInput(
+	input RequestData, options ai.MessageSanitizationOptions,
+) (ai.UserPromptPart, []ai.ModelMessage, *ai.DeferredToolResults, error) {
+	decisions := map[string]ai.ToolApproval{}
+	for _, message := range input.Messages {
+		for _, part := range message.Parts {
+			if !strings.HasPrefix(part.Type, "tool-") || part.State != "approval-responded" {
+				continue
+			}
+			if part.ToolCallID == "" {
+				return ai.UserPromptPart{}, nil, nil, fmt.Errorf("vercel: approval requires a toolCallId")
+			}
+			options.ResolvedToolCallIDs = append(options.ResolvedToolCallIDs, part.ToolCallID)
+			if part.Approval != nil && part.Approval.Approved != nil && *part.Approval.Approved {
+				decisions[part.ToolCallID] = ai.ToolApproved{}
+			} else {
+				reason := ""
+				if part.Approval != nil {
+					reason = part.Approval.Reason
+				}
+				decisions[part.ToolCallID] = ai.ToolDenied{Message: reason}
+			}
+		}
+	}
+	if len(decisions) == 0 {
+		prompt, history, _, err := PrepareInput(input, options)
+		return prompt, history, nil, err
+	}
+	messages, err := convertMessages(input.Messages)
+	if err != nil {
+		return ai.UserPromptPart{}, nil, nil, err
+	}
+	history, _, err := ai.SanitizeMessages(messages, options)
+	if err != nil {
+		return ai.UserPromptPart{}, nil, nil, err
+	}
+	return ai.UserPromptPart{}, history, &ai.DeferredToolResults{Approvals: decisions}, nil
+}
+
 func convertMessages(messages []UIMessage) ([]ai.ModelMessage, error) {
 	var converted []ai.ModelMessage
 	for _, message := range messages {

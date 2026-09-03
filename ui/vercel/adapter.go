@@ -35,15 +35,20 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 	ctx context.Context, input RequestData, deps Deps, options ...ai.RunOption,
 ) iter.Seq2[Chunk, error] {
 	return func(yield func(Chunk, error) bool) {
-		prompt, history, _, err := PrepareInput(input, adapter.config.Sanitization)
+		prompt, history, deferred, err := prepareRunInput(input, adapter.config.Sanitization)
 		if err != nil {
 			yield(Chunk{Type: ChunkError, ErrorText: err.Error()}, err)
 			return
 		}
 		runOptions := append([]ai.RunOption(nil), options...)
 		runOptions = append(runOptions, ai.WithMessageHistory(history), ai.WithConversationID(input.ID))
+		if deferred != nil {
+			runOptions = append(runOptions, ai.WithDeferredToolResults(*deferred))
+		}
 		stream := adapter.agent.RunStream(ctx, prompt.Content, deps, runOptions...)
-		for chunk, eventErr := range TransformStream(stream.Events(), adapter.config.ServerMessageID) {
+		for chunk, eventErr := range TransformStreamWithConfig(stream.Events(), StreamConfig{
+			SDKVersion: adapter.config.SDKVersion, ServerMessageID: adapter.config.ServerMessageID,
+		}) {
 			if !yield(chunk, eventErr) || eventErr != nil {
 				return
 			}

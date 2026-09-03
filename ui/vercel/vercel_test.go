@@ -184,6 +184,107 @@ func TestHandlerValidation(t *testing.T) {
 	}
 }
 
+func TestApprovalRequestAndResume(t *testing.T) {
+	executions := 0
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	agent.AddRawTool(ai.ToolDefinition{
+		Name: "approve", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+	}, func(context.Context, json.RawMessage) (any, error) {
+		executions++
+		return "done", nil
+	}, ai.WithApprovalRequired())
+	adapter := vercel.NewAdapter(agent, vercel.Config{SDKVersion: 6})
+	input := requestWith(vercel.UIMessage{
+		ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}},
+	})
+	approvalSeen := false
+	for chunk, err := range adapter.RunStream(context.Background(), input, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunk.Type == vercel.ChunkToolApprovalRequest {
+			approvalSeen = chunk.ApprovalID == "call_approve"
+		}
+	}
+	if executions != 0 || !approvalSeen {
+		t.Fatalf("unexpected approval request: executions=%d seen=%v", executions, approvalSeen)
+	}
+	approved := true
+	resume := requestWith(
+		vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}}},
+		vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+			Type: "tool-approve", ToolCallID: "call_approve", State: "approval-responded", Input: []byte(`{}`),
+			Approval: &vercel.ToolApproval{ID: "call_approve", Approved: &approved},
+		}}},
+	)
+	for _, err := range adapter.RunStream(context.Background(), resume, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if executions != 1 {
+		t.Fatalf("approval did not execute tool: %d", executions)
+	}
+}
+
+func TestApprovalResumeValidation(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	agent.AddRawTool(ai.ToolDefinition{
+		Name: "approve", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+	}, func(context.Context, json.RawMessage) (any, error) { return "done", nil }, ai.WithApprovalRequired())
+	denied := false
+	base := requestWith(
+		vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}}},
+		vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+			Type: "tool-approve", ToolCallID: "call_approve", State: "approval-responded", Input: []byte(`{}`),
+			Approval: &vercel.ToolApproval{ID: "call_approve", Approved: &denied, Reason: "no"},
+		}}},
+	)
+	for _, err := range vercel.NewAdapter(agent, vercel.Config{SDKVersion: 6}).RunStream(
+		context.Background(), base, struct{}{},
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	base.Messages[1].Parts[0].Approval = nil
+	base.Messages[1].Parts[0].State = "approval-responded"
+	for _, err := range vercel.NewAdapter(agent, vercel.Config{SDKVersion: 6}).RunStream(
+		context.Background(), base, struct{}{},
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	tests := []struct {
+		name   string
+		input  vercel.RequestData
+		config vercel.Config
+	}{
+		{name: "missing tool ID", input: requestWith(vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-x", State: "approval-responded"}},
+		})},
+		{name: "invalid message", input: requestWith(vercel.UIMessage{
+			Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-x", ToolCallID: "call", State: "approval-responded"}},
+		})},
+		{name: "sanitization", input: base, config: vercel.Config{Sanitization: ai.MessageSanitizationOptions{
+			AllowedFileURLSchemes: []string{"bad scheme"},
+		}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var got error
+			for _, err := range vercel.NewAdapter(agent, test.config).RunStream(context.Background(), test.input, struct{}{}) {
+				got = err
+			}
+			if got == nil {
+				t.Fatal("expected approval resume error")
+			}
+		})
+	}
+}
+
 func TestAdapterValidationAndErrors(t *testing.T) {
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
 	assertPanic(t, func() { vercel.NewAdapter[struct{}, string](nil, vercel.Config{}) })

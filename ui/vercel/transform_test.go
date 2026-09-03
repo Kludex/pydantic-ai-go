@@ -66,6 +66,46 @@ func TestTransformStreamVariants(t *testing.T) {
 	}
 }
 
+func TestTransformApprovalVersions(t *testing.T) {
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.DeferredToolRequestsEvent{Requests: ai.DeferredToolRequests{Approvals: []ai.ToolCallPart{{
+			ToolCallID: "call",
+		}}}}, nil)
+	})
+	for _, version := range []int{5, 6, 7} {
+		seen := false
+		for chunk, err := range vercel.TransformStreamWithConfig(stream, vercel.StreamConfig{SDKVersion: version}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if chunk.Type == vercel.ChunkToolApprovalRequest {
+				seen = true
+			}
+		}
+		if seen != (version >= 6) {
+			t.Fatalf("version=%d approval=%v", version, seen)
+		}
+	}
+	vercel.TransformStreamWithConfig(stream, vercel.StreamConfig{SDKVersion: 6, ServerMessageID: "message"})(
+		func(chunk vercel.Chunk, _ error) bool { return chunk.Type != vercel.ChunkToolApprovalRequest },
+	)
+	for _, version := range []int{4, 8} {
+		var got error
+		for _, err := range vercel.TransformStreamWithConfig(nil, vercel.StreamConfig{SDKVersion: version}) {
+			got = err
+		}
+		if got == nil {
+			t.Fatalf("version=%d: expected error", version)
+		}
+	}
+	empty := ai.EventStream(func(func(ai.StreamEvent, error) bool) {})
+	for _, err := range vercel.TransformStreamWithConfig(empty, vercel.StreamConfig{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestTransformFinishReasons(t *testing.T) {
 	tests := []struct {
 		reason ai.FinishReason

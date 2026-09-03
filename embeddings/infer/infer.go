@@ -15,6 +15,8 @@ import (
 	"github.com/Kludex/pydantic-ai-go/embeddings/voyageai"
 	modelazure "github.com/Kludex/pydantic-ai-go/models/azure"
 	modelgoogle "github.com/Kludex/pydantic-ai-go/models/google"
+	modelopenrouter "github.com/Kludex/pydantic-ai-go/models/openrouter"
+	modelzai "github.com/Kludex/pydantic-ai-go/models/zai"
 )
 
 // Resolver creates a model from the provider-local model name.
@@ -66,6 +68,12 @@ func Model(name string, options ...Option) (embeddings.Model, error) {
 	}
 	configuration.resolvers["ollama"] = func(modelName string) (embeddings.Model, error) {
 		return ollama.NewModel(modelName), nil
+	}
+	configuration.resolvers["openrouter"] = func(modelName string) (embeddings.Model, error) {
+		return openai.NewModel(modelName, openai.WithProvider(modelopenrouter.NewProviderConfig())), nil
+	}
+	configuration.resolvers["zai"] = func(modelName string) (embeddings.Model, error) {
+		return openai.NewModel(modelName, openai.WithProvider(modelzai.NewProviderConfig())), nil
 	}
 	configuration.resolvers["bedrock"] = func(modelName string) (embeddings.Model, error) {
 		return bedrock.NewModel(modelName)

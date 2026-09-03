@@ -71,31 +71,38 @@ func WithAppAttribution(url string, title string) Option {
 	}
 }
 
+// NewProviderConfig returns reusable OpenRouter endpoint and environment configuration.
+func NewProviderConfig() openai.ProviderConfig {
+	headers := http.Header{}
+	if appURL := os.Getenv("OPENROUTER_APP_URL"); appURL != "" {
+		headers.Set("HTTP-Referer", appURL)
+	}
+	if appTitle := os.Getenv("OPENROUTER_APP_TITLE"); appTitle != "" {
+		headers.Set("X-Title", appTitle)
+	}
+	return openai.ProviderConfig{
+		Name: "openrouter", BaseURL: defaultBaseURL, APIKey: os.Getenv("OPENROUTER_API_KEY"), Headers: headers,
+	}
+}
+
 // NewModel creates a model. OpenRouter names use the "provider/model" form.
 func NewModel(name string, options ...Option) *Model {
 	configuration := config{}
 	for _, option := range options {
 		option(&configuration)
 	}
-	headers := http.Header{}
-	appURL := os.Getenv("OPENROUTER_APP_URL")
+	provider := NewProviderConfig()
 	if configuration.attributionSet {
-		appURL = configuration.appURL
-	}
-	if appURL != "" {
-		headers.Set("HTTP-Referer", appURL)
-	}
-	appTitle := os.Getenv("OPENROUTER_APP_TITLE")
-	if configuration.attributionSet {
-		appTitle = configuration.appTitle
-	}
-	if appTitle != "" {
-		headers.Set("X-Title", appTitle)
+		provider.Headers = http.Header{}
+		if configuration.appURL != "" {
+			provider.Headers.Set("HTTP-Referer", configuration.appURL)
+		}
+		if configuration.appTitle != "" {
+			provider.Headers.Set("X-Title", configuration.appTitle)
+		}
 	}
 	openAIOptions := []openai.Option{
-		openai.WithProvider(openai.ProviderConfig{
-			Name: "openrouter", BaseURL: defaultBaseURL, APIKey: os.Getenv("OPENROUTER_API_KEY"), Headers: headers,
-		}),
+		openai.WithProvider(provider),
 		openai.WithChatCompatibility(openai.ChatCompatibility{
 			Reasoning: true, ReasoningDetails: true, LegacyMaxTokens: true, ExtendedMetadata: true,
 			VideoInput: true, FileURLInput: true,

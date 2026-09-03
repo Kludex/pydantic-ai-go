@@ -16,6 +16,14 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/zai"
 )
 
+func TestProviderConfig(t *testing.T) {
+	t.Setenv("ZAI_API_KEY", "key")
+	provider := zai.NewProviderConfig()
+	if provider.Name != "zai" || provider.BaseURL != "https://api.z.ai/api/paas/v4" || provider.APIKey != "key" {
+		t.Fatalf("unexpected provider: %#v", provider)
+	}
+}
+
 type responseServer struct {
 	*httptest.Server
 	mu        sync.Mutex

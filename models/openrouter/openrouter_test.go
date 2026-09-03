@@ -18,6 +18,22 @@ type unsupportedNativeTool struct {
 	optional bool
 }
 
+func TestProviderConfig(t *testing.T) {
+	t.Setenv("OPENROUTER_API_KEY", "key")
+	t.Setenv("OPENROUTER_APP_URL", "https://app.example")
+	t.Setenv("OPENROUTER_APP_TITLE", "App")
+	provider := openrouter.NewProviderConfig()
+	if provider.Name != "openrouter" || provider.BaseURL != "https://openrouter.ai/api/v1" ||
+		provider.APIKey != "key" || provider.Headers.Get("HTTP-Referer") != "https://app.example" ||
+		provider.Headers.Get("X-Title") != "App" {
+		t.Fatalf("unexpected provider: %#v", provider)
+	}
+	provider.Headers.Set("X-Title", "mutated")
+	if openrouter.NewProviderConfig().Headers.Get("X-Title") != "App" {
+		t.Fatal("provider headers were shared")
+	}
+}
+
 func (unsupportedNativeTool) Kind() string                        { return "unsupported" }
 func (unsupportedNativeTool) UniqueID() string                    { return "unsupported" }
 func (tool unsupportedNativeTool) IsOptional() bool               { return tool.optional }

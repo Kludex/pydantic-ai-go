@@ -96,7 +96,7 @@ func main() {
 }
 ```
 
-`infer.Model` requires a provider prefix. It supports `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, `ollama`, and `voyageai`. Use `infer.WithProvider` to register a custom resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
+`infer.Model` requires a provider prefix. It supports `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, `ollama`, `openrouter`, `voyageai`, and `zai`. Use `infer.WithProvider` to register a custom resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
 
 `WithModel` scopes an override to one context tree. It does not mutate the reusable `Embedder`, so concurrent requests can select different models safely.
 
@@ -169,7 +169,7 @@ func main() {
 }
 ```
 
-The provider name and URL remain attached to each result. `Result.Price` uses them with the bundled `genai-prices` snapshot.
+The provider name and URL remain attached to each result. `Result.Price` uses them with the bundled `genai-prices` snapshot. The `openrouter` and `zai` inference prefixes reuse their chat-provider endpoint and credential configuration. OpenRouter also forwards application attribution.
 
 ## Local models with Ollama
 

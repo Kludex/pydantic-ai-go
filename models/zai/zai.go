@@ -93,6 +93,13 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	return common, nil
 }
 
+// NewProviderConfig returns reusable Z.AI endpoint and environment configuration.
+func NewProviderConfig() openai.ProviderConfig {
+	return openai.ProviderConfig{
+		Name: "zai", BaseURL: defaultBaseURL, APIKey: os.Getenv("ZAI_API_KEY"),
+	}
+}
+
 // NewModel creates a model for a Z.AI GLM model, such as glm-5.3-flash.
 func NewModel(name string, options ...Option) *Model {
 	configuration := config{}
@@ -100,9 +107,7 @@ func NewModel(name string, options ...Option) *Model {
 		option(&configuration)
 	}
 	openAIOptions := []openai.Option{
-		openai.WithProvider(openai.ProviderConfig{
-			Name: "zai", BaseURL: defaultBaseURL, APIKey: os.Getenv("ZAI_API_KEY"),
-		}),
+		openai.WithProvider(NewProviderConfig()),
 		openai.WithChatCompatibility(openai.ChatCompatibility{
 			ReasoningContent: true,
 			FinishReasons: map[string]ai.FinishReason{

@@ -39,6 +39,14 @@ func TestBuiltInModels(t *testing.T) {
 			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*ollama.Model); return ok },
 		},
 		{
+			name: "openrouter:qwen/qwen3-embedding-8b", providerName: "openrouter", modelName: "qwen/qwen3-embedding-8b",
+			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*openai.Model); return ok },
+		},
+		{
+			name: "zai:embedding-3", providerName: "zai", modelName: "embedding-3",
+			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*openai.Model); return ok },
+		},
+		{
 			name: "cohere:embed-v4.0", providerName: "cohere", modelName: "embed-v4.0",
 			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*cohere.Model); return ok },
 		},

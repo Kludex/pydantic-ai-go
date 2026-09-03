@@ -17,12 +17,14 @@ import (
 // Capabilities are untyped so one implementation works with every agent
 // regardless of its Deps and Output types.
 type Capability interface {
+	// Setup registers static contributions once before an agent's first run.
 	Setup(reg *CapabilityRegistry) error
 }
 
 // CapabilityIDProvider optionally gives instruction contributions a stable
 // application source ID.
 type CapabilityIDProvider interface {
+	// CapabilityID returns the stable source ID used to qualify instruction names.
 	CapabilityID() string
 }
 
@@ -86,7 +88,9 @@ func (state *runMetadataState) snapshot() map[string]any {
 // RunInfo is the untyped view of a run that capabilities receive. It is the
 // erased counterpart of RunContext.
 type RunInfo struct {
-	RunID          string
+	// RunID identifies this run.
+	RunID string
+	// ConversationID identifies related runs in one conversation.
 	ConversationID string
 
 	agentName        string
@@ -150,6 +154,7 @@ type ModelRequestFunc func(ctx context.Context, msgs []ModelMessage, params Mode
 // next to continue; they may modify messages and params on the way in and
 // the response on the way out.
 type ModelRequestWrapper interface {
+	// WrapModelRequest intercepts one prepared provider request.
 	WrapModelRequest(ctx context.Context, ri *RunInfo, msgs []ModelMessage, params ModelRequestParams, next ModelRequestFunc) (*ModelResponse, error)
 }
 
@@ -162,46 +167,57 @@ type ToolCallFunc func(ctx context.Context, call ToolCallPart) (any, error)
 // prompt instead of failing the run. Independent calls invoke wrappers
 // concurrently, so implementations must synchronize mutable state.
 type ToolCallWrapper interface {
+	// WrapToolCall intercepts one validated local tool call.
 	WrapToolCall(ctx context.Context, ri *RunInfo, call ToolCallPart, next ToolCallFunc) (any, error)
 }
 
 // InstructionsProvider contributes instructions before every model request.
 type InstructionsProvider interface {
+	// Instructions returns instruction text resolved for the current request.
 	Instructions(ctx context.Context, ri *RunInfo) (string, error)
 }
 
 // InstructionPartsProvider contributes named or cache-aware instruction blocks
 // before every model request. It takes precedence over InstructionsProvider.
 type InstructionPartsProvider interface {
+	// InstructionParts returns independently addressable blocks for the current request.
 	InstructionParts(ctx context.Context, ri *RunInfo) ([]InstructionPart, error)
 }
 
 // ModelSettingsProvider contributes settings before every model request.
 // current contains model, agent, and earlier capability settings.
 type ModelSettingsProvider interface {
+	// ModelSettings returns settings layered over current for this request.
 	ModelSettings(ctx context.Context, ri *RunInfo, current ModelSettings) (ModelSettings, error)
 }
 
 // ModelSelectionInfo is the untyped capability view of a model-selection
 // step. Step starts at 1. Messages is a detached snapshot.
 type ModelSelectionInfo struct {
-	Model    Model
-	ModelID  string
-	Step     int
+	// Model is the lower-precedence or previously selected model.
+	Model Model
+	// ModelID is the lower-precedence or previously selected application ID.
+	ModelID string
+	// Step is the one-based logical model request number.
+	Step int
+	// Messages is a detached snapshot before the request.
 	Messages []ModelMessage
-	Usage    Usage
+	// Usage is detached usage accumulated before the request.
+	Usage Usage
 }
 
 // ModelSelectionProvider adaptively contributes a model. Return the zero
 // ModelSelection to leave the current selection unchanged. Later capability
 // providers take precedence.
 type ModelSelectionProvider interface {
+	// SelectModel contributes a concrete model or application model ID.
 	SelectModel(ctx context.Context, ri *RunInfo, selection ModelSelectionInfo) (ModelSelection, error)
 }
 
 // ModelIDResolver resolves application model IDs for a capability. Return
 // nil, nil to defer to the next resolver.
 type ModelIDResolver interface {
+	// ResolveModelID returns a model or nil to let the next resolver try.
 	ResolveModelID(ctx context.Context, ri *RunInfo, modelID string) (Model, error)
 }
 
@@ -219,6 +235,7 @@ func capabilityModelSettingsProvider(capability Capability) ModelSettingsProvide
 // approvals inline. Return nil to leave every request for the next handler or
 // caller. Handlers run in capability order.
 type DeferredToolCallHandler interface {
+	// HandleDeferredToolCalls resolves a subset of pending calls and approvals.
 	HandleDeferredToolCalls(
 		ctx context.Context, ri *RunInfo, requests DeferredToolRequests,
 	) (*DeferredToolResults, error)
@@ -244,6 +261,7 @@ func (f DeferredToolHandlerFunc) HandleDeferredToolCalls(
 // do not affect accumulated messages, tool execution, or final output. The
 // wrapper must consume stream and stop when its downstream yield returns false.
 type RunEventStreamWrapper interface {
+	// WrapRunEventStream transforms the consumer-facing stream.
 	WrapRunEventStream(ctx context.Context, ri *RunInfo, stream EventStream) EventStream
 }
 
@@ -251,6 +269,7 @@ type RunEventStreamWrapper interface {
 // Return nil to hide an event from the consumer. An error stops the stream.
 // If a capability implements both interfaces, RunEventStreamWrapper wins.
 type StreamEventProcessor interface {
+	// ProcessStreamEvent transforms, hides, or rejects one consumer-facing event.
 	ProcessStreamEvent(ctx context.Context, ri *RunInfo, event StreamEvent) (StreamEvent, error)
 }
 

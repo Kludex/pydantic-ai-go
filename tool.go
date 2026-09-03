@@ -17,25 +17,44 @@ import (
 // RunContext carries run-scoped data into tools and dynamic hooks. The
 // context.Context argument remains the cancellation signal carrier.
 type RunContext[Deps any] struct {
-	Deps             Deps
-	AgentName        string
+	// Deps is the run's typed dependency value.
+	Deps Deps
+	// AgentName is the configured application agent identity.
+	AgentName string
+	// AgentDescription is the description resolved for this run.
 	AgentDescription string
-	Prompt           UserPromptPart
-	Metadata         map[string]any
-	Retry            int
-	MaxRetries       int
-	RunID            string
-	ConversationID   string
-	ToolName         string
-	ToolCallID       string
+	// Prompt is the detached user input that started this run.
+	Prompt UserPromptPart
+	// Metadata is detached application metadata for this run.
+	Metadata map[string]any
+	// Retry is the zero-based retry count for the current tool or output.
+	Retry int
+	// MaxRetries is the applicable retry budget.
+	MaxRetries int
+	// RunID identifies this run.
+	RunID string
+	// ConversationID identifies related runs in one conversation.
+	ConversationID string
+	// ToolName is the current tool name and is empty outside tool processing.
+	ToolName string
+	// ToolCallID is the current model-assigned call ID.
+	ToolCallID string
+	// ToolCallApproved reports whether the current call resumed with approval.
 	ToolCallApproved bool
+	// ToolCallMetadata carries detached approval or external-execution metadata.
 	ToolCallMetadata map[string]any
-	PartialOutput    bool
-	Model            Model
-	ModelID          string
-	RunStep          int
-	ModelSettings    ModelSettings
-	UsageLimits      UsageLimits
+	// PartialOutput reports whether output validation is processing a stream snapshot.
+	PartialOutput bool
+	// Model is the concrete model selected for the current request.
+	Model Model
+	// ModelID is the application model ID selected for the current request.
+	ModelID string
+	// RunStep is the one-based logical model request number.
+	RunStep int
+	// ModelSettings contains detached settings prepared for the current request.
+	ModelSettings ModelSettings
+	// UsageLimits contains detached limits applied to this run.
+	UsageLimits UsageLimits
 
 	usage           *Usage
 	usageMu         *sync.Mutex

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -16,7 +18,7 @@ import (
 func buildConverseInput(
 	ctx context.Context, modelName string, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*bedrockruntime.ConverseInput, error) {
-	settings, cache, err := extractCacheSettings(params.Settings)
+	settings, cache, requestSettings, err := extractSettings(params.Settings)
 	if err != nil {
 		return nil, err
 	}
@@ -33,7 +35,30 @@ func buildConverseInput(
 			return nil, fmt.Errorf("bedrock: code execution file attachments are not supported")
 		}
 	}
-	input := &bedrockruntime.ConverseInput{ModelId: aws.String(modelName)}
+	modelID := modelName
+	if requestSettings.inferenceProfile != "" {
+		modelID = requestSettings.inferenceProfile
+	}
+	input := &bedrockruntime.ConverseInput{
+		ModelId:                           aws.String(modelID),
+		AdditionalModelResponseFieldPaths: slices.Clone(requestSettings.additionalModelResponseFieldPaths),
+		RequestMetadata:                   maps.Clone(requestSettings.requestMetadata),
+	}
+	if requestSettings.guardrail != nil {
+		input.GuardrailConfig = &types.GuardrailConfiguration{
+			GuardrailIdentifier: aws.String(requestSettings.guardrail.Identifier),
+			GuardrailVersion:    aws.String(requestSettings.guardrail.Version), Trace: requestSettings.guardrail.Trace,
+		}
+	}
+	if requestSettings.performanceLatency != "" {
+		input.PerformanceConfig = &types.PerformanceConfiguration{Latency: requestSettings.performanceLatency}
+	}
+	if len(requestSettings.promptVariables) > 0 {
+		input.PromptVariables = make(map[string]types.PromptVariableValues, len(requestSettings.promptVariables))
+		for name, value := range requestSettings.promptVariables {
+			input.PromptVariables[name] = &types.PromptVariableValuesMemberText{Value: value}
+		}
+	}
 	if params.Instructions != "" {
 		input.System = append(input.System, &types.SystemContentBlockMemberText{Value: params.Instructions})
 	}

@@ -282,10 +282,20 @@ func converseStreamInput(input *bedrockruntime.ConverseInput) *bedrockruntime.Co
 	return &bedrockruntime.ConverseStreamInput{
 		ModelId: input.ModelId, AdditionalModelRequestFields: input.AdditionalModelRequestFields,
 		AdditionalModelResponseFieldPaths: input.AdditionalModelResponseFieldPaths,
+		GuardrailConfig:                   streamGuardrailConfig(input.GuardrailConfig),
 		InferenceConfig:                   input.InferenceConfig, Messages: input.Messages, OutputConfig: input.OutputConfig,
 		PerformanceConfig: input.PerformanceConfig, PromptVariables: input.PromptVariables,
 		RequestMetadata: input.RequestMetadata, ServiceTier: input.ServiceTier, System: input.System,
 		ToolConfig: input.ToolConfig,
+	}
+}
+
+func streamGuardrailConfig(config *types.GuardrailConfiguration) *types.GuardrailStreamConfiguration {
+	if config == nil {
+		return nil
+	}
+	return &types.GuardrailStreamConfiguration{
+		GuardrailIdentifier: config.GuardrailIdentifier, GuardrailVersion: config.GuardrailVersion, Trace: config.Trace,
 	}
 }
 

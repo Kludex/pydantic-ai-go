@@ -211,6 +211,8 @@ func main() {
 
 `bedrock.Settings` places typed cache points after instructions, on the newest user message, and after tool definitions. Fixed instruction and tool points reserve their share of Bedrock's four-point limit. The adapter keeps the newest remaining message points. `ResolvePromptCacheRetention` reports the longest typed lifetime.
 
+The same type configures an inference profile, a guardrail, optimized latency, invocation-log metadata, additional response field paths, and prompt-management variables. Maps, slices, and guardrail values are detached when you call `Build`.
+
 Native output sends your reflected JSON Schema through Converse `outputConfig.textFormat`. Use tool output for models that do not support Bedrock structured output.
 
 ## Portable settings
@@ -221,4 +223,4 @@ Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and ext
 
 ## Current scope
 
-Guardrails, performance settings, request metadata, streamed image blocks, and native tools beyond Nova code interpreter remain outside this implementation.
+Advanced guardrail traces and response metadata, streamed image blocks, and native tools beyond Nova code interpreter remain outside this implementation.

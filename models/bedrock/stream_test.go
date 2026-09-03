@@ -124,7 +124,8 @@ func TestModelStreamRequest(t *testing.T) {
 	client := &streamingClient{fakeClient: &fakeClient{}, stream: func(
 		input *bedrockruntime.ConverseStreamInput, options ...func(*bedrockruntime.Options),
 	) (bedrock.EventStream, error) {
-		if *input.ModelId != "model" || len(input.Messages) != 1 || len(options) != 1 {
+		if *input.ModelId != "model" || len(input.Messages) != 1 || len(options) != 1 ||
+			input.GuardrailConfig == nil || *input.GuardrailConfig.GuardrailIdentifier != "guardrail" {
 			t.Fatalf("unexpected stream input: %#v", input)
 		}
 		return stream, nil
@@ -132,7 +133,9 @@ func TestModelStreamRequest(t *testing.T) {
 	model := bedrock.NewModel("model", bedrock.WithClient(client), bedrock.WithProviderURL("https://bedrock.example"))
 	sequence, err := model.StreamRequest(context.Background(), []ai.ModelMessage{
 		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}}},
-	}, ai.ModelRequestParams{})
+	}, ai.ModelRequestParams{Settings: mustBedrockSettings(t, bedrock.Settings{
+		Guardrail: &bedrock.GuardrailConfig{Identifier: "guardrail", Version: "1"},
+	})})
 	if err != nil {
 		t.Fatal(err)
 	}

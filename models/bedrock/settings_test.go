@@ -19,6 +19,14 @@ func TestTypedSettingsAndNativeOutput(t *testing.T) {
 	settings, err := (bedrock.Settings{
 		Common: common, CacheInstructions: bedrock.CacheTTL1Hour,
 		CacheMessages: bedrock.CacheTTL5Minutes, CacheToolDefinitions: bedrock.CacheTTL1Hour,
+		InferenceProfile: "profile-arn",
+		Guardrail: &bedrock.GuardrailConfig{
+			Identifier: "guardrail", Version: "1", Trace: types.GuardrailTraceEnabledFull,
+		},
+		PerformanceLatency:                types.PerformanceConfigLatencyOptimized,
+		RequestMetadata:                   map[string]string{"tenant": "one"},
+		AdditionalModelResponseFieldPaths: []string{"/stop_sequence"},
+		PromptVariables:                   map[string]string{"name": "Ada"},
 	}).Build()
 	if err != nil {
 		t.Fatal(err)
@@ -27,6 +35,13 @@ func TestTypedSettingsAndNativeOutput(t *testing.T) {
 	client := &fakeClient{converse: func(
 		input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
 	) (*bedrockruntime.ConverseOutput, error) {
+		if *input.ModelId != "profile-arn" || input.GuardrailConfig == nil ||
+			*input.GuardrailConfig.GuardrailIdentifier != "guardrail" ||
+			input.PerformanceConfig == nil || input.PerformanceConfig.Latency != types.PerformanceConfigLatencyOptimized ||
+			input.RequestMetadata["tenant"] != "one" || len(input.AdditionalModelResponseFieldPaths) != 1 ||
+			input.PromptVariables["name"].(*types.PromptVariableValuesMemberText).Value != "Ada" {
+			t.Fatalf("Bedrock request settings missing: %#v", input)
+		}
 		if len(input.System) != 2 {
 			t.Fatalf("instruction cache point missing: %#v", input.System)
 		}
@@ -111,6 +126,12 @@ func TestBedrockSettingsValidation(t *testing.T) {
 		{name: "reserved field", settings: bedrock.Settings{Common: ai.ModelSettings{ExtraBody: map[string]any{
 			"bedrock_cache_messages": true,
 		}}}, match: "is reserved"},
+		{name: "reserved request settings", settings: bedrock.Settings{Common: ai.ModelSettings{ExtraBody: map[string]any{
+			"bedrock_request_settings": true,
+		}}}, match: "is reserved"},
+		{name: "incomplete guardrail", settings: bedrock.Settings{
+			Guardrail: &bedrock.GuardrailConfig{Identifier: "guardrail"},
+		}, match: "identifier and version are required"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -140,6 +161,9 @@ func TestBedrockSettingsValidation(t *testing.T) {
 		{name: "invalid extracted TTL", params: ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraBody: map[string]any{
 			"bedrock_cache_messages": bedrock.CacheTTL("forever"),
 		}}}, match: "invalid cache TTL"},
+		{name: "unbuilt request settings", params: ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraBody: map[string]any{
+			"bedrock_request_settings": true,
+		}}}, match: "must be built with Settings.Build"},
 		{name: "instructions required", params: ai.ModelRequestParams{Settings: mustBedrockSettings(t, bedrock.Settings{
 			CacheInstructions: bedrock.CacheTTL5Minutes,
 		})}, match: "requires instructions"},

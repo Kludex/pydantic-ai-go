@@ -15,6 +15,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - MCP clients and toolsets for Streamable HTTP, SSE, stdio, shared sessions, OAuth, sampling, elicitation, prompts, resources, and configuration files.
 - Typed embedding clients for OpenAI-compatible APIs, Google Gemini and Vertex AI, Cohere, VoyageAI, Amazon Bedrock, and local Ollama models.
 - Typed prompt templates and deterministic XML formatting for structured prompt data.
+- Agent delegation through typed tools with nested usage and limit propagation.
 - OpenTelemetry tracing and metrics for agents, model requests, tools, output functions, compaction, and embeddings.
 - A runnable Logfire OTLP export example with privacy-safe defaults.
 - PydanticAI-compatible message serialization, multimodal content, speech history, compaction boundaries, cache points, sanitization, and history repair.

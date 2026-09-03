@@ -269,6 +269,7 @@ func TestAgent(t *testing.T) {
 | Render instructions from typed dependencies | [`PromptTemplate` and `FormatAsXML`](docs/prompt-templates.md) |
 | Address and rewrite instruction blocks | [Stable instruction IDs](docs/instructions.md) |
 | Reuse or combine tools | `NewTool`, `NewFunctionToolset`, and the toolset wrappers |
+| Delegate work to another agent | [`ToolReturn.Usage` and shared dependencies](docs/delegation.md) |
 | Require approval or external execution | [`WithApprovalRequired` and `DeferredToolResults`](docs/deferred-execution.md) |
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |

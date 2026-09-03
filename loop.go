@@ -357,13 +357,13 @@ func (a *Agent[Deps, Output]) newRun(
 		Deps: deps, AgentName: a.name, AgentDescription: description,
 		Prompt: cloneUserPromptPart(prompt), MaxRetries: r.outputMaxRetries,
 		RunID: runID, ConversationID: conversationID, Model: model, ModelSettings: settings, UsageLimits: limits,
-		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages,
+		usage: &r.usage, usageMu: &r.usageMu, toolCalls: &r.toolCalls, messages: &r.messages,
 		revealedTools: &r.revealedTools, pendingMessages: r.pendingMessages, cancellation: cancellation,
 	}
 	r.info = &RunInfo{
 		RunID: runID, ConversationID: conversationID, prompt: cloneUserPromptPart(prompt),
 		agentName: a.name, agentDescription: description,
-		usage: &r.usage, toolCalls: &r.toolCalls, messages: &r.messages, newMessages: r.newMessages,
+		usage: &r.usage, usageMu: &r.usageMu, toolCalls: &r.toolCalls, messages: &r.messages, newMessages: r.newMessages,
 		metadata: &r.metadata, model: func() Model { return r.model },
 		systemPrompts: func(ctx context.Context) ([]SystemPromptPart, error) {
 			return r.configuredSystemPromptParts(ctx, r.rc)
@@ -646,6 +646,7 @@ type run[Deps, Output any] struct {
 	messages                   []ModelMessage
 	newMessages                int
 	usage                      Usage
+	usageMu                    sync.Mutex
 	prompt                     UserPromptPart
 	metadata                   runMetadataState
 	runMetadata                map[string]any
@@ -1138,7 +1139,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		r.newMessages = 0
 	}
 	if !request.AdditionalUsage.IsZero() {
-		r.usage.Add(request.AdditionalUsage)
+		r.addUsage(request.AdditionalUsage)
 		r.publishUsage(nil)
 		if err := r.usageLimits.check(r.info.Usage()); err != nil {
 			return nil, err
@@ -2262,7 +2263,7 @@ func (r *run[Deps, Output]) doModelRequest(
 			}
 		}
 		if response.State == ModelResponseStateSuspended {
-			projected := r.usage.Clone()
+			projected := r.usageSnapshot()
 			projected.Add(response.Usage)
 			if err := r.rc.UsageLimits.check(projected); err != nil {
 				r.cancelSuspendedResponse(response)
@@ -2312,14 +2313,26 @@ func (r *run[Deps, Output]) requestModelSegment(
 	return response, err
 }
 
+func (r *run[Deps, Output]) addUsage(usage Usage) {
+	r.usageMu.Lock()
+	defer r.usageMu.Unlock()
+	r.usage.Add(usage)
+}
+
+func (r *run[Deps, Output]) usageSnapshot() Usage {
+	r.usageMu.Lock()
+	defer r.usageMu.Unlock()
+	return r.usage.Clone()
+}
+
 func (r *run[Deps, Output]) publishUsage(response *ModelResponse) {
 	if r.observeUsage == nil {
 		return
 	}
 	r.usagePublishMu.Lock()
 	defer r.usagePublishMu.Unlock()
-	usage := r.usage.Clone()
-	usage.ToolCalls = int(r.toolCalls.Load())
+	usage := r.usageSnapshot()
+	usage.ToolCalls += int(r.toolCalls.Load())
 	if response != nil {
 		priced := cloneModelResponse(response)
 		fillResponseCost(r.ctx, priced)
@@ -2369,7 +2382,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			if resp != nil {
 				resp = cloneModelResponse(resp)
 				fillResponseCost(ctx, resp)
-				r.usage.Add(resp.Usage)
+				r.addUsage(resp.Usage)
 				r.publishUsage(nil)
 				if applyErr := r.applyResponseToolKinds(resp); applyErr != nil {
 					return nil, applyErr
@@ -2387,7 +2400,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		}
 		resp = cloneModelResponse(resp)
 		fillResponseCost(ctx, resp)
-		r.usage.Add(resp.Usage)
+		r.addUsage(resp.Usage)
 		r.publishUsage(nil)
 		if err := r.applyResponseToolKinds(resp); err != nil {
 			return nil, err
@@ -2625,13 +2638,21 @@ func (r *run[Deps, Output]) executeCallsWithCallEvents(
 	if emitCalls && !r.emitToolCallEvents(calls) {
 		return nil, nil, context.Canceled
 	}
-	if r.agent.endStrategy == EndStrategyEarly {
-		return r.executeCallsEarly(ctx, calls)
+	var parts []RequestPart
+	var output *Output
+	var err error
+	switch r.agent.endStrategy {
+	case EndStrategyEarly:
+		parts, output, err = r.executeCallsEarly(ctx, calls)
+	case EndStrategyGraceful:
+		parts, output, err = r.executeCallsGraceful(ctx, calls)
+	default:
+		parts, output, err = r.executeCallsExhaustive(ctx, calls)
 	}
-	if r.agent.endStrategy == EndStrategyGraceful {
-		return r.executeCallsGraceful(ctx, calls)
+	if err == nil {
+		err = r.usageLimits.check(r.info.Usage())
 	}
-	return r.executeCallsExhaustive(ctx, calls)
+	return parts, output, err
 }
 
 func (r *run[Deps, Output]) checkToolCallLimit(calls []ToolCallPart) error {
@@ -3278,6 +3299,8 @@ func (r *run[Deps, Output]) normalizeSuccessfulToolReturn(
 		rich = value
 	}
 	if rich != nil {
+		r.addUsage(rich.Usage)
+		r.publishUsage(nil)
 		returnValue = rich.ReturnValue
 		metadata = cloneSchemaMap(rich.Metadata)
 		if len(rich.Tools) > 0 {
@@ -3642,8 +3665,8 @@ func (r *run[Deps, Output]) outputRetryCount() int {
 }
 
 func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
-	usage := r.usage
-	usage.ToolCalls = int(r.toolCalls.Load())
+	usage := r.usageSnapshot()
+	usage.ToolCalls += int(r.toolCalls.Load())
 	return &RunResult[Output]{
 		Output: out, usage: usage, messages: r.messages, newMessages: r.newMessages,
 		metadata: r.metadata.snapshot(),
@@ -3654,8 +3677,8 @@ func (r *run[Deps, Output]) deferredResult(requests DeferredToolRequests) (*RunR
 	if err := persistPendingMessages(r.messages, r.pendingMessages); err != nil {
 		return nil, err
 	}
-	usage := r.usage
-	usage.ToolCalls = int(r.toolCalls.Load())
+	usage := r.usageSnapshot()
+	usage.ToolCalls += int(r.toolCalls.Load())
 	requests = requests.Clone()
 	return &RunResult[Output]{
 		usage: usage, messages: r.messages, newMessages: r.newMessages,
@@ -3994,8 +4017,8 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 	}
 	cause := context.Cause(r.ctx)
 	if errors.Is(cause, ErrRunCancelled) {
-		usage := r.usage
-		usage.ToolCalls = int(r.toolCalls.Load())
+		usage := r.usageSnapshot()
+		usage.ToolCalls += int(r.toolCalls.Load())
 		cancelled := &RunCancelledError{
 			messages: slices.Clone(r.messages), usage: usage, metadata: r.metadata.snapshot(),
 		}

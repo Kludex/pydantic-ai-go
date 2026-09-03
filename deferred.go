@@ -162,6 +162,7 @@ func cloneToolReturn(result ToolReturn) ToolReturn {
 	result.Content = cloneUserContents(result.Content)
 	result.Metadata = cloneSchemaMap(result.Metadata)
 	result.Tools = slices.Clone(result.Tools)
+	result.Usage = result.Usage.Clone()
 	return result
 }
 

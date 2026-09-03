@@ -38,6 +38,7 @@ type RunContext[Deps any] struct {
 	UsageLimits      UsageLimits
 
 	usage           *Usage
+	usageMu         *sync.Mutex
 	toolCalls       *atomic.Int64
 	messages        *[]ModelMessage
 	revealedTools   *map[string]struct{}
@@ -47,8 +48,12 @@ type RunContext[Deps any] struct {
 
 // Usage returns the usage accumulated so far in this run.
 func (rc *RunContext[Deps]) Usage() Usage {
+	if rc.usageMu != nil {
+		rc.usageMu.Lock()
+		defer rc.usageMu.Unlock()
+	}
 	usage := rc.usage.Clone()
-	usage.ToolCalls = int(rc.toolCalls.Load())
+	usage.ToolCalls += int(rc.toolCalls.Load())
 	return usage
 }
 

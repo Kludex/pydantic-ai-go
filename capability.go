@@ -92,6 +92,7 @@ type RunInfo struct {
 	agentName        string
 	agentDescription string
 	usage            *Usage
+	usageMu          *sync.Mutex
 	toolCalls        *atomic.Int64
 	messages         *[]ModelMessage
 	newMessages      int
@@ -109,8 +110,12 @@ func (ri *RunInfo) AgentDescription() string { return ri.agentDescription }
 
 // Usage returns the usage accumulated so far in this run.
 func (ri *RunInfo) Usage() Usage {
+	if ri.usageMu != nil {
+		ri.usageMu.Lock()
+		defer ri.usageMu.Unlock()
+	}
 	usage := ri.usage.Clone()
-	usage.ToolCalls = int(ri.toolCalls.Load())
+	usage.ToolCalls += int(ri.toolCalls.Load())
 	return usage
 }
 

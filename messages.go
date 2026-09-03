@@ -267,6 +267,8 @@ type ToolReturn struct {
 	Content     []UserContent
 	Metadata    map[string]any
 	Tools       []string
+	// Usage adds delegated model work to the parent run's totals and limits.
+	Usage Usage
 }
 
 // ToolReturnPart carries the result of a tool call back to the model.

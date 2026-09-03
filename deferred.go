@@ -14,9 +14,12 @@ const DeferredToolKindsMetadataKey = "pydantic_ai_go_deferred_tool_kinds"
 // the current agent step. Calls require external execution. Approvals run
 // locally after the caller approves them.
 type DeferredToolRequests struct {
-	Calls     []ToolCallPart
+	// Calls require execution by an external system.
+	Calls []ToolCallPart
+	// Approvals require a caller decision before local execution.
 	Approvals []ToolCallPart
-	Metadata  map[string]map[string]any
+	// Metadata carries detached application context by tool-call ID.
+	Metadata map[string]map[string]any
 }
 
 // Clone returns a detached copy of the pending requests.
@@ -29,6 +32,7 @@ func (r DeferredToolRequests) Clone() DeferredToolRequests {
 // ExternalToolRequest sends a call to an external executor. Tool functions
 // require WithDynamicExternalExecution; validation and execution hooks do not.
 type ExternalToolRequest struct {
+	// Metadata carries application context to the external executor.
 	Metadata map[string]any
 }
 
@@ -40,6 +44,7 @@ func RequestExternalToolExecution(metadata map[string]any) ExternalToolRequest {
 // ToolApprovalRequest pauses execution for an approval decision. Tool functions
 // require WithDynamicApproval; validation and execution hooks do not.
 type ToolApprovalRequest struct {
+	// Metadata carries application context to the reviewer.
 	Metadata map[string]any
 }
 
@@ -50,12 +55,14 @@ func RequestToolApproval(metadata map[string]any) ToolApprovalRequest {
 
 // ToolApproval is a caller decision for a tool that requested approval.
 type ToolApproval interface {
+	// ToolApprovalKind identifies an approved or denied decision.
 	ToolApprovalKind() string
 }
 
 // ToolApproved authorizes local execution. OverrideArgs, when non-empty,
 // replaces the model-generated JSON arguments and is validated before use.
 type ToolApproved struct {
+	// OverrideArgs replaces the original arguments when non-empty.
 	OverrideArgs json.RawMessage
 }
 
@@ -64,6 +71,7 @@ func (ToolApproved) ToolApprovalKind() string { return "approved" }
 
 // ToolDenied prevents execution and returns Message to the model.
 type ToolDenied struct {
+	// Message explains the denial to the model.
 	Message string
 }
 
@@ -74,9 +82,12 @@ func (ToolDenied) ToolApprovalKind() string { return "denied" }
 // Calls maps externally executed call IDs to plain values, ToolReturn values,
 // ToolFailedf or Retryf errors, or RetryPromptPart values.
 type DeferredToolResults struct {
-	Calls     map[string]any
+	// Calls maps external tool-call IDs to their completed results.
+	Calls map[string]any
+	// Approvals maps approval call IDs to caller decisions.
 	Approvals map[string]ToolApproval
-	Metadata  map[string]map[string]any
+	// Metadata carries execution or review context into resumed tool calls.
+	Metadata map[string]map[string]any
 }
 
 // ApproveTool returns a decision that executes the original arguments.

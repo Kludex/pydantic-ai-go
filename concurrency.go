@@ -13,11 +13,15 @@ var ErrConcurrencyLimitExceeded = errors.New("ai: concurrency limit exceeded")
 
 // ConcurrencyLimitExceededError describes a rejected queued operation.
 type ConcurrencyLimitExceededError struct {
-	Name       string
+	// Name identifies the limited operation when configured.
+	Name string
+	// QueueDepth is the number of operations already waiting.
 	QueueDepth int
-	MaxQueued  int
+	// MaxQueued is the configured queue bound.
+	MaxQueued int
 }
 
+// Error describes the rejected operation and queue state.
 func (err *ConcurrencyLimitExceededError) Error() string {
 	message := fmt.Sprintf(
 		"%s: queue depth %d exceeds maximum %d", ErrConcurrencyLimitExceeded, err.QueueDepth, err.MaxQueued,
@@ -33,7 +37,9 @@ func (*ConcurrencyLimitExceededError) Unwrap() error { return ErrConcurrencyLimi
 
 // ConcurrencyGate controls admission to a shared concurrency pool.
 type ConcurrencyGate interface {
+	// Acquire waits for admission or returns a context or queue-limit error.
 	Acquire(ctx context.Context, source string) error
+	// Release returns one acquired slot.
 	Release()
 }
 

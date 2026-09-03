@@ -17,12 +17,14 @@ const (
 // ModelContinuationDelayer optionally delays reissuing a suspended model response.
 // Providers that poll a server-side job use this to avoid busy polling.
 type ModelContinuationDelayer interface {
+	// ContinuationDelay returns the wait before requesting the next segment.
 	ContinuationDelay(response ModelResponse) time.Duration
 }
 
 // SuspendedResponseCanceler optionally cancels a server-side suspended response.
 // The agent calls it best-effort when a continuation is abandoned.
 type SuspendedResponseCanceler interface {
+	// CancelSuspendedResponse abandons provider work represented by response.
 	CancelSuspendedResponse(ctx context.Context, response ModelResponse) error
 }
 

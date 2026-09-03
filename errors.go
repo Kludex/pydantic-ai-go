@@ -63,15 +63,20 @@ var ErrOutputTypeOverrideWithImageOutput = errors.New(
 // ModelAPIError identifies a provider API response error suitable for model fallback.
 type ModelAPIError interface {
 	error
+	// IsModelAPIError marks errors eligible for provider fallback.
 	IsModelAPIError() bool
 }
 
 // ModelTransportError reports a provider connection or response-read failure.
 type ModelTransportError struct {
-	ModelName    string
+	// ModelName is the model active when the operation failed.
+	ModelName string
+	// ProviderName is the provider identity when available.
 	ProviderName string
-	Operation    string
-	Err          error
+	// Operation identifies the failed transport action.
+	Operation string
+	// Err is the underlying transport failure.
+	Err error
 }
 
 // NewModelTransportError preserves caller cancellation and classifies other transport failures for model fallback.
@@ -128,9 +133,11 @@ func transportOperation(operation string) string {
 
 // UnknownModelIDError reports an unresolved application model ID.
 type UnknownModelIDError struct {
+	// ID is the unresolved application model identifier.
 	ID string
 }
 
+// Error describes the unresolved identifier.
 func (e *UnknownModelIDError) Error() string {
 	return fmt.Sprintf("%s %q", ErrUnknownModelID, e.ID)
 }
@@ -146,6 +153,7 @@ type RunCancelledError struct {
 	metadata map[string]any
 }
 
+// Error identifies run cancellation.
 func (e *RunCancelledError) Error() string { return ErrRunCancelled.Error() }
 
 // Unwrap supports errors.Is(err, ErrRunCancelled).
@@ -165,9 +173,11 @@ func (e *RunCancelledError) Metadata() map[string]any { return cloneSchemaMap(e.
 // UnexpectedModelBehaviorError is returned when the model produces a
 // response the loop cannot interpret or recover from.
 type UnexpectedModelBehaviorError struct {
+	// Message describes the invalid or unsupported model response.
 	Message string
 }
 
+// Error describes the unexpected model response.
 func (e *UnexpectedModelBehaviorError) Error() string {
 	return "ai: unexpected model behavior: " + e.Message
 }
@@ -175,11 +185,13 @@ func (e *UnexpectedModelBehaviorError) Error() string {
 // ContentFilterError reports a provider content filter. It retains the full
 // response so callers can inspect partial output and provider details.
 type ContentFilterError struct {
+	// Message describes the provider content-filter decision.
 	Message  string
 	response ModelResponse
 	body     []byte
 }
 
+// Error describes the content-filter decision.
 func (e *ContentFilterError) Error() string { return "ai: " + e.Message }
 
 // Response returns a detached filtered response.
@@ -192,9 +204,11 @@ func (e *ContentFilterError) Body() []byte { return append([]byte(nil), e.body..
 // validator with Retryf; the message is sent back to the model as a retry
 // prompt instead of failing the run.
 type RetryError struct {
+	// Message is returned to the model as corrective feedback.
 	Message string
 }
 
+// Error describes the requested model retry.
 func (e *RetryError) Error() string { return "ai: model retry: " + e.Message }
 
 // Retryf returns a RetryError with a formatted message.
@@ -205,9 +219,11 @@ func Retryf(format string, args ...any) error {
 // ToolFailedError reports a completed but unsuccessful tool call. The
 // message is returned to the model without consuming the retry budget.
 type ToolFailedError struct {
+	// Message is returned to the model as the terminal tool result.
 	Message string
 }
 
+// Error describes the failed tool call.
 func (e *ToolFailedError) Error() string { return "ai: tool failed: " + e.Message }
 
 // ToolFailedf returns a terminal tool failure with a formatted message.

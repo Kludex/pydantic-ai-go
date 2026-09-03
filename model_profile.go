@@ -4,8 +4,11 @@ package ai
 // The zero value defaults reflected output to a function tool, uses the standard
 // prompted-output template, and converts realtime speech to transcripts.
 type ModelProfile struct {
-	DefaultOutputMode          OutputMode
-	PromptedOutputTemplate     string
+	// DefaultOutputMode resolves OutputModeAuto for this model.
+	DefaultOutputMode OutputMode
+	// PromptedOutputTemplate formats provider-specific JSON instructions.
+	PromptedOutputTemplate string
+	// NativeOutputRequiresPrompt adds prompted guidance beside native schema enforcement.
 	NativeOutputRequiresPrompt bool
 	// SupportsImageOutput allows a FilePart with an image media type as final output.
 	SupportsImageOutput bool
@@ -16,18 +19,21 @@ type ModelProfile struct {
 
 // ModelProfiler is implemented by models that expose output and message-preparation defaults.
 type ModelProfiler interface {
+	// ModelProfile returns model-specific output and input behavior.
 	ModelProfile() ModelProfile
 }
 
 // ModelOutputProfileDispatcher is implemented by composite models that resolve
 // OutputModeAuto independently for each selected child model.
 type ModelOutputProfileDispatcher interface {
+	// DispatchesOutputProfile reports whether children resolve output profiles independently.
 	DispatchesOutputProfile() bool
 }
 
 // ModelMessageProfileDispatcher is implemented by composite models that prepare
 // message histories independently for each selected child model.
 type ModelMessageProfileDispatcher interface {
+	// DispatchesMessageProfile reports whether children prepare histories independently.
 	DispatchesMessageProfile() bool
 }
 

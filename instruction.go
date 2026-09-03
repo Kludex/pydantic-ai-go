@@ -12,16 +12,21 @@ import (
 type InstructionSourceKind string
 
 const (
-	InstructionSourceAgent      InstructionSourceKind = "agent"
-	InstructionSourceToolset    InstructionSourceKind = "toolset"
+	// InstructionSourceAgent identifies agent-level instructions.
+	InstructionSourceAgent InstructionSourceKind = "agent"
+	// InstructionSourceToolset identifies toolset-contributed instructions.
+	InstructionSourceToolset InstructionSourceKind = "toolset"
+	// InstructionSourceCapability identifies capability-contributed instructions.
 	InstructionSourceCapability InstructionSourceKind = "capability"
 )
 
 // InstructionSource identifies the agent, toolset, or capability that authored
 // an instruction. ID is empty only for the singleton agent source.
 type InstructionSource struct {
+	// Kind identifies the framework component category.
 	Kind InstructionSourceKind
-	ID   string
+	// ID identifies one toolset or capability and is empty for the agent.
+	ID string
 }
 
 // String returns the stable serialized source key.
@@ -38,8 +43,10 @@ func (source InstructionSource) String() string {
 // InstructionID is the stable address of one instruction block. An empty Name
 // addresses every unnamed block contributed by the source.
 type InstructionID struct {
+	// Source identifies the component that authored the instruction.
 	Source InstructionSource
-	Name   string
+	// Name identifies one block relative to its source.
+	Name string
 }
 
 // String returns the colon-delimited persisted address.

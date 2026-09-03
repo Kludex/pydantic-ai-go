@@ -27,18 +27,26 @@ type MessageSanitizationOptions struct {
 
 // MessageSanitizationToolCall identifies a local tool call removed from untrusted history.
 type MessageSanitizationToolCall struct {
+	// Name is the stripped model-facing function name.
 	Name string
-	ID   string
+	// ID is the stripped provider call identity.
+	ID string
 }
 
 // MessageSanitizationReport describes security-sensitive values removed or reset by SanitizeMessages.
 type MessageSanitizationReport struct {
-	StrippedSystemPrompts        int
-	StrippedCompactionParts      int
-	DroppedFileURLSchemes        []string
-	ResetFileDownloadModes       []FileDownloadMode
+	// StrippedSystemPrompts counts removed untrusted system parts.
+	StrippedSystemPrompts int
+	// StrippedCompactionParts counts removed durable provider boundaries.
+	StrippedCompactionParts int
+	// DroppedFileURLSchemes lists rejected URL schemes in encounter order.
+	DroppedFileURLSchemes []string
+	// ResetFileDownloadModes lists untrusted local download modes that were cleared.
+	ResetFileDownloadModes []FileDownloadMode
+	// DroppedUploadedFileProviders lists rejected provider-hosted references.
 	DroppedUploadedFileProviders []string
-	StrippedToolCalls            []MessageSanitizationToolCall
+	// StrippedToolCalls lists unresolved trailing local calls removed from history.
+	StrippedToolCalls []MessageSanitizationToolCall
 }
 
 // Changed reports whether sanitization changed the supplied history.

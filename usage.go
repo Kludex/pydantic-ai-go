@@ -8,20 +8,34 @@ import (
 // Usage counts model requests and tokens across a run.
 // The zero value is an empty count.
 type Usage struct {
-	Requests                 int            `json:"requests,omitempty"`
-	ToolCalls                int            `json:"tool_calls,omitempty"`
-	InputTokens              int            `json:"input_tokens,omitempty"`
-	CacheWriteTokens         int            `json:"cache_write_tokens,omitempty"`
-	CacheReadTokens          int            `json:"cache_read_tokens,omitempty"`
-	InputAudioTokens         int            `json:"input_audio_tokens,omitempty"`
-	CacheAudioReadTokens     int            `json:"cache_audio_read_tokens,omitempty"`
-	OutputTokens             int            `json:"output_tokens,omitempty"`
-	OutputAudioTokens        int            `json:"output_audio_tokens,omitempty"`
-	ReasoningTokens          int            `json:"reasoning_tokens,omitempty"`
-	AcceptedPredictionTokens int            `json:"accepted_prediction_tokens,omitempty"`
-	RejectedPredictionTokens int            `json:"rejected_prediction_tokens,omitempty"`
-	Details                  map[string]int `json:"details,omitempty"`
-	CostUSD                  *float64       `json:"cost,omitempty"`
+	// Requests is the number of model generation requests.
+	Requests int `json:"requests,omitempty"`
+	// ToolCalls is the number of successful local tool calls.
+	ToolCalls int `json:"tool_calls,omitempty"`
+	// InputTokens is the provider-reported input token count.
+	InputTokens int `json:"input_tokens,omitempty"`
+	// CacheWriteTokens is the number of input tokens written to a provider cache.
+	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// CacheReadTokens is the number of input tokens read from a provider cache.
+	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
+	// InputAudioTokens is the audio subset of input tokens.
+	InputAudioTokens int `json:"input_audio_tokens,omitempty"`
+	// CacheAudioReadTokens is the audio subset read from a provider cache.
+	CacheAudioReadTokens int `json:"cache_audio_read_tokens,omitempty"`
+	// OutputTokens is the provider-reported output token count.
+	OutputTokens int `json:"output_tokens,omitempty"`
+	// OutputAudioTokens is the audio subset of output tokens.
+	OutputAudioTokens int `json:"output_audio_tokens,omitempty"`
+	// ReasoningTokens is the reasoning subset of output tokens.
+	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	// AcceptedPredictionTokens counts accepted predicted-output tokens.
+	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
+	// RejectedPredictionTokens counts rejected predicted-output tokens.
+	RejectedPredictionTokens int `json:"rejected_prediction_tokens,omitempty"`
+	// Details preserves provider-specific integer counters by name.
+	Details map[string]int `json:"details,omitempty"`
+	// CostUSD is the known request cost in US dollars. Nil means unknown.
+	CostUSD *float64 `json:"cost,omitempty"`
 }
 
 // UnmarshalJSON accepts the upstream cost field and the legacy Go cost_usd alias.

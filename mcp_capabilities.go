@@ -7,8 +7,10 @@ import (
 
 // MCPServerCapabilityConfig configures a provider-hosted MCP server and an optional local client toolset.
 type MCPServerCapabilityConfig[Deps any] struct {
+	// Native configures provider-hosted MCP access.
 	Native MCPServerTool
-	Local  Toolset[Deps]
+	// Local is the lifecycle-aware client fallback.
+	Local Toolset[Deps]
 }
 
 // NewMCPServerCapability creates native-first MCP access. A nil Local requires native support.
@@ -32,9 +34,13 @@ type MCPServerFunc[Deps any] func(
 
 // DynamicMCPServerCapabilityConfig configures dependency-aware native MCP and a local fallback.
 type DynamicMCPServerCapabilityConfig[Deps any] struct {
-	ID           string
-	Resolve      MCPServerFunc[Deps]
-	Local        Toolset[Deps]
+	// ID is the stable server identity every resolved definition must retain.
+	ID string
+	// Resolve returns detached provider-hosted settings for each request.
+	Resolve MCPServerFunc[Deps]
+	// Local is the lifecycle-aware client fallback.
+	Local Toolset[Deps]
+	// AllowedTools filters both native and local paths.
 	AllowedTools []string
 }
 

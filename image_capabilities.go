@@ -4,8 +4,10 @@ import "context"
 
 // ImageGenerationCapabilityConfig configures native image generation and an optional local fallback.
 type ImageGenerationCapabilityConfig[Deps any] struct {
+	// Native configures provider-hosted image generation.
 	Native ImageGenerationTool
-	Local  Toolset[Deps]
+	// Local is the lifecycle-aware fallback toolset.
+	Local Toolset[Deps]
 }
 
 // NewImageGenerationCapability creates native-first image generation.

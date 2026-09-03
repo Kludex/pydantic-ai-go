@@ -8,8 +8,10 @@ import (
 
 // WebSearchCapabilityConfig configures native web search and an optional local fallback.
 type WebSearchCapabilityConfig[Deps any] struct {
+	// Native configures provider-hosted search.
 	Native WebSearchTool
-	Local  Toolset[Deps]
+	// Local is the lifecycle-aware fallback toolset.
+	Local Toolset[Deps]
 }
 
 // NewWebSearchCapability creates native-first web search. A nil Local requires native support.
@@ -67,8 +69,10 @@ func NewWebSearchCapabilityWithDuckDuckGo[Deps any](
 
 // WebFetchCapabilityConfig configures native URL fetching and an optional local fallback.
 type WebFetchCapabilityConfig[Deps any] struct {
+	// Native configures provider-hosted URL retrieval.
 	Native WebFetchTool
-	Local  Toolset[Deps]
+	// Local is the lifecycle-aware fallback toolset.
+	Local Toolset[Deps]
 }
 
 // NewWebFetchCapability creates native-first URL fetching. A nil Local requires native support.

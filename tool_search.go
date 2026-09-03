@@ -49,23 +49,31 @@ type ToolSearchFunc[Deps any] func(
 type ToolSearchConfig[Deps any] struct {
 	// Strategy defaults to provider-managed search with a local keyword fallback.
 	// Set Search for a custom client-executed strategy.
-	Strategy         ToolSearchStrategy
-	Search           ToolSearchFunc[Deps]
-	MaxResults       int
-	MaxRetries       *int
-	ToolDescription  string
+	Strategy ToolSearchStrategy
+	// Search supplies a custom client-executed strategy.
+	Search ToolSearchFunc[Deps]
+	// MaxResults bounds local matches. Zero defaults to ten.
+	MaxResults int
+	// MaxRetries overrides retries for the generated search function.
+	MaxRetries *int
+	// ToolDescription overrides the generated search function description.
+	ToolDescription string
+	// QueryDescription overrides the generated query schema description.
 	QueryDescription string
 }
 
 // ToolSearchMatch identifies one deferred tool discovered by search.
 type ToolSearchMatch struct {
+	// Name is one revealed model-facing tool name.
 	Name string `json:"name"`
 }
 
 // ToolSearchResult is the provider-facing value returned by search_tools.
 type ToolSearchResult struct {
+	// DiscoveredTools contains accepted matches in relevance order.
 	DiscoveredTools []ToolSearchMatch `json:"discovered_tools"`
-	Message         string            `json:"message,omitempty"`
+	// Message gives the model additional search guidance.
+	Message string `json:"message,omitempty"`
 }
 
 // WithToolSearch adds a search_tools function to a toolset whenever the

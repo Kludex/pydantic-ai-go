@@ -7,6 +7,7 @@ packages=(
     .
     ./a2a
     ./cli
+    ./durable
     ./internal/download
     ./internal/schema
     ./retries

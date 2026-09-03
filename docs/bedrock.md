@@ -33,7 +33,7 @@ Run the example with your normal AWS credentials:
 $ AWS_REGION=us-east-1 go run ./examples/bedrock
 ```
 
-`NewModel` loads the default AWS SDK configuration on the first operation. This keeps construction free of network and credential-provider work. Concurrent calls share the loaded client.
+`NewModel` loads the default AWS SDK configuration on the first operation. This keeps construction free of network and credential-provider work. Concurrent calls share the loaded client. `RunStream` uses `ConverseStream` when the client supports it and emits normalized text, reasoning, and function-tool events.
 
 You can pass a foundation model ID, an inference profile ID, or an ARN. Bedrock validates whether that resource supports the Converse API.
 
@@ -106,6 +106,8 @@ Use `WithAWSConfig` when your application already owns a loaded `aws.Config`. Th
 
 Use `WithAWSLoadOptions` to customize lazy default loading. Use `WithClient` for a caller-owned Bedrock Runtime implementation. Caller-owned clients must be safe for concurrent calls and remain owned by the caller.
 
+A custom client implements `bedrock.Client` for static generation. It can also implement `bedrock.StreamingClient` and `bedrock.TokenCountingClient`. `RunStream` falls back to one final event when the client does not implement streaming. Each returned `bedrock.EventStream` is closed when iteration ends or the consumer stops early.
+
 `WithProviderURL` records endpoint identity for telemetry when you supply a custom client. It does not change where that client sends requests.
 
 ## Messages and files
@@ -130,4 +132,4 @@ Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and ext
 
 ## Current scope
 
-The adapter currently uses non-streaming Converse generation. Converse streaming, native Bedrock tools, native structured output, automatic cache placement, guardrails, performance settings, request metadata, and legacy Anthropic `InvokeModel` transport remain outside this implementation.
+Native Bedrock tools, native structured output, automatic cache placement, guardrails, performance settings, request metadata, streamed image and provider-tool blocks, and legacy Anthropic `InvokeModel` transport remain outside this implementation.

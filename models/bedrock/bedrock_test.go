@@ -533,6 +533,12 @@ func TestOptionsAndAWSConfiguration(t *testing.T) {
 	if model := bedrock.NewModel("model", bedrock.WithClient(valueClient{})); model.Name() != "model" {
 		t.Fatal("value client was not accepted")
 	}
+	sdkClient := bedrockruntime.NewFromConfig(aws.Config{
+		Region: "us-east-1", Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""),
+	})
+	if model := bedrock.NewModel("model", bedrock.WithClient(sdkClient)); model.Name() != "model" {
+		t.Fatal("AWS SDK client was not accepted")
+	}
 
 	baseURL := "https://custom.example/"
 	model := bedrock.NewModel("model", bedrock.WithAWSConfig(aws.Config{Region: "us-east-1", BaseEndpoint: &baseURL}))
@@ -586,6 +592,35 @@ func TestOptionsAndAWSConfiguration(t *testing.T) {
 	}
 	if loaded.ProviderURL() != server.URL {
 		t.Fatalf("unexpected loaded provider URL: %q", loaded.ProviderURL())
+	}
+	_, err = loaded.CountTokens(context.Background(), nil, ai.ModelRequestParams{})
+	if err == nil {
+		t.Fatal("expected AWS token-count error")
+	}
+	_, err = loaded.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err == nil {
+		t.Fatal("expected AWS stream-open error")
+	}
+
+	streamServer := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
+		response.WriteHeader(http.StatusOK)
+	}))
+	defer streamServer.Close()
+	streamModel := bedrock.NewModel("model", bedrock.WithAWSConfig(aws.Config{
+		Region: "us-east-1", BaseEndpoint: aws.String(streamServer.URL), HTTPClient: streamServer.Client(),
+		Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""),
+	}))
+	sequence, err := streamModel.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamErr error
+	for _, eventErr := range sequence {
+		streamErr = eventErr
+	}
+	if streamErr == nil || !strings.Contains(streamErr.Error(), "without message stop") {
+		t.Fatalf("unexpected empty AWS stream error: %v", streamErr)
 	}
 }
 

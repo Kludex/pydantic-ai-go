@@ -11,6 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
+	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -21,6 +22,24 @@ type Client interface {
 	Converse(
 		ctx context.Context, input *bedrockruntime.ConverseInput, options ...func(*bedrockruntime.Options),
 	) (*bedrockruntime.ConverseOutput, error)
+}
+
+// EventStream is one Bedrock Converse response stream.
+type EventStream interface {
+	// Events returns provider events until the channel closes.
+	Events() <-chan types.ConverseStreamOutput
+	// Close releases the stream and must permit repeated calls.
+	Close() error
+	// Err returns the terminal stream-reader error.
+	Err() error
+}
+
+// StreamingClient is the optional Bedrock Runtime streaming surface.
+type StreamingClient interface {
+	// ConverseStream starts one streaming response.
+	ConverseStream(
+		ctx context.Context, input *bedrockruntime.ConverseStreamInput, options ...func(*bedrockruntime.Options),
+	) (EventStream, error)
 }
 
 // TokenCountingClient is the optional Bedrock Runtime token-counting surface.
@@ -39,7 +58,13 @@ func WithClient(client Client) Option {
 	if clientIsNil(client) {
 		panic("bedrock: client must not be nil")
 	}
-	return func(model *Model) { model.client = client }
+	return func(model *Model) {
+		if sdkClient, ok := client.(*bedrockruntime.Client); ok {
+			model.client = &awsClient{client: sdkClient}
+			return
+		}
+		model.client = client
+	}
 }
 
 // WithProviderURL records the endpoint identity used by a custom client.
@@ -55,7 +80,7 @@ func WithAWSConfig(config aws.Config) Option {
 		config.BaseEndpoint = &baseEndpoint
 	}
 	return func(model *Model) {
-		model.client = bedrockruntime.NewFromConfig(config)
+		model.client = &awsClient{client: bedrockruntime.NewFromConfig(config)}
 		model.setProviderURL(awsProviderURL(config))
 	}
 }
@@ -169,7 +194,7 @@ func (model *Model) resolveClient(ctx context.Context) (Client, error) {
 			model.loadErr = fmt.Errorf("bedrock: load AWS configuration: %w", err)
 			return
 		}
-		model.client = bedrockruntime.NewFromConfig(config)
+		model.client = &awsClient{client: bedrockruntime.NewFromConfig(config)}
 		model.setProviderURL(awsProviderURL(config))
 	})
 	return model.client, model.loadErr

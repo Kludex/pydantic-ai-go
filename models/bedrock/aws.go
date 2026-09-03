@@ -69,6 +69,42 @@ func requestOptions(headers map[string]string) func(*bedrockruntime.Options) {
 	}
 }
 
+type awsRuntimeClient interface {
+	Converse(
+		context.Context, *bedrockruntime.ConverseInput, ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error)
+	ConverseStream(
+		context.Context, *bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseStreamOutput, error)
+	CountTokens(
+		context.Context, *bedrockruntime.CountTokensInput, ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.CountTokensOutput, error)
+}
+
+type awsClient struct{ client awsRuntimeClient }
+
+func (client *awsClient) Converse(
+	ctx context.Context, input *bedrockruntime.ConverseInput, options ...func(*bedrockruntime.Options),
+) (*bedrockruntime.ConverseOutput, error) {
+	return client.client.Converse(ctx, input, options...)
+}
+
+func (client *awsClient) ConverseStream(
+	ctx context.Context, input *bedrockruntime.ConverseStreamInput, options ...func(*bedrockruntime.Options),
+) (EventStream, error) {
+	output, err := client.client.ConverseStream(ctx, input, options...)
+	if err != nil {
+		return nil, err
+	}
+	return output.GetStream(), nil
+}
+
+func (client *awsClient) CountTokens(
+	ctx context.Context, input *bedrockruntime.CountTokensInput, options ...func(*bedrockruntime.Options),
+) (*bedrockruntime.CountTokensOutput, error) {
+	return client.client.CountTokens(ctx, input, options...)
+}
+
 func awsProviderURL(config aws.Config) string {
 	if config.BaseEndpoint != nil {
 		return strings.TrimRight(*config.BaseEndpoint, "/")

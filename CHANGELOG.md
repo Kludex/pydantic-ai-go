@@ -66,6 +66,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Add Cerebras Chat Completions models with GLM and GPT-OSS reasoning behavior.
 - Add Hugging Face Inference Providers with routed endpoints, tagged reasoning, images, and function tools.
 - Add Cohere v2 Chat models with thinking, function tools, structured output, and billed usage.
+- Add Crusoe Serverless Inference models with guided output and family-aware reasoning.
 
 ### Deprecated
 

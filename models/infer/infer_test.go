@@ -29,6 +29,7 @@ func TestModels(t *testing.T) {
 		{"bedrock:us.amazon.nova-lite-v1:0", "bedrock"},
 		{"cerebras:gpt-oss-120b", "cerebras"},
 		{"cohere:command-r7b-12-2024", "cohere"},
+		{"crusoe:openai/gpt-oss-120b", "crusoe"},
 		{"groq:openai/gpt-oss-20b", "groq"},
 		{"huggingface:Qwen/Qwen3-32B", "huggingface"},
 		{"ollama:qwen3", "ollama"},

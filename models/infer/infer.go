@@ -11,6 +11,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/bedrock"
 	"github.com/Kludex/pydantic-ai-go/models/cerebras"
 	"github.com/Kludex/pydantic-ai-go/models/cohere"
+	"github.com/Kludex/pydantic-ai-go/models/crusoe"
 	"github.com/Kludex/pydantic-ai-go/models/google"
 	"github.com/Kludex/pydantic-ai-go/models/groq"
 	"github.com/Kludex/pydantic-ai-go/models/huggingface"
@@ -56,6 +57,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"bedrock":          func(name string) (ai.Model, error) { return bedrock.NewModel(name), nil },
 		"cerebras":         func(name string) (ai.Model, error) { return cerebras.NewModel(name), nil },
 		"cohere":           func(name string) (ai.Model, error) { return cohere.NewModel(name), nil },
+		"crusoe":           func(name string) (ai.Model, error) { return crusoe.NewModel(name), nil },
 		"groq":             func(name string) (ai.Model, error) { return groq.NewModel(name), nil },
 		"huggingface":      func(name string) (ai.Model, error) { return huggingface.NewModel(name), nil },
 		"ollama":           func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },

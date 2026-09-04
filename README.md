@@ -216,6 +216,7 @@ The bundled providers use the same `ai.Model` interface.
 | Anthropic | `anthropic.NewModel("claude-sonnet-4-5")` | `ANTHROPIC_API_KEY` |
 | Google Gemini | `google.NewModel("gemini-2.5-flash")` | `GOOGLE_API_KEY` |
 | Cohere | `cohere.NewModel("command-r7b-12-2024")` | `CO_API_KEY` |
+| Crusoe | `crusoe.NewModel("openai/gpt-oss-120b")` | `CRUSOE_API_KEY` |
 | Cerebras | `cerebras.NewModel("gpt-oss-120b")` | `CEREBRAS_API_KEY` |
 | Groq | `groq.NewModel("openai/gpt-oss-20b")` | `GROQ_API_KEY` |
 | Hugging Face | `huggingface.NewModel("Qwen/Qwen3-32B")` | `HF_TOKEN` |

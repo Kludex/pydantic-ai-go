@@ -29,10 +29,14 @@ packages=(
     ./models/anthropic
     ./models/azure
     ./models/bedrock
+    ./models/cerebras
     ./models/cohere
+    ./models/crusoe
     ./models/google
     ./models/groq
+    ./models/huggingface
     ./models/infer
+    ./models/ollama
     ./models/zai
     ./mcp
     ./ui/agui

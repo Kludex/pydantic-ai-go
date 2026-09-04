@@ -213,6 +213,34 @@ The model uses Cohere's v2 Chat API. It supports text, thinking, function tools,
 
 Use `cohere.Settings.TopK` for Cohere's `k` sampling setting. Portable max tokens, stop sequences, temperature, top-p, seed, presence penalty, and frequency penalty map directly.
 
+## Crusoe
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/crusoe"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](crusoe.NewModel("openai/gpt-oss-120b"))
+	result, err := agent.Run(context.Background(), "Explain why the sky is blue.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `CRUSOE_API_KEY`. Model names include the vendor prefix.
+
+Crusoe uses the OpenAI-compatible Chat Completions wire format. Every served model supports guided JSON Schema output. The adapter normalizes the `reasoning` field used by most families and the `reasoning_content` field used by DeepSeek. Static and streamed text, reasoning, function tools, settings, and usage use the shared OpenAI-compatible lifecycle.
+
 ## Cerebras
 
 ```go

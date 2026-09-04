@@ -11,7 +11,9 @@ import (
 type PromptCacheMode string
 
 const (
+	// PromptCacheModeImplicit lets OpenAI select cache boundaries.
 	PromptCacheModeImplicit PromptCacheMode = "implicit"
+	// PromptCacheModeExplicit uses caller-authored cache markers.
 	PromptCacheModeExplicit PromptCacheMode = "explicit"
 )
 
@@ -19,6 +21,7 @@ const (
 type PromptCacheTTL string
 
 const (
+	// PromptCacheTTL30Minutes requests at least 30 minutes of retention.
 	PromptCacheTTL30Minutes PromptCacheTTL = "30m"
 )
 
@@ -26,25 +29,34 @@ const (
 type PromptCacheRetention string
 
 const (
+	// PromptCacheRetentionInMemory keeps cached prefixes in volatile memory.
 	PromptCacheRetentionInMemory PromptCacheRetention = "in_memory"
-	PromptCacheRetention24Hours  PromptCacheRetention = "24h"
+	// PromptCacheRetention24Hours permits retention for up to 24 hours.
+	PromptCacheRetention24Hours PromptCacheRetention = "24h"
 )
 
 // PromptCacheOptions configures request-wide caching for GPT-5.6 and later models.
 type PromptCacheOptions struct {
+	// Mode selects implicit or explicit breakpoint placement.
 	Mode PromptCacheMode `json:"mode,omitempty"`
-	TTL  PromptCacheTTL  `json:"ttl,omitempty"`
+	// TTL requests the minimum cache lifetime.
+	TTL PromptCacheTTL `json:"ttl,omitempty"`
 }
 
 // Settings combines portable settings with OpenAI-specific request options.
 type Settings struct {
-	Common     ai.ModelSettings
+	// Common contains portable model settings.
+	Common ai.ModelSettings
+	// Prediction supplies expected Chat Completions output.
 	Prediction *Prediction
 	// IncludeRawAnnotations retains Responses text annotations such as citations.
 	IncludeRawAnnotations *bool
-	PromptCacheKey        string
-	PromptCacheRetention  PromptCacheRetention
-	PromptCacheOptions    *PromptCacheOptions
+	// PromptCacheKey groups requests that should reuse a cached prefix.
+	PromptCacheKey string
+	// PromptCacheRetention selects the maximum cache retention policy.
+	PromptCacheRetention PromptCacheRetention
+	// PromptCacheOptions configures GPT-5.6 request-wide caching.
+	PromptCacheOptions *PromptCacheOptions
 }
 
 const (

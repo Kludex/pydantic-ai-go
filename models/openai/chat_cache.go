@@ -10,20 +10,29 @@ import (
 type ChatPromptCacheMarkerStyle string
 
 const (
-	ChatPromptCacheMarkerControl    ChatPromptCacheMarkerStyle = "cache_control"
+	// ChatPromptCacheMarkerControl emits Anthropic or Gemini-style cache controls.
+	ChatPromptCacheMarkerControl ChatPromptCacheMarkerStyle = "cache_control"
+	// ChatPromptCacheMarkerBreakpoint emits OpenAI explicit breakpoint objects.
 	ChatPromptCacheMarkerBreakpoint ChatPromptCacheMarkerStyle = "openai"
 )
 
 // ChatPromptCache configures explicit cache breakpoints for one compatible
 // Chat Completions request. Provider packages should ignore unsupported fields.
 type ChatPromptCache struct {
-	InstructionsTTL             string
-	MessagesTTL                 string
-	ToolsTTL                    string
-	IncludeTTL                  bool
+	// InstructionsTTL caches the final stable instruction boundary.
+	InstructionsTTL string
+	// MessagesTTL caches recent message boundaries.
+	MessagesTTL string
+	// ToolsTTL caches the final function-tool definition.
+	ToolsTTL string
+	// IncludeTTL sends retention values with cache controls.
+	IncludeTTL bool
+	// SupportsDynamicInstructions permits a boundary before dynamic instructions.
 	SupportsDynamicInstructions bool
-	ExplicitMarkerStyle         ChatPromptCacheMarkerStyle
-	MaxPoints                   int
+	// ExplicitMarkerStyle selects the downstream wire representation.
+	ExplicitMarkerStyle ChatPromptCacheMarkerStyle
+	// MaxPoints limits explicit cache boundaries. Zero uses the provider default.
+	MaxPoints int
 }
 
 type chatPromptCacheContextKey struct{}

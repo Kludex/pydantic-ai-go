@@ -10,13 +10,17 @@ import (
 // Prediction supplies expected output so compatible Chat Completions models can
 // generate unchanged content faster. Set either Content or ContentParts.
 type Prediction struct {
-	Content      string
+	// Content is the complete expected text.
+	Content string
+	// ContentParts contains segmented expected text with optional cache boundaries.
 	ContentParts []PredictionContentPart
 }
 
 // PredictionContentPart is one expected text segment.
 type PredictionContentPart struct {
-	Text                  string
+	// Text is one expected output segment.
+	Text string
+	// PromptCacheBreakpoint inserts an explicit cache boundary after this segment.
 	PromptCacheBreakpoint bool
 }
 

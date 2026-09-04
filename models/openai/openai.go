@@ -51,18 +51,27 @@ type RequestPreparationFunc func(*http.Request) error
 // ProviderConfig configures an OpenAI-compatible endpoint. Name is persisted
 // in message history and telemetry. Headers and Query are copied.
 type ProviderConfig struct {
-	Name           string
-	BaseURL        string
-	APIKey         string
-	HTTPClient     *http.Client
-	Headers        http.Header
-	Query          url.Values
+	// Name is persisted in responses, usage, and telemetry.
+	Name string
+	// BaseURL is the OpenAI-compatible API endpoint.
+	BaseURL string
+	// APIKey is sent as a bearer token.
+	APIKey string
+	// HTTPClient performs requests. Nil uses the shared default client.
+	HTTPClient *http.Client
+	// Headers contains detached provider-wide request headers.
+	Headers http.Header
+	// Query contains detached provider-wide query parameters.
+	Query url.Values
+	// PrepareRequest adds dynamic authentication or routing data.
 	PrepareRequest RequestPreparationFunc
 }
 
 // ChatNativeTool is one provider-managed Chat Completions tool declaration.
 type ChatNativeTool struct {
-	Type       string         `json:"type"`
+	// Type is the provider-native tool discriminator.
+	Type string `json:"type"`
+	// Parameters contains detached provider-specific options.
 	Parameters map[string]any `json:"parameters,omitempty"`
 }
 
@@ -74,17 +83,28 @@ type ChatNativeToolFunc func(ai.NativeTool) (ChatNativeTool, bool, error)
 // Completions wire format. The configuration is intended for provider packages;
 // applications should prefer a dedicated provider model.
 type ChatCompatibility struct {
-	ReasoningContent     bool
-	Reasoning            bool
-	ReasoningDetails     bool
-	LegacyMaxTokens      bool
-	ExtendedMetadata     bool
-	VideoInput           bool
-	FileURLInput         bool
-	AudioInputDataURI    bool
+	// ReasoningContent enables the reasoning_content extension.
+	ReasoningContent bool
+	// Reasoning enables the unified reasoning extension.
+	Reasoning bool
+	// ReasoningDetails enables OpenRouter-style reasoning details.
+	ReasoningDetails bool
+	// LegacyMaxTokens sends max_tokens instead of max_completion_tokens.
+	LegacyMaxTokens bool
+	// ExtendedMetadata preserves routed-provider and server-tool metadata.
+	ExtendedMetadata bool
+	// VideoInput enables video_url user content.
+	VideoInput bool
+	// FileURLInput enables remote file user content.
+	FileURLInput bool
+	// AudioInputDataURI enables audio data URLs.
+	AudioInputDataURI bool
+	// DisableDocumentInput rejects document user content before transport.
 	DisableDocumentInput bool
-	NativeToolFunc       ChatNativeToolFunc
-	FinishReasons        map[string]ai.FinishReason
+	// NativeToolFunc renders provider-native Chat Completions tools.
+	NativeToolFunc ChatNativeToolFunc
+	// FinishReasons maps provider-specific stop reasons.
+	FinishReasons map[string]ai.FinishReason
 }
 
 // WithChatCompatibility configures OpenAI-compatible response and history
@@ -324,11 +344,15 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 // APIError is a provider API failure. StatusCode is zero when an OpenAI-compatible
 // endpoint returns no completion and no explicit error envelope.
 type APIError struct {
-	StatusCode   int
-	Body         string
+	// StatusCode is the HTTP response status, or zero for an empty completion.
+	StatusCode int
+	// Body is the provider error or diagnostic body.
+	Body string
+	// ProviderName identifies the endpoint that returned the error.
 	ProviderName string
 }
 
+// Error formats the provider status and body.
 func (e *APIError) Error() string {
 	providerName := e.ProviderName
 	if providerName == "" {

@@ -9,7 +9,10 @@ import (
 )
 
 // Input is content or a control command sent to a realtime connection.
-type Input = any
+type Input interface {
+	// RealtimeInputKind returns a stable input discriminator.
+	RealtimeInputKind() string
+}
 
 // TextInput sends one complete text turn.
 type TextInput struct {
@@ -17,17 +20,26 @@ type TextInput struct {
 	Text string
 }
 
+// RealtimeInputKind identifies text input.
+func (TextInput) RealtimeInputKind() string { return "text" }
+
 // AudioInput sends raw mono PCM16 audio at the model's input sample rate.
 type AudioInput struct {
 	// Data contains raw little-endian mono PCM16 samples.
 	Data []byte
 }
 
+// RealtimeInputKind identifies audio input.
+func (AudioInput) RealtimeInputKind() string { return "audio" }
+
 // ImageInput sends one encoded image or video frame.
 type ImageInput struct {
 	// Content contains one encoded image or video frame.
 	Content ai.BinaryContent
 }
+
+// RealtimeInputKind identifies image input.
+func (ImageInput) RealtimeInputKind() string { return "image" }
 
 // ToolResult returns one completed function call to the provider.
 type ToolResult struct {
@@ -39,17 +51,32 @@ type ToolResult struct {
 	Content []ai.UserContent
 }
 
+// RealtimeInputKind identifies a tool result.
+func (ToolResult) RealtimeInputKind() string { return "tool-result" }
+
 // CommitAudio commits buffered audio as a user turn.
 type CommitAudio struct{}
+
+// RealtimeInputKind identifies an audio commit command.
+func (CommitAudio) RealtimeInputKind() string { return "commit-audio" }
 
 // ClearAudio discards buffered uncommitted audio.
 type ClearAudio struct{}
 
+// RealtimeInputKind identifies an audio clear command.
+func (ClearAudio) RealtimeInputKind() string { return "clear-audio" }
+
 // CreateResponse asks the model to respond immediately.
 type CreateResponse struct{}
 
+// RealtimeInputKind identifies a response creation command.
+func (CreateResponse) RealtimeInputKind() string { return "create-response" }
+
 // CancelResponse cancels the response currently being generated.
 type CancelResponse struct{}
+
+// RealtimeInputKind identifies a response cancellation command.
+func (CancelResponse) RealtimeInputKind() string { return "cancel-response" }
 
 // TruncateOutput removes unheard audio from provider conversation state.
 type TruncateOutput struct {
@@ -57,8 +84,14 @@ type TruncateOutput struct {
 	AudioEndMilliseconds int
 }
 
+// RealtimeInputKind identifies an output truncation command.
+func (TruncateOutput) RealtimeInputKind() string { return "truncate-output" }
+
 // CodecEvent is one normalized event received from a provider connection.
-type CodecEvent = any
+type CodecEvent interface {
+	// RealtimeCodecEventKind returns a stable event discriminator.
+	RealtimeCodecEventKind() string
+}
 
 // AudioDelta carries raw PCM16 model output.
 type AudioDelta struct {
@@ -67,6 +100,9 @@ type AudioDelta struct {
 	// ItemID identifies the provider output item when available.
 	ItemID string
 }
+
+// RealtimeCodecEventKind identifies an audio delta.
+func (AudioDelta) RealtimeCodecEventKind() string { return "audio-delta" }
 
 // OutputTranscript updates model speech transcription or plain text output.
 type OutputTranscript struct {
@@ -80,6 +116,9 @@ type OutputTranscript struct {
 	ItemID string
 }
 
+// RealtimeCodecEventKind identifies an output transcript update.
+func (OutputTranscript) RealtimeCodecEventKind() string { return "output-transcript" }
+
 // InputTranscript updates the transcription of one user turn.
 type InputTranscript struct {
 	// Text is an incremental transcript piece or cumulative snapshot.
@@ -91,6 +130,9 @@ type InputTranscript struct {
 	// ItemID identifies the provider input item when available.
 	ItemID string
 }
+
+// RealtimeCodecEventKind identifies an input transcript update.
+func (InputTranscript) RealtimeCodecEventKind() string { return "input-transcript" }
 
 // ToolCall asks the application to execute a function tool.
 type ToolCall struct {
@@ -106,11 +148,17 @@ type ToolCall struct {
 	ResponseUsageFollows bool
 }
 
+// RealtimeCodecEventKind identifies a provider function call.
+func (ToolCall) RealtimeCodecEventKind() string { return "tool-call" }
+
 // ToolCallCancelled reports provider cancellation of in-flight calls.
 type ToolCallCancelled struct {
 	// ToolCallIDs identifies calls whose results must not be returned.
 	ToolCallIDs []string
 }
+
+// RealtimeCodecEventKind identifies cancelled function calls.
+func (ToolCallCancelled) RealtimeCodecEventKind() string { return "tool-call-cancelled" }
 
 // ResponseDone closes the provider's current response.
 type ResponseDone struct {
@@ -124,6 +172,9 @@ type ResponseDone struct {
 	ProviderDetails map[string]any
 }
 
+// RealtimeCodecEventKind identifies response completion.
+func (ResponseDone) RealtimeCodecEventKind() string { return "response-done" }
+
 // SessionUsage carries response-scoped or session-scoped provider usage.
 type SessionUsage struct {
 	// Usage contains normalized provider counters.
@@ -136,11 +187,17 @@ type SessionUsage struct {
 	ResponseScoped bool
 }
 
+// RealtimeCodecEventKind identifies provider usage.
+func (SessionUsage) RealtimeCodecEventKind() string { return "session-usage" }
+
 // InputSpeechStarted reports server-side voice activity detection.
 type InputSpeechStarted struct {
 	// ItemID identifies the detected input segment when available.
 	ItemID string
 }
+
+// RealtimeCodecEventKind identifies the start of user speech.
+func (InputSpeechStarted) RealtimeCodecEventKind() string { return "input-speech-started" }
 
 // InputSpeechEnded reports the end of server-detected user speech.
 type InputSpeechEnded struct {
@@ -148,11 +205,20 @@ type InputSpeechEnded struct {
 	ItemID string
 }
 
+// RealtimeCodecEventKind identifies the end of user speech.
+func (InputSpeechEnded) RealtimeCodecEventKind() string { return "input-speech-ended" }
+
 // OutputSpeechStarted reports that provider audio playback started.
 type OutputSpeechStarted struct{}
 
+// RealtimeCodecEventKind identifies the start of output playback.
+func (OutputSpeechStarted) RealtimeCodecEventKind() string { return "output-speech-started" }
+
 // OutputSpeechEnded reports that provider audio playback stopped.
 type OutputSpeechEnded struct{}
+
+// RealtimeCodecEventKind identifies the end of output playback.
+func (OutputSpeechEnded) RealtimeCodecEventKind() string { return "output-speech-ended" }
 
 // InputTranscriptionError reports a recoverable transcription failure.
 type InputTranscriptionError struct {
@@ -162,17 +228,26 @@ type InputTranscriptionError struct {
 	Err error
 }
 
+// RealtimeCodecEventKind identifies a transcription failure.
+func (InputTranscriptionError) RealtimeCodecEventKind() string { return "input-transcription-error" }
+
 // SessionReconnected reports a successful transport reconnection.
 type SessionReconnected struct {
 	// StateRestored reports that the provider resumed in-flight state.
 	StateRestored bool
 }
 
+// RealtimeCodecEventKind identifies a successful reconnect.
+func (SessionReconnected) RealtimeCodecEventKind() string { return "session-reconnected" }
+
 // ConversationCreated carries a provider conversation identifier.
 type ConversationCreated struct {
 	// ConversationID is the provider-assigned session identifier.
 	ConversationID string
 }
+
+// RealtimeCodecEventKind identifies provider conversation creation.
+func (ConversationCreated) RealtimeCodecEventKind() string { return "conversation-created" }
 
 // ConversationItemCreated identifies a live or replayed provider item.
 type ConversationItemCreated struct {
@@ -184,6 +259,36 @@ type ConversationItemCreated struct {
 	Replayed bool
 }
 
+// RealtimeCodecEventKind identifies a provider conversation item.
+func (ConversationItemCreated) RealtimeCodecEventKind() string { return "conversation-item-created" }
+
+// PartStarted carries a complete provider-native response part.
+type PartStarted struct {
+	// Event is the normalized start event forwarded to session consumers.
+	Event ai.PartStartEvent
+}
+
+// RealtimeCodecEventKind identifies a provider-native part start.
+func (PartStarted) RealtimeCodecEventKind() string { return "part-started" }
+
+// PartEnded closes a provider-native response part.
+type PartEnded struct {
+	// Event is the normalized end event forwarded to session consumers.
+	Event ai.PartEndEvent
+}
+
+// RealtimeCodecEventKind identifies a provider-native part end.
+func (PartEnded) RealtimeCodecEventKind() string { return "part-ended" }
+
+// ResponseStarted reports the provider identity of a new generation.
+type ResponseStarted struct {
+	// ResponseID is the provider-assigned response identifier.
+	ResponseID string
+}
+
+// RealtimeCodecEventKind identifies response creation.
+func (ResponseStarted) RealtimeCodecEventKind() string { return "response-started" }
+
 // SessionError reports a recoverable or terminal provider failure.
 type SessionError struct {
 	// Err describes the provider or protocol failure.
@@ -191,6 +296,9 @@ type SessionError struct {
 	// Recoverable reports that the connection remains usable.
 	Recoverable bool
 }
+
+// RealtimeCodecEventKind identifies a session error.
+func (SessionError) RealtimeCodecEventKind() string { return "session-error" }
 
 // Connection is one live provider transport.
 type Connection interface {

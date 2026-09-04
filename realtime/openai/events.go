@@ -7,7 +7,6 @@ import (
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/realtime"
-	"github.com/Kludex/pydantic-ai-go/realtime/internal/openaiprotocol"
 )
 
 // MapEvent translates one OpenAI Realtime JSON frame into provider-neutral codec events.
@@ -20,7 +19,7 @@ func MapEvent(data []byte) ([]realtime.CodecEvent, error) {
 	switch kind {
 	case "response.created":
 		response := object(frame["response"])
-		return []realtime.CodecEvent{openaiprotocol.ResponseCreated{ResponseID: stringValue(response["id"])}}, nil
+		return []realtime.CodecEvent{realtime.ResponseStarted{ResponseID: stringValue(response["id"])}}, nil
 	case "response.output_audio.delta", "response.audio.delta":
 		decoded, err := base64.StdEncoding.DecodeString(stringValue(frame["delta"]))
 		if err != nil {

@@ -19,6 +19,10 @@ import (
 	"github.com/coder/websocket"
 )
 
+type unsupportedInput struct{}
+
+func (unsupportedInput) RealtimeInputKind() string { return "unsupported" }
+
 func TestConnectionSendAndEvents(t *testing.T) {
 	frames := make(chan struct {
 		kind websocket.MessageType
@@ -62,7 +66,7 @@ func TestConnectionSendAndEvents(t *testing.T) {
 	mapper := func(data []byte) ([]realtime.CodecEvent, error) {
 		switch string(data) {
 		case "created":
-			return []realtime.CodecEvent{openaiprotocol.ResponseCreated{ResponseID: "response"}}, nil
+			return []realtime.CodecEvent{realtime.ResponseStarted{ResponseID: "response"}}, nil
 		case "audio":
 			return []realtime.CodecEvent{realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "item"}}, nil
 		case "done":
@@ -109,7 +113,7 @@ func TestConnectionSendAndEvents(t *testing.T) {
 	if err := connection.Send(t.Context(), realtime.AudioInput{Data: []byte{1}}); err == nil {
 		t.Fatal("expected odd audio error")
 	}
-	if err := connection.Send(t.Context(), struct{}{}); err == nil {
+	if err := connection.Send(t.Context(), unsupportedInput{}); err == nil {
 		t.Fatal("expected unsupported input error")
 	}
 	for _, content := range [][]ai.UserContent{
@@ -130,7 +134,7 @@ func TestConnectionSendAndEvents(t *testing.T) {
 			if err == nil {
 				events = append(events, event)
 			}
-			if len(events) == 4 {
+			if len(events) == 5 {
 				break
 			}
 		}
@@ -147,11 +151,20 @@ func TestConnectionSendAndEvents(t *testing.T) {
 		}{websocket.MessageText, frame}
 	}
 	events := <-eventDone
-	if len(events) != 4 {
+	if len(events) != 5 {
 		t.Fatalf("unexpected mapped events: %+v", events)
 	}
 	if err := connection.Send(t.Context(), realtime.TruncateOutput{AudioEndMilliseconds: 100}); err != nil {
 		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	for _, input := range []realtime.Input{
+		realtime.TextInput{Text: "cancelled"}, realtime.ToolResult{ToolCallID: "cancelled"}, realtime.CreateResponse{},
+	} {
+		if err := connection.Send(cancelled, input); err == nil {
+			t.Fatalf("expected cancelled send error for %T", input)
+		}
 	}
 	if err := connection.Close(t.Context()); err != nil {
 		t.Fatal(err)

@@ -13,6 +13,10 @@ import (
 	"google.golang.org/genai"
 )
 
+type unsupportedInput struct{}
+
+func (unsupportedInput) RealtimeInputKind() string { return "unsupported" }
+
 func TestGoogleOptionsAndOfficialConnector(t *testing.T) {
 	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
@@ -134,7 +138,7 @@ func TestGoogleConnectionEventsAndSendErrors(t *testing.T) {
 		connection.(interface{ ReconnectRestoresInFlightState() bool }).ReconnectRestoresInFlightState() != true {
 		t.Fatal("connection info mismatch")
 	}
-	if err := connection.Send(t.Context(), struct{}{}); err == nil {
+	if err := connection.Send(t.Context(), unsupportedInput{}); err == nil {
 		t.Fatal("expected unsupported send error")
 	}
 	live.receive <- nil

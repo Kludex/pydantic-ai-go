@@ -579,10 +579,10 @@ func mapServerMessage(message *genai.LiveServerMessage, provider string) []realt
 				ProviderName: provider, Content: metadata,
 			}
 			events = append(events,
-				ai.PartStartEvent{PartID: callID + "-call", Part: call},
-				ai.PartEndEvent{PartID: callID + "-call", Part: call},
-				ai.PartStartEvent{PartID: callID + "-result", Part: result},
-				ai.PartEndEvent{PartID: callID + "-result", Part: result},
+				realtime.PartStarted{Event: ai.PartStartEvent{PartID: callID + "-call", Part: call}},
+				realtime.PartEnded{Event: ai.PartEndEvent{PartID: callID + "-call", Part: call}},
+				realtime.PartStarted{Event: ai.PartStartEvent{PartID: callID + "-result", Part: result}},
+				realtime.PartEnded{Event: ai.PartEndEvent{PartID: callID + "-result", Part: result}},
 			)
 		}
 		if content.Interrupted || content.TurnComplete {

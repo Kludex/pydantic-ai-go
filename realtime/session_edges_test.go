@@ -10,6 +10,10 @@ import (
 	"github.com/Kludex/pydantic-ai-go/realtime"
 )
 
+type unknownCodecEvent struct{ Unknown bool }
+
+func (unknownCodecEvent) RealtimeCodecEventKind() string { return "unknown" }
+
 type historyConnection struct {
 	*fakeConnection
 	history func() []ai.ModelMessage
@@ -62,8 +66,13 @@ func TestSessionHistoryAndIteratorControls(t *testing.T) {
 	base.events <- realtime.OutputTranscript{Text: "spoken", ItemID: "two"}
 	base.events <- realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "three"}
 	base.events <- realtime.ResponseDone{}
-	base.events <- ai.PartStartEvent{PartID: "native", Part: ai.NativeToolCallPart{ToolName: "search"}}
-	base.events <- ai.PartEndEvent{PartID: "native", Part: ai.NativeToolCallPart{ToolName: "search"}}
+	base.events <- realtime.PartStarted{Event: ai.PartStartEvent{
+		PartID: "native", Part: ai.NativeToolCallPart{ToolName: "search"},
+	}}
+	base.events <- realtime.PartEnded{Event: ai.PartEndEvent{
+		PartID: "native", Part: ai.NativeToolCallPart{ToolName: "search"},
+	}}
+	base.events <- realtime.ResponseStarted{ResponseID: "response"}
 	base.end()
 	count := 0
 	for _, err := range session.Events(t.Context()) {
@@ -219,7 +228,7 @@ func TestSessionTerminalErrors(t *testing.T) {
 
 	for _, event := range []realtime.CodecEvent{
 		realtime.SessionError{Err: errors.New("fatal")},
-		struct{ Unknown bool }{Unknown: true},
+		unknownCodecEvent{Unknown: true},
 	} {
 		base := newFakeConnection()
 		session, err := realtime.Open(t.Context(), &fakeModel{connection: base, profile: fullProfile()}, realtime.ConnectParams{})

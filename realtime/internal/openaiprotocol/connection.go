@@ -188,6 +188,12 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 }
 
 func (connection *Connection) requestResponse(ctx context.Context) error {
+	connection.mu.RLock()
+	closed := connection.closed
+	connection.mu.RUnlock()
+	if closed {
+		return fmt.Errorf("realtime: connection is closed")
+	}
 	connection.stateMu.Lock()
 	if connection.responseActive {
 		connection.stateMu.Unlock()
@@ -263,9 +269,6 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 					}
 				}
 				connection.observe(event)
-				if _, internal := event.(ResponseCreated); internal {
-					continue
-				}
 				if !yield(event, nil) {
 					return
 				}
@@ -284,18 +287,13 @@ func (connection *Connection) observe(event realtime.CodecEvent) {
 			connection.generatedAudioBytes = 0
 		}
 		connection.generatedAudioBytes += len(event.Data)
-	case ResponseCreated:
+	case realtime.ResponseStarted:
 		connection.responseActive = true
 		connection.activeResponseID = event.ResponseID
 	case realtime.ResponseDone:
 		connection.responseActive = false
 		connection.activeResponseID = ""
 	}
-}
-
-// ResponseCreated is consumed internally while preserving response state.
-type ResponseCreated struct {
-	ResponseID string
 }
 
 func (connection *Connection) reconnect(ctx context.Context) (bool, error) {

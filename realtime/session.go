@@ -143,21 +143,22 @@ type Session struct {
 	err    error
 	usage  ai.Usage
 
-	seeded             []ai.ModelMessage
-	history            []ai.ModelMessage
-	responseParts      []ai.ResponsePart
-	activeAssistant    *activeSpeech
-	userTurns          map[string]*activeSpeech
-	anonymousUser      *activeSpeech
-	nextPartIndex      int
-	inputAudio         []byte
-	outputAudio        []byte
-	imageCount         int
-	retainedImages     []ai.ModelRequest
-	pendingUsage       ai.Usage
-	pendingResponseID  string
-	pendingFinish      ai.FinishReason
-	pendingToolResults map[string]ai.ModelRequest
+	seeded              []ai.ModelMessage
+	history             []ai.ModelMessage
+	responseParts       []ai.ResponsePart
+	activeAssistant     *activeSpeech
+	userTurns           map[string]*activeSpeech
+	anonymousUser       *activeSpeech
+	nextPartIndex       int
+	inputAudio          []byte
+	outputAudio         []byte
+	imageCount          int
+	retainedImages      []ai.ModelRequest
+	pendingUsage        ai.Usage
+	pendingResponseID   string
+	pendingFinish       ai.FinishReason
+	pendingToolResults  map[string]ai.ModelRequest
+	providerPartIndexes map[string]int
 
 	toolMu      sync.Mutex
 	toolCancels map[string]context.CancelFunc
@@ -212,8 +213,8 @@ func Open(ctx context.Context, model Model, params ConnectParams, options ...Ses
 		model: model, connection: connection, profile: profile, config: config,
 		ctx: runCtx, cancel: cancel, done: make(chan struct{}), events: make(chan eventResult, 128),
 		seeded: params.Messages, userTurns: map[string]*activeSpeech{},
-		pendingToolResults: map[string]ai.ModelRequest{},
-		toolCancels:        map[string]context.CancelFunc{}, audioTaps: map[chan []byte]struct{}{},
+		pendingToolResults: map[string]ai.ModelRequest{}, providerPartIndexes: map[string]int{},
+		toolCancels: map[string]context.CancelFunc{}, audioTaps: map[chan []byte]struct{}{},
 		transcriptTaps: map[chan TranscriptUpdate]struct{}{},
 	}
 	if historyAware, ok := connection.(HistoryAwareConnection); ok {
@@ -506,6 +507,7 @@ func (session *Session) require(supported bool, method, feature string) error {
 }
 
 func (session *Session) send(ctx context.Context, input Input) error {
+	_ = input.RealtimeInputKind()
 	session.mu.RLock()
 	closed := session.closed
 	session.mu.RUnlock()
@@ -623,6 +625,7 @@ func (session *Session) pump() {
 }
 
 func (session *Session) handle(event CodecEvent) bool {
+	_ = event.RealtimeCodecEventKind()
 	switch event := event.(type) {
 	case AudioDelta:
 		session.handleAudio(event)
@@ -650,13 +653,26 @@ func (session *Session) handle(event CodecEvent) bool {
 		session.publish(InputTranscriptionErrorEvent(event))
 	case SessionReconnected:
 		session.publish(SessionReconnectEvent(event))
-	case ai.PartStartEvent:
+	case PartStarted:
 		session.mu.Lock()
-		session.responseParts = append(session.responseParts, event.Part)
+		started := event.Event
+		started.Index = session.nextPartIndex
+		session.nextPartIndex++
+		session.providerPartIndexes[started.PartID] = started.Index
+		session.responseParts = append(session.responseParts, started.Part)
 		session.mu.Unlock()
-		session.publish(event)
-	case ai.PartEndEvent:
-		session.publish(event)
+		session.publish(started)
+	case PartEnded:
+		session.mu.Lock()
+		ended := event.Event
+		ended.Index = session.providerPartIndexes[ended.PartID]
+		delete(session.providerPartIndexes, ended.PartID)
+		session.mu.Unlock()
+		session.publish(ended)
+	case ResponseStarted:
+		session.mu.Lock()
+		session.pendingResponseID = event.ResponseID
+		session.mu.Unlock()
 	case ConversationCreated, ConversationItemCreated:
 	case SessionError:
 		if event.Recoverable {

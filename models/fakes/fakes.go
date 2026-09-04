@@ -126,11 +126,27 @@ func valueFromSchema(prop any) any {
 	if !ok {
 		return "a"
 	}
-	if enum, ok := p["enum"].([]string); ok && len(enum) > 0 {
-		return enum[0]
+	switch enum := p["enum"].(type) {
+	case []string:
+		if len(enum) > 0 {
+			return enum[0]
+		}
+	case []any:
+		if len(enum) > 0 {
+			return enum[0]
+		}
+	}
+	if alternatives, ok := p["anyOf"].([]any); ok && len(alternatives) > 0 {
+		return valueFromSchema(alternatives[0])
 	}
 	switch p["type"] {
 	case "string":
+		if p["format"] == "date-time" {
+			return "2000-01-01T00:00:00Z"
+		}
+		if p["contentEncoding"] == "base64" {
+			return "YQ=="
+		}
 		return "a"
 	case "integer":
 		return 0

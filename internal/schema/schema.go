@@ -2,9 +2,13 @@
 package schema
 
 import (
+	"encoding"
+	"encoding/json"
 	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // ForType returns a JSON Schema for any supported Go type.
@@ -24,6 +28,12 @@ func For(t reflect.Type) (map[string]any, error) {
 	return forStruct(t, "#", make(map[reflect.Type]string))
 }
 
+var (
+	jsonRawMessageType = reflect.TypeFor[json.RawMessage]()
+	textMarshalerType  = reflect.TypeFor[encoding.TextMarshaler]()
+	timeType           = reflect.TypeFor[time.Time]()
+)
+
 func forStruct(t reflect.Type, path string, active map[reflect.Type]string) (map[string]any, error) {
 	if reference, recursive := active[t]; recursive {
 		return map[string]any{"$ref": reference}, nil
@@ -42,11 +52,35 @@ func forStruct(t reflect.Type, path string, active map[reflect.Type]string) (map
 		if skip {
 			continue
 		}
+		if f.Anonymous && strings.Split(f.Tag.Get("json"), ",")[0] == "" {
+			embeddedType := f.Type
+			if embeddedType.Kind() == reflect.Pointer {
+				embeddedType = embeddedType.Elem()
+				omitempty = true
+			}
+			if embeddedType.Kind() == reflect.Struct {
+				embedded, err := forStruct(embeddedType, path, active)
+				if err != nil {
+					return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
+				}
+				for propertyName, property := range embedded["properties"].(map[string]any) {
+					properties[propertyName] = property
+				}
+				if !omitempty {
+					if names, ok := embedded["required"].([]string); ok {
+						required = append(required, names...)
+					}
+				}
+				continue
+			}
+		}
 		fieldSchema, err := forType(f.Type, path+"/properties/"+escapeJSONPointer(name), active)
 		if err != nil {
 			return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
 		}
-		applyTag(fieldSchema, f.Tag.Get("jsonschema"))
+		if err := applyTag(fieldSchema, f.Tag.Get("jsonschema")); err != nil {
+			return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
+		}
 		properties[name] = fieldSchema
 		if !omitempty {
 			required = append(required, name)
@@ -64,6 +98,22 @@ func forStruct(t reflect.Type, path string, active map[reflect.Type]string) (map
 }
 
 func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[string]any, error) {
+	if t.Kind() == reflect.Pointer {
+		inner, err := forType(t.Elem(), path, active)
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"anyOf": []any{inner, map[string]any{"type": "null"}}}, nil
+	}
+	if t == jsonRawMessageType {
+		return map[string]any{}, nil
+	}
+	if t == timeType {
+		return map[string]any{"type": "string", "format": "date-time"}, nil
+	}
+	if t.Implements(textMarshalerType) || reflect.PointerTo(t).Implements(textMarshalerType) {
+		return map[string]any{"type": "string"}, nil
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return map[string]any{"type": "string"}, nil
@@ -75,6 +125,9 @@ func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[s
 	case reflect.Float32, reflect.Float64:
 		return map[string]any{"type": "number"}, nil
 	case reflect.Slice, reflect.Array:
+		if t.Elem().Kind() == reflect.Uint8 {
+			return map[string]any{"type": "string", "contentEncoding": "base64"}, nil
+		}
 		items, err := forType(t.Elem(), path+"/items", active)
 		if err != nil {
 			return nil, err
@@ -91,8 +144,6 @@ func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[s
 		return map[string]any{"type": "object", "additionalProperties": values}, nil
 	case reflect.Struct:
 		return forStruct(t, path, active)
-	case reflect.Pointer:
-		return forType(t.Elem(), path, active)
 	case reflect.Interface:
 		return map[string]any{}, nil
 	default:
@@ -118,23 +169,52 @@ func jsonName(f reflect.StructField) (name string, omitempty, skip bool) {
 	return name, omitempty, false
 }
 
-func applyTag(s map[string]any, tag string) {
+func applyTag(schema map[string]any, tag string) error {
 	if tag == "" {
-		return
+		return nil
 	}
-	var enum []string
+	var enum []any
 	for _, entry := range strings.Split(tag, ",") {
 		key, value, _ := strings.Cut(entry, "=")
 		switch key {
-		case "description":
-			s["description"] = value
+		case "description", "title", "format", "pattern":
+			schema[key] = value
 		case "enum":
-			enum = append(enum, value)
+			enum = append(enum, parseTagValue(value))
+		case "default", "example":
+			schema[key] = parseTagValue(value)
+		case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
+			number, err := strconv.ParseFloat(value, 64)
+			if err != nil {
+				return fmt.Errorf("invalid %s value %q", key, value)
+			}
+			schema[key] = number
+		case "minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties":
+			number, err := strconv.Atoi(value)
+			if err != nil || number < 0 {
+				return fmt.Errorf("invalid %s value %q", key, value)
+			}
+			schema[key] = number
+		case "readOnly", "writeOnly", "deprecated":
+			boolean, err := strconv.ParseBool(value)
+			if err != nil {
+				return fmt.Errorf("invalid %s value %q", key, value)
+			}
+			schema[key] = boolean
 		}
 	}
 	if len(enum) > 0 {
-		s["enum"] = enum
+		schema["enum"] = enum
 	}
+	return nil
+}
+
+func parseTagValue(value string) any {
+	var parsed any
+	if json.Unmarshal([]byte(value), &parsed) == nil {
+		return parsed
+	}
+	return value
 }
 
 func escapeJSONPointer(value string) string {

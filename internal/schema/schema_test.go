@@ -1,8 +1,10 @@
 package schema_test
 
 import (
+	"encoding/json"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/Kludex/pydantic-ai-go/internal/schema"
 )
@@ -10,6 +12,10 @@ import (
 type nested struct {
 	Value float32 `json:"value"`
 }
+
+type textValue int
+
+func (textValue) MarshalText() ([]byte, error) { return []byte("value"), nil }
 
 type everything struct {
 	Name     string            `json:"name" jsonschema:"description=A name"`
@@ -42,6 +48,9 @@ func TestForCoversAllTypes(t *testing.T) {
 	}
 	for name, want := range expectType {
 		p := properties[name].(map[string]any)
+		if name == "ptr" {
+			p = nonNullSchema(p)
+		}
 		if p["type"] != want {
 			t.Fatalf("field %s: expected type %s, got %v", name, want, p["type"])
 		}
@@ -49,7 +58,7 @@ func TestForCoversAllTypes(t *testing.T) {
 	if properties["name"].(map[string]any)["description"] != "A name" {
 		t.Fatal("description tag not applied")
 	}
-	if enum := properties["unit"].(map[string]any)["enum"].([]string); len(enum) != 2 || enum[0] != "celsius" {
+	if enum := properties["unit"].(map[string]any)["enum"].([]any); len(enum) != 2 || enum[0] != "celsius" {
 		t.Fatalf("unexpected enum %v", enum)
 	}
 	if _, ok := properties["Skipped"]; ok {
@@ -95,10 +104,10 @@ func TestForSupportsRecursiveStructs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := value["properties"].(map[string]any)["root/node"].(map[string]any)
+	root := nonNullSchema(value["properties"].(map[string]any)["root/node"].(map[string]any))
 	properties := root["properties"].(map[string]any)
-	children := properties["children"].(map[string]any)["items"].(map[string]any)
-	lookup := properties["lookup"].(map[string]any)["additionalProperties"].(map[string]any)
+	children := nonNullSchema(properties["children"].(map[string]any)["items"].(map[string]any))
+	lookup := nonNullSchema(properties["lookup"].(map[string]any)["additionalProperties"].(map[string]any))
 	const reference = "#/properties/root~1node"
 	if children["$ref"] != reference || lookup["$ref"] != reference {
 		t.Fatalf("unexpected recursive references: children=%+v lookup=%+v", children, lookup)
@@ -113,10 +122,72 @@ func TestForTypeSupportsRecursiveRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	reference := value["properties"].(map[string]any)["next"].(map[string]any)["$ref"]
+	reference := nonNullSchema(value["properties"].(map[string]any)["next"].(map[string]any))["$ref"]
 	if reference != "#" {
 		t.Fatalf("unexpected root reference: %v", reference)
 	}
+}
+
+func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
+	type Embedded struct {
+		Embedded string `json:"embedded"`
+	}
+	type OptionalEmbedded struct {
+		Optional string `json:"optional"`
+	}
+	type value struct {
+		Embedded
+		*OptionalEmbedded
+		Time time.Time       `json:"time"`
+		Raw  json.RawMessage `json:"raw"`
+		Data []byte          `json:"data"`
+		Text textValue       `json:"text"`
+		Code int             `json:"code" jsonschema:"title=Code,minimum=1,maximum=9,multipleOf=2,default=2,example=4"`
+		Name string          `json:"name" jsonschema:"format=email,pattern=^[a-z]+$,minLength=1,maxLength=20,readOnly=true"`
+		List []string        `json:"list" jsonschema:"minItems=1,maxItems=3"`
+	}
+	result, err := schema.For(reflect.TypeFor[value]())
+	if err != nil {
+		t.Fatal(err)
+	}
+	properties := result["properties"].(map[string]any)
+	if properties["time"].(map[string]any)["format"] != "date-time" ||
+		len(properties["raw"].(map[string]any)) != 0 ||
+		properties["data"].(map[string]any)["contentEncoding"] != "base64" ||
+		properties["text"].(map[string]any)["type"] != "string" ||
+		properties["code"].(map[string]any)["minimum"] != float64(1) ||
+		properties["code"].(map[string]any)["default"] != float64(2) ||
+		properties["name"].(map[string]any)["readOnly"] != true ||
+		properties["list"].(map[string]any)["maxItems"] != 3 {
+		t.Fatalf("unexpected reflected schema: %#v", result)
+	}
+	if _, ok := properties["embedded"]; !ok {
+		t.Fatal("embedded field was not promoted")
+	}
+	if _, ok := properties["optional"]; !ok {
+		t.Fatal("pointer-embedded field was not promoted")
+	}
+	required := result["required"].([]string)
+	for _, name := range required {
+		if name == "optional" {
+			t.Fatal("pointer-embedded field was required")
+		}
+	}
+
+	for _, tag := range []string{"minimum=nope", "minLength=-1", "readOnly=nope"} {
+		type invalid struct {
+			Value int `json:"value"`
+		}
+		field, _ := reflect.TypeFor[invalid]().FieldByName("Value")
+		field.Tag = reflect.StructTag(`json:"value" jsonschema:"` + tag + `"`)
+		if _, err := schema.For(reflect.StructOf([]reflect.StructField{field})); err == nil {
+			t.Fatalf("invalid tag %q was accepted", tag)
+		}
+	}
+}
+
+func nonNullSchema(value map[string]any) map[string]any {
+	return value["anyOf"].([]any)[0].(map[string]any)
 }
 
 func TestForRejectsNonStructs(t *testing.T) {
@@ -143,6 +214,21 @@ func TestForRejectsUnsupportedFields(t *testing.T) {
 	}
 	if _, err := schema.For(reflect.TypeFor[badSlice]()); err == nil {
 		t.Fatal("expected error for slice of unsupported type")
+	}
+	type badPointer struct {
+		C *chan int `json:"c"`
+	}
+	if _, err := schema.For(reflect.TypeFor[badPointer]()); err == nil {
+		t.Fatal("expected error for pointer to unsupported type")
+	}
+	type BadEmbedded struct {
+		C chan int `json:"c"`
+	}
+	type badEmbedding struct {
+		BadEmbedded
+	}
+	if _, err := schema.For(reflect.TypeFor[badEmbedding]()); err == nil {
+		t.Fatal("expected error for unsupported embedded field")
 	}
 	type badNested struct {
 		N struct {

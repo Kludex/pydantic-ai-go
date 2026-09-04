@@ -75,7 +75,7 @@ Status:
 - [x] Dependency-aware and simple tool signatures.
 - [x] Raw-schema dynamic tool registration.
 - [x] Tool and argument-unmarshal retries use independent per-tool counters; output retries use a separate counter.
-- [~] Reflected JSON Schema supports common structs, recursive structs with stable escaped local references, arrays, maps, descriptions, and enums; schema generation is not yet full Pydantic parity.
+- [~] Reflected JSON Schema supports common and embedded structs, recursive structs with stable escaped local references, nullable pointers, arrays, string maps, base64 byte slices, arbitrary `json.RawMessage`, text-marshaled values, RFC 3339 timestamps, descriptions, titles, string/number enums, defaults, examples, formats, patterns, numeric/string/collection bounds, and annotation flags; schema generation is not yet full Pydantic parity.
 - [x] Provider schema transforms for implemented providers: Gemini full JSON Schema wire fields, OpenAI compatibility inference/forced rewrites including recursive roots, opt-in Anthropic strict-subset conversion, and detached OpenRouter downstream transforms for legacy Google schemas plus inline-definition Qwen, Amazon, and Meta routes.
 - [x] Provider-aware strict tool mode via `WithStrict()` / `WithoutStrict()`: OpenAI infers schema compatibility, Anthropic is explicit and model-gated, and Gemini 2.5+ defaults to request-wide `VALIDATED`; each provider supports alias/proxy overrides.
 - [x] Surface Anthropic's lossy strict transformation of dynamic-map schemas through `anthropic.WithSchemaWarningHandler`.

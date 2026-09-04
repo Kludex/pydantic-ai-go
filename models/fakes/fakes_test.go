@@ -72,16 +72,20 @@ func TestTestModelGeneratesValuesForAllSchemaTypes(t *testing.T) {
 	schema := map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"s":     map[string]any{"type": "string"},
-			"i":     map[string]any{"type": "integer"},
-			"n":     map[string]any{"type": "number"},
-			"b":     map[string]any{"type": "boolean"},
-			"a":     map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
-			"o":     map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": "string"}}},
-			"free":  map[string]any{"type": "object"},
-			"e":     map[string]any{"type": "string", "enum": []string{"one", "two"}},
-			"weird": map[string]any{"type": "mystery"},
-			"raw":   "not a schema",
+			"s":      map[string]any{"type": "string"},
+			"date":   map[string]any{"type": "string", "format": "date-time"},
+			"binary": map[string]any{"type": "string", "contentEncoding": "base64"},
+			"i":      map[string]any{"type": "integer"},
+			"n":      map[string]any{"type": "number"},
+			"b":      map[string]any{"type": "boolean"},
+			"a":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+			"o":      map[string]any{"type": "object", "properties": map[string]any{"x": map[string]any{"type": "string"}}},
+			"free":   map[string]any{"type": "object"},
+			"e":      map[string]any{"type": "string", "enum": []string{"one", "two"}},
+			"eany":   map[string]any{"type": "string", "enum": []any{"three", "four"}},
+			"maybe":  map[string]any{"anyOf": []any{map[string]any{"type": "string"}, map[string]any{"type": "null"}}},
+			"weird":  map[string]any{"type": "mystery"},
+			"raw":    "not a schema",
 		},
 	}
 	model := fakes.NewTestModel()
@@ -96,8 +100,8 @@ func TestTestModelGeneratesValuesForAllSchemaTypes(t *testing.T) {
 		t.Fatal(err)
 	}
 	expected := map[string]any{
-		"s": "a", "i": 0.0, "n": 0.0, "b": false,
-		"e": "one", "raw": "a", "weird": nil,
+		"s": "a", "date": "2000-01-01T00:00:00Z", "binary": "YQ==", "i": 0.0, "n": 0.0, "b": false,
+		"e": "one", "eany": "three", "maybe": "a", "raw": "a", "weird": nil,
 	}
 	for k, v := range expected {
 		got, ok := args[k]

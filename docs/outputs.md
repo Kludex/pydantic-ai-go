@@ -31,6 +31,8 @@ func main() {
 
 The agent reflects a Draft 2020-12 JSON Schema. It validates the raw response before decoding it into `City`.
 
+Reflection follows `json` names and optional fields. It promotes anonymous embedded structs. Pointers accept `null`. `time.Time`, text marshalers, `[]byte`, and `json.RawMessage` use their JSON representations. Use `jsonschema` entries such as `description=...`, `enum=...`, `minimum=...`, `maxLength=...`, `format=...`, or `pattern=...` for additional constraints.
+
 ## Multiple output alternatives
 
 Use `UnionOutput` when the model can return one of several Go types:
@@ -261,7 +263,7 @@ func main() {
 ```
 
 - `OutputModeTool` asks the model to call a final-result tool.
-- `OutputModeNative` uses the provider's native JSON Schema feature. OpenAI Chat Completions, OpenAI Responses, and Gemini support it.
+- `OutputModeNative` uses the provider's native JSON Schema feature. OpenAI Chat Completions, OpenAI Responses, Anthropic, Gemini, and Bedrock support it on compatible models.
 - `OutputModePrompted` puts the schema in the instructions and validates returned JSON.
 - `OutputModeAuto` resolves the mode after model selection.
 

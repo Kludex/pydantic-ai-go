@@ -175,6 +175,36 @@ func main() {
 
 The compatibility layer sends OpenAI wire formats. It cannot make an endpoint support OpenAI features that the endpoint does not implement.
 
+## Cerebras
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/cerebras"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](cerebras.NewModel("gpt-oss-120b"))
+	result, err := agent.Run(context.Background(), "Explain why the sky is blue.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `CEREBRAS_API_KEY`.
+
+Cerebras returns reasoning either through the OpenAI-compatible `reasoning` field or inside `<think>` tags. Both forms become `ThinkingPart`. GLM history replays reasoning with the tags Cerebras requires and defaults `clear_thinking` to `false`. Portable disabled thinking maps to `reasoning_effort: "none"` for GLM. GPT-OSS always reasons, so disabled thinking is omitted instead of sending an invalid setting. Cerebras documents `logit_bias` but does not apply it, so the adapter omits the portable field.
+
+Use `cerebras.Settings` for the typed `ClearThinking` and legacy `DisableReasoning` controls. `Settings.Build` returns detached `ai.ModelSettings` and rejects conflicts with `ExtraBody`.
+
 ## Ollama
 
 ```go

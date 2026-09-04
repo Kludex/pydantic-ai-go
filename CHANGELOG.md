@@ -63,6 +63,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Complete Draft 2020-12 reflected-schema annotations with structured merge and replacement escapes.
 - Normalize tagged Chat Completions reasoning, moderation metadata, and `o1-mini` instruction roles.
 - Add local and Ollama Cloud Chat Completions models with image, reasoning, and structured-output support.
+- Add Cerebras Chat Completions models with GLM and GPT-OSS reasoning behavior.
 
 ### Deprecated
 

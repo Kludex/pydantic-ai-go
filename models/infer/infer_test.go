@@ -27,6 +27,7 @@ func TestModels(t *testing.T) {
 		{"anthropic:claude-sonnet-4-5", "anthropic"},
 		{"google:gemini-2.5-flash", "google"},
 		{"bedrock:us.amazon.nova-lite-v1:0", "bedrock"},
+		{"cerebras:gpt-oss-120b", "cerebras"},
 		{"groq:openai/gpt-oss-20b", "groq"},
 		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},

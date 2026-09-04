@@ -98,9 +98,20 @@ func TestDefaultToolSearchDiscoversMostRelevantDeferredTool(t *testing.T) {
 	agent.AddToolset(ai.WithToolSearch(ai.NewFunctionToolset(status, profile, comment), ai.ToolSearchConfig[deps]{
 		MaxResults: 1, ToolDescription: "Find GitHub tools.", QueryDescription: "GitHub operations.",
 	}))
-	result, err := agent.Run(t.Context(), "find my profile", deps{})
-	if err != nil || result.Output != "done" {
-		t.Fatalf("unexpected search result=%+v err=%v", result, err)
+	stream := agent.RunStream(t.Context(), "find my profile", deps{})
+	var revealed [][]string
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if delta, ok := event.(ai.ToolAvailabilityDeltaEvent); ok {
+			revealed = append(revealed, slices.Clone(delta.Part.ToolsAdded))
+			delta.Part.ToolsAdded[0] = "mutated"
+		}
+	}
+	result := stream.Result()
+	if result == nil || result.Output != "done" || !slices.EqualFunc(revealed, [][]string{{"github_get_me"}, {"github_comment"}}, slices.Equal) {
+		t.Fatalf("unexpected search result=%+v revealed=%v", result, revealed)
 	}
 }
 

@@ -341,6 +341,14 @@ type OutputToolResultEvent struct {
 
 func (OutputToolResultEvent) streamEventKind() string { return "output-tool-result" }
 
+// ToolAvailabilityDeltaEvent announces tools revealed by a completed tool call.
+type ToolAvailabilityDeltaEvent struct {
+	// Part is the detached availability change added to history.
+	Part ToolAvailabilityDeltaPart
+}
+
+func (ToolAvailabilityDeltaEvent) streamEventKind() string { return "tool-availability-delta" }
+
 // DeferredToolRequestsEvent announces the batch of external calls and
 // approvals that paused the run.
 type DeferredToolRequestsEvent struct {

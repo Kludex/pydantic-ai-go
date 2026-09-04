@@ -126,8 +126,14 @@ Set `SDKVersion` to 6 or 7 to emit `tool-approval-request` chunks for tools regi
 
 To change the arguments before execution, replace the tool part's `input` value and approve it. The adapter validates and executes that replacement instead of the model-generated arguments.
 
+## Preserve compaction and discovered tools
+
+The adapter uses `data-compaction` parts for provider compaction boundaries. It uses `data-tool-availability-delta` parts for tools revealed during a run. Keep these data parts in client-held history so later requests preserve the compacted context and deferred-tool visibility.
+
+Unrecognized `data-*` parts remain UI-only and are not sent to the model.
+
 ## Current scope
 
-The adapter supports AI SDK UI versions 5 through 7 for text, files, reasoning, function and provider-native tool inputs and outputs, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
+The adapter supports AI SDK UI versions 5 through 7 for text, files, reasoning, function and provider-native tool inputs and outputs, compaction boundaries, tool-availability changes, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
 
-Vercel AI source and data parts, provider metadata, message metadata, external deferred resumes, compaction activities, tool-availability data, cancellation chunks, and remaining version-specific fields remain.
+Vercel AI source and custom data parts, provider metadata, message metadata, external deferred resumes, cancellation chunks, and remaining version-specific fields remain.

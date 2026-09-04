@@ -2994,7 +2994,16 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 	if err := r.emitPendingCallResults(outcomes); err != nil {
 		return nil, nil, err
 	}
-	return append(parts, r.normalizeOutcomeExtraParts(outcomes)...), winner, nil
+	extraParts := r.normalizeOutcomeExtraParts(outcomes)
+	for _, extra := range extraParts {
+		if delta, ok := extra.(ToolAvailabilityDeltaPart); ok {
+			delta.ToolsAdded = slices.Clone(delta.ToolsAdded)
+			if !r.emitStreamEvent(ToolAvailabilityDeltaEvent{Part: delta}) {
+				return nil, nil, context.Canceled
+			}
+		}
+	}
+	return append(parts, extraParts...), winner, nil
 }
 
 func (r *run[Deps, Output]) normalizeOutcomeExtraParts(

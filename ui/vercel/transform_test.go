@@ -35,6 +35,13 @@ func TestTransformStreamVariants(t *testing.T) {
 				Data: []byte("second"), MediaType: "image/png",
 			}}}},
 			ai.PartEndEvent{PartID: "file", Part: ai.FilePart{}},
+			ai.PartStartEvent{PartID: "compaction", Part: ai.CompactionPart{
+				Content: "summary", ID: "compact-1", ProviderName: "openai",
+				ProviderDetails: map[string]any{"encrypted": "value"},
+			}},
+			ai.ToolAvailabilityDeltaEvent{Part: ai.ToolAvailabilityDeltaPart{
+				ToolsAdded: []string{"search"}, ToolCallID: "reveal-1",
+			}},
 			ai.FinishEvent{FinishReason: ai.FinishReasonToolCall},
 		}
 		for _, event := range events {
@@ -59,6 +66,7 @@ func TestTransformStreamVariants(t *testing.T) {
 		vercel.ChunkReasoningStart, vercel.ChunkReasoningDelta, vercel.ChunkReasoningEnd,
 		vercel.ChunkToolInputStart, vercel.ChunkToolInputDelta, vercel.ChunkToolInputAvailable,
 		vercel.ChunkToolOutputAvailable, vercel.ChunkToolOutputError, vercel.ChunkFile,
+		vercel.ChunkDataCompaction, vercel.ChunkDataToolAvailability,
 	} {
 		if chunkIndex(chunks, kind) < 0 {
 			t.Fatalf("missing %s: %#v", kind, chunks)
@@ -77,6 +85,16 @@ func TestTransformStreamVariants(t *testing.T) {
 	if len(files) != 2 || files[0].URL != "data:image/png;base64,Zmlyc3Q=" ||
 		files[1].URL != "data:image/png;base64,c2Vjb25k" || files[1].MediaType != "image/png" {
 		t.Fatalf("unexpected files: %#v", files)
+	}
+	compaction := chunks[chunkIndex(chunks, vercel.ChunkDataCompaction)].Data
+	if compaction["content"] != "summary" || compaction["id"] != "compact-1" ||
+		compaction["provider_name"] != "openai" ||
+		compaction["provider_details"].(map[string]any)["encrypted"] != "value" {
+		t.Fatalf("unexpected compaction data: %#v", compaction)
+	}
+	availability := chunks[chunkIndex(chunks, vercel.ChunkDataToolAvailability)].Data
+	if availability["tool_call_id"] != "reveal-1" || availability["added"].([]string)[0] != "search" {
+		t.Fatalf("unexpected tool availability data: %#v", availability)
 	}
 }
 

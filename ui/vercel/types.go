@@ -49,6 +49,10 @@ const (
 	ChunkToolApprovalRequest ChunkType = "tool-approval-request"
 	// ChunkFile carries one model-generated file as a data URL.
 	ChunkFile ChunkType = "file"
+	// ChunkDataCompaction carries a durable compaction boundary.
+	ChunkDataCompaction ChunkType = "data-compaction"
+	// ChunkDataToolAvailability carries tools revealed by an earlier result.
+	ChunkDataToolAvailability ChunkType = "data-tool-availability-delta"
 )
 
 // Chunk is one JSON Vercel AI UI message stream value.
@@ -83,6 +87,8 @@ type Chunk struct {
 	URL string `json:"url,omitempty"`
 	// MediaType is the IANA media type of a file.
 	MediaType string `json:"mediaType,omitempty"`
+	// Data contains a protocol-specific data-part payload.
+	Data map[string]any `json:"data,omitempty"`
 }
 
 // RequestData is a Vercel AI submit-message or regenerate-message request.
@@ -131,6 +137,8 @@ type UIMessagePart struct {
 	MediaType string `json:"mediaType,omitempty"`
 	// Filename is the optional display name supplied by the client.
 	Filename string `json:"filename,omitempty"`
+	// Data contains a data-name-prefixed part payload.
+	Data map[string]any `json:"data,omitempty"`
 }
 
 // ToolApproval is one Vercel AI tool approval state.

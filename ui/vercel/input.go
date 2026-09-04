@@ -26,18 +26,26 @@ func PrepareInput(
 	if err != nil {
 		return ai.UserPromptPart{}, nil, report, err
 	}
-	for index := len(sanitized) - 1; index >= 0; index-- {
-		request, ok := sanitized[index].(ai.ModelRequest)
-		if !ok || len(request.Parts) != 1 {
-			continue
-		}
-		prompt, ok := request.Parts[0].(ai.UserPromptPart)
+	for messageIndex := len(sanitized) - 1; messageIndex >= 0; messageIndex-- {
+		request, ok := sanitized[messageIndex].(ai.ModelRequest)
 		if !ok {
 			continue
 		}
-		history := append([]ai.ModelMessage(nil), sanitized[:index]...)
-		history = append(history, sanitized[index+1:]...)
-		return prompt, history, report, nil
+		for partIndex := len(request.Parts) - 1; partIndex >= 0; partIndex-- {
+			prompt, ok := request.Parts[partIndex].(ai.UserPromptPart)
+			if !ok {
+				continue
+			}
+			history := append([]ai.ModelMessage(nil), sanitized[:messageIndex]...)
+			remaining := append([]ai.RequestPart(nil), request.Parts[:partIndex]...)
+			remaining = append(remaining, request.Parts[partIndex+1:]...)
+			if len(remaining) > 0 {
+				request.Parts = remaining
+				history = append(history, request)
+			}
+			history = append(history, sanitized[messageIndex+1:]...)
+			return prompt, history, report, nil
+		}
 	}
 	return ai.UserPromptPart{}, nil, report, fmt.Errorf("vercel: input requires a user message")
 }
@@ -101,11 +109,11 @@ func convertMessages(messages []UIMessage) ([]ai.ModelMessage, error) {
 				ai.SystemPromptPart{Content: text},
 			}})
 		case "user":
-			prompt, err := userMessage(message.Parts)
+			parts, err := userMessage(message.Parts)
 			if err != nil {
 				return nil, err
 			}
-			converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{prompt}})
+			converted = append(converted, ai.ModelRequest{Parts: parts})
 		case "assistant":
 			response, results, err := assistantMessage(message.Parts)
 			if err != nil {
@@ -131,12 +139,13 @@ func messageText(parts []UIMessagePart) (string, error) {
 	return strings.Join(text, ""), nil
 }
 
-func userMessage(parts []UIMessagePart) (ai.UserPromptPart, error) {
+func userMessage(parts []UIMessagePart) ([]ai.RequestPart, error) {
 	if onlyText := len(parts) == 0 || allText(parts); onlyText {
 		text, err := messageText(parts)
-		return ai.UserPromptPart{Content: text}, err
+		return []ai.RequestPart{ai.UserPromptPart{Content: text}}, err
 	}
 	contents := make([]ai.UserContent, 0, len(parts))
+	requestParts := make([]ai.RequestPart, 0, 2)
 	for _, part := range parts {
 		switch part.Type {
 		case "text":
@@ -144,14 +153,21 @@ func userMessage(parts []UIMessagePart) (ai.UserPromptPart, error) {
 		case "file":
 			file, err := userFile(part)
 			if err != nil {
-				return ai.UserPromptPart{}, err
+				return nil, err
 			}
 			contents = append(contents, file)
+		case string(ChunkDataToolAvailability):
+			requestParts = append(requestParts, toolAvailabilityPart(part.Data))
 		default:
-			return ai.UserPromptPart{}, fmt.Errorf("vercel: unsupported user part %q", part.Type)
+			if !strings.HasPrefix(part.Type, "data-") {
+				return nil, fmt.Errorf("vercel: unsupported user part %q", part.Type)
+			}
 		}
 	}
-	return ai.UserPromptPart{Contents: contents}, nil
+	if len(contents) > 0 {
+		requestParts = append(requestParts, ai.UserPromptPart{Contents: contents})
+	}
+	return requestParts, nil
 }
 
 func allText(parts []UIMessagePart) bool {
@@ -178,6 +194,11 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: decode assistant file: %w", err)
 			}
 			response.Parts = append(response.Parts, ai.FilePart{Content: file})
+		case part.Type == string(ChunkDataCompaction):
+			if compaction, ok := compactionPart(part.Data); ok {
+				response.Parts = append(response.Parts, compaction)
+			}
+		case strings.HasPrefix(part.Type, "data-"):
 		case strings.HasPrefix(part.Type, "tool-"):
 			if part.ToolCallID == "" {
 				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: tool part requires a toolCallId")

@@ -79,6 +79,7 @@ func TestStreamEventKinds(t *testing.T) {
 		{OutputToolCallEvent{}, "output-tool-call"},
 		{FunctionToolResultEvent{}, "function-tool-result"},
 		{OutputToolResultEvent{}, "output-tool-result"},
+		{ToolAvailabilityDeltaEvent{}, "tool-availability-delta"},
 		{FinishEvent{}, "finish"},
 	}
 	for _, test := range streamKinds {

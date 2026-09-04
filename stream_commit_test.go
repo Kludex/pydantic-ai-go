@@ -84,6 +84,37 @@ func TestRunStreamCommittedToolsPreserveReveals(t *testing.T) {
 	}
 }
 
+func TestRunStreamToolAvailabilityConsumerStops(t *testing.T) {
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ToolCallStartEvent{ToolName: "loader", ToolCallID: "loader"},
+			ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
+			ai.FinishEvent{},
+		}
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddSimpleTool(agent, "loader", func(context.Context, struct{}) (ai.ToolReturn, error) {
+		return ai.ToolReturn{ReturnValue: "loaded", Tools: []string{"target"}}, nil
+	})
+	ai.AddSimpleTool(agent, "target", func(context.Context, struct{}) (string, error) {
+		return "target", nil
+	}, ai.WithDeferredLoading())
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	seen := false
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := event.(ai.ToolAvailabilityDeltaEvent); ok {
+			seen = true
+			break
+		}
+	}
+	if !seen || stream.Result() != nil {
+		t.Fatalf("unexpected detached stream: seen=%v result=%+v", seen, stream.Result())
+	}
+}
+
 func TestRunStreamCommitsFirstOutputTool(t *testing.T) {
 	tests := []struct {
 		strategy       ai.EndStrategy

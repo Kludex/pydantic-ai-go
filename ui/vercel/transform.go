@@ -93,6 +93,8 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 			}
 		case ai.FilePart:
 			return yield(fileChunk(part), nil)
+		case ai.CompactionPart:
+			return yield(Chunk{Type: ChunkDataCompaction, Data: compactionData(part)}, nil)
 		case ai.ToolCallPart:
 			if !state.startTool(yield, value.PartID, part.ToolCallID, part.ToolName, string(part.Args), false) {
 				return false
@@ -139,6 +141,8 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		return state.requestResult(yield, value.Part, false)
 	case ai.OutputToolResultEvent:
 		return state.requestResult(yield, value.Part, false)
+	case ai.ToolAvailabilityDeltaEvent:
+		return yield(Chunk{Type: ChunkDataToolAvailability, Data: toolAvailabilityData(value.Part)}, nil)
 	case ai.DeferredToolRequestsEvent:
 		if state.sdkVersion >= 6 {
 			for _, call := range value.Requests.Approvals {

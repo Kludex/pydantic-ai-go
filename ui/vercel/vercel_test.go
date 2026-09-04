@@ -120,6 +120,55 @@ func TestPrepareInputFiles(t *testing.T) {
 	}
 }
 
+func TestPrepareInputDataParts(t *testing.T) {
+	prompt, history, _, err := vercel.PrepareInput(vercel.RequestData{
+		Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+			{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
+				{Type: string(vercel.ChunkDataCompaction), Data: map[string]any{
+					"content": "summary", "id": "compact-1", "provider_name": "openai",
+					"provider_details": map[string]any{"encrypted": "value"},
+				}},
+				{Type: "data-custom", Data: map[string]any{"ignored": true}},
+			}},
+			{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{
+				{Type: string(vercel.ChunkDataToolAvailability), Data: map[string]any{
+					"added": []any{"search", "bad name", 1}, "tool_call_id": "reveal-1",
+				}},
+				{Type: "data-custom", Data: map[string]any{"ignored": true}},
+				{Type: "text", Text: "Continue."},
+			}},
+		},
+	}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt.Contents[0].(ai.TextContent).Text != "Continue." || len(history) != 2 {
+		t.Fatalf("unexpected data input: prompt=%#v history=%#v", prompt, history)
+	}
+	compaction := history[0].(ai.ModelResponse).Parts[0].(ai.CompactionPart)
+	if compaction.Content != "summary" || compaction.ID != "compact-1" ||
+		compaction.ProviderDetails["encrypted"] != "value" {
+		t.Fatalf("unexpected compaction: %#v", compaction)
+	}
+	delta := history[1].(ai.ModelRequest).Parts[0].(ai.ToolAvailabilityDeltaPart)
+	if len(delta.ToolsAdded) != 1 || delta.ToolsAdded[0] != "search" || delta.ToolCallID != "reveal-1" {
+		t.Fatalf("unexpected availability delta: %#v", delta)
+	}
+
+	prompt, history, _, err = vercel.PrepareInput(vercel.RequestData{
+		Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+			{ID: "old", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "old"}}},
+			{ID: "data", Role: "user", Parts: []vercel.UIMessagePart{{
+				Type: string(vercel.ChunkDataToolAvailability), Data: map[string]any{"added": []string{"next"}},
+			}}},
+		},
+	}, ai.MessageSanitizationOptions{})
+	if err != nil || prompt.Content != "old" || len(history) != 1 ||
+		history[0].(ai.ModelRequest).Parts[0].(ai.ToolAvailabilityDeltaPart).ToolsAdded[0] != "next" {
+		t.Fatalf("unexpected data-only message: prompt=%#v history=%#v err=%v", prompt, history, err)
+	}
+}
+
 func TestInputValidation(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -147,6 +196,21 @@ func TestInputValidation(t *testing.T) {
 		{name: "tool input", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", Input: []byte("{")}}}), match: "not valid JSON"},
 		{name: "tool output", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", State: "output-available", Output: []byte("{")}}}), match: "decode tool"},
 		{name: "assistant part", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "future"}}}), match: "unsupported assistant part"},
+		{name: "invalid compaction field", input: requestWith(
+			vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+				Type: string(vercel.ChunkDataCompaction), Data: map[string]any{"content": 1},
+			}}},
+		), match: "requires a user"},
+		{name: "invalid compaction provider", input: requestWith(
+			vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+				Type: string(vercel.ChunkDataCompaction), Data: map[string]any{"id": "compact"},
+			}}},
+		), match: "requires a user"},
+		{name: "empty compaction", input: requestWith(
+			vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+				Type: string(vercel.ChunkDataCompaction), Data: map[string]any{},
+			}}},
+		), match: "requires a user"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

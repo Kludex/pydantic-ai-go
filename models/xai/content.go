@@ -29,8 +29,6 @@ func validateMessages(messages []ai.ModelMessage) error {
 					return fmt.Errorf("xai: audio URL input is not supported")
 				case ai.VideoURL:
 					return fmt.Errorf("xai: video URL input is not supported")
-				case ai.DocumentURL:
-					return fmt.Errorf("xai: document URL input requires file upload support")
 				}
 			}
 		}

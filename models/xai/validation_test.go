@@ -113,7 +113,6 @@ func TestUnsupportedContent(t *testing.T) {
 		{name: "binary", content: ai.BinaryContent{Data: []byte("audio"), MediaType: "audio/mpeg"}, want: "binary input"},
 		{name: "audio URL", content: ai.AudioURL{URL: "https://example.com/audio.mp3"}, want: "audio URL"},
 		{name: "video URL", content: ai.VideoURL{URL: "https://example.com/video.mp4"}, want: "video URL"},
-		{name: "document URL", content: ai.DocumentURL{URL: "https://example.com/file.pdf"}, want: "file upload"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {

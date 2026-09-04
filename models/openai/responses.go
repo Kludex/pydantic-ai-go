@@ -919,8 +919,9 @@ type responsesResponse struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
-	Output []responsesOutputItem `json:"output"`
-	Usage  responsesUsage        `json:"usage"`
+	Output    []responsesOutputItem `json:"output"`
+	Citations []string              `json:"citations"`
+	Usage     responsesUsage        `json:"usage"`
 }
 
 type responsesOutputItem struct {
@@ -967,9 +968,10 @@ type responsesOutputItem struct {
 }
 
 type responsesUsage struct {
-	InputTokens        int `json:"input_tokens"`
-	OutputTokens       int `json:"output_tokens"`
-	InputTokensDetails struct {
+	InputTokens         int      `json:"input_tokens"`
+	OutputTokens        int      `json:"output_tokens"`
+	ServerSideToolsUsed []string `json:"server_side_tools_used"`
+	InputTokensDetails  struct {
 		CachedTokens     int `json:"cached_tokens"`
 		CacheWriteTokens int `json:"cache_write_tokens"`
 	} `json:"input_tokens_details"`
@@ -979,12 +981,16 @@ type responsesUsage struct {
 }
 
 func (u responsesUsage) usage() ai.Usage {
+	details := map[string]int{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens}
+	for _, tool := range u.ServerSideToolsUsed {
+		details["server_side_tools_"+tool]++
+	}
 	return ai.Usage{
 		Requests: 1, InputTokens: u.InputTokens, OutputTokens: u.OutputTokens,
 		CacheWriteTokens: u.InputTokensDetails.CacheWriteTokens,
 		CacheReadTokens:  u.InputTokensDetails.CachedTokens,
 		ReasoningTokens:  u.OutputTokensDetails.ReasoningTokens,
-		Details:          map[string]int{"reasoning_tokens": u.OutputTokensDetails.ReasoningTokens},
+		Details:          details,
 	}
 }
 
@@ -1308,6 +1314,9 @@ func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool
 		case "x_search_call":
 			call, returned := responsesSearchParts(item, timestamp, "x_search", ai.ToolPartKindXSearch)
 			resp.Parts = append(resp.Parts, call, returned)
+		case "attachment_search_call":
+			call, returned := responsesSearchParts(item, timestamp, "attachment_search", ai.ToolPartKindFileSearch)
+			resp.Parts = append(resp.Parts, call, returned)
 		case "mcp_approval_request":
 			return nil, fmt.Errorf("openai: MCP approval requests are not supported")
 		case "mcp_list_tools", "mcp_call":
@@ -1388,6 +1397,19 @@ func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool
 					Content: s.Text, ID: item.ID, Signature: signature, ProviderName: "openai",
 				})
 			}
+		}
+	}
+	if len(rr.Citations) > 0 {
+		citations := slices.Clone(rr.Citations)
+		for index, part := range resp.Parts {
+			returned, ok := part.(ai.NativeToolReturnPart)
+			if !ok || returned.ToolKind != ai.ToolPartKindXSearch {
+				continue
+			}
+			content := returned.Content.(map[string]any)
+			content["citations"] = slices.Clone(citations)
+			returned.Content = content
+			resp.Parts[index] = returned
 		}
 	}
 	if hasRefusal {

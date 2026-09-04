@@ -358,12 +358,17 @@ func (m *ResponsesModel) responsesEventStream(
 					}, nil) {
 						return
 					}
-				case "x_search_call":
+				case "x_search_call", "attachment_search_call":
 					emittedParts = true
+					toolName := "x_search"
+					toolKind := ai.ToolPartKindXSearch
+					if event.Item.Type == "attachment_search_call" {
+						toolName = "attachment_search"
+						toolKind = ai.ToolPartKindFileSearch
+					}
 					if !yield(ai.ToolCallStartEvent{
-						PartID: responsesToolPartID(event), ToolName: "x_search", ToolCallID: event.Item.ID,
-						ToolKind: ai.ToolPartKindXSearch, ID: event.Item.ID,
-						ProviderName: m.providerName, Native: true,
+						PartID: responsesToolPartID(event), ToolName: toolName, ToolCallID: event.Item.ID,
+						ToolKind: toolKind, ID: event.Item.ID, ProviderName: m.providerName, Native: true,
 					}, nil) {
 						return
 					}
@@ -515,10 +520,14 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 					continue
 				}
-				if event.Item.Type == "x_search_call" {
-					call, returned := responsesSearchParts(
-						event.Item, responseTimestamp, "x_search", ai.ToolPartKindXSearch,
-					)
+				if event.Item.Type == "x_search_call" || event.Item.Type == "attachment_search_call" {
+					toolName := "x_search"
+					toolKind := ai.ToolPartKindXSearch
+					if event.Item.Type == "attachment_search_call" {
+						toolName = "attachment_search"
+						toolKind = ai.ToolPartKindFileSearch
+					}
+					call, returned := responsesSearchParts(event.Item, responseTimestamp, toolName, toolKind)
 					returned.ProviderName = m.providerName
 					if !yield(ai.ToolCallDeltaEvent{
 						PartID: responsesToolPartID(event), ToolCallID: call.ToolCallID, ArgsDelta: string(call.Args),

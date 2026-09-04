@@ -31,7 +31,7 @@ func TestResponsesXAITools(t *testing.T) {
 				t.Errorf("unexpected xAI tools: %#v", tools)
 			}
 		}
-		_, _ = io.WriteString(response, `{"id":"response","model":"grok-4.3","status":"completed","output":[{"id":"x","type":"x_search_call","status":"completed","output":"result","results":[{"url":"https://x.com/post"}]},{"id":"collection","type":"collections_search_call","status":"completed","queries":["docs"],"results":[{"text":"result"}]}]}`)
+		_, _ = io.WriteString(response, `{"id":"response","model":"grok-4.3","status":"completed","citations":["https://x.com/citation"],"usage":{"server_side_tools_used":["x_search","x_search"]},"output":[{"id":"x","type":"x_search_call","status":"completed","output":"result","results":[{"url":"https://x.com/post"}]},{"id":"collection","type":"collections_search_call","status":"completed","queries":["docs"],"results":[{"text":"result"}]},{"id":"attachment","type":"attachment_search_call","status":"completed","action":{"query":"file"},"output":"attachment result"}]}`)
 	}))
 	defer server.Close()
 	model := openai.NewResponsesModel("grok-4.3", openai.WithProvider(openai.ProviderConfig{
@@ -52,12 +52,15 @@ func TestResponsesXAITools(t *testing.T) {
 			AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"spam.example"}, ExternalWebAccess: &external,
 		},
 	}})
-	if err != nil || len(response.Parts) != 4 || response.Parts[0].(ai.NativeToolCallPart).ToolKind != ai.ToolPartKindXSearch {
+	if err != nil || len(response.Parts) != 6 || response.Parts[0].(ai.NativeToolCallPart).ToolKind != ai.ToolPartKindXSearch {
 		t.Fatalf("unexpected xAI response: %#v %v", response, err)
 	}
-	if response.Parts[1].(ai.NativeToolReturnPart).Content.(map[string]any)["output"] != "result" ||
-		response.Parts[3].(ai.NativeToolReturnPart).Content.(map[string]any)["results"] == nil {
-		t.Fatalf("unexpected xAI tool results: %#v", response.Parts)
+	xResult := response.Parts[1].(ai.NativeToolReturnPart).Content.(map[string]any)
+	if xResult["output"] != "result" || xResult["citations"].([]string)[0] != "https://x.com/citation" ||
+		response.Parts[3].(ai.NativeToolReturnPart).Content.(map[string]any)["results"] == nil ||
+		response.Parts[4].(ai.NativeToolCallPart).ToolName != "attachment_search" ||
+		response.Usage.Details["server_side_tools_x_search"] != 2 {
+		t.Fatalf("unexpected xAI tool results: %#v", response)
 	}
 	history := []ai.ModelMessage{*response}
 	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
@@ -134,7 +137,9 @@ func TestResponsesXAIToolStream(t *testing.T) {
 		`{"type":"response.output_item.done","item":{"id":"x","type":"x_search_call","status":"completed","action":{"query":"go"},"output":"result"}}`,
 		`{"type":"response.output_item.added","item":{"id":"collection","type":"collections_search_call","status":"in_progress"}}`,
 		`{"type":"response.output_item.done","item":{"id":"collection","type":"collections_search_call","status":"completed","queries":["docs"]}}`,
-		`{"type":"response.completed","response":{"id":"response","model":"grok","created_at":100,"status":"completed","output":[{"id":"x","type":"x_search_call","status":"completed","action":{"query":"go"}},{"id":"collection","type":"collections_search_call","status":"completed","queries":["docs"]}]}}`,
+		`{"type":"response.output_item.added","item":{"id":"attachment","type":"attachment_search_call","status":"in_progress"}}`,
+		`{"type":"response.output_item.done","item":{"id":"attachment","type":"attachment_search_call","status":"completed","action":{"query":"file"},"output":"result"}}`,
+		`{"type":"response.completed","response":{"id":"response","model":"grok","created_at":100,"status":"completed","output":[{"id":"x","type":"x_search_call","status":"completed","action":{"query":"go"}},{"id":"collection","type":"collections_search_call","status":"completed","queries":["docs"]},{"id":"attachment","type":"attachment_search_call","status":"completed","action":{"query":"file"},"output":"result"}]}}`,
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "text/event-stream")
@@ -163,7 +168,7 @@ func TestResponsesXAIToolStream(t *testing.T) {
 			returns++
 		}
 	}
-	if starts != 2 || returns != 2 {
+	if starts != 3 || returns != 3 {
 		t.Fatalf("unexpected lifecycle: %d starts, %d returns", starts, returns)
 	}
 	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})

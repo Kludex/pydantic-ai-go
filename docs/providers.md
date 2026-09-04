@@ -479,7 +479,7 @@ func main() {
 
 Set `XAI_API_KEY`.
 
-The adapter uses xAI's Responses-compatible HTTP endpoint because xAI does not publish an official Go SDK. It supports static and streamed text, encrypted reasoning, function tools, native JSON Schema output, uploaded files, log probabilities, usage, and xAI conversation settings.
+The adapter uses xAI's Responses-compatible HTTP endpoint because xAI does not publish an official Go SDK. It supports static and streamed text, encrypted reasoning, function tools, native JSON Schema output, uploaded files, log probabilities, usage, and xAI conversation settings. Direct binary documents and document URLs are safely uploaded through the xAI Files API before generation.
 
 Grok 4, code, and build models support hosted web search, X search, code execution, MCP servers, and managed collections search. `xai.Settings` configures output inclusion, stored-response continuity, reasoning effort, server-side turn limits, and multi-agent counts. Unsupported required native tools fail before transport.
 

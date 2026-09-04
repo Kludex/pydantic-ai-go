@@ -16,11 +16,21 @@ const defaultBaseURL = "https://api.x.ai/v1"
 
 // Model calls an xAI Grok model.
 type Model struct {
-	model *openai.ResponsesModel
+	model          *openai.ResponsesModel
+	apiKey         string
+	baseURL        string
+	httpClient     *http.Client
+	headers        http.Header
+	prepareRequest openai.RequestPreparationFunc
 }
 
 type config struct {
-	options []openai.Option
+	options        []openai.Option
+	apiKey         string
+	baseURL        string
+	httpClient     *http.Client
+	headers        http.Header
+	prepareRequest openai.RequestPreparationFunc
 }
 
 // Option configures an xAI model.
@@ -28,23 +38,39 @@ type Option func(*config)
 
 // WithAPIKey sets the API key. The default is XAI_API_KEY.
 func WithAPIKey(key string) Option {
-	return func(config *config) { config.options = append(config.options, openai.WithAPIKey(key)) }
+	return func(config *config) {
+		config.apiKey = key
+		config.options = append(config.options, openai.WithAPIKey(key))
+	}
 }
 
 // WithBaseURL points the model at an xAI-compatible endpoint.
 func WithBaseURL(baseURL string) Option {
-	return func(config *config) { config.options = append(config.options, openai.WithBaseURL(baseURL)) }
+	return func(config *config) {
+		config.baseURL = baseURL
+		config.options = append(config.options, openai.WithBaseURL(baseURL))
+	}
 }
 
 // WithHTTPClient sets the HTTP client used for requests.
 func WithHTTPClient(client *http.Client) Option {
-	return func(config *config) { config.options = append(config.options, openai.WithHTTPClient(client)) }
+	return func(config *config) {
+		config.httpClient = client
+		config.options = append(config.options, openai.WithHTTPClient(client))
+	}
 }
 
 // WithProvider configures a gateway while retaining xAI request semantics.
 func WithProvider(provider openai.ProviderConfig) Option {
 	provider.Name = "xai"
-	return func(config *config) { config.options = append(config.options, openai.WithProvider(provider)) }
+	return func(config *config) {
+		config.apiKey = provider.APIKey
+		config.baseURL = provider.BaseURL
+		config.httpClient = provider.HTTPClient
+		config.headers = provider.Headers.Clone()
+		config.prepareRequest = provider.PrepareRequest
+		config.options = append(config.options, openai.WithProvider(provider))
+	}
 }
 
 // WithDefaultSettings sets request defaults overridden by agent and run settings.
@@ -64,7 +90,11 @@ func NewProviderConfig() openai.ProviderConfig {
 
 // NewModel creates an xAI model.
 func NewModel(name string, options ...Option) *Model {
-	configuration := config{}
+	provider := NewProviderConfig()
+	configuration := config{
+		apiKey: provider.APIKey, baseURL: provider.BaseURL, httpClient: provider.HTTPClient,
+		headers: provider.Headers.Clone(), prepareRequest: provider.PrepareRequest,
+	}
 	for _, option := range options {
 		option(&configuration)
 	}
@@ -74,7 +104,15 @@ func NewModel(name string, options ...Option) *Model {
 		openai.WithResponsesFileSearchResults(true),
 	}
 	openAIOptions = append(openAIOptions, configuration.options...)
-	return &Model{model: openai.NewResponsesModel(name, openAIOptions...)}
+	httpClient := configuration.httpClient
+	if httpClient == nil {
+		httpClient = http.DefaultClient
+	}
+	return &Model{
+		model: openai.NewResponsesModel(name, openAIOptions...), apiKey: configuration.apiKey,
+		baseURL: configuration.baseURL, httpClient: httpClient, headers: configuration.headers.Clone(),
+		prepareRequest: configuration.prepareRequest,
+	}
 }
 
 // Name returns the configured model name.
@@ -113,6 +151,10 @@ func (model *Model) SupportsNativeTool(tool ai.NativeTool) bool {
 func (model *Model) Request(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*ai.ModelResponse, error) {
+	messages, err := model.prepareMessages(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateMessages(messages); err != nil {
 		return nil, err
 	}
@@ -127,6 +169,10 @@ func (model *Model) Request(
 func (model *Model) StreamRequest(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+	messages, err := model.prepareMessages(ctx, messages)
+	if err != nil {
+		return nil, err
+	}
 	if err := validateMessages(messages); err != nil {
 		return nil, err
 	}

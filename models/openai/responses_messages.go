@@ -365,6 +365,13 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				continue
 			}
 			if part.ToolKind == ai.ToolPartKindFileSearch && part.ToolCallID != "" {
+				if part.ToolName == "attachment_search" {
+					out = append(out, responsesInput{
+						Type: "attachment_search_call", ID: part.ToolCallID,
+						Action: slices.Clone(part.Args), Status: "completed",
+					})
+					continue
+				}
 				var arguments struct {
 					Queries []string `json:"queries"`
 				}

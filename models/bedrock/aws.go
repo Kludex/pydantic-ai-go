@@ -96,8 +96,15 @@ func (client *awsClient) ConverseStream(
 	if err != nil {
 		return nil, err
 	}
-	return output.GetStream(), nil
+	return &awsEventStream{EventStream: output.GetStream(), metadata: output.ResultMetadata}, nil
 }
+
+type awsEventStream struct {
+	EventStream
+	metadata middleware.Metadata
+}
+
+func (stream *awsEventStream) ResultMetadata() middleware.Metadata { return stream.metadata }
 
 func (client *awsClient) CountTokens(
 	ctx context.Context, input *bedrockruntime.CountTokensInput, options ...func(*bedrockruntime.Options),

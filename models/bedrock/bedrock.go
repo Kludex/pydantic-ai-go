@@ -13,6 +13,7 @@ import (
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go/middleware"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -33,6 +34,14 @@ type EventStream interface {
 	Close() error
 	// Err returns the terminal stream-reader error.
 	Err() error
+}
+
+// ResultMetadataEventStream exposes AWS operation metadata for a stream.
+// Custom clients may implement it to preserve the provider request ID.
+type ResultMetadataEventStream interface {
+	EventStream
+	// ResultMetadata returns detached AWS operation metadata.
+	ResultMetadata() middleware.Metadata
 }
 
 // StreamingClient is the optional Bedrock Runtime streaming surface.

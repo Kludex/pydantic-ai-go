@@ -7,10 +7,12 @@ import (
 	"testing"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go/middleware"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/bedrock"
@@ -27,6 +29,7 @@ func (valueStream) Err() error                                       { return ni
 type fakeStream struct {
 	events     chan types.ConverseStreamOutput
 	err        error
+	metadata   middleware.Metadata
 	closeCount int
 }
 
@@ -44,7 +47,8 @@ func (stream *fakeStream) Close() error {
 	stream.closeCount++
 	return nil
 }
-func (stream *fakeStream) Err() error { return stream.err }
+func (stream *fakeStream) Err() error                          { return stream.err }
+func (stream *fakeStream) ResultMetadata() middleware.Metadata { return stream.metadata }
 
 type streamingClient struct {
 	*fakeClient
@@ -116,11 +120,16 @@ func TestModelStreamRequest(t *testing.T) {
 		&types.ConverseStreamOutputMemberContentBlockStop{Value: types.ContentBlockStopEvent{ContentBlockIndex: &index4}},
 		&types.ConverseStreamOutputMemberMessageStop{Value: types.MessageStopEvent{StopReason: types.StopReasonToolUse}},
 		&types.ConverseStreamOutputMemberMetadata{Value: types.ConverseStreamMetadataEvent{
-			Usage:       &types.TokenUsage{InputTokens: aws.Int32(10), OutputTokens: aws.Int32(4)},
-			Metrics:     &types.ConverseStreamMetrics{LatencyMs: aws.Int64(25)},
-			ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypeFlex},
+			Usage:             &types.TokenUsage{InputTokens: aws.Int32(10), OutputTokens: aws.Int32(4)},
+			Metrics:           &types.ConverseStreamMetrics{LatencyMs: aws.Int64(25)},
+			ServiceTier:       &types.ServiceTier{Type: types.ServiceTierTypeFlex},
+			PerformanceConfig: &types.PerformanceConfiguration{Latency: types.PerformanceConfigLatencyOptimized},
+			Trace: &types.ConverseStreamTrace{PromptRouter: &types.PromptRouterTrace{
+				InvokedModelId: aws.String("stream-routed-model"),
+			}},
 		}},
 	)
+	awsmiddleware.SetRequestIDMetadata(&stream.metadata, "stream-request-id")
 	client := &streamingClient{fakeClient: &fakeClient{}, stream: func(
 		input *bedrockruntime.ConverseStreamInput, options ...func(*bedrockruntime.Options),
 	) (bedrock.EventStream, error) {
@@ -170,7 +179,9 @@ func TestModelStreamRequest(t *testing.T) {
 	finish := events[10].(ai.FinishEvent)
 	if finish.FinishReason != ai.FinishReasonToolCall || finish.Usage.InputTokens != 10 ||
 		finish.Usage.OutputTokens != 4 || finish.ProviderDetails["latency_ms"] != int64(25) ||
-		finish.ProviderDetails["service_tier"] != "flex" || finish.ProviderURL != "https://bedrock.example" {
+		finish.ProviderDetails["service_tier"] != "flex" || finish.ProviderURL != "https://bedrock.example" ||
+		finish.ProviderResponseID != "stream-request-id" || finish.ProviderDetails["performance_latency"] != "optimized" ||
+		finish.ProviderDetails["trace"].(map[string]any)["promptRouter"].(map[string]any)["invokedModelId"] != "stream-routed-model" {
 		t.Fatalf("unexpected finish event: %#v", finish)
 	}
 }

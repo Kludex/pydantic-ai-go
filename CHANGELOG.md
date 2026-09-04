@@ -67,6 +67,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Add Hugging Face Inference Providers with routed endpoints, tagged reasoning, images, and function tools.
 - Add Cohere v2 Chat models with thinking, function tools, structured output, and billed usage.
 - Add Crusoe Serverless Inference models with guided output and family-aware reasoning.
+- Preserve Bedrock static and streamed request IDs, traces, performance settings, and additional response fields.
 - Preserve Gemini static and streamed traffic-type metadata and complete its native-tool audit.
 - Preserve Anthropic static and streamed text citations as detached part metadata.
 - Complete OpenRouter downstream profile handling with safe non-leading system-prompt fallback.

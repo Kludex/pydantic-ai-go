@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"time"
 
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
@@ -59,6 +60,10 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 		finish := ai.FinishReason("")
 		stopReason := types.StopReason("")
 		providerDetails := map[string]any{}
+		responseID := ""
+		if metadataStream, ok := stream.(ResultMetadataEventStream); ok {
+			responseID, _ = awsmiddleware.GetRequestIDMetadata(metadataStream.ResultMetadata())
+		}
 		results := map[string]*streamNativeToolResult{}
 		stopped := false
 		for event := range stream.Events() {
@@ -227,6 +232,12 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 				if value.Value.ServiceTier != nil {
 					providerDetails["service_tier"] = string(value.Value.ServiceTier.Type)
 				}
+				if value.Value.PerformanceConfig != nil {
+					providerDetails["performance_latency"] = string(value.Value.PerformanceConfig.Latency)
+				}
+				if value.Value.Trace != nil {
+					providerDetails["trace"] = bedrockMetadataValue(value.Value.Trace)
+				}
 			default:
 				yield(nil, fmt.Errorf("bedrock: unsupported stream event type %T", event))
 				return
@@ -242,7 +253,8 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 		}
 		yield(ai.FinishEvent{
 			Usage: usage, ModelName: model.name, Timestamp: time.Now().UTC(), ProviderName: "bedrock",
-			ProviderURL: model.ProviderURL(), ProviderDetails: providerDetails, FinishReason: finish,
+			ProviderURL: model.ProviderURL(), ProviderDetails: providerDetails, ProviderResponseID: responseID,
+			FinishReason: finish,
 		}, nil)
 	}
 }

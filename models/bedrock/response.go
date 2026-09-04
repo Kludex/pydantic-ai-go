@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
@@ -102,11 +103,29 @@ func convertResponse(model *Model, output *bedrockruntime.ConverseOutput) (*ai.M
 		ProviderName: "bedrock", ProviderURL: model.ProviderURL(), FinishReason: finishReason(output.StopReason),
 		ProviderDetails: map[string]any{"stop_reason": string(output.StopReason)},
 	}
+	if requestID, ok := awsmiddleware.GetRequestIDMetadata(output.ResultMetadata); ok {
+		response.ProviderResponseID = requestID
+	}
 	if output.Metrics != nil && output.Metrics.LatencyMs != nil {
 		response.ProviderDetails["latency_ms"] = *output.Metrics.LatencyMs
 	}
 	if output.ServiceTier != nil {
 		response.ProviderDetails["service_tier"] = string(output.ServiceTier.Type)
+	}
+	if output.PerformanceConfig != nil {
+		response.ProviderDetails["performance_latency"] = string(output.PerformanceConfig.Latency)
+	}
+	if output.AdditionalModelResponseFields != nil {
+		encoded, err := output.AdditionalModelResponseFields.MarshalSmithyDocument()
+		if err != nil {
+			return nil, fmt.Errorf("bedrock: encode additional response fields: %w", err)
+		}
+		var fields any
+		_ = json.Unmarshal(encoded, &fields)
+		response.ProviderDetails["additional_model_response_fields"] = fields
+	}
+	if output.Trace != nil {
+		response.ProviderDetails["trace"] = bedrockMetadataValue(output.Trace)
 	}
 	return response, nil
 }

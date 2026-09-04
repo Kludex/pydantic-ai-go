@@ -11,11 +11,13 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awsmiddleware "github.com/aws/aws-sdk-go-v2/aws/middleware"
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/document"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
+	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -180,7 +182,10 @@ func TestModelRequestAndCountTokens(t *testing.T) {
 	if response.FinishReason != ai.FinishReasonToolCall || response.Usage.InputTokens != 12 ||
 		response.Usage.OutputTokens != 7 || response.Usage.CacheReadTokens != 3 || response.Usage.CacheWriteTokens != 4 ||
 		len(response.Parts) != 4 || response.ProviderDetails["latency_ms"] != int64(45) ||
-		response.ProviderDetails["service_tier"] != "priority" {
+		response.ProviderDetails["service_tier"] != "priority" || response.ProviderResponseID != "request-id" ||
+		response.ProviderDetails["performance_latency"] != "optimized" ||
+		response.ProviderDetails["additional_model_response_fields"].(map[string]any)["stop_sequence"] != "END" ||
+		response.ProviderDetails["trace"].(map[string]any)["promptRouter"].(map[string]any)["invokedModelId"] != "routed-model" {
 		t.Fatalf("unexpected response: %#v", response)
 	}
 	call := response.Parts[1].(ai.ToolCallPart)
@@ -206,6 +211,8 @@ func nativeResultOutput(content []types.ToolResultContentBlock, resultType strin
 }
 
 func completeOutput(reason types.StopReason) *bedrockruntime.ConverseOutput {
+	metadata := middleware.Metadata{}
+	awsmiddleware.SetRequestIDMetadata(&metadata, "request-id")
 	return &bedrockruntime.ConverseOutput{
 		Output: &types.ConverseOutputMemberMessage{Value: types.Message{
 			Role: types.ConversationRoleAssistant,
@@ -226,8 +233,24 @@ func completeOutput(reason types.StopReason) *bedrockruntime.ConverseOutput {
 			InputTokens: aws.Int32(12), OutputTokens: aws.Int32(7),
 			CacheReadInputTokens: aws.Int32(3), CacheWriteInputTokens: aws.Int32(4),
 		},
-		Metrics:     &types.ConverseMetrics{LatencyMs: aws.Int64(45)},
-		ServiceTier: &types.ServiceTier{Type: types.ServiceTierTypePriority},
+		Metrics:                       &types.ConverseMetrics{LatencyMs: aws.Int64(45)},
+		ServiceTier:                   &types.ServiceTier{Type: types.ServiceTierTypePriority},
+		PerformanceConfig:             &types.PerformanceConfiguration{Latency: types.PerformanceConfigLatencyOptimized},
+		AdditionalModelResponseFields: document.NewLazyDocument(map[string]any{"stop_sequence": "END"}),
+		Trace: &types.ConverseTrace{
+			PromptRouter: &types.PromptRouterTrace{InvokedModelId: aws.String("routed-model")},
+			Guardrail: &types.GuardrailTraceAssessment{
+				InputAssessment: map[string]types.GuardrailAssessment{"": {}},
+				OutputAssessments: map[string][]types.GuardrailAssessment{"guard": {{
+					AutomatedReasoningPolicy: &types.GuardrailAutomatedReasoningPolicyAssessment{
+						Findings: []types.GuardrailAutomatedReasoningFinding{
+							&types.GuardrailAutomatedReasoningFindingMemberTooComplex{},
+						},
+					},
+				}}},
+			},
+		},
+		ResultMetadata: metadata,
 	}
 }
 
@@ -240,6 +263,10 @@ func TestModelErrorsAndResponseShapes(t *testing.T) {
 	}{
 		{name: "nil response", match: "response is nil"},
 		{name: "missing output", output: &bedrockruntime.ConverseOutput{}, match: "omitted output message"},
+		{name: "unencodable additional response fields", output: &bedrockruntime.ConverseOutput{
+			Output:                        &types.ConverseOutputMemberMessage{},
+			AdditionalModelResponseFields: document.NewLazyDocument(map[string]any{"": 1}),
+		}, match: "encode additional response fields"},
 		{name: "unsupported output", output: &bedrockruntime.ConverseOutput{Output: &types.ConverseOutputMemberMessage{Value: types.Message{
 			Content: []types.ContentBlock{&types.ContentBlockMemberImage{}},
 		}}}, match: "unsupported response content"},

@@ -62,6 +62,119 @@ func TestModelAndSettings(t *testing.T) {
 	}
 }
 
+func TestCompoundWebSearch(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		response.Header().Set("Content-Type", "application/json")
+		if body["stream"] == true {
+			_, _ = response.Write([]byte("data: {\"id\":\"completion\",\"model\":\"groq/compound\"," +
+				"\"choices\":[{\"index\":0,\"delta\":{\"content\":\"found\"}}]}\n\n" +
+				"data: {\"id\":\"completion\",\"model\":\"groq/compound\"," +
+				"\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: [DONE]\n\n"))
+			return
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"completion","model":"groq/compound",
+			"choices":[{"finish_reason":"stop","message":{"content":"found"}}],
+			"usage":{"prompt_tokens":1,"completion_tokens":1}
+		}`))
+	}))
+	defer server.Close()
+
+	model := groq.NewModel("groq/compound", groq.WithBaseURL(server.URL), groq.WithAPIKey("key"),
+		groq.WithHTTPClient(server.Client()))
+	search := ai.WebSearchTool{
+		AllowedDomains: []string{"allowed.example"}, BlockedDomains: []string{"blocked.example"},
+	}
+	response, err := model.Request(context.Background(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{search},
+	})
+	if err != nil || response.Text() != "found" {
+		t.Fatalf("unexpected compound response: %#v %v", response, err)
+	}
+	stream, err := model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{&search},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+	}
+	if len(bodies) != 2 {
+		t.Fatalf("unexpected request count: %d", len(bodies))
+	}
+	for _, body := range bodies {
+		settings := body["search_settings"].(map[string]any)
+		if settings["include_domains"].([]any)[0] != "allowed.example" ||
+			settings["exclude_domains"].([]any)[0] != "blocked.example" {
+			t.Fatalf("unexpected search settings: %#v", body)
+		}
+		if _, exists := body["tools"]; exists {
+			t.Fatalf("implicit search emitted a tool declaration: %#v", body)
+		}
+	}
+	if !model.SupportsNativeTool(search) || !model.SupportsNativeTool(&search) ||
+		model.SupportsNativeTool(ai.CodeExecutionTool{}) {
+		t.Fatal("unexpected compound native-tool support")
+	}
+	var nilSearch *ai.WebSearchTool
+	if model.SupportsNativeTool(nilSearch) || groq.NewModel("model").SupportsNativeTool(search) {
+		t.Fatal("unsupported search was accepted")
+	}
+}
+
+func TestCompoundWebSearchValidation(t *testing.T) {
+	compound := groq.NewModel("compound-beta")
+	var nilSearch *ai.WebSearchTool
+	tests := []struct {
+		name   string
+		model  *groq.Model
+		params ai.ModelRequestParams
+		match  string
+	}{
+		{name: "model", model: groq.NewModel("model"), params: ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+		}, match: "requires a compound model"},
+		{name: "nil", model: compound, params: ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{nil},
+		}, match: "must not be nil"},
+		{name: "typed nil", model: compound, params: ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{nilSearch},
+		}, match: "must not be nil"},
+		{name: "tool", model: compound, params: ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+		}, match: "is not supported"},
+		{name: "constraint", model: compound, params: ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{MaxUses: 1}},
+		}, match: "only supports domain filters"},
+		{name: "conflict", model: compound, params: ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+			Settings:    ai.ModelSettings{ExtraBody: map[string]any{"search_settings": map[string]any{}}},
+		}, match: "conflicts"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := test.model.Request(context.Background(), nil, test.params)
+			if err == nil || !strings.Contains(err.Error(), test.match) {
+				t.Fatalf("expected %q, got %v", test.match, err)
+			}
+			stream, streamErr := test.model.StreamRequest(context.Background(), nil, test.params)
+			if streamErr == nil || stream != nil || !strings.Contains(streamErr.Error(), test.match) {
+				t.Fatalf("expected streaming %q, got %v", test.match, streamErr)
+			}
+		})
+	}
+}
+
 func TestProviderConfiguration(t *testing.T) {
 	t.Setenv("GROQ_API_KEY", "environment-key")
 	t.Setenv("GROQ_BASE_URL", "https://groq.example/v1")

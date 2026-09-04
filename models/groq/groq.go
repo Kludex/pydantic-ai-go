@@ -2,10 +2,13 @@
 package groq
 
 import (
+	"context"
 	"fmt"
+	"iter"
 	"maps"
 	"net/http"
 	"os"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
@@ -90,6 +93,7 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 // Model calls models served by Groq.
 type Model struct {
 	*ai.ModelWrapper
+	name string
 }
 
 type config struct{ options []openai.Option }
@@ -146,7 +150,98 @@ func NewModel(name string, options ...Option) *Model {
 		openai.WithChatCompatibility(openai.ChatCompatibility{Reasoning: true}),
 	}
 	openAIOptions = append(openAIOptions, configuration.options...)
-	return &Model{ModelWrapper: ai.WrapModel(openai.NewModel(name, openAIOptions...))}
+	return &Model{ModelWrapper: ai.WrapModel(openai.NewModel(name, openAIOptions...)), name: name}
+}
+
+// SupportsNativeTool reports support for implicit web search on Groq compound models.
+func (model *Model) SupportsNativeTool(tool ai.NativeTool) bool {
+	if !isCompoundModel(model.name) {
+		return false
+	}
+	switch value := tool.(type) {
+	case ai.WebSearchTool:
+		return true
+	case *ai.WebSearchTool:
+		return value != nil
+	default:
+		return false
+	}
+}
+
+// Request maps Groq compound search settings before generation.
+func (model *Model) Request(
+	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+) (*ai.ModelResponse, error) {
+	prepared, err := model.prepareParams(params)
+	if err != nil {
+		return nil, err
+	}
+	return model.ModelWrapper.Request(ctx, messages, prepared)
+}
+
+// StreamRequest maps Groq compound search settings before streaming generation.
+func (model *Model) StreamRequest(
+	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+	prepared, err := model.prepareParams(params)
+	if err != nil {
+		return nil, err
+	}
+	return model.ModelWrapper.StreamRequest(ctx, messages, prepared)
+}
+
+func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequestParams, error) {
+	if len(params.NativeTools) == 0 {
+		return params, nil
+	}
+	if !isCompoundModel(model.name) {
+		return ai.ModelRequestParams{}, fmt.Errorf("groq: native web search requires a compound model")
+	}
+	settings := params.Settings.Clone()
+	for _, nativeTool := range params.NativeTools {
+		if nativeTool == nil {
+			return ai.ModelRequestParams{}, fmt.Errorf("groq: native tool must not be nil")
+		}
+		var webSearch ai.WebSearchTool
+		switch value := nativeTool.(type) {
+		case ai.WebSearchTool:
+			webSearch = value
+		case *ai.WebSearchTool:
+			if value == nil {
+				return ai.ModelRequestParams{}, fmt.Errorf("groq: native web search must not be nil")
+			}
+			webSearch = *value
+		default:
+			return ai.ModelRequestParams{}, fmt.Errorf("groq: native tool %q is not supported", nativeTool.Kind())
+		}
+		if webSearch.SearchContextSize != "" || webSearch.UserLocation != nil || webSearch.MaxUses != 0 ||
+			webSearch.ExternalWebAccess != nil {
+			return ai.ModelRequestParams{}, fmt.Errorf("groq: compound web search only supports domain filters")
+		}
+		if _, exists := settings.ExtraBody["search_settings"]; exists {
+			return ai.ModelRequestParams{}, fmt.Errorf("groq: extra body field %q conflicts with native web search", "search_settings")
+		}
+		if len(webSearch.AllowedDomains) > 0 || len(webSearch.BlockedDomains) > 0 {
+			if settings.ExtraBody == nil {
+				settings.ExtraBody = make(map[string]any)
+			}
+			search := map[string]any{}
+			if len(webSearch.AllowedDomains) > 0 {
+				search["include_domains"] = append([]string(nil), webSearch.AllowedDomains...)
+			}
+			if len(webSearch.BlockedDomains) > 0 {
+				search["exclude_domains"] = append([]string(nil), webSearch.BlockedDomains...)
+			}
+			settings.ExtraBody["search_settings"] = search
+		}
+	}
+	params.Settings = settings
+	params.NativeTools = nil
+	return params, nil
+}
+
+func isCompoundModel(name string) bool {
+	return strings.HasPrefix(name, "compound-") || strings.HasPrefix(name, "groq/compound")
 }
 
 func validateReasoningFormat(format ReasoningFormat) error {

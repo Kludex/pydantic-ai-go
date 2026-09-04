@@ -463,7 +463,7 @@ func main() {
 	settings, err := (anthropic.Settings{
 		Container: &anthropic.Container{Skills: []anthropic.ContainerSkill{{
 			Type: "anthropic", SkillID: "xlsx", Version: "latest",
-		}},
+		}}},
 		CodeExecutionToolVersion: anthropic.CodeExecutionToolVersionAuto,
 	}).Build()
 	if err != nil {
@@ -710,3 +710,34 @@ func main() {
 Set `GROQ_API_KEY`. `GROQ_BASE_URL` overrides the default `https://api.groq.com/openai/v1` endpoint.
 
 `ReasoningFormatParsed` returns reasoning as separate `ThinkingPart` values. Reasoning effort support depends on the selected Groq model family. `WithProvider` keeps Groq response parsing when you route requests through a gateway.
+
+### Compound web search
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/groq"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		groq.NewModel("groq/compound"),
+		ai.WithNativeTools(ai.WebSearchTool{
+			AllowedDomains: []string{"go.dev"},
+		}),
+	)
+	result, err := agent.Run(context.Background(), "What changed in the latest Go release?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Groq compound models include web search automatically. `WebSearchTool` forwards allowed and blocked domains through `search_settings` without emitting a duplicate tool declaration. Other portable search constraints fail before transport because Groq does not support them on this API.

@@ -9,6 +9,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 ### Changed
 
 - All library packages now live under `ai/`. The core package uses `github.com/Kludex/pydantic-ai-go/ai`, and subpackages use paths such as `github.com/Kludex/pydantic-ai-go/ai/models/openai`.
+- Browser chat now serves PydanticAI's official `@pydantic/ai-chat-ui` with cached remote or local HTML, model and native-tool selectors, approval continuation, and configuration and health endpoints. `webchat.Config.AllowedHosts` now permits only IP addresses and localhost by default; set it to `[]string{"*"}` only to restore unrestricted host access behind an authentication boundary.
 
 ### Added
 

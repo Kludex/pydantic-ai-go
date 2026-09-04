@@ -1,26 +1,44 @@
-// Package webchat serves a minimal browser UI for typed agents.
+// Package webchat serves PydanticAI's official browser chat UI for typed agents.
 package webchat
 
 import (
-	_ "embed"
 	"fmt"
-	"net"
 	"net/http"
-	"slices"
-	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/mcp"
 	"github.com/Kludex/pydantic-ai-go/ai/ui/vercel"
 )
 
-//go:embed index.html
-var indexHTML []byte
+// ModelOption exposes one model in the browser model selector.
+type ModelOption struct {
+	// ID is sent by the browser when this model is selected. Empty uses Model.Name().
+	ID string
+	// Name is the human-readable browser label. Empty uses ID.
+	Name string
+	// Model handles runs that select ID.
+	Model ai.Model
+}
 
-// Config controls browser serving, inbound trust, and MCP tools.
+// Config controls browser serving, model and tool selection, inbound trust, and MCP tools.
 type Config struct {
-	// AllowedHosts restricts HTTP Host values. Nil accepts every host.
+	// AllowedHosts adds hostnames accepted alongside IP addresses and localhost.
+	// Use "*.example.com" for subdomains or "*" only behind an authentication boundary.
 	AllowedHosts []string
+	// DefaultModelID overrides the browser ID for the agent's configured model.
+	DefaultModelID string
+	// DefaultModelName overrides the browser label for the agent's configured model.
+	DefaultModelName string
+	// Models exposes additional models in the browser selector.
+	Models []ModelOption
+	// NativeTools exposes configured provider-native tools in the browser selector.
+	NativeTools []ai.NativeTool
+	// HTMLSource is a local path or HTTP URL for the UI. Empty uses DefaultHTMLURL.
+	HTMLSource string
+	// CacheDir stores remotely fetched UI HTML. Empty uses the user cache directory.
+	CacheDir string
+	// HTTPClient fetches remote UI HTML. Nil uses http.DefaultClient.
+	HTTPClient *http.Client
 	// MCPConfigPath loads common mcpServers JSON when the handler is built.
 	MCPConfigPath string
 	// Sanitization controls browser-held history. The zero value is secure.
@@ -31,8 +49,8 @@ type Config struct {
 	RunOptions []ai.RunOption
 }
 
-// NewHandler builds a browser UI and /api/chat Vercel AI endpoint. Deps and
-// run options must be safe for concurrent requests.
+// NewHandler builds the official web UI and its chat, configuration, and health endpoints.
+// Deps, models, native tools, and run options must be safe for concurrent requests.
 func NewHandler[Deps, Output any](
 	agent *ai.Agent[Deps, Output], deps Deps, config Config,
 ) (http.Handler, error) {
@@ -42,6 +60,20 @@ func NewHandler[Deps, Output any](
 	if config.MaxRequestBytes < 0 {
 		return nil, fmt.Errorf("webchat: maximum request bytes must not be negative")
 	}
+	allowedHosts, err := normalizeAllowedHosts(config.AllowedHosts)
+	if err != nil {
+		return nil, err
+	}
+	configuration, err := newFrontendConfiguration(
+		agent.Model(), config.DefaultModelID, config.DefaultModelName, config.Models, config.NativeTools,
+	)
+	if err != nil {
+		return nil, err
+	}
+	loader, err := newHTMLLoader(config)
+	if err != nil {
+		return nil, err
+	}
 	options := append([]ai.RunOption(nil), config.RunOptions...)
 	if config.MCPConfigPath != "" {
 		toolsets, err := mcp.LoadToolsets[Deps](config.MCPConfigPath)
@@ -50,43 +82,43 @@ func NewHandler[Deps, Output any](
 		}
 		options = append(options, ai.WithRunToolsets(toolsets...))
 	}
-	allowedHosts := slices.Clone(config.AllowedHosts)
-	for index := range allowedHosts {
-		allowedHosts[index] = strings.ToLower(strings.TrimSpace(allowedHosts[index]))
-	}
-	chat := vercel.NewAdapter(agent, vercel.Config{
-		Sanitization: config.Sanitization, MaxRequestBytes: config.MaxRequestBytes,
-	}).Handler(deps, options...)
+	adapter := vercel.NewAdapter(agent, vercel.Config{
+		SDKVersion: 7, Sanitization: config.Sanitization, MaxRequestBytes: config.MaxRequestBytes,
+	})
+	chat := newChatHandler(adapter, deps, options, configuration, config.MaxRequestBytes)
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if !hostAllowed(request.Host, allowedHosts) {
-			http.Error(response, "host not allowed", http.StatusForbidden)
+			http.Error(response, "misdirected request", http.StatusMisdirectedRequest)
 			return
 		}
 		switch request.URL.Path {
-		case "/":
-			if request.Method != http.MethodGet {
-				response.Header().Set("Allow", http.MethodGet)
-				http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
-				return
-			}
-			response.Header().Set("Content-Type", "text/html; charset=utf-8")
-			response.Header().Set("Content-Security-Policy", "default-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
-			_, _ = response.Write(indexHTML)
 		case "/api/chat":
 			chat.ServeHTTP(response, request)
+		case "/api/configure":
+			serveConfiguration(response, request, configuration)
+		case "/api/health":
+			serveHealth(response, request)
 		default:
+			if isUIPath(request.URL.Path) {
+				loader.ServeHTTP(response, request)
+				return
+			}
 			http.NotFound(response, request)
 		}
 	}), nil
 }
 
-func hostAllowed(value string, allowed []string) bool {
-	if allowed == nil {
+func isUIPath(path string) bool {
+	if path == "/" {
 		return true
 	}
-	host := strings.ToLower(value)
-	if parsed, _, err := net.SplitHostPort(value); err == nil {
-		host = strings.ToLower(parsed)
+	if len(path) < 2 || path[0] != '/' {
+		return false
 	}
-	return slices.Contains(allowed, host)
+	for _, character := range path[1:] {
+		if character == '/' {
+			return false
+		}
+	}
+	return true
 }

@@ -145,6 +145,10 @@ type RequestData struct {
 	Messages []UIMessage `json:"messages"`
 	// MessageID selects an assistant message for regeneration.
 	MessageID string `json:"messageId,omitempty"`
+	// Model selects an application-approved model in a web chat request.
+	Model string `json:"model,omitempty"`
+	// BuiltinTools selects application-approved provider-native tools in a web chat request.
+	BuiltinTools []string `json:"builtinTools,omitempty"`
 }
 
 // UIMessage is one client-held Vercel AI message.

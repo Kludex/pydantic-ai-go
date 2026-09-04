@@ -28,6 +28,16 @@ type weatherArgs struct {
 	Unit string `json:"unit,omitempty" jsonschema:"enum=celsius,enum=fahrenheit"`
 }
 
+func TestAgentModel(t *testing.T) {
+	model := fakes.NewTestModel()
+	if ai.NewAgent[deps, string](model).Model() != model {
+		t.Fatal("agent did not return its configured model")
+	}
+	if ai.NewAgent[deps, string](nil).Model() != nil {
+		t.Fatal("model-less agent returned a model")
+	}
+}
+
 func TestAgentRejectsNilModelResponse(t *testing.T) {
 	agent := ai.NewAgent[deps, string](nilModel{})
 	_, err := agent.Run(t.Context(), "go", deps{})

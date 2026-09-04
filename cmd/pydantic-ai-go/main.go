@@ -53,7 +53,7 @@ func run(arguments []string) error {
 		hosts = strings.Split(*allowedHosts, ",")
 	}
 	handler, err := webchat.NewHandler(agent, struct{}{}, webchat.Config{
-		AllowedHosts: hosts, MCPConfigPath: *mcpConfig,
+		AllowedHosts: hosts, MCPConfigPath: *mcpConfig, DefaultModelID: *modelName,
 	})
 	if err != nil {
 		return err

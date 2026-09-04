@@ -55,9 +55,9 @@ $ OPENAI_API_KEY=... go run ./cmd/pydantic-ai-go web \
     -allowed-hosts localhost
 ```
 
-Open <http://localhost:8080>. The browser streams text and shows tool start, completion, and failure states.
+Open <http://localhost:8080>. The command serves PydanticAI's official `@pydantic/ai-chat-ui`. The browser streams text, renders rich content, and handles tool execution and approval states.
 
-`-allowed-hosts` accepts comma-separated exact host names. The listen port is ignored during host matching. Configure this allowlist when the server is reachable through an untrusted proxy or network.
+IP addresses, `localhost`, and names below `.localhost` are accepted by default. `-allowed-hosts` adds comma-separated host names. `*.example.com` accepts subdomains only. Use `*` only when an authenticated proxy protects the server.
 
 ## Serve web chat from your program
 
@@ -73,9 +73,15 @@ import (
 )
 
 func main() {
-    agent := ai.NewAgent[struct{}, string](openai.NewModel("gpt-5-mini"))
+    model := openai.NewModel("gpt-5-mini")
+    agent := ai.NewAgent[struct{}, string](model)
     handler, err := webchat.NewHandler(agent, struct{}{}, webchat.Config{
-        AllowedHosts:  []string{"localhost"},
+        DefaultModelID: "openai:gpt-5-mini",
+        Models: []webchat.ModelOption{
+            {ID: "openai:gpt-5.2", Name: "GPT-5.2", Model: openai.NewModel("gpt-5.2")},
+        },
+        NativeTools:  []ai.NativeTool{ai.WebSearchTool{}, ai.CodeExecutionTool{}},
+        AllowedHosts: []string{"ui.example.com"},
         MCPConfigPath: "mcp.json",
     })
     if err != nil {
@@ -88,7 +94,11 @@ func main() {
 }
 ```
 
-The web endpoint uses the Vercel AI adapter and applies its secure untrusted-history sanitization. The built-in page is intentionally small. Use the AG-UI or Vercel AI adapters directly for a custom frontend.
+The handler fetches `@pydantic/ai-chat-ui` from `webchat.DefaultHTMLURL` and caches it in your user cache directory. Set `HTMLSource` to `webchat.OfflineHTMLURL`, another HTTP URL, or a local file. `CacheDir` overrides remote HTML caching, and `HTTPClient` controls remote fetching.
+
+The official UI reads model and native-tool choices from `/api/configure`, streams Vercel AI SDK v7 from `/api/chat`, and checks `/api/health`. The agent's model is included automatically. Set `DefaultModelID` or `DefaultModelName` to customize it. Add other choices with `Models`.
+
+The chat endpoint requires `Content-Type: application/json` and refuses cross-origin preflights. Use the AG-UI or Vercel AI adapters directly for a custom frontend.
 
 ## Resolve model names
 

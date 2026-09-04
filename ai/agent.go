@@ -200,6 +200,10 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 // AgentDescriptionFunc renders an agent description for one run.
 type AgentDescriptionFunc[Deps any] func(ctx context.Context, deps Deps) (string, error)
 
+// Model returns the configured default model. It returns nil when every run must select a model.
+// The model remains caller-owned and must be safe for concurrent runs.
+func (a *Agent[Deps, Output]) Model() Model { return a.model }
+
 // Name returns the application-defined agent name. Instrumentation uses
 // "agent" when no name is configured.
 func (a *Agent[Deps, Output]) Name() string { return a.name }

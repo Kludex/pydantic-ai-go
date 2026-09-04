@@ -15,6 +15,7 @@ require (
 	github.com/coder/websocket v1.8.15
 	github.com/google/jsonschema-go v0.4.3
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/natefinch/atomic v1.0.1
 	github.com/pydantic/genai-prices/packages/go v0.1.5
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/tiktoken-go/tokenizer v0.7.0

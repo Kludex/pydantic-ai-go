@@ -91,6 +91,8 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 			if part.Content != "" && !yield(Chunk{Type: ChunkReasoningDelta, ID: id, Delta: part.Content}, nil) {
 				return false
 			}
+		case ai.FilePart:
+			return yield(fileChunk(part), nil)
 		case ai.ToolCallPart:
 			if !state.startTool(yield, value.PartID, part.ToolCallID, part.ToolName, string(part.Args), false) {
 				return false
@@ -118,6 +120,8 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		case ai.NativeToolCallPartDelta:
 			converted := ai.ToolCallPartDelta(delta)
 			return state.toolDelta(yield, value.PartID, converted.ToolCallID, converted.ArgsDelta)
+		case ai.FilePartDelta:
+			return yield(fileChunk(delta.Part), nil)
 		}
 	case ai.PartEndEvent:
 		id := state.partIDs[value.PartID]

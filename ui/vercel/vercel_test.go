@@ -83,6 +83,43 @@ func TestPrepareInput(t *testing.T) {
 	}
 }
 
+func TestPrepareInputFiles(t *testing.T) {
+	prompt, history, _, err := vercel.PrepareInput(vercel.RequestData{
+		Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+			{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+				Type: "file", URL: "data:image/png;base64,b2xk", MediaType: "image/png",
+			}}},
+			{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{
+				{Type: "text", Text: "Describe these files."},
+				{Type: "file", URL: "data:application/pdf;base64,cGRm", MediaType: "application/pdf"},
+				{Type: "file", URL: "https://example.com/image.png", MediaType: "image/png"},
+				{Type: "file", URL: "https://example.com/video.mp4", MediaType: "video/mp4"},
+				{Type: "file", URL: "https://example.com/audio.mp3", MediaType: "audio/mpeg"},
+				{Type: "file", URL: "https://example.com/file.pdf", MediaType: "application/pdf"},
+			}},
+		},
+	}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prompt.Contents) != 6 || len(history) != 1 {
+		t.Fatalf("unexpected file input: prompt=%#v history=%#v", prompt, history)
+	}
+	if prompt.Contents[0].(ai.TextContent).Text != "Describe these files." ||
+		string(prompt.Contents[1].(ai.BinaryContent).Data) != "pdf" ||
+		prompt.Contents[2].(ai.ImageURL).URL != "https://example.com/image.png" ||
+		prompt.Contents[3].(ai.VideoURL).URL != "https://example.com/video.mp4" ||
+		prompt.Contents[4].(ai.AudioURL).URL != "https://example.com/audio.mp3" ||
+		prompt.Contents[5].(ai.DocumentURL).URL != "https://example.com/file.pdf" {
+		t.Fatalf("unexpected file content: %#v", prompt.Contents)
+	}
+	response := history[0].(ai.ModelResponse)
+	file := response.Parts[0].(ai.FilePart)
+	if string(file.Content.Data) != "old" || file.Content.MediaType != "image/png" {
+		t.Fatalf("unexpected assistant file: %#v", file)
+	}
+}
+
 func TestInputValidation(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -93,7 +130,19 @@ func TestInputValidation(t *testing.T) {
 		{name: "missing user", input: requestWith(vercel.UIMessage{ID: "assistant", Role: "assistant"}), match: "requires a user"},
 		{name: "missing ID", input: requestWith(vercel.UIMessage{Role: "user"}), match: "ID must not be empty"},
 		{name: "role", input: requestWith(vercel.UIMessage{ID: "one", Role: "tool"}), match: "unsupported message role"},
-		{name: "user part", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "file"}}}), match: "support only text"},
+		{name: "system part", input: requestWith(
+			vercel.UIMessage{ID: "system", Role: "system", Parts: []vercel.UIMessagePart{{Type: "file"}}},
+			vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
+		), match: "support only text"},
+		{name: "user file URL", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "file"}}}), match: "file URL"},
+		{name: "user part", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "source-url"}}}), match: "unsupported user part"},
+		{name: "data encoding", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "file", URL: "data:text/plain,hello"}}}), match: "base64 data"},
+		{name: "data media type", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "file", URL: "data:;base64,aGVsbG8="}}}), match: "media type"},
+		{name: "data base64", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "file", URL: "data:text/plain;base64,!"}}}), match: "decode file data URL"},
+		{name: "assistant file URL", input: requestWith(
+			vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "file", URL: "https://example.com/file.png"}}},
+			vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
+		), match: "decode assistant file"},
 		{name: "tool ID", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather"}}}), match: "requires a toolCallId"},
 		{name: "tool input", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", Input: []byte("{")}}}), match: "not valid JSON"},
 		{name: "tool output", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", State: "output-available", Output: []byte("{")}}}), match: "decode tool"},

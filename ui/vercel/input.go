@@ -92,16 +92,20 @@ func convertMessages(messages []UIMessage) ([]ai.ModelMessage, error) {
 			return nil, fmt.Errorf("vercel: message ID must not be empty")
 		}
 		switch message.Role {
-		case "system", "user":
+		case "system":
 			text, err := messageText(message.Parts)
 			if err != nil {
 				return nil, err
 			}
-			var part ai.RequestPart = ai.UserPromptPart{Content: text}
-			if message.Role == "system" {
-				part = ai.SystemPromptPart{Content: text}
+			converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.SystemPromptPart{Content: text},
+			}})
+		case "user":
+			prompt, err := userMessage(message.Parts)
+			if err != nil {
+				return nil, err
 			}
-			converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{part}})
+			converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{prompt}})
 		case "assistant":
 			response, results, err := assistantMessage(message.Parts)
 			if err != nil {
@@ -127,6 +131,38 @@ func messageText(parts []UIMessagePart) (string, error) {
 	return strings.Join(text, ""), nil
 }
 
+func userMessage(parts []UIMessagePart) (ai.UserPromptPart, error) {
+	if onlyText := len(parts) == 0 || allText(parts); onlyText {
+		text, err := messageText(parts)
+		return ai.UserPromptPart{Content: text}, err
+	}
+	contents := make([]ai.UserContent, 0, len(parts))
+	for _, part := range parts {
+		switch part.Type {
+		case "text":
+			contents = append(contents, ai.TextContent{Text: part.Text})
+		case "file":
+			file, err := userFile(part)
+			if err != nil {
+				return ai.UserPromptPart{}, err
+			}
+			contents = append(contents, file)
+		default:
+			return ai.UserPromptPart{}, fmt.Errorf("vercel: unsupported user part %q", part.Type)
+		}
+	}
+	return ai.UserPromptPart{Contents: contents}, nil
+}
+
+func allText(parts []UIMessagePart) bool {
+	for _, part := range parts {
+		if part.Type != "text" {
+			return false
+		}
+	}
+	return true
+}
+
 func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessage, error) {
 	response := ai.ModelResponse{}
 	var results []ai.ModelMessage
@@ -136,6 +172,12 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 			response.Parts = append(response.Parts, ai.TextPart{Content: part.Text})
 		case part.Type == "reasoning":
 			response.Parts = append(response.Parts, ai.ThinkingPart{Content: part.Text})
+		case part.Type == "file":
+			file, err := binaryFile(part.URL)
+			if err != nil {
+				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: decode assistant file: %w", err)
+			}
+			response.Parts = append(response.Parts, ai.FilePart{Content: file})
 		case strings.HasPrefix(part.Type, "tool-"):
 			if part.ToolCallID == "" {
 				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: tool part requires a toolCallId")

@@ -28,9 +28,13 @@ func TestTransformStreamVariants(t *testing.T) {
 			ai.PartStartEvent{PartID: "native", Part: ai.NativeToolCallPart{ToolName: "search", ToolCallID: "native-1"}},
 			ai.PartDeltaEvent{PartID: "native", Delta: ai.NativeToolCallPartDelta(ai.ToolCallPartDelta{ArgsDelta: `{}`})},
 			ai.PartStartEvent{PartID: "native-return", Part: ai.NativeToolReturnPart{ToolCallID: "native-1", Content: "found"}},
-			ai.PartStartEvent{PartID: "ignored", Part: ai.FilePart{}},
-			ai.PartDeltaEvent{PartID: "ignored", Delta: ai.FilePartDelta{}},
-			ai.PartEndEvent{PartID: "ignored", Part: ai.FilePart{}},
+			ai.PartStartEvent{PartID: "file", Part: ai.FilePart{Content: ai.BinaryContent{
+				Data: []byte("first"), MediaType: "image/png",
+			}}},
+			ai.PartDeltaEvent{PartID: "file", Delta: ai.FilePartDelta{Part: ai.FilePart{Content: ai.BinaryContent{
+				Data: []byte("second"), MediaType: "image/png",
+			}}}},
+			ai.PartEndEvent{PartID: "file", Part: ai.FilePart{}},
 			ai.FinishEvent{FinishReason: ai.FinishReasonToolCall},
 		}
 		for _, event := range events {
@@ -54,7 +58,7 @@ func TestTransformStreamVariants(t *testing.T) {
 		vercel.ChunkTextStart, vercel.ChunkTextDelta, vercel.ChunkTextEnd,
 		vercel.ChunkReasoningStart, vercel.ChunkReasoningDelta, vercel.ChunkReasoningEnd,
 		vercel.ChunkToolInputStart, vercel.ChunkToolInputDelta, vercel.ChunkToolInputAvailable,
-		vercel.ChunkToolOutputAvailable, vercel.ChunkToolOutputError,
+		vercel.ChunkToolOutputAvailable, vercel.ChunkToolOutputError, vercel.ChunkFile,
 	} {
 		if chunkIndex(chunks, kind) < 0 {
 			t.Fatalf("missing %s: %#v", kind, chunks)
@@ -63,6 +67,16 @@ func TestTransformStreamVariants(t *testing.T) {
 	finish := chunks[chunkIndex(chunks, vercel.ChunkFinish)]
 	if finish.FinishReason != "tool-calls" {
 		t.Fatalf("unexpected finish: %#v", finish)
+	}
+	var files []vercel.Chunk
+	for _, chunk := range chunks {
+		if chunk.Type == vercel.ChunkFile {
+			files = append(files, chunk)
+		}
+	}
+	if len(files) != 2 || files[0].URL != "data:image/png;base64,Zmlyc3Q=" ||
+		files[1].URL != "data:image/png;base64,c2Vjb25k" || files[1].MediaType != "image/png" {
+		t.Fatalf("unexpected files: %#v", files)
 	}
 }
 

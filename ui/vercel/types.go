@@ -47,6 +47,8 @@ const (
 	ChunkToolOutputError ChunkType = "tool-output-error"
 	// ChunkToolApprovalRequest asks an AI SDK v6+ client to approve a tool.
 	ChunkToolApprovalRequest ChunkType = "tool-approval-request"
+	// ChunkFile carries one model-generated file as a data URL.
+	ChunkFile ChunkType = "file"
 )
 
 // Chunk is one JSON Vercel AI UI message stream value.
@@ -77,6 +79,10 @@ type Chunk struct {
 	ProviderExecuted *bool `json:"providerExecuted,omitempty"`
 	// ApprovalID identifies one tool approval request.
 	ApprovalID string `json:"approvalId,omitempty"`
+	// URL contains a generated file as a data URL.
+	URL string `json:"url,omitempty"`
+	// MediaType is the IANA media type of a file.
+	MediaType string `json:"mediaType,omitempty"`
 }
 
 // RequestData is a Vercel AI submit-message or regenerate-message request.
@@ -97,7 +103,7 @@ type UIMessage struct {
 	ID string `json:"id"`
 	// Role is system, user, or assistant.
 	Role string `json:"role"`
-	// Parts contains text, reasoning, or tool state.
+	// Parts contains text, file, reasoning, or tool state.
 	Parts []UIMessagePart `json:"parts"`
 }
 
@@ -119,6 +125,12 @@ type UIMessagePart struct {
 	ErrorText string `json:"errorText,omitempty"`
 	// Approval contains a requested or completed tool decision.
 	Approval *ToolApproval `json:"approval,omitempty"`
+	// URL contains a hosted file URL or an inline data URL.
+	URL string `json:"url,omitempty"`
+	// MediaType is the IANA media type of a file.
+	MediaType string `json:"mediaType,omitempty"`
+	// Filename is the optional display name supplied by the client.
+	Filename string `json:"filename,omitempty"`
 }
 
 // ToolApproval is one Vercel AI tool approval state.

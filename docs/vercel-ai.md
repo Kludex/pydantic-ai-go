@@ -40,6 +40,29 @@ Pass `Config.Sanitization` only after your authenticated application decides whi
 
 The request `id` becomes the agent conversation ID. `ServerMessageID` controls the assistant message identity returned to the frontend. The adapter generates one when it is empty.
 
+## Send files
+
+Use a `file` part with a hosted URL or a base64 data URL:
+
+```console
+$ curl http://localhost:8080/ \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "trigger": "submit-message",
+    "id": "chat-1",
+    "messages": [{
+      "id": "user-1",
+      "role": "user",
+      "parts": [
+        {"type": "text", "text": "Describe this image."},
+        {"type": "file", "mediaType": "image/png", "url": "https://example.com/image.png"}
+      ]
+    }]
+  }'
+```
+
+The media type selects image, audio, video, or document input. The default sanitizer permits only `http` and `https` URLs. Inline data URLs are decoded before the model request. Generated files stream back as `file` chunks with base64 data URLs.
+
 ## Transform an existing stream
 
 ```go
@@ -105,6 +128,6 @@ To change the arguments before execution, replace the tool part's `input` value 
 
 ## Current scope
 
-The adapter supports AI SDK UI versions 5 through 7 for text, reasoning, function and provider-native tool inputs and outputs, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
+The adapter supports AI SDK UI versions 5 through 7 for text, files, reasoning, function and provider-native tool inputs and outputs, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
 
-Vercel AI file and source parts, data parts, provider metadata, message metadata, external deferred resumes, compaction activities, tool-availability data, cancellation chunks, and remaining version-specific fields remain.
+Vercel AI source and data parts, provider metadata, message metadata, external deferred resumes, compaction activities, tool-availability data, cancellation chunks, and remaining version-specific fields remain.

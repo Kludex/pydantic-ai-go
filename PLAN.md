@@ -282,6 +282,7 @@ Once the package is up to date with PydanticAI itself, add a [gh-aw](https://git
 - Graph layer and general multi-agent orchestration beyond the typed-tool and A2A adapters
 - HTTP-level retry policy (delegate to the injected `http.Client`/transport)
 - On-demand capability loading, self-extension, harness features
+- Non-standard MCP task extensions until they are supported by the official Go SDK; MCP multi-round-trip input remains owned by the SDK session
 
 ## Open Decisions
 

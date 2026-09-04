@@ -4,7 +4,7 @@ set -euo pipefail
 
 fail=0
 packages=(
-    .
+    ./ai
     ./a2a
     ./cli
     ./durable

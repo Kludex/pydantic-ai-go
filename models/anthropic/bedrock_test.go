@@ -15,7 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
 )
 

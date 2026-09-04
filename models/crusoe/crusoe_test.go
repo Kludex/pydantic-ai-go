@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/crusoe"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )

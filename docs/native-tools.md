@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -72,7 +72,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -118,7 +118,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -152,7 +152,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -185,7 +185,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -245,7 +245,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
 )
 
@@ -292,7 +292,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -332,7 +332,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
 )
 
@@ -372,7 +372,7 @@ import (
 	"log"
 	"os"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -416,7 +416,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
 )
 
@@ -454,7 +454,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/google"
 )
 
@@ -484,7 +484,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
 )
 
@@ -516,7 +516,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -563,7 +563,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -612,7 +612,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 

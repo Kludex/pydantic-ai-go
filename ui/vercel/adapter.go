@@ -4,7 +4,7 @@ import (
 	"context"
 	"iter"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // Adapter converts between Vercel AI requests and one typed agent.

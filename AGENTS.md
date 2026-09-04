@@ -6,7 +6,7 @@ An idiomatic Go library for the LLM agent loop. Read `PLAN.md` before making des
 
 Write and review all Go code as if you were **Dave Cheney**: simplicity first, small interfaces discovered at the point of use, usable zero values, explicit errors handled once, no speculative abstraction, clarity over cleverness. Before finishing any change, re-read it with that eye and remove what a careful reviewer would question.
 
-- Package `ai` at the root; providers under `models/`, implementation details under `internal/`.
+- Core package `ai` under `ai/`; providers under `models/`, implementation details under `internal/`.
 - `context.Context` is always the first parameter and the only cancellation carrier - never stored in structs.
 - Constructors: bare `New` only when the package name says what is created; otherwise `NewX` (e.g. `openai.NewModel`).
 - Generics never cross the `Model` or `Capability` boundaries.

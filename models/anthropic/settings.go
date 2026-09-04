@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"maps"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // CacheTTL selects the lifetime of an Anthropic prompt-cache breakpoint.

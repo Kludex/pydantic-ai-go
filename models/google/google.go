@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/internal/download"
 	jsonschema "github.com/Kludex/pydantic-ai-go/internal/schema"
 )
@@ -1168,11 +1168,18 @@ func googleWebSearchParts(
 		callID = "web_search"
 	}
 	return &ai.NativeToolCallPart{
-			ToolName: "web_search", ToolCallID: callID, ToolKind: ai.ToolPartKindWebSearch,
-			Args: args, ProviderName: providerName,
+			ToolName:     "web_search",
+			ToolCallID:   callID,
+			ToolKind:     ai.ToolPartKindWebSearch,
+			Args:         args,
+			ProviderName: providerName,
 		}, &ai.NativeToolReturnPart{
-			ToolName: "web_search", ToolCallID: callID, ToolKind: ai.ToolPartKindWebSearch,
-			Content: results, Timestamp: timestamp, ProviderName: providerName,
+			ToolName:     "web_search",
+			ToolCallID:   callID,
+			ToolKind:     ai.ToolPartKindWebSearch,
+			Content:      results,
+			Timestamp:    timestamp,
+			ProviderName: providerName,
 		}
 }
 

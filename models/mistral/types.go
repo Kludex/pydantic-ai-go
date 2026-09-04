@@ -3,7 +3,7 @@ package mistral
 import (
 	"encoding/json"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 type chatRequest struct {

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"slices"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 type chatRequest struct {

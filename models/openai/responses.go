@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // ResponsesModel calls the OpenAI Responses API, the successor to Chat
@@ -1087,11 +1087,19 @@ func responsesCodeExecutionParts(
 		content["logs"] = logs
 	}
 	return ai.NativeToolCallPart{
-			ToolName: "code_execution", Args: args, ToolCallID: item.ID,
-			ToolKind: ai.ToolPartKindCodeExecution, ID: item.ID, ProviderName: "openai",
+			ToolName:     "code_execution",
+			Args:         args,
+			ToolCallID:   item.ID,
+			ToolKind:     ai.ToolPartKindCodeExecution,
+			ID:           item.ID,
+			ProviderName: "openai",
 		}, files, ai.NativeToolReturnPart{
-			ToolName: "code_execution", ToolCallID: item.ID, ToolKind: ai.ToolPartKindCodeExecution,
-			Content: content, Timestamp: timestamp, ProviderName: "openai",
+			ToolName:     "code_execution",
+			ToolCallID:   item.ID,
+			ToolKind:     ai.ToolPartKindCodeExecution,
+			Content:      content,
+			Timestamp:    timestamp,
+			ProviderName: "openai",
 		}, nil
 }
 

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/realtime"
 	"github.com/Kludex/pydantic-ai-go/realtime/internal/openaiprotocol"
 	"github.com/coder/websocket"

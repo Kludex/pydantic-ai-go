@@ -12,7 +12,7 @@ import (
 	"net/http"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 	"github.com/Kludex/pydantic-ai-go/retries"
 )
@@ -79,7 +79,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 type primaryModel struct{}

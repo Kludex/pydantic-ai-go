@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/realtime"
 	azurert "github.com/Kludex/pydantic-ai-go/realtime/azure"
 	openairt "github.com/Kludex/pydantic-ai-go/realtime/openai"

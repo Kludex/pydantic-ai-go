@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/realtime"
 	"google.golang.org/genai"
 )

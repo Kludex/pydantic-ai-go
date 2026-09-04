@@ -146,7 +146,7 @@ import (
     "encoding/json"
     "fmt"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/realtime"
     openairt "github.com/Kludex/pydantic-ai-go/realtime/openai"
 )
@@ -208,7 +208,7 @@ import (
     "context"
     "encoding/base64"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/realtime"
     googlert "github.com/Kludex/pydantic-ai-go/realtime/google"
 )

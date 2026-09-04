@@ -5,7 +5,7 @@ import (
 	"context"
 	"iter"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // Input is content or a control command sent to a realtime connection.

@@ -6,7 +6,7 @@ import (
 	"maps"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func splitTaggedThinking(response *ai.ModelResponse) {

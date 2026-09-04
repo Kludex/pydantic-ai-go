@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
 	"github.com/Kludex/pydantic-ai-go/models/bedrock"
 	"github.com/Kludex/pydantic-ai-go/models/bedrockmantle"

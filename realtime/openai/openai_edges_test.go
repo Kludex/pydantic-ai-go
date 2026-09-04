@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/realtime"
 	openairt "github.com/Kludex/pydantic-ai-go/realtime/openai"
 	"github.com/coder/websocket"

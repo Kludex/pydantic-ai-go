@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"sync/atomic"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 var generatedID atomic.Uint64

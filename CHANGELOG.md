@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+### Changed
+
+- The core `ai` package now uses `github.com/Kludex/pydantic-ai-go/ai`, keeping Go source and tests out of the repository root.
+
 ### Added
 
 - A typed agent loop with structured output, tools, retries, usage limits, cancellation, deferred execution, message enqueueing, manual runs, and synchronous or streamed results.

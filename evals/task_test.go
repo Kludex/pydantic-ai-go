@@ -8,7 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	aievals "github.com/Kludex/pydantic-ai-go/evals"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 	pydanticevals "github.com/Kludex/pydantic-evals-go"

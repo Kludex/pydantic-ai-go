@@ -20,7 +20,7 @@ import (
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/bedrock"
 )
 
@@ -719,6 +719,9 @@ func TestOptionsAndAWSConfiguration(t *testing.T) {
 		if request.Header.Get("x-custom") != "present" {
 			t.Errorf("custom header was omitted: %v", request.Header)
 		}
+		if !strings.Contains(request.Header.Get("Authorization"), "x-custom") {
+			t.Errorf("custom header was not signed: %v", request.Header)
+		}
 		response.WriteHeader(http.StatusInternalServerError)
 		_, _ = response.Write([]byte(`{"message":"failed"}`))
 	}))
@@ -737,11 +740,12 @@ func TestOptionsAndAWSConfiguration(t *testing.T) {
 	if loaded.ProviderURL() != server.URL {
 		t.Fatalf("unexpected loaded provider URL: %q", loaded.ProviderURL())
 	}
-	_, err = loaded.CountTokens(context.Background(), nil, ai.ModelRequestParams{})
+	headerParams := ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraHeaders: map[string]string{"x-custom": "present"}}}
+	_, err = loaded.CountTokens(context.Background(), nil, headerParams)
 	if err == nil {
 		t.Fatal("expected AWS token-count error")
 	}
-	_, err = loaded.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	_, err = loaded.StreamRequest(context.Background(), nil, headerParams)
 	if err == nil {
 		t.Fatal("expected AWS stream-open error")
 	}

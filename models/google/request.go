@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func (model *Model) prepareHTTPRequest(request *http.Request, settings ai.ModelSettings) error {

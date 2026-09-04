@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 const defaultBaseURL = "https://api.mistral.ai/v1"

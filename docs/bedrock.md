@@ -9,7 +9,7 @@ import (
     "context"
     "fmt"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/models/bedrock"
 )
 
@@ -46,7 +46,7 @@ import (
     "context"
     "fmt"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/models/bedrock"
 )
 
@@ -82,7 +82,7 @@ import (
     "github.com/aws/aws-sdk-go-v2/aws"
     "github.com/aws/aws-sdk-go-v2/credentials"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/models/bedrock"
 )
 
@@ -122,7 +122,7 @@ import (
     "github.com/aws/aws-sdk-go-v2/config"
     "github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/models/anthropic"
 )
 
@@ -178,7 +178,7 @@ import (
     "context"
     "fmt"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/models/bedrock"
 )
 

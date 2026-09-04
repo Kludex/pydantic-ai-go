@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func validateMessages(messages []ai.ModelMessage) error {

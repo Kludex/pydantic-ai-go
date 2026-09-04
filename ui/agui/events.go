@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 var errConsumerStopped = errors.New("agui: stream consumer stopped")

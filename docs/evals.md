@@ -7,7 +7,7 @@ import (
 	"context"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	aievals "github.com/Kludex/pydantic-ai-go/evals"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 	pydanticevals "github.com/Kludex/pydantic-evals-go"
@@ -74,7 +74,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	aievals "github.com/Kludex/pydantic-ai-go/evals"
 	"github.com/Kludex/pydantic-ai-go/models/google"
 	pydanticevals "github.com/Kludex/pydantic-evals-go"

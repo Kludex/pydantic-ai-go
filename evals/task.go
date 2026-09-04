@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	pydanticevals "github.com/Kludex/pydantic-evals-go"
 )
 

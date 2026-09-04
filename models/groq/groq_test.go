@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/groq"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )

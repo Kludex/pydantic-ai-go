@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // PrepareInput converts and sanitizes untrusted AG-UI history. The latest user

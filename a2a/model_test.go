@@ -14,8 +14,8 @@ import (
 	"github.com/a2aproject/a2a-go/a2aclient"
 	"github.com/a2aproject/a2a-go/a2asrv"
 
-	ai "github.com/Kludex/pydantic-ai-go"
 	a2aintegration "github.com/Kludex/pydantic-ai-go/a2a"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 )
 

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/realtime"
 	xairt "github.com/Kludex/pydantic-ai-go/realtime/xai"
 	"github.com/coder/websocket"

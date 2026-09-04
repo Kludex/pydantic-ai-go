@@ -8,7 +8,7 @@ package main
 import (
 	"context"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )

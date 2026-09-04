@@ -10,7 +10,7 @@ import (
 
 	protocol "github.com/a2aproject/a2a-go/a2a"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 type remoteArtifacts struct {

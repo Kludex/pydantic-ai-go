@@ -3,7 +3,7 @@
 Run every benchmark from the repository root:
 
 ```console
-go test -run '^$' -bench . -benchmem .
+go test -run '^$' -bench . -benchmem ./ai
 ```
 
 The benchmark suite covers four hot paths:

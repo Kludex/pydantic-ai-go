@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func TestCacheSettingsBuildAndExtract(t *testing.T) {

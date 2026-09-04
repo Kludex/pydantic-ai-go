@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"slices"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func toolResultContent(value any) (string, []ai.UserContent, error) {

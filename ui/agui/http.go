@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // Handler returns an HTTP handler that accepts RunAgentInput JSON and streams

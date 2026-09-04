@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func userFile(part UIMessagePart) (ai.UserContent, error) {

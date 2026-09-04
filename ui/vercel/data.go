@@ -7,7 +7,7 @@ import (
 	"slices"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 const toolResultChunksMetadataKey = "pydantic_ai_go_vercel_chunks"

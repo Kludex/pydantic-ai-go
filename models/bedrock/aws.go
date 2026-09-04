@@ -10,7 +10,7 @@ import (
 	"github.com/aws/smithy-go/middleware"
 	smithyhttp "github.com/aws/smithy-go/transport/http"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // APIError reports an HTTP error returned by Bedrock Runtime.
@@ -53,18 +53,18 @@ func requestOptions(headers map[string]string) func(*bedrockruntime.Options) {
 			return
 		}
 		options.APIOptions = append(options.APIOptions, func(stack *middleware.Stack) error {
-			return stack.Build.Add(middleware.BuildMiddlewareFunc(
+			return stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc(
 				"PydanticAIBedrockHeaders",
 				func(
-					ctx context.Context, input middleware.BuildInput, next middleware.BuildHandler,
-				) (middleware.BuildOutput, middleware.Metadata, error) {
+					ctx context.Context, input middleware.FinalizeInput, next middleware.FinalizeHandler,
+				) (middleware.FinalizeOutput, middleware.Metadata, error) {
 					request := input.Request.(*smithyhttp.Request)
 					for name, value := range cloned {
 						request.Header.Set(name, value)
 					}
-					return next.HandleBuild(ctx, input)
+					return next.HandleFinalize(ctx, input)
 				},
-			), middleware.After)
+			), "Signing", middleware.Before)
 		})
 	}
 }

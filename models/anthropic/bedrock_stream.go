@@ -11,7 +11,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func (model *Model) streamLegacyBedrock(
@@ -48,28 +48,42 @@ func (model *Model) streamLegacyBedrock(
 		return nil, fmt.Errorf("anthropic: legacy Bedrock streaming client returned nil stream")
 	}
 	reader, writer := io.Pipe()
-	go copyLegacyBedrockStream(stream, writer)
-	return model.eventStream(ctx, reader), nil
+	done := make(chan struct{})
+	go func() {
+		copyLegacyBedrockStream(stream, writer)
+		close(done)
+	}()
+	events := model.eventStream(ctx, reader)
+	return func(yield func(ai.ModelStreamEvent, error) bool) {
+		for event, eventErr := range events {
+			if !yield(event, eventErr) {
+				_ = reader.Close()
+				<-done
+				return
+			}
+		}
+		<-done
+	}, nil
 }
 
 func copyLegacyBedrockStream(stream LegacyBedrockEventStream, writer *io.PipeWriter) {
-	defer func() { _ = stream.Close() }()
+	var streamErr error
 	for event := range stream.Events() {
 		chunk, ok := event.(*types.ResponseStreamMemberChunk)
 		if !ok || chunk == nil {
-			_ = writer.CloseWithError(fmt.Errorf("anthropic: unsupported legacy Bedrock stream event %T", event))
-			return
+			streamErr = fmt.Errorf("anthropic: unsupported legacy Bedrock stream event %T", event)
+			break
 		}
 		if _, err := writer.Write(append(append([]byte("data: "), chunk.Value.Bytes...), '\n', '\n')); err != nil {
-			_ = writer.CloseWithError(err)
-			return
+			streamErr = err
+			break
 		}
 	}
-	if err := stream.Err(); err != nil {
-		_ = writer.CloseWithError(err)
-		return
+	if streamErr == nil {
+		streamErr = stream.Err()
 	}
-	_ = writer.Close()
+	_ = stream.Close()
+	_ = writer.CloseWithError(streamErr)
 }
 
 func legacyBedrockStreamIsNil(stream LegacyBedrockEventStream) bool {

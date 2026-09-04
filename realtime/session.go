@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // Event is one session event. Values are ai.PartStartEvent, ai.PartDeltaEvent,

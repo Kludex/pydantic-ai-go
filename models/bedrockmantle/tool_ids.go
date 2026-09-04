@@ -3,7 +3,7 @@ package bedrockmantle
 import (
 	"iter"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func qualifyResponseToolCallIDs(response *ai.ModelResponse) {

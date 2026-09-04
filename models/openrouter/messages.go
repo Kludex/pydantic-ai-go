@@ -1,6 +1,6 @@
 package openrouter
 
-import ai "github.com/Kludex/pydantic-ai-go"
+import ai "github.com/Kludex/pydantic-ai-go/ai"
 
 func prepareMessages(messages []ai.ModelMessage) []ai.ModelMessage {
 	prepared := ai.ModelRequestContext{Messages: messages}.Clone().Messages

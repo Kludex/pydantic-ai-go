@@ -5,7 +5,7 @@ import (
 	"maps"
 	"slices"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 const explicitReasoningSetting = "xai_explicit_reasoning_effort"

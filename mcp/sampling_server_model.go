@@ -9,7 +9,7 @@ import (
 	"reflect"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 

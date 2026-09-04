@@ -9,7 +9,7 @@ Build typed LLM agents in Go.
 You need Go 1.25 or newer.
 
 ```console
-go get github.com/Kludex/pydantic-ai-go
+go get github.com/Kludex/pydantic-ai-go/ai
 ```
 
 Set the API key for your provider:
@@ -30,7 +30,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -87,7 +87,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -129,7 +129,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -175,7 +175,7 @@ import (
 	"fmt"
 	"log"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 )
 
@@ -241,7 +241,7 @@ import (
 	"context"
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 )
 
@@ -308,7 +308,7 @@ func TestAgent(t *testing.T) {
 | Call a model without an agent | `RequestModel` or `StreamModel` |
 | Drive a run one event at a time | `AgentRun` |
 
-Run options are detached from agent configuration. They are safe to use in concurrent runs. See the [Go package documentation](https://pkg.go.dev/github.com/Kludex/pydantic-ai-go) for each public contract and [`CHECKLIST.md`](CHECKLIST.md) for remaining parity work.
+Run options are detached from agent configuration. They are safe to use in concurrent runs. See the [Go package documentation](https://pkg.go.dev/github.com/Kludex/pydantic-ai-go/ai) for each public contract and [`CHECKLIST.md`](CHECKLIST.md) for remaining parity work.
 
 ## Design
 
@@ -334,7 +334,7 @@ golangci-lint run ./...
 go test ./...
 scripts/coverage.sh
 go test -race ./...
-go test -run '^$' -bench . -benchmem .
+go test -run '^$' -bench . -benchmem ./ai
 ```
 
 The project requires 100% statement coverage for every tested package. See the [benchmark guide](docs/benchmarks.md) to compare performance changes.

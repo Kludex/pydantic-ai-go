@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // ChunkType identifies one Vercel AI UI message stream chunk.

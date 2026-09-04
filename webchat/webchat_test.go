@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 	"github.com/Kludex/pydantic-ai-go/webchat"
 )

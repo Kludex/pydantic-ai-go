@@ -4,7 +4,7 @@ import (
 	"slices"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // Result contains one vector for each original input.

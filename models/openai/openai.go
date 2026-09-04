@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
@@ -1096,12 +1096,20 @@ func (model *Model) executedToolParts(
 	callID := fmt.Sprintf("groq-search:%d", tool.Index)
 	details := map[string]any{"index": tool.Index, "type": tool.Type}
 	return ai.NativeToolCallPart{
-			ToolName: "web_search", Args: arguments, ToolCallID: callID,
-			ToolKind: ai.ToolPartKindWebSearch, ID: callID, ProviderName: model.providerName,
+			ToolName:        "web_search",
+			Args:            arguments,
+			ToolCallID:      callID,
+			ToolKind:        ai.ToolPartKindWebSearch,
+			ID:              callID,
+			ProviderName:    model.providerName,
 			ProviderDetails: details,
 		}, ai.NativeToolReturnPart{
-			ToolName: "web_search", Content: content, ToolCallID: callID,
-			ToolKind: ai.ToolPartKindWebSearch, Outcome: ai.ToolReturnOutcomeSuccess, ProviderName: model.providerName,
+			ToolName:        "web_search",
+			Content:         content,
+			ToolCallID:      callID,
+			ToolKind:        ai.ToolPartKindWebSearch,
+			Outcome:         ai.ToolReturnOutcomeSuccess,
+			ProviderName:    model.providerName,
 			ProviderDetails: maps.Clone(details),
 		}, true, nil
 }

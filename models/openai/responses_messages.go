@@ -8,7 +8,7 @@ import (
 	"slices"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func trimOpenAICompactionMessages(messages []ai.ModelMessage, providerNames ...string) []ai.ModelMessage {

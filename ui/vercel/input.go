@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // PrepareInput converts and sanitizes client-held Vercel AI history. The

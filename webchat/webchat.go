@@ -9,7 +9,7 @@ import (
 	"slices"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/mcp"
 	"github.com/Kludex/pydantic-ai-go/ui/vercel"
 )

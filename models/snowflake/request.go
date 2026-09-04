@@ -5,7 +5,7 @@ import (
 	"iter"
 	"maps"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequestParams, error) {

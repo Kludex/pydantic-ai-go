@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // CompactionTrigger decides whether the current history should be compacted.

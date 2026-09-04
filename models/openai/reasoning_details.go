@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strconv"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 type reasoningDetail struct {

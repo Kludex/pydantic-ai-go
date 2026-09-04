@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"sync"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // ModelFactory rebuilds one model inside a durable operation.

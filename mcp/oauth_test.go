@@ -8,7 +8,7 @@ import (
 	"sync"
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"

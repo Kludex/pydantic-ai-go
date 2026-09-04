@@ -12,7 +12,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
-const instrumentationScope = "github.com/Kludex/pydantic-ai-go"
+const instrumentationScope = "github.com/Kludex/pydantic-ai-go/ai"
 
 // InstrumentationOption configures embedding telemetry.
 type InstrumentationOption func(*instrumentationConfig)

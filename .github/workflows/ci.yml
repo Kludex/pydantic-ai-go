@@ -33,7 +33,7 @@ jobs:
       - run: scripts/coverage.sh
       - run: go test -race ./...
       - name: Stress concurrent paths
-        run: go test -race -count=10 -run 'Concurrent|Parallel|Enqueue' .
+        run: go test -race -count=10 -run 'Concurrent|Parallel|Enqueue' ./ai
       - name: Verify replay-only tests did not write cassettes
         run: git diff --exit-code
 

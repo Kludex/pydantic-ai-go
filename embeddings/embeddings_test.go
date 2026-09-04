@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 type testModel struct {

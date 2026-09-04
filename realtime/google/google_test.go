@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/realtime"
 	googlert "github.com/Kludex/pydantic-ai-go/realtime/google"
 	"google.golang.org/genai"

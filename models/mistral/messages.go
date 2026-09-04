@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"slices"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func (model *Model) convertMessage(ctx context.Context, message ai.ModelMessage) ([]mistralMessage, error) {

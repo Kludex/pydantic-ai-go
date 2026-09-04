@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 const providerMetadataKey = "pydantic_ai"

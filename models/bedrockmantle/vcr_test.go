@@ -5,7 +5,7 @@ import (
 	"os"
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/bedrockmantle"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/cassette"
 	"gopkg.in/dnaeon/go-vcr.v4/pkg/recorder"
@@ -36,8 +36,12 @@ func TestRecordedSimpleRun(t *testing.T) {
 			t.Error(err)
 		}
 	})
+	token := os.Getenv("AWS_BEARER_TOKEN_BEDROCK")
+	if token == "" {
+		token = "replay"
+	}
 	model := bedrockmantle.NewModel(
-		"openai.gpt-oss-20b", bedrockmantle.WithRegion("us-east-1"),
+		"openai.gpt-oss-20b", bedrockmantle.WithRegion("us-east-1"), bedrockmantle.WithAPIKey(token),
 		bedrockmantle.WithHTTPClient(recording.GetDefaultClient()),
 	)
 	agent := ai.NewAgent[struct{}, string](model, ai.WithInstructions("Answer with a single word."))

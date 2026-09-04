@@ -5,7 +5,7 @@ import (
 	"slices"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // ToolChoice controls whether and which function tools the model may call.

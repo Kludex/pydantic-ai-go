@@ -4,7 +4,7 @@ package agui
 import (
 	"encoding/json"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // EventType identifies one AG-UI stream event.

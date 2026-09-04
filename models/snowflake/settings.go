@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"maps"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 const reasoningSetting = "snowflake_reasoning"

@@ -12,7 +12,7 @@ Deprecated APIs remain available for at least one minor release when a compatibi
 
 ## Public Go API
 
-The compatibility promise covers exported identifiers in the root package and its provider, embedding, MCP, retry, and evaluation packages. It also covers documented option precedence, lifecycle ownership, concurrency behavior, and errors intended for `errors.Is` or `errors.As`.
+The compatibility promise covers exported identifiers in the `ai` package and its provider, embedding, MCP, retry, and evaluation packages. It also covers documented option precedence, lifecycle ownership, concurrency behavior, and errors intended for `errors.Is` or `errors.As`.
 
 The following details are not stable contracts:
 

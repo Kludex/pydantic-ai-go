@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/realtime"
 	"github.com/Kludex/pydantic-ai-go/realtime/internal/openaiprotocol"
 	openairt "github.com/Kludex/pydantic-ai-go/realtime/openai"

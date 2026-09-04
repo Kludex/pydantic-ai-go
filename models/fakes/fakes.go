@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // FunctionModel calls a user-supplied function for every request.

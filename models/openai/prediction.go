@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // Prediction supplies expected output so compatible Chat Completions models can

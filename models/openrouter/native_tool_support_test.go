@@ -3,7 +3,7 @@ package openrouter_test
 import (
 	"testing"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/models/openrouter"
 )
 

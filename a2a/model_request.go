@@ -7,7 +7,7 @@ import (
 
 	protocol "github.com/a2aproject/a2a-go/a2a"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func (model *Model) request(messages []ai.ModelMessage, params ai.ModelRequestParams) (*protocol.MessageSendParams, error) {

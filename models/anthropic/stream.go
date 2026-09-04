@@ -13,7 +13,7 @@ import (
 	"strconv"
 	"strings"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // StreamRequest implements ai.StreamingModel using Anthropic server-sent events.

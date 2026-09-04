@@ -29,7 +29,7 @@ package main
 import (
     "context"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/cli"
     "github.com/Kludex/pydantic-ai-go/models/openai"
 )
@@ -67,7 +67,7 @@ package main
 import (
     "net/http"
 
-    ai "github.com/Kludex/pydantic-ai-go"
+    ai "github.com/Kludex/pydantic-ai-go/ai"
     "github.com/Kludex/pydantic-ai-go/models/openai"
     "github.com/Kludex/pydantic-ai-go/webchat"
 )

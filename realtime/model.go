@@ -6,7 +6,7 @@ import (
 	"reflect"
 	"time"
 
-	ai "github.com/Kludex/pydantic-ai-go"
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // Error reports a realtime transport or protocol failure.

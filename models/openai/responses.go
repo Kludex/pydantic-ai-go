@@ -64,13 +64,17 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 func (m *ResponsesModel) Name() string { return m.name }
 
 // SupportsNativeTool reports Responses native-tool support.
-func (*ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
+func (m *ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
 	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
 		return false
 	}
 	switch tool.CloneNativeTool().(type) {
-	case ai.WebSearchTool, ai.CodeExecutionTool, ai.ImageGenerationTool, ai.FileSearchTool, ai.MCPServerTool:
+	case ai.WebSearchTool, ai.CodeExecutionTool, ai.FileSearchTool, ai.MCPServerTool:
 		return true
+	case ai.ImageGenerationTool:
+		return m.providerName != "xai"
+	case ai.XSearchTool:
+		return m.providerName == "xai"
 	default:
 		return false
 	}
@@ -453,39 +457,51 @@ type responsesInputContent struct {
 }
 
 type responsesTool struct {
-	Type              string                          `json:"type"`
-	Name              string                          `json:"name,omitempty"`
-	Description       string                          `json:"description,omitempty"`
-	Parameters        map[string]any                  `json:"parameters,omitempty"`
-	Strict            *bool                           `json:"strict,omitempty"`
-	DeferLoading      bool                            `json:"defer_loading,omitempty"`
-	Execution         string                          `json:"execution,omitempty"`
-	SearchContextSize ai.WebSearchContextSize         `json:"search_context_size,omitempty"`
-	UserLocation      *responsesWebSearchLocation     `json:"user_location,omitempty"`
-	Filters           *responsesWebSearchFilters      `json:"filters,omitempty"`
-	ExternalWebAccess *bool                           `json:"external_web_access,omitempty"`
-	Container         *responsesCodeContainer         `json:"container,omitempty"`
-	VectorStoreIDs    []string                        `json:"vector_store_ids,omitempty"`
-	Action            ai.ImageGenerationAction        `json:"action,omitempty"`
-	Background        ai.ImageGenerationBackground    `json:"background,omitempty"`
-	InputFidelity     ai.ImageGenerationInputFidelity `json:"input_fidelity,omitempty"`
-	Moderation        ai.ImageGenerationModeration    `json:"moderation,omitempty"`
-	Model             string                          `json:"model,omitempty"`
-	OutputCompression *int                            `json:"output_compression,omitempty"`
-	OutputFormat      ai.ImageGenerationOutputFormat  `json:"output_format,omitempty"`
-	PartialImages     int                             `json:"partial_images"`
-	Quality           ai.ImageGenerationQuality       `json:"quality,omitempty"`
-	Size              ai.ImageGenerationSize          `json:"size,omitempty"`
-	ServerLabel       string                          `json:"server_label,omitempty"`
-	ServerURL         string                          `json:"server_url,omitempty"`
-	ConnectorID       string                          `json:"connector_id,omitempty"`
-	RequireApproval   string                          `json:"require_approval,omitempty"`
-	Authorization     string                          `json:"authorization,omitempty"`
-	AllowedTools      *[]string                       `json:"allowed_tools,omitempty"`
-	ServerDescription string                          `json:"server_description,omitempty"`
-	Headers           map[string]string               `json:"headers,omitempty"`
-	InputSchema       map[string]any                  `json:"input_schema,omitempty"`
-	Annotations       map[string]any                  `json:"annotations,omitempty"`
+	Type                     string                          `json:"type"`
+	Name                     string                          `json:"name,omitempty"`
+	Description              string                          `json:"description,omitempty"`
+	Parameters               map[string]any                  `json:"parameters,omitempty"`
+	Strict                   *bool                           `json:"strict,omitempty"`
+	DeferLoading             bool                            `json:"defer_loading,omitempty"`
+	Execution                string                          `json:"execution,omitempty"`
+	SearchContextSize        ai.WebSearchContextSize         `json:"search_context_size,omitempty"`
+	UserLocation             *responsesWebSearchLocation     `json:"user_location,omitempty"`
+	Filters                  *responsesWebSearchFilters      `json:"filters,omitempty"`
+	AllowedDomains           []string                        `json:"allowed_domains,omitempty"`
+	ExcludedDomains          []string                        `json:"excluded_domains,omitempty"`
+	ExternalWebAccess        *bool                           `json:"external_web_access,omitempty"`
+	Container                *responsesCodeContainer         `json:"container,omitempty"`
+	VectorStoreIDs           []string                        `json:"vector_store_ids,omitempty"`
+	CollectionIDs            []string                        `json:"collection_ids,omitempty"`
+	MaxNumResults            *int                            `json:"max_num_results,omitempty"`
+	Instructions             string                          `json:"instructions,omitempty"`
+	RetrievalMode            ai.FileSearchRetrievalMode      `json:"retrieval_mode,omitempty"`
+	AllowedXHandles          []string                        `json:"allowed_x_handles,omitempty"`
+	ExcludedXHandles         []string                        `json:"excluded_x_handles,omitempty"`
+	FromDate                 string                          `json:"from_date,omitempty"`
+	ToDate                   string                          `json:"to_date,omitempty"`
+	EnableImageUnderstanding bool                            `json:"enable_image_understanding,omitempty"`
+	EnableVideoUnderstanding bool                            `json:"enable_video_understanding,omitempty"`
+	Action                   ai.ImageGenerationAction        `json:"action,omitempty"`
+	Background               ai.ImageGenerationBackground    `json:"background,omitempty"`
+	InputFidelity            ai.ImageGenerationInputFidelity `json:"input_fidelity,omitempty"`
+	Moderation               ai.ImageGenerationModeration    `json:"moderation,omitempty"`
+	Model                    string                          `json:"model,omitempty"`
+	OutputCompression        *int                            `json:"output_compression,omitempty"`
+	OutputFormat             ai.ImageGenerationOutputFormat  `json:"output_format,omitempty"`
+	PartialImages            *int                            `json:"partial_images,omitempty"`
+	Quality                  ai.ImageGenerationQuality       `json:"quality,omitempty"`
+	Size                     ai.ImageGenerationSize          `json:"size,omitempty"`
+	ServerLabel              string                          `json:"server_label,omitempty"`
+	ServerURL                string                          `json:"server_url,omitempty"`
+	ConnectorID              string                          `json:"connector_id,omitempty"`
+	RequireApproval          string                          `json:"require_approval,omitempty"`
+	Authorization            string                          `json:"authorization,omitempty"`
+	AllowedTools             *[]string                       `json:"allowed_tools,omitempty"`
+	ServerDescription        string                          `json:"server_description,omitempty"`
+	Headers                  map[string]string               `json:"headers,omitempty"`
+	InputSchema              map[string]any                  `json:"input_schema,omitempty"`
+	Annotations              map[string]any                  `json:"annotations,omitempty"`
 }
 
 type responsesCodeContainer struct {
@@ -523,9 +539,13 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 		prepared, err := responsesImageGenerationTool(*tool)
 		return prepared, true, err
 	case ai.FileSearchTool:
-		return responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}, true, nil
+		return responsesFileSearchTool(tool, providerName), true, nil
 	case *ai.FileSearchTool:
-		return responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}, true, nil
+		return responsesFileSearchTool(*tool, providerName), true, nil
+	case ai.XSearchTool:
+		return responsesXSearchTool(tool, providerName)
+	case *ai.XSearchTool:
+		return responsesXSearchTool(*tool, providerName)
 	case ai.MCPServerTool:
 		return responsesMCPServerTool(tool), true, nil
 	case *ai.MCPServerTool:
@@ -536,11 +556,14 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 		}
 		return responsesTool{}, false, fmt.Errorf("openai: Responses does not support native tool %q", nativeTool.Kind())
 	}
-	contextSize := webSearch.SearchContextSize
-	if contextSize == "" {
-		contextSize = ai.WebSearchContextMedium
+	tool := responsesTool{Type: "web_search"}
+	if providerName != "xai" {
+		contextSize := webSearch.SearchContextSize
+		if contextSize == "" {
+			contextSize = ai.WebSearchContextMedium
+		}
+		tool.SearchContextSize = contextSize
 	}
-	tool := responsesTool{Type: "web_search", SearchContextSize: contextSize}
 	if webSearch.UserLocation != nil {
 		tool.UserLocation = &responsesWebSearchLocation{
 			Type: "approximate", City: webSearch.UserLocation.City, Country: webSearch.UserLocation.Country,
@@ -548,13 +571,58 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 		}
 	}
 	if len(webSearch.AllowedDomains) > 0 {
-		tool.Filters = &responsesWebSearchFilters{AllowedDomains: slices.Clone(webSearch.AllowedDomains)}
+		if providerName == "xai" {
+			tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
+		} else {
+			tool.Filters = &responsesWebSearchFilters{AllowedDomains: slices.Clone(webSearch.AllowedDomains)}
+		}
+	}
+	if providerName == "xai" {
+		tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
+		return tool, true, nil
 	}
 	if webSearch.ExternalWebAccess != nil {
 		external := *webSearch.ExternalWebAccess
 		tool.ExternalWebAccess = &external
 	}
 	return tool, true, nil
+}
+
+func responsesFileSearchTool(tool ai.FileSearchTool, providerName string) responsesTool {
+	if providerName == "xai" {
+		prepared := responsesTool{
+			Type: "collections_search", CollectionIDs: slices.Clone(tool.FileStoreIDs),
+			Instructions: tool.Instructions, RetrievalMode: tool.RetrievalMode,
+		}
+		if tool.MaxNumResults != nil {
+			maximum := *tool.MaxNumResults
+			prepared.MaxNumResults = &maximum
+		}
+		return prepared
+	}
+	return responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}
+}
+
+func responsesXSearchTool(tool ai.XSearchTool, providerName string) (responsesTool, bool, error) {
+	if providerName != "xai" {
+		if tool.Optional {
+			return responsesTool{}, false, nil
+		}
+		return responsesTool{}, false, fmt.Errorf("openai: Responses does not support native tool %q", tool.Kind())
+	}
+	prepared := responsesTool{
+		Type: "x_search", AllowedXHandles: slices.Clone(tool.AllowedXHandles),
+		ExcludedXHandles:         slices.Clone(tool.ExcludedXHandles),
+		EnableImageUnderstanding: tool.EnableImageUnderstanding,
+		EnableVideoUnderstanding: tool.EnableVideoUnderstanding,
+	}
+	if tool.FromDate != nil {
+		prepared.FromDate = tool.FromDate.Format(time.DateOnly)
+	}
+	if tool.ToDate != nil {
+		prepared.ToDate = tool.ToDate.Format(time.DateOnly)
+	}
+	return prepared, true, nil
 }
 
 func responsesMCPServerTool(tool ai.MCPServerTool) responsesTool {
@@ -619,10 +687,11 @@ func responsesImageGenerationTool(tool ai.ImageGenerationTool) (responsesTool, e
 	if err != nil {
 		return responsesTool{}, err
 	}
+	partialImages := tool.PartialImages
 	return responsesTool{
 		Type: "image_generation", Action: action, Background: background, InputFidelity: tool.InputFidelity,
 		Moderation: moderation, Model: tool.Model, OutputCompression: &compression, OutputFormat: outputFormat,
-		PartialImages: tool.PartialImages, Quality: quality, Size: size,
+		PartialImages: &partialImages, Quality: quality, Size: size,
 	}, nil
 }
 
@@ -689,6 +758,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		PromptCacheKey:        promptCache.Key,
 		PromptCacheRetention:  promptCache.Retention,
 		PromptCacheOptions:    promptCache.Options,
+		Include:               slices.Clone(responseSettings.Include),
 		IncludeRawAnnotations: responseSettings.IncludeRawAnnotations,
 		ExtraBody:             params.Settings.ExtraBody,
 	}
@@ -731,10 +801,13 @@ func (m *ResponsesModel) buildResponsesPayload(
 		if include {
 			req.Tools = append(req.Tools, tool)
 			if tool.Type == "code_interpreter" && m.codeExecutionOutputs {
-				req.Include = append(req.Include, "code_interpreter_call.outputs")
+				req.Include = appendResponsesInclude(req.Include, "code_interpreter_call.outputs")
 			}
 			if tool.Type == "file_search" && m.fileSearchResults {
-				req.Include = append(req.Include, "file_search_call.results")
+				req.Include = appendResponsesInclude(req.Include, "file_search_call.results")
+			}
+			if xSearch, ok := nativeTool.CloneNativeTool().(ai.XSearchTool); ok && xSearch.IncludeOutput {
+				req.Include = appendResponsesInclude(req.Include, "x_search_call.outputs")
 			}
 		}
 	}
@@ -821,6 +894,13 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}}
 	}
 	return req, nil
+}
+
+func appendResponsesInclude(included []string, value string) []string {
+	if slices.Contains(included, value) {
+		return included
+	}
+	return append(included, value)
 }
 
 type incompleteDetails struct {
@@ -1041,6 +1121,29 @@ func responsesMCPParts(
 		}, nil
 }
 
+func responsesSearchParts(
+	item responsesOutputItem, timestamp time.Time, toolName string, toolKind ai.ToolPartKind,
+) (ai.NativeToolCallPart, ai.NativeToolReturnPart) {
+	arguments := slices.Clone(item.Action)
+	if len(arguments) == 0 || string(arguments) == "null" {
+		arguments = json.RawMessage(`{}`)
+	}
+	content := map[string]any{"status": item.Status}
+	if item.Output != nil {
+		content["output"] = item.Output
+	}
+	if item.Results != nil {
+		content["results"] = item.Results
+	}
+	return ai.NativeToolCallPart{
+			ToolName: toolName, Args: arguments, ToolCallID: item.ID, ToolKind: toolKind,
+			ID: item.ID, ProviderName: "openai",
+		}, ai.NativeToolReturnPart{
+			ToolName: toolName, ToolCallID: item.ID, ToolKind: toolKind,
+			Content: content, Timestamp: timestamp, ProviderName: "openai",
+		}
+}
+
 func responsesFileSearchParts(
 	item responsesOutputItem, timestamp time.Time,
 ) (ai.NativeToolCallPart, ai.NativeToolReturnPart) {
@@ -1199,8 +1302,11 @@ func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool
 				resp.Parts = append(resp.Parts, file)
 			}
 			resp.Parts = append(resp.Parts, returned)
-		case "file_search_call":
+		case "file_search_call", "collections_search_call":
 			call, returned := responsesFileSearchParts(item, timestamp)
+			resp.Parts = append(resp.Parts, call, returned)
+		case "x_search_call":
+			call, returned := responsesSearchParts(item, timestamp, "x_search", ai.ToolPartKindXSearch)
 			resp.Parts = append(resp.Parts, call, returned)
 		case "mcp_approval_request":
 			return nil, fmt.Errorf("openai: MCP approval requests are not supported")

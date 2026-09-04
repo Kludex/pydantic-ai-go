@@ -349,11 +349,20 @@ func (m *ResponsesModel) responsesEventStream(
 					}, nil) {
 						return
 					}
-				case "file_search_call":
+				case "file_search_call", "collections_search_call":
 					emittedParts = true
 					if !yield(ai.ToolCallStartEvent{
 						PartID: responsesToolPartID(event), ToolName: "file_search", ToolCallID: event.Item.ID,
 						ToolKind: ai.ToolPartKindFileSearch, ID: event.Item.ID,
+						ProviderName: m.providerName, Native: true,
+					}, nil) {
+						return
+					}
+				case "x_search_call":
+					emittedParts = true
+					if !yield(ai.ToolCallStartEvent{
+						PartID: responsesToolPartID(event), ToolName: "x_search", ToolCallID: event.Item.ID,
+						ToolKind: ai.ToolPartKindXSearch, ID: event.Item.ID,
 						ProviderName: m.providerName, Native: true,
 					}, nil) {
 						return
@@ -478,7 +487,9 @@ func (m *ResponsesModel) responsesEventStream(
 						yield(nil, err)
 						return
 					}
+					returned.ProviderName = m.providerName
 					for index, file := range files {
+						file.ProviderName = m.providerName
 						if !yield(ai.FileEvent{
 							PartID: fmt.Sprintf("item:%s:file:%d", event.Item.ID, index), Part: file,
 						}, nil) {
@@ -492,8 +503,23 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 					continue
 				}
-				if event.Item.Type == "file_search_call" {
+				if event.Item.Type == "file_search_call" || event.Item.Type == "collections_search_call" {
 					call, returned := responsesFileSearchParts(event.Item, responseTimestamp)
+					returned.ProviderName = m.providerName
+					if !yield(ai.ToolCallDeltaEvent{
+						PartID: responsesToolPartID(event), ToolCallID: call.ToolCallID, ArgsDelta: string(call.Args),
+					}, nil) || !yield(ai.NativeToolReturnEvent{
+						PartID: "return:" + event.Item.ID, Part: returned,
+					}, nil) {
+						return
+					}
+					continue
+				}
+				if event.Item.Type == "x_search_call" {
+					call, returned := responsesSearchParts(
+						event.Item, responseTimestamp, "x_search", ai.ToolPartKindXSearch,
+					)
+					returned.ProviderName = m.providerName
 					if !yield(ai.ToolCallDeltaEvent{
 						PartID: responsesToolPartID(event), ToolCallID: call.ToolCallID, ArgsDelta: string(call.Args),
 					}, nil) || !yield(ai.NativeToolReturnEvent{
@@ -513,6 +539,7 @@ func (m *ResponsesModel) responsesEventStream(
 						yield(nil, err)
 						return
 					}
+					returned.ProviderName = m.providerName
 					if !yield(ai.NativeToolReturnEvent{
 						PartID: "return:" + event.Item.ID, Part: returned,
 					}, nil) {
@@ -606,6 +633,7 @@ func (m *ResponsesModel) responsesEventStream(
 						continue
 					}
 					_, returned, _ := responsesMCPParts(item, mcpTimestamp)
+					returned.ProviderName = m.providerName
 					if !yield(ai.NativeToolReturnEvent{PartID: "return:" + item.ID, Part: returned}, nil) {
 						return
 					}

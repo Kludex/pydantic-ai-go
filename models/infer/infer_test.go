@@ -36,6 +36,7 @@ func TestModels(t *testing.T) {
 		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},
 		{"snowflake:claude-sonnet-4-6", "snowflake"},
+		{"xai:grok-4.3", "xai"},
 		{"zai:glm-5.3-flash", "zai"},
 	}
 	for _, test := range tests {

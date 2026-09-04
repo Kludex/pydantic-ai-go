@@ -463,6 +463,8 @@ const (
 	ToolPartKindCapabilityLoad ToolPartKind = "capability-load"
 	// ToolPartKindWebSearch identifies web search.
 	ToolPartKindWebSearch ToolPartKind = "web-search"
+	// ToolPartKindXSearch identifies X post and content search.
+	ToolPartKindXSearch ToolPartKind = "x-search"
 	// ToolPartKindWebFetch identifies URL retrieval.
 	ToolPartKindWebFetch ToolPartKind = "web-fetch"
 	// ToolPartKindCodeExecution identifies provider code execution.

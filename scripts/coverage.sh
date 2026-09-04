@@ -39,6 +39,7 @@ packages=(
     ./models/mistral
     ./models/ollama
     ./models/snowflake
+    ./models/xai
     ./models/zai
     ./mcp
     ./ui/agui

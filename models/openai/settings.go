@@ -51,6 +51,8 @@ type Settings struct {
 	Prediction *Prediction
 	// IncludeRawAnnotations retains Responses text annotations such as citations.
 	IncludeRawAnnotations *bool
+	// ResponsesInclude requests optional Responses output fields.
+	ResponsesInclude []string
 	// PromptCacheKey groups requests that should reuse a cached prefix.
 	PromptCacheKey string
 	// PromptCacheRetention selects the maximum cache retention policy.
@@ -62,6 +64,7 @@ type Settings struct {
 const (
 	predictionSetting            = "openai_prediction"
 	includeRawAnnotationsSetting = "openai_include_raw_annotations"
+	responsesIncludeSetting      = "openai_responses_include"
 	promptCacheKeySetting        = "openai_prompt_cache_key"
 	promptCacheRetentionSetting  = "openai_prompt_cache_retention"
 	promptCacheOptionsSetting    = "openai_prompt_cache_options"
@@ -92,7 +95,7 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 		extra = map[string]any{}
 	}
 	for _, name := range []string{
-		predictionSetting, includeRawAnnotationsSetting,
+		predictionSetting, includeRawAnnotationsSetting, responsesIncludeSetting,
 		promptCacheKeySetting, promptCacheRetentionSetting, promptCacheOptionsSetting,
 	} {
 		if _, exists := extra[name]; exists {
@@ -107,6 +110,16 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	}
 	if settings.IncludeRawAnnotations != nil {
 		extra[includeRawAnnotationsSetting] = *settings.IncludeRawAnnotations
+	}
+	if len(settings.ResponsesInclude) > 0 {
+		included := make([]string, len(settings.ResponsesInclude))
+		for index, value := range settings.ResponsesInclude {
+			if value == "" {
+				return ai.ModelSettings{}, fmt.Errorf("openai: Responses include values cannot be empty")
+			}
+			included[index] = value
+		}
+		extra[responsesIncludeSetting] = included
 	}
 	optionsValue := PromptCacheOptions{}
 	if options != nil {

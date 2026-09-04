@@ -349,10 +349,14 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				}
 				continue
 			}
-			if part.ToolKind == ai.ToolPartKindWebSearch {
+			if part.ToolKind == ai.ToolPartKindWebSearch || part.ToolKind == ai.ToolPartKindXSearch {
 				status, _ := part.ProviderDetails["status"].(string)
+				itemType := "web_search_call"
+				if part.ToolKind == ai.ToolPartKindXSearch {
+					itemType = "x_search_call"
+				}
 				out = append(out, responsesInput{
-					Type: "web_search_call", ID: part.ID, Action: slices.Clone(part.Args), Status: status,
+					Type: itemType, ID: part.ID, Action: slices.Clone(part.Args), Status: status,
 				})
 				continue
 			}
@@ -367,8 +371,12 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				if err := json.Unmarshal(part.Args, &arguments); err != nil {
 					return nil, fmt.Errorf("openai: parse file search arguments: %w", err)
 				}
+				itemType := "file_search_call"
+				if c.providerName == "xai" {
+					itemType = "collections_search_call"
+				}
 				out = append(out, responsesInput{
-					Type: "file_search_call", ID: part.ToolCallID, Queries: arguments.Queries, Status: "completed",
+					Type: itemType, ID: part.ToolCallID, Queries: arguments.Queries, Status: "completed",
 				})
 				continue
 			}

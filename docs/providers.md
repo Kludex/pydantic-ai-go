@@ -450,6 +450,39 @@ Snowflake Cortex exposes an OpenAI-compatible Chat Completions endpoint inside y
 
 Cortex does not support function tools or native JSON Schema output for its Llama, Mistral, Mixtral, DeepSeek, and Snowflake model families. The adapter rejects those requests before transport. Use prompted output for those models.
 
+## xAI
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/xai"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		xai.NewModel("grok-4.3"),
+		ai.WithNativeTools(ai.XSearchTool{IncludeOutput: true}),
+	)
+	result, err := agent.Run(context.Background(), "What are people saying about Go on X?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `XAI_API_KEY`.
+
+The adapter uses xAI's Responses-compatible HTTP endpoint because xAI does not publish an official Go SDK. It supports static and streamed text, encrypted reasoning, function tools, native JSON Schema output, uploaded files, log probabilities, usage, and xAI conversation settings.
+
+Grok 4, code, and build models support hosted web search, X search, code execution, MCP servers, and managed collections search. `xai.Settings` configures output inclusion, stored-response continuity, reasoning effort, server-side turn limits, and multi-agent counts. Unsupported required native tools fail before transport.
+
 ## Z.AI
 
 ```go

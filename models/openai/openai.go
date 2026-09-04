@@ -429,8 +429,9 @@ type inputAudio struct {
 }
 
 type chatFile struct {
-	FileData string `json:"file_data"`
-	Filename string `json:"filename"`
+	FileData string `json:"file_data,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
+	Filename string `json:"filename,omitempty"`
 }
 
 type videoURL struct {
@@ -1181,6 +1182,18 @@ func (model *Model) convertUserPrompt(
 				return chatMessage{}, err
 			}
 			parts = append(parts, documentPart)
+		case ai.UploadedFile:
+			if item.ProviderName != model.providerName {
+				return chatMessage{}, fmt.Errorf(
+					"%s: uploaded file %q belongs to provider %q", model.providerName, item.FileID, item.ProviderName,
+				)
+			}
+			if isImageMediaType(item.MediaType) {
+				return chatMessage{}, fmt.Errorf(
+					"%s: referencing uploaded images by file ID is not supported by Chat Completions", model.providerName,
+				)
+			}
+			parts = append(parts, contentPart{Type: "file", File: &chatFile{FileID: item.FileID}})
 		case ai.BinaryContent:
 			location := fmt.Sprintf("data:%s;base64,%s", item.MediaType, base64.StdEncoding.EncodeToString(item.Data))
 			switch {

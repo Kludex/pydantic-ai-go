@@ -642,6 +642,7 @@ func TestChatFileContent(t *testing.T) {
 		ai.BinaryContent{Data: []byte("audio"), MediaType: "audio/wav"},
 		ai.BinaryContent{Data: []byte("document"), MediaType: "application/pdf"},
 		ai.BinaryContent{Data: []byte("config"), MediaType: "text/plain", Identifier: "config"},
+		ai.UploadedFile{FileID: "file-report", ProviderName: "openai", MediaType: "application/pdf"},
 	}}}}}
 	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
 		t.Fatal(err)
@@ -659,7 +660,8 @@ func TestChatFileContent(t *testing.T) {
 		parts[4].(map[string]any)["input_audio"].(map[string]any)["format"] != "wav" ||
 		parts[5].(map[string]any)["file"].(map[string]any)["filename"] != "filename.pdf" ||
 		parts[6].(map[string]any)["text"] !=
-			"-----BEGIN FILE id=\"config\" type=\"text/plain\"-----\nconfig\n-----END FILE id=\"config\"-----" {
+			"-----BEGIN FILE id=\"config\" type=\"text/plain\"-----\nconfig\n-----END FILE id=\"config\"-----" ||
+		parts[7].(map[string]any)["file"].(map[string]any)["file_id"] != "file-report" {
 		t.Fatalf("unexpected Chat file content: %#v", parts)
 	}
 }
@@ -729,6 +731,12 @@ func TestChatFileContentCompatibility(t *testing.T) {
 		}},
 		{name: "unsupported file", model: enabled, content: ai.BinaryContent{
 			Data: []byte("data"), MediaType: "application/unknown",
+		}},
+		{name: "foreign uploaded file", model: enabled, content: ai.UploadedFile{
+			FileID: "file", ProviderName: "anthropic", MediaType: "application/pdf",
+		}},
+		{name: "uploaded image", model: enabled, content: ai.UploadedFile{
+			FileID: "file", ProviderName: "openai", MediaType: "image/png",
 		}},
 		{name: "invalid image mode", model: enabled, content: ai.ImageURL{
 			URL: "https://example.com/image.png", ForceDownload: "invalid",

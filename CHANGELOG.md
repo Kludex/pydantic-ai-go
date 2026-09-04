@@ -46,6 +46,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Add typed Vertex Model Armor prompt and response screening configuration for non-streaming requests.
 - Add typed Anthropic container reuse, managed skills, fresh-container requests, and model-gated code execution versions.
 - Add profile-aware Anthropic adaptive thinking, effort mapping, and model-specific reasoning restrictions.
+- Add OpenAI Chat Completions input for provider-hosted document file IDs.
 
 ### Deprecated
 

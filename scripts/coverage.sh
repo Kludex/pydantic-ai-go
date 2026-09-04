@@ -43,6 +43,12 @@ packages=(
     ./models/xai
     ./models/zai
     ./mcp
+    ./realtime
+    ./realtime/google
+    ./realtime/infer
+    ./realtime/internal/openaiprotocol
+    ./realtime/openai
+    ./realtime/xai
     ./ui/agui
     ./ui/vercel
     ./webchat

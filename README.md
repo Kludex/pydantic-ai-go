@@ -288,6 +288,7 @@ func TestAgent(t *testing.T) {
 | Stream an agent to Vercel AI UI | [`vercel.Adapter`](docs/vercel-ai.md) |
 | Serve an agent over A2A | [`a2a.Executor`](docs/a2a.md) |
 | Chat in a terminal or browser | [`cli.Run` and `webchat.NewHandler`](docs/chat.md) |
+| Run a speech-to-speech session | [`realtime.Open`](docs/realtime.md) |
 | Build a durable operation backend | [`durable.Backend` and `durable.Operation`](docs/durable.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
 | Sanitize, trim, or summarize conversation history | [`SanitizeMessages` and history capabilities](docs/history.md) |

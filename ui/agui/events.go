@@ -21,6 +21,7 @@ type eventTransformer struct {
 	reasoningID      string
 	reasoningStarted bool
 	reasoningText    bool
+	activity         int
 	calls            map[string]bool
 	partCalls        map[string]string
 	outcome          RunOutcome
@@ -46,6 +47,11 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 			}
 		case ai.ThinkingPart:
 			transformer.startReasoning(yield, part)
+		case ai.CompactionPart:
+			transformer.activitySnapshot(yield, "pydantic_ai_compaction", map[string]any{
+				"content": part.Content, "id": part.ID, "provider_name": part.ProviderName,
+				"provider_details": cloneMap(part.ProviderDetails),
+			})
 		case ai.ToolCallPart:
 			transformer.partCalls[value.PartID] = part.ToolCallID
 			transformer.startToolCall(yield, part.ToolCallID, part.ToolName, string(part.Args))
@@ -110,6 +116,10 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 			return err
 		}
 		transformer.toolResult(yield, toolCallID, content)
+	case ai.ToolAvailabilityDeltaEvent:
+		transformer.activitySnapshot(yield, "pydantic_ai_tool_availability_delta", map[string]any{
+			"added": append([]string(nil), value.Part.ToolsAdded...), "tool_call_id": value.Part.ToolCallID,
+		})
 	case ai.DeferredToolRequestsEvent:
 		transformer.outcome = RunOutcome{Type: "interrupt"}
 		for _, call := range value.Requests.Approvals {
@@ -128,6 +138,20 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 		return errConsumerStopped
 	}
 	return nil
+}
+
+func (transformer *eventTransformer) activitySnapshot(
+	yield func(Event, error) bool, activityType string, content map[string]any,
+) {
+	if !transformer.version.atLeast(0, 1, 19) {
+		return
+	}
+	transformer.activity++
+	replace := true
+	yield(Event{
+		Type: EventActivitySnapshot, MessageID: fmt.Sprintf("%s:activity:%d", transformer.runID, transformer.activity),
+		ActivityType: activityType, Content: content, Replace: &replace,
+	}, nil)
 }
 
 func (transformer *eventTransformer) startReasoning(yield func(Event, error) bool, part ai.ThinkingPart) {

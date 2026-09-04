@@ -53,6 +53,10 @@ const (
 	EventReasoningMessageEnd EventType = "REASONING_MESSAGE_END"
 	// EventReasoningEncryptedValue preserves opaque reasoning metadata.
 	EventReasoningEncryptedValue EventType = "REASONING_ENCRYPTED_VALUE"
+	// EventActivitySnapshot replaces one AG-UI activity value.
+	EventActivitySnapshot EventType = "ACTIVITY_SNAPSHOT"
+	// EventActivityDelta applies a JSON Patch to one AG-UI activity value.
+	EventActivityDelta EventType = "ACTIVITY_DELTA"
 )
 
 // Event is one JSON-encoded AG-UI event. Fields not used by Type are omitted.
@@ -77,14 +81,20 @@ type Event struct {
 	ToolCallName string `json:"toolCallName,omitempty"`
 	// ParentMessageID attaches a tool call to its assistant response.
 	ParentMessageID string `json:"parentMessageId,omitempty"`
-	// Content is a JSON string containing a tool result.
-	Content string `json:"content,omitempty"`
+	// Content contains a tool result or complete activity snapshot.
+	Content any `json:"content,omitempty"`
 	// Subtype identifies a message or tool-call encrypted value.
 	Subtype string `json:"subtype,omitempty"`
 	// EntityID identifies the message or tool call carrying an encrypted value.
 	EntityID string `json:"entityId,omitempty"`
 	// EncryptedValue preserves opaque reasoning or typed-tool metadata.
 	EncryptedValue string `json:"encryptedValue,omitempty"`
+	// ActivityType identifies one activity data contract.
+	ActivityType string `json:"activityType,omitempty"`
+	// Patch contains an activity JSON Patch delta.
+	Patch []any `json:"patch,omitempty"`
+	// Replace controls whether an activity snapshot replaces prior content.
+	Replace *bool `json:"replace,omitempty"`
 	// Message describes a run error.
 	Message string `json:"message,omitempty"`
 	// Outcome describes a successful or interrupted run.
@@ -153,6 +163,8 @@ type Message struct {
 	Name string `json:"name,omitempty"`
 	// EncryptedValue preserves reasoning or typed-tool metadata.
 	EncryptedValue string `json:"encryptedValue,omitempty"`
+	// ActivityType identifies an activity message contract.
+	ActivityType string `json:"activityType,omitempty"`
 }
 
 // InputContent is one AG-UI text, binary, image, audio, video, or document input.

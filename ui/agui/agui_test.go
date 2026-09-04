@@ -154,6 +154,54 @@ func TestPrepareMultimodalInput(t *testing.T) {
 	}
 }
 
+func TestPrepareActivities(t *testing.T) {
+	compaction := map[string]any{
+		"content": "summary", "id": "compact", "provider_name": "openai",
+		"provider_details": map[string]any{"encrypted": "value"},
+	}
+	prompt, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "compact", Role: "activity", ActivityType: "pydantic_ai_compaction", Content: compaction},
+		{ID: "custom", Role: "activity", ActivityType: "application_custom", Content: map[string]any{"ignored": true}},
+		{ID: "tools", Role: "activity", ActivityType: "pydantic_ai_tool_availability_delta", Content: map[string]any{
+			"added": []any{"search", 1, ""}, "tool_call_id": "call",
+		}},
+		{ID: "tools-typed", Role: "activity", ActivityType: "pydantic_ai_tool_availability_delta", Content: map[string]any{
+			"added": []string{"fetch"},
+		}},
+		{ID: "user", Role: "user", Content: "continue"},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt.Content != "continue" || len(history) != 3 {
+		t.Fatalf("unexpected activity input: prompt=%#v history=%#v", prompt, history)
+	}
+	part := history[0].(ai.ModelResponse).Parts[0].(ai.CompactionPart)
+	first := history[1].(ai.ModelRequest).Parts[0].(ai.ToolAvailabilityDeltaPart)
+	second := history[2].(ai.ModelRequest).Parts[0].(ai.ToolAvailabilityDeltaPart)
+	if part.Content != "summary" || part.ProviderDetails["encrypted"] != "value" ||
+		len(first.ToolsAdded) != 1 || first.ToolsAdded[0] != "search" || first.ToolCallID != "call" ||
+		len(second.ToolsAdded) != 1 || second.ToolsAdded[0] != "fetch" {
+		t.Fatalf("unexpected activity parts: %#v %#v %#v", part, first, second)
+	}
+	compaction["provider_details"].(map[string]any)["encrypted"] = "changed"
+	if part.ProviderDetails["encrypted"] != "value" {
+		t.Fatal("activity metadata shares client input")
+	}
+	for _, malformed := range []map[string]any{
+		{"content": 1}, {"id": 1}, {"provider_name": 1}, {"provider_details": 1},
+		{"id": "compact"}, {},
+	} {
+		_, malformedHistory, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+			{ID: "activity", Role: "activity", ActivityType: "pydantic_ai_compaction", Content: malformed},
+			{ID: "user", Role: "user", Content: "continue"},
+		}}, ai.MessageSanitizationOptions{})
+		if err != nil || len(malformedHistory) != 0 {
+			t.Fatalf("malformed compaction was retained: %#v %v", malformedHistory, err)
+		}
+	}
+}
+
 func TestPrepareReasoningInput(t *testing.T) {
 	encrypted := `{"id":"thinking-id","signature":"signature","provider_name":"anthropic","provider_details":{"redacted":false}}`
 	prompt, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
@@ -193,6 +241,7 @@ func TestInputValidation(t *testing.T) {
 		{name: "system content", messages: []agui.Message{{ID: "one", Role: "system", Content: 1}}, match: "system message content"},
 		{name: "assistant content", messages: []agui.Message{{ID: "one", Role: "assistant", Content: 1}}, match: "assistant message content"},
 		{name: "reasoning content", messages: []agui.Message{{ID: "one", Role: "reasoning", Content: 1}}, match: "reasoning message content"},
+		{name: "activity content", messages: []agui.Message{{ID: "one", Role: "activity", Content: "invalid"}}, match: "activity content"},
 		{name: "user encoding", messages: []agui.Message{{ID: "one", Role: "user", Content: func() {}}}, match: "encode user content"},
 		{name: "user decoding", messages: []agui.Message{{ID: "one", Role: "user", Content: 1}}, match: "decode user content"},
 		{name: "content type", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "future"}}}}, match: "unsupported user content"},

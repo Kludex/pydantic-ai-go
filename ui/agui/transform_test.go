@@ -151,6 +151,41 @@ func TestTransformLazyReasoning(t *testing.T) {
 	}
 }
 
+func TestTransformActivities(t *testing.T) {
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.PartStartEvent{PartID: "compaction", Part: ai.CompactionPart{
+			Content: "summary", ID: "compact", ProviderName: "openai",
+			ProviderDetails: map[string]any{"encrypted": "value"},
+		}}, nil)
+		yield(ai.ToolAvailabilityDeltaEvent{Part: ai.ToolAvailabilityDeltaPart{
+			ToolsAdded: []string{"search"}, ToolCallID: "call",
+		}}, nil)
+	})
+	for _, version := range []string{"0.1.18", "0.1.19"} {
+		var activities []agui.Event
+		for event, err := range agui.TransformStreamWithConfig(stream, agui.StreamConfig{Version: version}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.Type == agui.EventActivitySnapshot {
+				activities = append(activities, event)
+			}
+		}
+		if version == "0.1.18" && len(activities) != 0 {
+			t.Fatalf("old version received activities: %#v", activities)
+		}
+		if version == "0.1.19" {
+			if len(activities) != 2 || activities[0].ActivityType != "pydantic_ai_compaction" ||
+				activities[0].Content.(map[string]any)["content"] != "summary" ||
+				activities[1].ActivityType != "pydantic_ai_tool_availability_delta" ||
+				activities[1].Content.(map[string]any)["tool_call_id"] != "call" ||
+				activities[0].Replace == nil || !*activities[0].Replace {
+				t.Fatalf("unexpected activities: %#v", activities)
+			}
+		}
+	}
+}
+
 func TestTransformStreamErrors(t *testing.T) {
 	var versionErr error
 	for _, err := range agui.TransformStreamWithConfig(nil, agui.StreamConfig{Version: "0.1.2.3"}) {

@@ -135,6 +135,12 @@ Versions before `0.1.13` receive the legacy `THINKING_*` lifecycle. Version `0.1
 
 Every event includes a Unix-millisecond `timestamp`. A canceled agent run closes any open text message and emits `RUN_FINISHED` without a success or interrupt outcome because AG-UI has no cancellation outcome.
 
+## Preserve durable activities
+
+AG-UI `0.1.19` and later receives `ACTIVITY_SNAPSHOT` events for provider-neutral compaction boundaries and tools revealed during a run. The reserved activity types are `pydantic_ai_compaction` and `pydantic_ai_tool_availability_delta`.
+
+Keep those activity messages in client-held history. The adapter reconstructs `CompactionPart` and `ToolAvailabilityDeltaPart` values on the next request. Unknown application activity types remain UI-only and are not sent to the model. Older protocol versions omit activity events.
+
 ## Event ordering
 
 Each model response owns one assistant message. The adapter emits `TEXT_MESSAGE_START` before text or tool-call events from that response. A tool call uses that message ID as `parentMessageId`, including responses that start with a tool and contain no text.
@@ -145,4 +151,4 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 The adapter supports text and multimodal user messages, assistant reasoning, function calls, structured tool results, secure client-held history, versioned thinking and reasoning streams, normalized text and tool streaming, event timestamps, cancellation, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-Frontend tools, state snapshots and deltas, activities, file preservation, external-execution interrupts, custom events, and forwarded context remain.
+Frontend tools, state snapshots and deltas, file preservation, external-execution interrupts, custom events, and forwarded context remain.

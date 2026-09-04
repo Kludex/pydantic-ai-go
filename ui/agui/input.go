@@ -113,6 +113,22 @@ func convertMessages(messages []Message) ([]ai.ModelMessage, error) {
 				return nil, err
 			}
 			converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{prompt}})
+		case "activity":
+			content, ok := message.Content.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("agui: activity content must be an object")
+			}
+			switch message.ActivityType {
+			case "pydantic_ai_compaction":
+				part, ok := compactionActivityPart(content)
+				if ok {
+					converted = appendResponse(converted, []ai.ResponsePart{part})
+				}
+			case "pydantic_ai_tool_availability_delta":
+				converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{
+					toolAvailabilityActivityPart(content),
+				}})
+			}
 		case "reasoning":
 			content, err := textMessageContent(message.Content, "reasoning")
 			if err != nil {
@@ -169,6 +185,50 @@ func convertMessages(messages []Message) ([]ai.ModelMessage, error) {
 		}
 	}
 	return converted, nil
+}
+
+func compactionActivityPart(content map[string]any) (ai.CompactionPart, bool) {
+	part := ai.CompactionPart{}
+	if value, ok := content["content"].(string); ok {
+		part.Content = value
+	} else if content["content"] != nil {
+		return ai.CompactionPart{}, false
+	}
+	if value, ok := content["id"].(string); ok {
+		part.ID = value
+	} else if content["id"] != nil {
+		return ai.CompactionPart{}, false
+	}
+	if value, ok := content["provider_name"].(string); ok {
+		part.ProviderName = value
+	} else if content["provider_name"] != nil {
+		return ai.CompactionPart{}, false
+	}
+	if value, ok := content["provider_details"].(map[string]any); ok {
+		part.ProviderDetails = cloneMap(value)
+	} else if content["provider_details"] != nil {
+		return ai.CompactionPart{}, false
+	}
+	if part.ProviderName == "" && (part.ID != "" || len(part.ProviderDetails) > 0) {
+		return ai.CompactionPart{}, false
+	}
+	return part, part.Content != "" || part.ID != "" || part.ProviderName != "" || len(part.ProviderDetails) > 0
+}
+
+func toolAvailabilityActivityPart(content map[string]any) ai.ToolAvailabilityDeltaPart {
+	part := ai.ToolAvailabilityDeltaPart{}
+	part.ToolCallID, _ = content["tool_call_id"].(string)
+	switch values := content["added"].(type) {
+	case []string:
+		part.ToolsAdded = append(part.ToolsAdded, values...)
+	case []any:
+		for _, value := range values {
+			if name, ok := value.(string); ok && name != "" {
+				part.ToolsAdded = append(part.ToolsAdded, name)
+			}
+		}
+	}
+	return part
 }
 
 func appendResponse(messages []ai.ModelMessage, parts []ai.ResponsePart) []ai.ModelMessage {

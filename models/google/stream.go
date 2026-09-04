@@ -23,6 +23,7 @@ func (m *Model) StreamRequest(
 	if err != nil {
 		return nil, err
 	}
+	payload.ModelArmorConfig = nil
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("google: marshal request: %w", err)

@@ -91,6 +91,79 @@ func TestCachedContentSettings(t *testing.T) {
 	}
 }
 
+func TestModelArmorSettings(t *testing.T) {
+	config := &google.ModelArmorConfig{
+		PromptTemplateName:   "projects/project/locations/global/templates/prompt",
+		ResponseTemplateName: "projects/project/locations/global/templates/response",
+	}
+	settings, err := (google.Settings{ModelArmor: config}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config.PromptTemplateName = "changed"
+
+	var staticBody map[string]any
+	vertex := newNamedServer(t, "gemini-2.5-flash", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&staticBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`))
+	}, google.WithProvider(google.ProviderConfig{Transport: google.TransportVertexAI, Name: "google-cloud"}))
+	if _, err := vertex.Request(t.Context(), nil, ai.ModelRequestParams{Settings: settings}); err != nil {
+		t.Fatal(err)
+	}
+	armor := staticBody["modelArmorConfig"].(map[string]any)
+	if armor["promptTemplateName"] != "projects/project/locations/global/templates/prompt" ||
+		armor["responseTemplateName"] != "projects/project/locations/global/templates/response" {
+		t.Fatalf("unexpected Model Armor config: %#v", staticBody)
+	}
+
+	var streamBody map[string]any
+	streaming := newNamedServer(t, "gemini-2.5-flash", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&streamBody); err != nil {
+			t.Error(err)
+		}
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = response.Write([]byte("data: {\"candidates\":[{\"content\":{\"role\":\"model\",\"parts\":[{\"text\":\"ok\"}]}}]}\n\n"))
+	}, google.WithProvider(google.ProviderConfig{Transport: google.TransportVertexAI, Name: "google-cloud"}))
+	stream, err := streaming.StreamRequest(t.Context(), nil, ai.ModelRequestParams{Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if streamBody["modelArmorConfig"] != nil {
+		t.Fatalf("streaming request included Model Armor: %#v", streamBody)
+	}
+
+	gemini := newServer(t, func(http.ResponseWriter, *http.Request) {})
+	if _, err := gemini.Request(t.Context(), nil, ai.ModelRequestParams{Settings: settings}); err == nil ||
+		!strings.Contains(err.Error(), "only supported by Vertex") {
+		t.Fatalf("unexpected Gemini Model Armor error: %v", err)
+	}
+	for name, invalid := range map[string]ai.ModelSettings{
+		"encode": {ExtraBody: map[string]any{"google_model_armor_config": make(chan int)}},
+		"decode": {ExtraBody: map[string]any{"google_model_armor_config": map[string]any{"promptTemplateName": 1}}},
+		"empty":  {ExtraBody: map[string]any{"google_model_armor_config": map[string]any{}}},
+	} {
+		if _, err := gemini.Request(t.Context(), nil, ai.ModelRequestParams{Settings: invalid}); err == nil {
+			t.Fatalf("invalid %s Model Armor config was accepted", name)
+		}
+	}
+	if _, err := (google.Settings{ModelArmor: &google.ModelArmorConfig{}}).Build(); err == nil {
+		t.Fatal("empty typed Model Armor config was accepted")
+	}
+	if _, err := (google.Settings{
+		Common:     ai.ModelSettings{ExtraBody: map[string]any{"google_model_armor_config": map[string]any{}}},
+		ModelArmor: config,
+	}).Build(); err == nil {
+		t.Fatal("conflicting Model Armor config was accepted")
+	}
+}
+
 func TestGoogleCountTokensByTransport(t *testing.T) {
 	for _, transport := range []google.Transport{google.TransportGeminiAPI, google.TransportVertexAI} {
 		t.Run(string(transport), func(t *testing.T) {

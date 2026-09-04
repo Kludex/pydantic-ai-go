@@ -465,6 +465,40 @@ func main() {
 
 Create the cached-content resource with Gemini or Vertex before the run. The resource owns system instructions and tools. The provider omits local system and tool declarations because Google rejects requests that combine them with `cachedContent`.
 
+### Model Armor
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/google"
+)
+
+func main() {
+	settings, err := (google.Settings{ModelArmor: &google.ModelArmorConfig{
+		PromptTemplateName:   "projects/project/locations/global/templates/prompt",
+		ResponseTemplateName: "projects/project/locations/global/templates/response",
+	}}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	model, err := google.NewVertexModel("gemini-2.5-flash", google.VertexConfig{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](model, ai.WithModelSettings(settings))
+	if _, err := agent.Run(context.Background(), "Screen this request.", struct{}{}); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Model Armor is available only with Vertex AI. Google applies it only to non-streaming generation, so `StreamRequest` omits the configuration. The Gemini Developer API rejects the setting before transport.
+
 ## Google Cloud Vertex AI
 
 ```go

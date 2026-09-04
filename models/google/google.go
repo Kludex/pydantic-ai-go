@@ -237,6 +237,7 @@ type generateRequest struct {
 	Tools             []toolsParam      `json:"tools,omitempty"`
 	ToolConfig        *toolConfig       `json:"toolConfig,omitempty"`
 	CachedContent     string            `json:"cachedContent,omitempty"`
+	ModelArmorConfig  *ModelArmorConfig `json:"modelArmorConfig,omitempty"`
 	GenerationConfig  *generationConfig `json:"generationConfig,omitempty"`
 }
 
@@ -638,6 +639,14 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
+	armor, err := modelArmor(settings)
+	if err != nil {
+		return nil, err
+	}
+	if armor != nil && m.transport != TransportVertexAI {
+		return nil, fmt.Errorf("google: Model Armor is only supported by Vertex AI")
+	}
+	req.ModelArmorConfig = armor
 	thinking, err := googleThinking(m.name, settings.Thinking)
 	if err != nil {
 		return nil, err

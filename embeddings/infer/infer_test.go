@@ -70,6 +70,57 @@ func TestBuiltInModels(t *testing.T) {
 	}
 }
 
+func TestOpenAICompatibleModels(t *testing.T) {
+	for _, name := range []string{
+		"ALIBABA_BASE_URL", "CEREBRAS_BASE_URL", "CRUSOE_BASE_URL", "DEEPSEEK_BASE_URL", "FIREWORKS_BASE_URL",
+		"GITHUB_MODELS_BASE_URL", "HEROKU_INFERENCE_URL", "LITELLM_BASE_URL", "MOONSHOTAI_BASE_URL",
+		"NEBIUS_BASE_URL", "OVHCLOUD_BASE_URL", "SAMBANOVA_BASE_URL", "SNOWFLAKE_BASE_URL", "TOGETHER_BASE_URL",
+		"VERCEL_AI_GATEWAY_BASE_URL",
+	} {
+		t.Setenv(name, "")
+	}
+	tests := map[string]string{
+		"alibaba":    "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+		"cerebras":   "https://api.cerebras.ai/v1",
+		"crusoe":     "https://api.inference.crusoecloud.com/v1",
+		"deepseek":   "https://api.deepseek.com",
+		"fireworks":  "https://api.fireworks.ai/inference/v1",
+		"github":     "https://models.github.ai/inference",
+		"heroku":     "https://us.inference.heroku.com/v1",
+		"moonshotai": "https://api.moonshot.ai/v1",
+		"nebius":     "https://api.studio.nebius.com/v1",
+		"ovhcloud":   "https://oai.endpoints.kepler.ai.cloud.ovh.net/v1",
+		"sambanova":  "https://api.sambanova.ai/v1",
+		"together":   "https://api.together.xyz/v1",
+		"vercel":     "https://ai-gateway.vercel.sh/v1",
+	}
+	for providerName, expectedURL := range tests {
+		t.Run(providerName, func(t *testing.T) {
+			model, err := infer.Model(providerName + ":embedding-model")
+			if err != nil || model.Name() != "embedding-model" || model.ProviderName() != providerName ||
+				model.ProviderURL() != expectedURL {
+				t.Fatalf("unexpected compatible model: %T %#v %v", model, model, err)
+			}
+		})
+	}
+	for _, providerName := range []string{"litellm", "snowflake"} {
+		_, err := infer.Model(providerName + ":embedding-model")
+		if err == nil || !strings.Contains(err.Error(), "requires") {
+			t.Fatalf("unexpected unconfigured %s error: %v", providerName, err)
+		}
+	}
+	t.Setenv("LITELLM_BASE_URL", "https://litellm.example/v1")
+	model, err := infer.Model("litellm:embedding-model")
+	if err != nil || model.ProviderURL() != "https://litellm.example/v1" {
+		t.Fatalf("unexpected configured LiteLLM model: %#v %v", model, err)
+	}
+	t.Setenv("ALIBABA_BASE_URL", "https://alibaba.example/v1")
+	model, err = infer.Model("alibaba:embedding-model")
+	if err != nil || model.ProviderURL() != "https://alibaba.example/v1" {
+		t.Fatalf("unexpected configured Alibaba model: %#v %v", model, err)
+	}
+}
+
 func TestAzureModel(t *testing.T) {
 	t.Setenv("OPENAI_API_VERSION", "")
 	model, err := infer.Model("azure:embedding-deployment", infer.WithAzureConfig(modelazure.Config{

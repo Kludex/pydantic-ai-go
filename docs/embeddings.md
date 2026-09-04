@@ -96,7 +96,9 @@ func main() {
 }
 ```
 
-`infer.Model` requires a provider prefix. It supports `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, `ollama`, `openrouter`, `voyageai`, and `zai`. Use `infer.WithProvider` to register a custom resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
+`infer.Model` requires a provider prefix. It supports the bundled `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, `ollama`, `openrouter`, `voyageai`, and `zai` providers. It also resolves OpenAI-compatible `alibaba`, `cerebras`, `crusoe`, `deepseek`, `fireworks`, `github`, `heroku`, `litellm`, `moonshotai`, `nebius`, `ovhcloud`, `sambanova`, `snowflake`, `together`, and `vercel` endpoints.
+
+LiteLLM requires `LITELLM_BASE_URL`. Snowflake requires `SNOWFLAKE_BASE_URL`. Other compatible aliases use their public endpoint by default and accept a provider-specific base URL environment variable. Use `infer.WithProvider` to replace any resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
 
 `WithModel` scopes an override to one context tree. It does not mutate the reusable `Embedder`, so concurrent requests can select different models safely.
 

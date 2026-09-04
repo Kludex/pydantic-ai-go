@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strconv"
 	"sync/atomic"
 
@@ -57,8 +58,12 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 		if !state.finishStep(yield) {
 			return
 		}
+		messageMetadata := state.messageMetadata
+		if len(state.externalCallIDs) > 0 {
+			messageMetadata = withExternalCallIDs(messageMetadata, state.externalCallIDs)
+		}
 		if !yield(Chunk{
-			Type: ChunkFinish, FinishReason: state.finishReason, MessageMetadata: state.messageMetadata,
+			Type: ChunkFinish, FinishReason: state.finishReason, MessageMetadata: messageMetadata,
 		}, nil) {
 			return
 		}
@@ -71,6 +76,7 @@ type transformState struct {
 	step            bool
 	finishReason    string
 	messageMetadata map[string]any
+	externalCallIDs []string
 	partIDs         map[string]string
 	toolIDs         map[string]string
 }
@@ -177,6 +183,11 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 	case ai.ToolAvailabilityDeltaEvent:
 		return yield(Chunk{Type: ChunkDataToolAvailability, Data: toolAvailabilityData(value.Part)}, nil)
 	case ai.DeferredToolRequestsEvent:
+		for _, call := range value.Requests.Calls {
+			if !slices.Contains(state.externalCallIDs, call.ToolCallID) {
+				state.externalCallIDs = append(state.externalCallIDs, call.ToolCallID)
+			}
+		}
 		if state.sdkVersion >= 6 {
 			for _, call := range value.Requests.Approvals {
 				if !yield(Chunk{
@@ -185,6 +196,12 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 					return false
 				}
 			}
+		}
+	case ai.DeferredToolResultsEvent:
+		for callID := range value.Results.Calls {
+			state.externalCallIDs = slices.DeleteFunc(state.externalCallIDs, func(pendingID string) bool {
+				return pendingID == callID
+			})
 		}
 	case ai.FinishEvent:
 		state.finishReason = vercelFinishReason(value.FinishReason)

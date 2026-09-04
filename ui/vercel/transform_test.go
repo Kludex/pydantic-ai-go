@@ -133,6 +133,39 @@ func TestTransformStreamVariants(t *testing.T) {
 	}
 }
 
+func TestTransformExternalToolMetadata(t *testing.T) {
+	calls := []ai.ToolCallPart{{ToolCallID: "first"}, {ToolCallID: "second"}}
+	metadata := map[string]any{"nested": map[string]any{"value": "original"}}
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.DeferredToolRequestsEvent{Requests: ai.DeferredToolRequests{Calls: calls}}, nil)
+		yield(ai.DeferredToolRequestsEvent{Requests: ai.DeferredToolRequests{Calls: calls[:1]}}, nil)
+		yield(ai.DeferredToolResultsEvent{Results: ai.DeferredToolResults{Calls: map[string]any{
+			"first": "resolved",
+		}}}, nil)
+		yield(ai.FinishEvent{FinishReason: ai.FinishReasonToolCall, Metadata: metadata}, nil)
+	})
+	var finish map[string]any
+	for chunk, err := range vercel.TransformStream(stream, "") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunk.Type == vercel.ChunkFinish {
+			finish = chunk.MessageMetadata
+		}
+	}
+	calls[0].ToolCallID = "changed"
+	metadata["nested"].(map[string]any)["value"] = "changed"
+	wrapped := finish["pydantic_ai"].(map[string]any)
+	ids := wrapped["external_tool_call_ids"].([]string)
+	if len(ids) != 1 || ids[0] != "second" || finish["nested"].(map[string]any)["value"] != "original" {
+		t.Fatalf("unexpected external metadata: %#v", finish)
+	}
+	finish["nested"].(map[string]any)["value"] = "client"
+	if metadata["nested"].(map[string]any)["value"] != "changed" {
+		t.Fatal("finish metadata shares application metadata")
+	}
+}
+
 func TestTransformApprovalVersions(t *testing.T) {
 	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
 		yield(ai.DeferredToolRequestsEvent{Requests: ai.DeferredToolRequests{Approvals: []ai.ToolCallPart{{

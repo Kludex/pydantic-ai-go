@@ -126,6 +126,44 @@ Set `SDKVersion` to 6 or 7 to emit `tool-approval-request` chunks for tools regi
 
 To change the arguments before execution, replace the tool part's `input` value and approve it. The adapter validates and executes that replacement instead of the model-generated arguments.
 
+## Resume externally executed tools
+
+Register external tools with `AddExternalTool`. The adapter stores their pending call IDs in the final assistant message metadata. Preserve that metadata while your application executes each call. Return every result in the trailing assistant message:
+
+```json
+{
+  "trigger": "submit-message",
+  "id": "chat-1",
+  "messages": [
+    {
+      "id": "user-1",
+      "role": "user",
+      "parts": [{"type": "text", "text": "Run the report."}]
+    },
+    {
+      "id": "assistant-1",
+      "role": "assistant",
+      "metadata": {
+        "pydantic_ai": {
+          "external_tool_call_ids": ["call_report"]
+        }
+      },
+      "parts": [
+        {
+          "type": "tool-report",
+          "toolCallId": "call_report",
+          "state": "output-available",
+          "input": {"month": "August"},
+          "output": {"total": 42}
+        }
+      ]
+    }
+  ]
+}
+```
+
+Use `output-error` and `errorText` when execution fails. The adapter resumes the original call IDs as one deferred result batch. It rejects missing, duplicate, incomplete, and malformed result metadata. This prevents a partial batch from rerunning completed work.
+
 ## Preserve compaction and discovered tools
 
 The adapter uses `data-compaction` parts for provider compaction boundaries. It uses `data-tool-availability-delta` parts for tools revealed during a run. Keep these data parts in client-held history so later requests preserve the compacted context and deferred-tool visibility.
@@ -136,12 +174,12 @@ Unrecognized `data-*` parts remain UI-only and are not sent to the model.
 
 The adapter stores part metadata under `providerMetadata.pydantic_ai`. It round-trips provider part IDs, names, details, reasoning signatures, tool kinds, and file metadata.
 
-Message metadata remains application-owned. The adapter reserves `metadata.pydantic_ai.timestamp` for the original message timestamp. It does not trust client-held provider response IDs or provider URLs.
+Message metadata remains application-owned. The adapter reserves `metadata.pydantic_ai.timestamp` for the original message timestamp and `metadata.pydantic_ai.external_tool_call_ids` for deferred external work. Preserve reserved values exactly. It does not trust client-held provider response IDs or provider URLs.
 
 A canceled run emits an `abort` chunk followed by `[DONE]`. This keeps cancellation distinct from model and adapter errors.
 
 ## Current scope
 
-The adapter supports AI SDK UI versions 5 through 7 for text, files, reasoning, function and provider-native tool inputs and outputs, compaction boundaries, tool-availability changes, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
+The adapter supports AI SDK UI versions 5 through 7 for text, files, reasoning, function and provider-native tool inputs and outputs, approval and external-tool resumes, compaction boundaries, tool-availability changes, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
 
-Vercel AI source and custom data parts, external deferred resumes, and remaining version-specific fields remain.
+Vercel AI source and custom data parts, and remaining version-specific fields remain.

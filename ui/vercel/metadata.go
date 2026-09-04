@@ -2,6 +2,7 @@ package vercel
 
 import (
 	"encoding/json"
+	"fmt"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
@@ -114,6 +115,58 @@ func dumpMessageMetadata(metadata map[string]any, timestamp time.Time) map[strin
 		return nil
 	}
 	return result
+}
+
+func withExternalCallIDs(metadata map[string]any, callIDs []string) map[string]any {
+	result := cloneMap(metadata)
+	if result == nil {
+		result = map[string]any{}
+	}
+	wrapped, _ := result[providerMetadataKey].(map[string]any)
+	if wrapped == nil {
+		wrapped = map[string]any{}
+	}
+	wrapped["external_tool_call_ids"] = append([]string(nil), callIDs...)
+	result[providerMetadataKey] = wrapped
+	return result
+}
+
+func externalCallIDs(metadata map[string]any) ([]string, error) {
+	wrapped, ok := metadata[providerMetadataKey].(map[string]any)
+	if !ok {
+		return nil, nil
+	}
+	value, exists := wrapped["external_tool_call_ids"]
+	if !exists {
+		return nil, nil
+	}
+	var result []string
+	switch values := value.(type) {
+	case []string:
+		result = append(result, values...)
+	case []any:
+		result = make([]string, 0, len(values))
+		for _, value := range values {
+			callID, ok := value.(string)
+			if !ok {
+				return nil, fmt.Errorf("vercel: external tool call IDs must be strings")
+			}
+			result = append(result, callID)
+		}
+	default:
+		return nil, fmt.Errorf("vercel: external tool call IDs must be an array")
+	}
+	seen := make(map[string]struct{}, len(result))
+	for _, callID := range result {
+		if callID == "" {
+			return nil, fmt.Errorf("vercel: external tool call ID must not be empty")
+		}
+		if _, ok := seen[callID]; ok {
+			return nil, fmt.Errorf("vercel: duplicate external tool call ID %q", callID)
+		}
+		seen[callID] = struct{}{}
+	}
+	return result, nil
 }
 
 func cloneMap(value map[string]any) map[string]any {

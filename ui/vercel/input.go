@@ -18,7 +18,7 @@ func PrepareInput(
 			"vercel: unsupported trigger %q", input.Trigger,
 		)
 	}
-	messages, err := convertMessages(input.Messages)
+	messages, err := convertMessages(input.Messages, nil)
 	if err != nil {
 		return ai.UserPromptPart{}, nil, ai.MessageSanitizationReport{}, err
 	}
@@ -50,52 +50,9 @@ func PrepareInput(
 	return ai.UserPromptPart{}, nil, report, fmt.Errorf("vercel: input requires a user message")
 }
 
-func prepareRunInput(
-	input RequestData, options ai.MessageSanitizationOptions,
-) (ai.UserPromptPart, []ai.ModelMessage, *ai.DeferredToolResults, error) {
-	decisions := map[string]ai.ToolApproval{}
-	for _, message := range input.Messages {
-		for _, part := range message.Parts {
-			if !strings.HasPrefix(part.Type, "tool-") || part.State != "approval-responded" {
-				continue
-			}
-			if part.ToolCallID == "" {
-				return ai.UserPromptPart{}, nil, nil, fmt.Errorf("vercel: approval requires a toolCallId")
-			}
-			options.ResolvedToolCallIDs = append(options.ResolvedToolCallIDs, part.ToolCallID)
-			if part.Approval != nil && part.Approval.Approved != nil && *part.Approval.Approved {
-				approval := ai.ToolApproved{}
-				if len(part.Input) > 0 {
-					approval.OverrideArgs = append(json.RawMessage(nil), part.Input...)
-				}
-				decisions[part.ToolCallID] = approval
-			} else {
-				reason := ""
-				if part.Approval != nil {
-					reason = part.Approval.Reason
-				}
-				decisions[part.ToolCallID] = ai.ToolDenied{Message: reason}
-			}
-		}
-	}
-	if len(decisions) == 0 {
-		prompt, history, _, err := PrepareInput(input, options)
-		return prompt, history, nil, err
-	}
-	messages, err := convertMessages(input.Messages)
-	if err != nil {
-		return ai.UserPromptPart{}, nil, nil, err
-	}
-	history, _, err := ai.SanitizeMessages(messages, options)
-	if err != nil {
-		return ai.UserPromptPart{}, nil, nil, err
-	}
-	return ai.UserPromptPart{}, history, &ai.DeferredToolResults{Approvals: decisions}, nil
-}
-
-func convertMessages(messages []UIMessage) ([]ai.ModelMessage, error) {
+func convertMessages(messages []UIMessage, externalIDs map[string]struct{}) ([]ai.ModelMessage, error) {
 	var converted []ai.ModelMessage
-	for _, message := range messages {
+	for messageIndex, message := range messages {
 		if message.ID == "" {
 			return nil, fmt.Errorf("vercel: message ID must not be empty")
 		}
@@ -116,7 +73,11 @@ func convertMessages(messages []UIMessage) ([]ai.ModelMessage, error) {
 			}
 			converted = append(converted, ai.ModelRequest{Parts: parts, Metadata: metadata, Timestamp: timestamp})
 		case "assistant":
-			response, results, err := assistantMessage(message.Parts)
+			var messageExternalIDs map[string]struct{}
+			if messageIndex == len(messages)-1 {
+				messageExternalIDs = externalIDs
+			}
+			response, results, err := assistantMessage(message.Parts, messageExternalIDs)
 			if err != nil {
 				return nil, err
 			}
@@ -182,7 +143,9 @@ func allText(parts []UIMessagePart) bool {
 	return true
 }
 
-func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessage, error) {
+func assistantMessage(
+	parts []UIMessagePart, externalIDs map[string]struct{},
+) (ai.ModelResponse, []ai.ModelMessage, error) {
 	response := ai.ModelResponse{}
 	var results []ai.ModelMessage
 	for _, part := range parts {
@@ -243,19 +206,9 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 				})
 			}
 			if part.State == "output-available" || part.State == "output-error" || part.State == "output-denied" {
-				content := any(nil)
-				if len(part.Output) > 0 {
-					if err := json.Unmarshal(part.Output, &content); err != nil {
-						return ai.ModelResponse{}, nil, fmt.Errorf("vercel: decode tool %q output: %w", name, err)
-					}
-				}
-				outcome := ai.ToolReturnOutcomeSuccess
-				switch part.State {
-				case "output-error":
-					outcome = ai.ToolReturnOutcomeFailed
-					content = part.ErrorText
-				case "output-denied":
-					outcome = ai.ToolReturnOutcomeDenied
+				content, outcome, err := toolOutput(part, name)
+				if err != nil {
+					return ai.ModelResponse{}, nil, err
 				}
 				if providerExecuted {
 					response.Parts = append(response.Parts, ai.NativeToolReturnPart{
@@ -263,7 +216,7 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 						ToolKind: metadata.toolKind, ProviderName: metadata.providerName,
 						ProviderDetails: cloneMap(metadata.providerDetails),
 					})
-				} else {
+				} else if _, external := externalIDs[part.ToolCallID]; !external {
 					results = append(results, ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{
 						ToolName: name, ToolCallID: part.ToolCallID, Content: content, Outcome: outcome,
 						ToolKind: metadata.toolKind,
@@ -275,4 +228,22 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 		}
 	}
 	return response, results, nil
+}
+
+func toolOutput(part UIMessagePart, name string) (any, ai.ToolReturnOutcome, error) {
+	content := any(nil)
+	if len(part.Output) > 0 {
+		if err := json.Unmarshal(part.Output, &content); err != nil {
+			return nil, "", fmt.Errorf("vercel: decode tool %q output: %w", name, err)
+		}
+	}
+	outcome := ai.ToolReturnOutcomeSuccess
+	switch part.State {
+	case "output-error":
+		outcome = ai.ToolReturnOutcomeFailed
+		content = part.ErrorText
+	case "output-denied":
+		outcome = ai.ToolReturnOutcomeDenied
+	}
+	return content, outcome, nil
 }

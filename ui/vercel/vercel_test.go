@@ -427,7 +427,9 @@ func TestApprovalRequestAndResume(t *testing.T) {
 	approved := true
 	resume := requestWith(
 		vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}}},
-		vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+		vercel.UIMessage{ID: "assistant", Role: "assistant", Metadata: map[string]any{
+			"pydantic_ai": map[string]any{"timestamp": "2026-09-04T10:00:00Z"},
+		}, Parts: []vercel.UIMessagePart{{
 			Type: "tool-approve", ToolCallID: "call_approve", State: "approval-responded",
 			Input:    []byte(`{"value":"edited"}`),
 			Approval: &vercel.ToolApproval{ID: "call_approve", Approved: &approved},
@@ -440,6 +442,61 @@ func TestApprovalRequestAndResume(t *testing.T) {
 	}
 	if executions != 1 || received["value"] != "edited" {
 		t.Fatalf("approval did not execute edited arguments: executions=%d args=%#v", executions, received)
+	}
+}
+
+func TestExternalToolRequestAndResume(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		state     string
+		output    json.RawMessage
+		errorText string
+	}{
+		{name: "output", state: "output-available", output: json.RawMessage(`"remote result"`)},
+		{name: "error", state: "output-error", errorText: "worker failed"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+			ai.AddExternalTool[struct{}, string, struct{}, string](agent, "remote")
+			adapter := vercel.NewAdapter(agent, vercel.Config{})
+			input := requestWith(vercel.UIMessage{
+				ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}},
+			})
+			var finishMetadata map[string]any
+			for chunk, err := range adapter.RunStream(context.Background(), input, struct{}{}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if chunk.Type == vercel.ChunkFinish {
+					finishMetadata = chunk.MessageMetadata
+				}
+			}
+			encoded, err := json.Marshal(finishMetadata)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := json.Unmarshal(encoded, &finishMetadata); err != nil {
+				t.Fatal(err)
+			}
+			resume := requestWith(
+				vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}}},
+				vercel.UIMessage{ID: "assistant", Role: "assistant", Metadata: finishMetadata,
+					Parts: []vercel.UIMessagePart{{
+						Type: "tool-remote", ToolCallID: "call_remote", State: test.state,
+						Input: []byte(`{}`), Output: test.output, ErrorText: test.errorText,
+					}}},
+			)
+			textSeen := false
+			for chunk, err := range adapter.RunStream(context.Background(), resume, struct{}{}) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				textSeen = textSeen || chunk.Type == vercel.ChunkTextDelta
+			}
+			if !textSeen {
+				t.Fatal("resumed stream did not produce a model response")
+			}
+		})
 	}
 }
 
@@ -487,6 +544,46 @@ func TestApprovalResumeValidation(t *testing.T) {
 		{name: "sanitization", input: base, config: vercel.Config{Sanitization: ai.MessageSanitizationOptions{
 			AllowedFileURLSchemes: []string{"bad scheme"},
 		}}},
+		{name: "incomplete external result", input: requestWith(vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"pydantic_ai": map[string]any{"external_tool_call_ids": []string{"call"}},
+			}, Parts: []vercel.UIMessagePart{
+				{Type: "text", Text: "waiting"},
+				{Type: "tool-x", ToolCallID: "call", State: "input-available"},
+			},
+		})},
+		{name: "missing external result", input: requestWith(vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"pydantic_ai": map[string]any{"external_tool_call_ids": []string{"call"}},
+			},
+		})},
+		{name: "invalid external result", input: requestWith(vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"pydantic_ai": map[string]any{"external_tool_call_ids": []string{"call"}},
+			}, Parts: []vercel.UIMessagePart{{
+				Type: "tool-x", ToolCallID: "call", State: "output-available", Output: []byte(`{`),
+			}},
+		})},
+		{name: "invalid external metadata type", input: requestWith(vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"pydantic_ai": map[string]any{"external_tool_call_ids": "call"},
+			},
+		})},
+		{name: "invalid external metadata value", input: requestWith(vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"pydantic_ai": map[string]any{"external_tool_call_ids": []any{1}},
+			},
+		})},
+		{name: "empty external metadata ID", input: requestWith(vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"pydantic_ai": map[string]any{"external_tool_call_ids": []string{""}},
+			},
+		})},
+		{name: "duplicate external metadata ID", input: requestWith(vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"pydantic_ai": map[string]any{"external_tool_call_ids": []string{"call", "call"}},
+			},
+		})},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

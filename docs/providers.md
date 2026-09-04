@@ -175,6 +175,44 @@ func main() {
 
 The compatibility layer sends OpenAI wire formats. It cannot make an endpoint support OpenAI features that the endpoint does not implement.
 
+## Cohere
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/cohere"
+)
+
+func main() {
+	topK := 20
+	settings, err := (cohere.Settings{TopK: &topK}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](
+		cohere.NewModel("command-r7b-12-2024"),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.Run(context.Background(), "Explain why the sky is blue.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `CO_API_KEY`. Set `CO_BASE_URL` for a compatible endpoint.
+
+The model uses Cohere's v2 Chat API. It supports text, thinking, function tools, tool output, structured output through a function tool, Cohere finish reasons, billed-unit details, and cached-token usage. Cohere does not expose streaming or multimodal input through this adapter. Unsupported native tools, native JSON Schema output, and multimodal content fail before transport.
+
+Use `cohere.Settings.TopK` for Cohere's `k` sampling setting. Portable max tokens, stop sequences, temperature, top-p, seed, presence penalty, and frequency penalty map directly.
+
 ## Cerebras
 
 ```go

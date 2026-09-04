@@ -65,6 +65,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Add local and Ollama Cloud Chat Completions models with image, reasoning, and structured-output support.
 - Add Cerebras Chat Completions models with GLM and GPT-OSS reasoning behavior.
 - Add Hugging Face Inference Providers with routed endpoints, tagged reasoning, images, and function tools.
+- Add Cohere v2 Chat models with thinking, function tools, structured output, and billed usage.
 
 ### Deprecated
 

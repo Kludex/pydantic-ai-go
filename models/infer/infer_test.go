@@ -28,6 +28,7 @@ func TestModels(t *testing.T) {
 		{"google:gemini-2.5-flash", "google"},
 		{"bedrock:us.amazon.nova-lite-v1:0", "bedrock"},
 		{"cerebras:gpt-oss-120b", "cerebras"},
+		{"cohere:command-r7b-12-2024", "cohere"},
 		{"groq:openai/gpt-oss-20b", "groq"},
 		{"huggingface:Qwen/Qwen3-32B", "huggingface"},
 		{"ollama:qwen3", "ollama"},

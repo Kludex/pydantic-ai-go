@@ -58,7 +58,8 @@ type openAIPromptCacheBreakpoint struct {
 }
 
 func supportsOpenAIPromptCache(modelName string) bool {
-	return strings.HasPrefix(strings.ToLower(modelName), "gpt-5.6")
+	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
+	return strings.HasPrefix(modelName, "gpt-5.6")
 }
 
 func newChatCacheControl(ttl string, includeTTL bool) *chatCacheControl {

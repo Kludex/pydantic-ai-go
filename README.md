@@ -213,6 +213,7 @@ The bundled providers use the same `ai.Model` interface.
 | OpenAI Responses | `openai.NewResponsesModel("gpt-5-mini")` | `OPENAI_API_KEY` |
 | Azure OpenAI | `azure.NewModel("deployment", azure.Config{})` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
 | Amazon Bedrock | `bedrock.NewModel("us.amazon.nova-lite-v1:0")` | Standard AWS SDK configuration |
+| Amazon Bedrock Mantle | `bedrockmantle.NewModel("openai.gpt-5.6-luna")` | `AWS_BEARER_TOKEN_BEDROCK` or standard AWS SDK configuration |
 | Anthropic | `anthropic.NewModel("claude-sonnet-4-5")` | `ANTHROPIC_API_KEY` |
 | Google Gemini | `google.NewModel("gemini-2.5-flash")` | `GOOGLE_API_KEY` |
 | Cohere | `cohere.NewModel("command-r7b-12-2024")` | `CO_API_KEY` |

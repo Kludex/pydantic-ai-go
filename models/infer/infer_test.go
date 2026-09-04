@@ -27,6 +27,7 @@ func TestModels(t *testing.T) {
 		{"anthropic:claude-sonnet-4-5", "anthropic"},
 		{"google:gemini-2.5-flash", "google"},
 		{"bedrock:us.amazon.nova-lite-v1:0", "bedrock"},
+		{"bedrock-mantle:openai.gpt-5.6-luna", "bedrock-mantle"},
 		{"cerebras:gpt-oss-120b", "cerebras"},
 		{"cohere:command-r7b-12-2024", "cohere"},
 		{"crusoe:openai/gpt-oss-120b", "crusoe"},

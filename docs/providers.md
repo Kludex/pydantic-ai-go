@@ -450,6 +450,37 @@ Snowflake Cortex exposes an OpenAI-compatible Chat Completions endpoint inside y
 
 Cortex does not support function tools or native JSON Schema output for its Llama, Mistral, Mixtral, DeepSeek, and Snowflake model families. The adapter rejects those requests before transport. Use prompted output for those models.
 
+## Amazon Bedrock Mantle
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/bedrockmantle"
+)
+
+func main() {
+	model := bedrockmantle.NewModel("openai.gpt-5.6-luna")
+	agent := ai.NewAgent[struct{}, string](model)
+
+	result, err := agent.Run(context.Background(), "Explain SigV4 in one sentence.", struct{}{})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `AWS_DEFAULT_REGION` or `AWS_REGION`. Set `AWS_BEARER_TOKEN_BEDROCK` to use a bearer token. Without a bearer token, the adapter loads standard AWS SDK credentials and signs each request with SigV4.
+
+`bedrockmantle.NewModel` routes GPT-OSS Safeguard models to Chat Completions at `/v1`. It routes other GPT-OSS models to Responses at `/v1`, and GPT-5.4 and newer models to Responses at `/openai/v1`. The adapter qualifies response-scoped GPT-5 tool-call IDs before storing history and replays the stable qualified IDs.
+
+Mantle supports native JSON Schema output but does not support portable OpenAI-native server tools or image output. These unsupported features fail before transport. Use `bedrockmantle.WithAWSConfig` for an already loaded AWS configuration or `bedrockmantle.WithProvider` for a caller-managed gateway.
+
 ## xAI
 
 ```go

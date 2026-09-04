@@ -1,0 +1,42 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 143
+        host: bedrock-mantle.us-east-1.api.aws
+        body: '{"model":"openai.gpt-oss-20b","instructions":"Answer with a single word.","input":[{"role":"user","content":"What is the capital of France?"}]}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://bedrock-mantle.us-east-1.api.aws/v1/responses
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: 1015
+        body: '{"background":false,"created_at":1788534461.0,"error":null,"id":"resp_67s7nhwe42esjawsys4uu26ovfwhoww54xxsqku4qwrjqdpomy5q","incomplete_details":null,"instructions":"Answer with a single word.","metadata":{},"model":"openai.gpt-oss-20b","object":"response","output":[{"content":[{"text":"User asks simple knowledge: capital of France. Answer: Paris.","type":"reasoning_text"}],"id":"msg_afb1699634c76c44","status":"completed","summary":[],"type":"reasoning"},{"content":[{"annotations":[],"text":"The capital of France is **Paris**.","type":"output_text"}],"id":"msg_aae8ab5f84ddcdf3","role":"assistant","status":"completed","type":"message"}],"parallel_tool_calls":true,"service_tier":"default","status":"completed","temperature":1.0,"text":{"format":{"type":"text"},"verbosity":"medium"},"tool_choice":"auto","tools":[],"top_p":1.0,"truncation":"disabled","usage":{"input_tokens":74,"input_tokens_details":{"cached_tokens":0},"output_tokens":32,"output_tokens_details":{"reasoning_tokens":14},"total_tokens":106}}'
+        headers:
+            Access-Control-Allow-Origin:
+                - '*'
+            Access-Control-Expose-Headers:
+                - x-amzn-requestid,x-request-id,date,x-amzn-usage-reservation-quota,x-amzn-usage-reservation-remaining-quota,x-amzn-usage-reservation-spillover
+            Content-Length:
+                - "1015"
+            Content-Type:
+                - application/json
+            Date:
+                - Fri, 04 Sep 2026 15:07:41 GMT
+            Vary:
+                - origin, access-control-request-method, access-control-request-headers
+            X-Amzn-Requestid:
+                - req_xxsec6ntfbfaigz3mx64xluk56xdlhwcvpgu6ozv2iqggwl2ov2q
+            X-Request-Id:
+                - req_xxsec6ntfbfaigz3mx64xluk56xdlhwcvpgu6ozv2iqggwl2ov2q
+        status: 200 OK
+        code: 200
+        duration: 853.284875ms

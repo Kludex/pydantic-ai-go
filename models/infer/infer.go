@@ -9,6 +9,7 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/anthropic"
 	"github.com/Kludex/pydantic-ai-go/models/bedrock"
+	"github.com/Kludex/pydantic-ai-go/models/bedrockmantle"
 	"github.com/Kludex/pydantic-ai-go/models/cerebras"
 	"github.com/Kludex/pydantic-ai-go/models/cohere"
 	"github.com/Kludex/pydantic-ai-go/models/crusoe"
@@ -58,6 +59,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"anthropic":        func(name string) (ai.Model, error) { return anthropic.NewModel(name), nil },
 		"google":           func(name string) (ai.Model, error) { return google.NewModel(name), nil },
 		"bedrock":          func(name string) (ai.Model, error) { return bedrock.NewModel(name), nil },
+		"bedrock-mantle":   func(name string) (ai.Model, error) { return bedrockmantle.NewModel(name), nil },
 		"cerebras":         func(name string) (ai.Model, error) { return cerebras.NewModel(name), nil },
 		"cohere":           func(name string) (ai.Model, error) { return cohere.NewModel(name), nil },
 		"crusoe":           func(name string) (ai.Model, error) { return crusoe.NewModel(name), nil },

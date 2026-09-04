@@ -872,7 +872,7 @@ func TestResponsesPromptCachePoints(t *testing.T) {
 	}))
 	defer server.Close()
 	options := []openai.Option{openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client())}
-	gpt := openai.NewResponsesModel("gpt-5.6", options...)
+	gpt := openai.NewResponsesModel("openai.gpt-5.6", options...)
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
 		ai.TextContent{Text: "cache me"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
 	}}}}}
@@ -958,6 +958,7 @@ func TestResponsesPhaseReplayUsesModelProfileAndOverride(t *testing.T) {
 		{name: "gpt 5.4", modelName: "gpt-5.4", phase: "final_answer", wantPhase: true},
 		{name: "gpt 5.5", modelName: "gpt-5.5-mini", phase: "commentary", wantPhase: true},
 		{name: "gpt 5.6", modelName: "gpt-5.6-terra", phase: "final_answer", wantPhase: true},
+		{name: "Bedrock model ID", modelName: "openai.gpt-5.6-luna", phase: "final_answer", wantPhase: true},
 		{name: "unsupported", modelName: "gpt-5", phase: "commentary"},
 		{name: "enabled override", modelName: "gpt-5", options: []openai.Option{
 			openai.WithResponsesPhaseSupport(true),
@@ -1031,6 +1032,28 @@ func TestResponsesTextMetadataWithoutLogprobs(t *testing.T) {
 	first = withoutAnnotations.Parts[0].(ai.TextPart)
 	if _, exists := first.ProviderDetails["annotations"]; exists || first.ProviderDetails["phase"] != "commentary" {
 		t.Fatalf("raw annotations were retained by default: %+v", first)
+	}
+}
+
+func TestResponsesReasoningTextContent(t *testing.T) {
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(response, `{
+			"id":"response","model":"openai.gpt-oss-20b","status":"completed","output":[{
+				"id":"reasoning","type":"reasoning","encrypted_content":"signature",
+				"content":[{"type":"ignored","text":"ignored"},{"type":"reasoning_text","text":"detail"}],
+				"summary":[{"text":"summary"}]
+			}]
+		}`)
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 2 || response.Parts[0].(ai.ThinkingPart).Content != "detail" ||
+		response.Parts[0].(ai.ThinkingPart).Signature != "signature" ||
+		response.Parts[1].(ai.ThinkingPart).Content != "summary" ||
+		response.Parts[1].(ai.ThinkingPart).Signature != "" {
+		t.Fatalf("unexpected reasoning parts: %#v", response.Parts)
 	}
 }
 

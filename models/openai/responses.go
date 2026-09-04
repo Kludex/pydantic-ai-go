@@ -998,6 +998,7 @@ func responsesPhaseSupported(modelName string, override *bool) bool {
 	if override != nil {
 		return *override
 	}
+	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
 	return strings.HasPrefix(modelName, "gpt-5.3-codex") || strings.HasPrefix(modelName, "gpt-5.4") ||
 		strings.HasPrefix(modelName, "gpt-5.5") || strings.HasPrefix(modelName, "gpt-5.6")
 }
@@ -1383,19 +1384,34 @@ func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool
 			}
 			resp.Parts = append(resp.Parts, responsesToolSearchReturn(item, responsesEffectiveCallID(item), timestamp, "openai"))
 		case "reasoning":
-			if len(item.Summary) == 0 && item.EncryptedContent != "" {
+			if len(item.Summary) == 0 && len(item.Content) == 0 && item.EncryptedContent != "" {
 				resp.Parts = append(resp.Parts, ai.ThinkingPart{
 					ID: item.ID, Signature: item.EncryptedContent, ProviderName: "openai",
 				})
 			}
-			for index, s := range item.Summary {
+			reasoningParts := 0
+			for _, content := range item.Content {
+				if content.Type != "reasoning_text" {
+					continue
+				}
 				signature := ""
-				if index == 0 {
+				if reasoningParts == 0 {
 					signature = item.EncryptedContent
 				}
 				resp.Parts = append(resp.Parts, ai.ThinkingPart{
-					Content: s.Text, ID: item.ID, Signature: signature, ProviderName: "openai",
+					Content: content.Text, ID: item.ID, Signature: signature, ProviderName: "openai",
 				})
+				reasoningParts++
+			}
+			for _, summary := range item.Summary {
+				signature := ""
+				if reasoningParts == 0 {
+					signature = item.EncryptedContent
+				}
+				resp.Parts = append(resp.Parts, ai.ThinkingPart{
+					Content: summary.Text, ID: item.ID, Signature: signature, ProviderName: "openai",
+				})
+				reasoningParts++
 			}
 		}
 	}

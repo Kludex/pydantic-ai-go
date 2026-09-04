@@ -29,6 +29,7 @@ packages=(
     ./models/anthropic
     ./models/azure
     ./models/bedrock
+    ./models/bedrockmantle
     ./models/cerebras
     ./models/cohere
     ./models/crusoe

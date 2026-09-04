@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/Kludex/pydantic-ai-go/realtime"
+	azurert "github.com/Kludex/pydantic-ai-go/realtime/azure"
 	googlert "github.com/Kludex/pydantic-ai-go/realtime/google"
 	openairt "github.com/Kludex/pydantic-ai-go/realtime/openai"
 	xairt "github.com/Kludex/pydantic-ai-go/realtime/xai"
@@ -18,6 +19,8 @@ func Model(name string) (realtime.Model, error) {
 		return nil, fmt.Errorf("realtime: model identifiers use provider:model, got %q", name)
 	}
 	switch provider {
+	case "azure":
+		return azurert.NewModel(model, azurert.Config{})
 	case "openai":
 		return openairt.NewModel(model), nil
 	case "xai":

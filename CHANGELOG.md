@@ -22,7 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Typed prompt templates and deterministic XML formatting for structured prompt data.
 - Agent delegation through typed tools with nested usage and limit propagation.
 - OpenTelemetry tracing and metrics for agents, model requests, tools, output functions, compaction, and embeddings.
-- Bidirectional realtime sessions with portable speech history, audio and transcript taps, concurrent tools, interruption, reconnection, OpenAI Realtime, Gemini Live, and xAI Grok Voice transports.
+- Bidirectional realtime sessions with portable speech history, audio and transcript taps, concurrent tools, interruption, reconnection, OpenAI Realtime, Azure OpenAI and Voice Live, Gemini Live, and xAI Grok Voice transports.
 - A runnable Logfire OTLP export example with privacy-safe defaults.
 - PydanticAI-compatible message serialization, multimodal content, speech history, compaction boundaries, cache points, sanitization, and history repair.
 - Evaluation task adapters for `pydantic-evals-go`.

@@ -45,6 +45,7 @@ packages=(
     ./models/zai
     ./mcp
     ./realtime
+    ./realtime/azure
     ./realtime/google
     ./realtime/infer
     ./realtime/internal/openaiprotocol

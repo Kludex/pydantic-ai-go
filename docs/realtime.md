@@ -44,6 +44,46 @@ func main() {
 
 OpenAI reads `OPENAI_API_KEY`. Use `openai.WithAPIKey`, `openai.WithBaseURL`, `openai.WithHTTPClient`, and `openai.WithHeaders` when you need explicit transport configuration.
 
+## Use Azure OpenAI or Voice Live
+
+```go
+package main
+
+import (
+    "context"
+    "os"
+
+    "github.com/Kludex/pydantic-ai-go/realtime"
+    azurert "github.com/Kludex/pydantic-ai-go/realtime/azure"
+)
+
+func main() {
+    ctx := context.Background()
+    model, err := azurert.NewModel("gpt-realtime", azurert.Config{
+        Endpoint: os.Getenv("AZURE_OPENAI_ENDPOINT"),
+        APIKey: os.Getenv("AZURE_OPENAI_API_KEY"),
+    })
+    if err != nil {
+        panic(err)
+    }
+    session, err := realtime.Open(ctx, model, realtime.ConnectParams{})
+    if err != nil {
+        panic(err)
+    }
+    defer func() { _ = session.Close(ctx) }()
+
+    if err := session.Send(ctx, "Say hello."); err != nil {
+        panic(err)
+    }
+}
+```
+
+Azure OpenAI uses `/openai/v1/realtime`. Pass `Config.TokenProvider` to use a fresh Microsoft Entra token instead of an API key.
+
+Set `azure_voice_live` in `realtime.Settings.Provider` or use `azure.WithSettings` to select Azure AI Voice Live for models served by both APIs. Voice Live-only model families route there automatically. Configure its separate endpoint, key, and API version through `Config.VoiceLiveEndpoint`, `Config.VoiceLiveAPIKey`, and `Config.VoiceLiveAPIVersion`.
+
+Azure OpenAI supports ephemeral client secrets and WebRTC through `CreateClientSecret`, `AnswerWebRTCOffer`, and `ConnectWebRTC`. Voice Live uses a different signaling protocol and rejects those methods.
+
 ## Stream audio
 
 ```go

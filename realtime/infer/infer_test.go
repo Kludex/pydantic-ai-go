@@ -7,8 +7,10 @@ import (
 )
 
 func TestModel(t *testing.T) {
+	t.Setenv("AZURE_OPENAI_ENDPOINT", "https://example.openai.azure.com")
+	t.Setenv("AZURE_OPENAI_API_KEY", "key")
 	for _, name := range []string{
-		"openai:gpt-realtime", "xai:grok-voice-latest",
+		"azure:gpt-realtime", "openai:gpt-realtime", "xai:grok-voice-latest",
 		"google:gemini-live", "google-cloud:gemini-live",
 	} {
 		model, err := infer.Model(name)

@@ -335,7 +335,8 @@ type messagesRequest struct {
 }
 
 type anthropicOutputConfig struct {
-	Format anthropicOutputFormat `json:"format"`
+	Format *anthropicOutputFormat `json:"format,omitempty"`
+	Effort Effort                 `json:"effort,omitempty"`
 }
 
 type anthropicOutputFormat struct {
@@ -358,7 +359,7 @@ type anthropicMCPToolConfiguration struct {
 
 type thinkingParam struct {
 	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 type messageParam struct {
@@ -777,6 +778,73 @@ func anthropicWebFetchTool(modelName string, webFetch ai.WebFetchTool) toolParam
 	return tool
 }
 
+func anthropicEffort(modelName string, level ai.ThinkingLevel) Effort {
+	switch level {
+	case ai.ThinkingLevelMinimal, ai.ThinkingLevelLow:
+		return EffortLow
+	case ai.ThinkingLevelMedium:
+		return EffortMedium
+	case ai.ThinkingLevelHigh:
+		return EffortHigh
+	case ai.ThinkingLevelXHigh:
+		if anthropicSupportsXHighEffort(modelName) {
+			return EffortXHigh
+		}
+		return EffortMax
+	default:
+		return ""
+	}
+}
+
+func anthropicSupportsAdaptiveThinking(modelName string) bool {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-sonnet-4-6", "claude-sonnet-5",
+		"claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func anthropicDisallowsBudgetThinking(modelName string) bool {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-opus-4-7", "claude-opus-4-8",
+		"claude-opus-5", "claude-sonnet-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func anthropicDisallowsSamplingSettings(modelName string) bool {
+	return anthropicDisallowsBudgetThinking(modelName)
+}
+
+func anthropicSupportsForcedToolChoice(modelName string) bool {
+	for _, prefix := range []string{"claude-fable-5", "claude-mythos-5", "claude-mythos-preview"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func anthropicSupportsXHighEffort(modelName string) bool {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-opus-4-7", "claude-opus-4-8",
+		"claude-opus-5", "claude-sonnet-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 func anthropicSupportsAdvisor(modelName string) bool {
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-opus-4-6", "claude-opus-4-7",
@@ -924,7 +992,7 @@ func (m *Model) buildPayload(
 			}
 		}
 	}
-	thinking, err := anthropicThinking(params.Settings.Thinking)
+	thinking, effort, err := anthropicThinking(m.name, params.Settings.Thinking, providerSettings.Effort)
 	if err != nil {
 		return nil, err
 	}
@@ -936,14 +1004,20 @@ func (m *Model) buildPayload(
 	if providerSettings.ContainerSet {
 		container = providerSettings.Container
 	}
+	temperature := params.Settings.Temperature
+	topP := params.Settings.TopP
+	if anthropicDisallowsSamplingSettings(m.name) {
+		temperature = nil
+		topP = nil
+	}
 	req := &messagesRequest{
 		Model:        m.name,
 		Tools:        nativeTools,
 		MCPServers:   mcpServers,
 		Betas:        nativeBetas,
 		MaxTokens:    params.Settings.MaxTokens,
-		Temperature:  params.Settings.Temperature,
-		TopP:         params.Settings.TopP,
+		Temperature:  temperature,
+		TopP:         topP,
 		Stop:         params.Settings.StopSequences,
 		Thinking:     thinking,
 		ServiceTier:  serviceTier,
@@ -1084,8 +1158,12 @@ func (m *Model) buildPayload(
 			})
 		}
 	}
+	if effort != "" {
+		req.OutputConfig = &anthropicOutputConfig{Effort: effort}
+	}
 	if params.OutputTool != nil {
-		if thinking != nil && !params.AllowText {
+		if thinking != nil && (thinking.Type == "enabled" || !anthropicSupportsForcedToolChoice(m.name)) &&
+			!params.AllowText {
 			return nil, fmt.Errorf("anthropic: extended thinking and forced output tools cannot be used together")
 		}
 		converted, err := prepareAnthropicTool(*params.OutputTool, m.strictToolSupport, m.schemaWarning)
@@ -1112,9 +1190,10 @@ func (m *Model) buildPayload(
 		if !supportsAnthropicNativeOutput(m.name) {
 			return nil, fmt.Errorf("anthropic: model %q does not support native JSON output", m.name)
 		}
-		req.OutputConfig = &anthropicOutputConfig{Format: anthropicOutputFormat{
-			Type: "json_schema", Schema: params.OutputSchema,
-		}}
+		if req.OutputConfig == nil {
+			req.OutputConfig = &anthropicOutputConfig{}
+		}
+		req.OutputConfig.Format = &anthropicOutputFormat{Type: "json_schema", Schema: params.OutputSchema}
 	}
 	return req, limitAnthropicCachePoints(req, cache.Automatic != "")
 }
@@ -1189,10 +1268,28 @@ func anthropicServiceTier(tier ai.ServiceTier) (string, error) {
 	}
 }
 
-func anthropicThinking(settings *ai.ThinkingSettings) (*thinkingParam, error) {
+func anthropicThinking(
+	modelName string, settings *ai.ThinkingSettings, configuredEffort Effort,
+) (*thinkingParam, Effort, error) {
 	if settings == nil || settings.Level == ai.ThinkingLevelDisabled ||
 		settings.Level == "" && settings.TokenBudget == nil {
-		return nil, nil
+		if settings != nil && settings.Level == ai.ThinkingLevelDisabled &&
+			(configuredEffort == EffortXHigh || configuredEffort == EffortMax) && strings.HasPrefix(modelName, "claude-opus-5") {
+			return nil, "", fmt.Errorf(
+				"anthropic: model %q does not support effort %q while thinking is disabled", modelName, configuredEffort,
+			)
+		}
+		return nil, configuredEffort, nil
+	}
+	if settings.TokenBudget != nil && anthropicDisallowsBudgetThinking(modelName) {
+		return nil, "", fmt.Errorf("anthropic: model %q does not support budget-based thinking", modelName)
+	}
+	if settings.TokenBudget == nil && anthropicSupportsAdaptiveThinking(modelName) {
+		effort := configuredEffort
+		if effort == "" {
+			effort = anthropicEffort(modelName, settings.Level)
+		}
+		return &thinkingParam{Type: "adaptive"}, effort, nil
 	}
 	budget := 0
 	if settings.TokenBudget != nil {
@@ -1210,13 +1307,13 @@ func anthropicThinking(settings *ai.ThinkingSettings) (*thinkingParam, error) {
 		case ai.ThinkingLevelXHigh:
 			budget = 32768
 		default:
-			return nil, fmt.Errorf("anthropic: invalid thinking level %q", settings.Level)
+			return nil, "", fmt.Errorf("anthropic: invalid thinking level %q", settings.Level)
 		}
 	}
 	if budget <= 0 {
-		return nil, fmt.Errorf("anthropic: thinking token budget must be positive, got %d", budget)
+		return nil, "", fmt.Errorf("anthropic: thinking token budget must be positive, got %d", budget)
 	}
-	return &thinkingParam{Type: "enabled", BudgetTokens: budget}, nil
+	return &thinkingParam{Type: "enabled", BudgetTokens: budget}, configuredEffort, nil
 }
 
 func hasAnthropicToolAdditions(msgs []ai.ModelMessage, deferredNames map[string]struct{}) bool {

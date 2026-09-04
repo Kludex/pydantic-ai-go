@@ -17,6 +17,22 @@ const (
 	CacheTTL1Hour CacheTTL = "1h"
 )
 
+// Effort selects Anthropic's generation effort.
+type Effort string
+
+const (
+	// EffortLow minimizes generation effort.
+	EffortLow Effort = "low"
+	// EffortMedium balances speed and quality.
+	EffortMedium Effort = "medium"
+	// EffortHigh increases generation effort.
+	EffortHigh Effort = "high"
+	// EffortXHigh requests the provider's extended high setting.
+	EffortXHigh Effort = "xhigh"
+	// EffortMax requests the maximum supported effort.
+	EffortMax Effort = "max"
+)
+
 // CodeExecutionToolVersion selects an Anthropic hosted code execution API version.
 type CodeExecutionToolVersion string
 
@@ -65,6 +81,8 @@ type Settings struct {
 	FreshContainer bool
 	// CodeExecutionToolVersion selects the hosted code execution API version.
 	CodeExecutionToolVersion CodeExecutionToolVersion
+	// Effort overrides the portable thinking level's generation effort.
+	Effort Effort
 }
 
 const (
@@ -74,6 +92,7 @@ const (
 	cacheToolDefinitionsSetting = "anthropic_cache_tool_definitions"
 	containerSetting            = "anthropic_container"
 	codeExecutionVersionSetting = "anthropic_code_execution_tool_version"
+	effortSetting               = "anthropic_effort"
 )
 
 type cacheSettings struct {
@@ -108,6 +127,11 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	}
 	if settings.CodeExecutionToolVersion != "" {
 		if err := validateCodeExecutionToolVersion(settings.CodeExecutionToolVersion); err != nil {
+			return ai.ModelSettings{}, err
+		}
+	}
+	if settings.Effort != "" {
+		if err := validateEffort(settings.Effort); err != nil {
 			return ai.ModelSettings{}, err
 		}
 	}
@@ -151,6 +175,12 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 			return ai.ModelSettings{}, fmt.Errorf("anthropic: setting field %q is reserved", codeExecutionVersionSetting)
 		}
 		extra[codeExecutionVersionSetting] = settings.CodeExecutionToolVersion
+	}
+	if settings.Effort != "" {
+		if _, exists := extra[effortSetting]; exists {
+			return ai.ModelSettings{}, fmt.Errorf("anthropic: setting field %q is reserved", effortSetting)
+		}
+		extra[effortSetting] = settings.Effort
 	}
 	if len(extra) == 0 {
 		extra = nil
@@ -205,6 +235,7 @@ type providerSettings struct {
 	Container                any
 	ContainerSet             bool
 	CodeExecutionToolVersion CodeExecutionToolVersion
+	Effort                   Effort
 }
 
 func extractProviderSettings(settings ai.ModelSettings) (ai.ModelSettings, providerSettings, error) {
@@ -262,11 +293,31 @@ func extractProviderSettings(settings ai.ModelSettings) (ai.ModelSettings, provi
 		}
 		provider.CodeExecutionToolVersion = version
 	}
+	if value, exists := extra[effortSetting]; exists {
+		delete(extra, effortSetting)
+		effort, ok := value.(Effort)
+		if !ok {
+			return ai.ModelSettings{}, providerSettings{}, fmt.Errorf("anthropic: effort must use Effort")
+		}
+		if err := validateEffort(effort); err != nil {
+			return ai.ModelSettings{}, providerSettings{}, err
+		}
+		provider.Effort = effort
+	}
 	if len(extra) == 0 {
 		extra = nil
 	}
 	settings.ExtraBody = extra
 	return settings, provider, nil
+}
+
+func validateEffort(effort Effort) error {
+	switch effort {
+	case EffortLow, EffortMedium, EffortHigh, EffortXHigh, EffortMax:
+		return nil
+	default:
+		return fmt.Errorf("anthropic: invalid effort %q", effort)
+	}
 }
 
 func validateContainer(container Container) error {

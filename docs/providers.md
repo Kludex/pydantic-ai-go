@@ -369,6 +369,42 @@ Anthropic accepts image URLs, PDF URLs, inline images, inline PDFs, and plain-te
 
 Supported Claude 4.1, 4.5, 4.6, 4.7, 4.8, and 5 families accept `OutputModeNative`. The provider sends your output schema through `output_config.format`. Unsupported models fail before transport instead of silently ignoring the schema.
 
+### Adaptive thinking
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+func main() {
+	settings, err := (anthropic.Settings{
+		Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}},
+		Effort: anthropic.EffortHigh,
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-6"),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.Run(context.Background(), "Solve the problem carefully.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Claude Sonnet 4.6+, Opus 4.6+, Fable 5, and Mythos 5 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budget, sampling, effort, and forced-tool combinations fail or are omitted according to the model profile.
+
 ### Prompt caching
 
 ```go

@@ -1763,6 +1763,153 @@ func TestAnthropicContainerAndCodeExecutionSettings(t *testing.T) {
 	}
 }
 
+func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		model       string
+		level       ai.ThinkingLevel
+		thinking    string
+		budget      float64
+		effort      string
+		temperature bool
+	}{
+		{name: "classic", model: "claude-haiku-4-5", level: ai.ThinkingLevelMedium, thinking: "enabled", budget: 10000},
+		{name: "adaptive minimal", model: "claude-sonnet-4-6", level: ai.ThinkingLevelMinimal, thinking: "adaptive", effort: "low"},
+		{name: "adaptive medium", model: "claude-sonnet-4-6", level: ai.ThinkingLevelMedium, thinking: "adaptive", effort: "medium"},
+		{name: "adaptive", model: "claude-sonnet-4-6", level: ai.ThinkingLevelHigh, thinking: "adaptive", effort: "high"},
+		{name: "maximum fallback", model: "claude-opus-4-6", level: ai.ThinkingLevelXHigh, thinking: "adaptive", effort: "max"},
+		{name: "extended high", model: "claude-opus-4-7", level: ai.ThinkingLevelXHigh, thinking: "adaptive", effort: "xhigh", temperature: true},
+		{name: "unqualified adaptive", model: "claude-fable-5", level: ai.ThinkingLevelEnabled, thinking: "adaptive", temperature: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var body map[string]any
+			model := newNamedServer(t, test.model, func(response http.ResponseWriter, request *http.Request) {
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+			})
+			temperature := 0.3
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: &ai.ThinkingSettings{Level: test.level}, Temperature: &temperature,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			thinking := body["thinking"].(map[string]any)
+			actualBudget, _ := thinking["budget_tokens"].(float64)
+			if thinking["type"] != test.thinking || actualBudget != test.budget {
+				t.Fatalf("unexpected thinking config: %#v", body)
+			}
+			output, _ := body["output_config"].(map[string]any)
+			actualEffort, _ := output["effort"].(string)
+			if actualEffort != test.effort {
+				t.Fatalf("unexpected effort config: %#v", body)
+			}
+			_, hasTemperature := body["temperature"]
+			if hasTemperature != !test.temperature {
+				t.Fatalf("unexpected sampling config: %#v", body)
+			}
+		})
+	}
+
+	var body map[string]any
+	adaptive := newNamedServer(t, "claude-sonnet-4-6", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+	})
+	settings, err := (anthropic.Settings{
+		Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}},
+		Effort: anthropic.EffortLow,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adaptive.Request(t.Context(), nil, ai.ModelRequestParams{
+		Settings: settings, OutputMode: ai.OutputModeNative, OutputSchema: map[string]any{"type": "object"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	output := body["output_config"].(map[string]any)
+	if output["effort"] != "low" || output["format"].(map[string]any)["type"] != "json_schema" {
+		t.Fatalf("native output replaced effort: %#v", body)
+	}
+
+	budget := 2048
+	if _, err := adaptive.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh, TokenBudget: &budget},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if thinking := body["thinking"].(map[string]any); thinking["type"] != "enabled" || thinking["budget_tokens"] != float64(2048) {
+		t.Fatalf("explicit budget did not retain extended thinking: %#v", body)
+	}
+
+	outputTool := &ai.ToolDefinition{Name: "final", Schema: map[string]any{"type": "object"}}
+	if _, err := adaptive.Request(t.Context(), nil, ai.ModelRequestParams{
+		Settings:   ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}},
+		OutputTool: outputTool,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if body["tool_choice"].(map[string]any)["type"] != "any" {
+		t.Fatalf("adaptive thinking did not permit forced output: %#v", body)
+	}
+
+	for name, modelSettings := range map[string]struct {
+		model    string
+		settings ai.ModelSettings
+		params   ai.ModelRequestParams
+	}{
+		"budget": {model: "claude-opus-5", settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{
+			Level: ai.ThinkingLevelEnabled, TokenBudget: &budget,
+		}}},
+		"disabled maximum": {model: "claude-opus-5", settings: mustAnthropicSettings(t, anthropic.Settings{
+			Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}, Effort: anthropic.EffortMax,
+		})},
+		"forced fable output": {model: "claude-fable-5", settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{
+			Level: ai.ThinkingLevelEnabled,
+		}}, params: ai.ModelRequestParams{OutputTool: outputTool}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newNamedServer(t, modelSettings.model, func(http.ResponseWriter, *http.Request) {})
+			params := modelSettings.params
+			params.Settings = modelSettings.settings
+			if _, err := model.Request(t.Context(), nil, params); err == nil {
+				t.Fatal("unsupported thinking profile was accepted")
+			}
+		})
+	}
+
+	if _, err := (anthropic.Settings{Effort: "future"}).Build(); err == nil {
+		t.Fatal("invalid typed effort was accepted")
+	}
+	if _, err := (anthropic.Settings{
+		Common: ai.ModelSettings{ExtraBody: map[string]any{"anthropic_effort": anthropic.EffortLow}},
+		Effort: anthropic.EffortHigh,
+	}).Build(); err == nil {
+		t.Fatal("conflicting effort was accepted")
+	}
+	for name, effort := range map[string]any{"untyped": "low", "invalid": anthropic.Effort("future")} {
+		if _, err := adaptive.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"anthropic_effort": effort},
+		}}); err == nil {
+			t.Fatalf("%s direct effort was accepted", name)
+		}
+	}
+}
+
+func mustAnthropicSettings(t *testing.T, settings anthropic.Settings) ai.ModelSettings {
+	t.Helper()
+	built, err := settings.Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return built
+}
+
 func TestAnthropicLegacyCodeExecutionRequest(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

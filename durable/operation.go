@@ -148,7 +148,10 @@ type Codec[T any] interface {
 // JSONCodec serializes values with encoding/json.
 type JSONCodec[T any] struct{}
 
+// Encode serializes a value as JSON.
 func (JSONCodec[T]) Encode(value T) ([]byte, error) { return json.Marshal(value) }
+
+// Decode rebuilds a value from JSON.
 func (JSONCodec[T]) Decode(payload []byte) (T, error) {
 	var value T
 	err := json.Unmarshal(payload, &value)
@@ -164,6 +167,7 @@ type CacheIdentity[Params any] interface {
 // CacheIdentityFunc adapts a function into CacheIdentity.
 type CacheIdentityFunc[Params any] func(params Params) (any, error)
 
+// Project calls the adapted semantic cache-identity function.
 func (function CacheIdentityFunc[Params]) Project(params Params) (any, error) {
 	return function(params)
 }

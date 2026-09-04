@@ -62,6 +62,7 @@ func (*ProfiledModel) DispatchesOutputProfile() bool { return false }
 // DispatchesMessageProfile reports that this explicit outer profile prepares messages before delegation.
 func (*ProfiledModel) DispatchesMessageProfile() bool { return false }
 
+// ModelProfile delegates profile discovery to the wrapped model.
 func (wrapper *ModelWrapper) ModelProfile() ModelProfile {
 	if model, ok := wrapper.wrapped.(ModelProfiler); ok {
 		return model.ModelProfile()

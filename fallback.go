@@ -513,6 +513,7 @@ func newFallbackExhaustedError(failures []error, rejected []*ModelResponse) *Fal
 	return &FallbackExhaustedError{failures: append([]error(nil), failures...), rejected: cloned}
 }
 
+// Error summarizes failed and rejected fallback candidates.
 func (err *FallbackExhaustedError) Error() string {
 	return fmt.Sprintf("%s: %d error(s), %d rejected response(s)", ErrFallbackExhausted, len(err.failures), len(err.rejected))
 }

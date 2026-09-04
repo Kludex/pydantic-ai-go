@@ -29,6 +29,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- Add Logfire messages and JSON schemas to model and tool spans, including model-visible retry and terminal-failure results.
 - Widen Vercel AI `Chunk.Data` and `UIMessagePart.Data` from object-only maps to arbitrary JSON values. Existing map values remain valid.
 - Emit Vercel AI response metadata through the protocol's final `message-metadata` chunk instead of attaching it to `finish`.
 - Widen AG-UI `Message.Content` from text to arbitrary protocol content so typed multimodal input and structured tool results can round-trip.

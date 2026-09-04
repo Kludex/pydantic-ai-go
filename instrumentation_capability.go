@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"sync"
@@ -214,17 +215,13 @@ func (instrumentation *Instrumentation) OnToolValidationError(
 	validationErr error,
 ) (any, error) {
 	names := namesForInstrumentationVersion(instrumentation.runtime.version)
-	attributes := []attribute.KeyValue{
-		attribute.String("gen_ai.operation.name", "execute_tool"),
-		attribute.String("gen_ai.tool.name", hook.Call.ToolName),
-		attribute.String("gen_ai.tool.call.id", hook.Call.ToolCallID),
+	attributes := instrumentation.toolSpanAttributes(ctx, hook.Call, telemetryRawJSON(rawArgs))
+	attributes = append(attributes,
+		attribute.String("logfire.msg", "invalid tool call: "+hook.Call.ToolName),
 		attribute.String("pydantic_ai.tool.failure_stage", "validation"),
-	}
+	)
 	if instrumentation.runtime.includeContent {
-		attributes = append(attributes,
-			attribute.String(names.toolArguments, telemetryJSON(telemetryRawJSON(rawArgs))),
-			attribute.String(names.toolResult, validationErr.Error()),
-		)
+		attributes = append(attributes, attribute.String(names.toolResult, validationErr.Error()))
 	}
 	_, span := instrumentation.runtime.tracer.Start(
 		ctx, names.toolSpan(hook.Call.ToolName), trace.WithAttributes(attributes...),
@@ -254,18 +251,24 @@ func (instrumentation *Instrumentation) WrapToolExecution(
 		return next(ctx, args)
 	}
 	names := namesForInstrumentationVersion(instrumentation.runtime.version)
-	ctx, span := instrumentation.runtime.tracer.Start(ctx, names.toolSpan(hook.Call.ToolName), trace.WithAttributes(
-		attribute.String("gen_ai.operation.name", "execute_tool"),
-		attribute.String("gen_ai.tool.name", hook.Call.ToolName),
-		attribute.String("gen_ai.tool.call.id", hook.Call.ToolCallID),
-	))
+	ctx, span := instrumentation.runtime.tracer.Start(
+		ctx, names.toolSpan(hook.Call.ToolName),
+		trace.WithAttributes(instrumentation.toolSpanAttributes(ctx, hook.Call, telemetryValue(args))...),
+	)
 	ctx = context.WithValue(ctx, toolSpanContextKey{}, true)
-	if instrumentation.runtime.includeContent {
-		span.SetAttributes(attribute.String(names.toolArguments, telemetryJSON(telemetryValue(args))))
-	}
 	defer func() {
 		if err != nil {
 			span.SetStatus(codes.Error, err.Error())
+			if instrumentation.runtime.includeContent {
+				var retry *RetryError
+				var failed *ToolFailedError
+				switch {
+				case errors.As(err, &retry):
+					span.SetAttributes(attribute.String(names.toolResult, retry.Message))
+				case errors.As(err, &failed):
+					span.SetAttributes(attribute.String(names.toolResult, failed.Message))
+				}
+			}
 			span.RecordError(err)
 		} else if deferralName, metadata, deferred := telemetryToolDeferral(result); deferred {
 			span.SetAttributes(attribute.String("pydantic_ai.tool.deferral.name", deferralName))
@@ -291,6 +294,31 @@ func (instrumentation *Instrumentation) WrapToolExecution(
 		span.End()
 	}()
 	return next(ctx, args)
+}
+
+func (instrumentation *Instrumentation) toolSpanAttributes(
+	ctx context.Context, call ToolCallPart, arguments any,
+) []attribute.KeyValue {
+	names := namesForInstrumentationVersion(instrumentation.runtime.version)
+	attributes := []attribute.KeyValue{
+		attribute.String("gen_ai.operation.name", "execute_tool"),
+		attribute.String("gen_ai.tool.name", call.ToolName),
+		attribute.String("gen_ai.tool.call.id", call.ToolCallID),
+		attribute.String("logfire.msg", "running tool: "+call.ToolName),
+	}
+	attributes = append(attributes, instrumentationBaggageAttributes(ctx)...)
+	properties := map[string]any{
+		"gen_ai.tool.name":    map[string]any{},
+		"gen_ai.tool.call.id": map[string]any{},
+	}
+	if instrumentation.runtime.includeContent {
+		attributes = append(attributes, attribute.String(names.toolArguments, telemetryJSON(arguments)))
+		properties[names.toolArguments] = map[string]any{"type": "object"}
+		properties[names.toolResult] = map[string]any{"type": "object"}
+	}
+	return append(attributes, attribute.String(
+		"logfire.json_schema", telemetryJSON(map[string]any{"type": "object", "properties": properties}),
+	))
 }
 
 // WrapOutputProcessing records user output-function arguments and results.

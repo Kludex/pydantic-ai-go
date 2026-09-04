@@ -144,6 +144,14 @@ func TestInstrumentedModelRequest(t *testing.T) {
 	output, _ := attributes["gen_ai.output.messages"].(string)
 	definitions, _ := attributes["gen_ai.tool.definitions"].(string)
 	parameters, _ := attributes["model_request_parameters"].(string)
+	schema, _ := attributes["logfire.json_schema"].(string)
+	if attributes["logfire.msg"] != "chat request-model" ||
+		!strings.Contains(schema, "gen_ai.input.messages") ||
+		!strings.Contains(schema, "gen_ai.output.messages") ||
+		!strings.Contains(schema, "gen_ai.system_instructions") ||
+		!strings.Contains(schema, "model_request_parameters") {
+		t.Fatalf("model request Logfire attributes are incomplete: %+v", attributes)
+	}
 	for _, fragment := range []string{
 		"system", "spoken input", "aW5wdXQgdm9pY2U=", "plain user prompt", "hello", "c2VjcmV0",
 		"prior-id", "plain retry", "new_tool", "history",

@@ -270,14 +270,21 @@ func (model *InstrumentedModel) startOperation(
 	attributes := []attribute.KeyValue{
 		attribute.String("gen_ai.operation.name", operation),
 		attribute.String("gen_ai.request.model", model.Name()),
+		attribute.String("logfire.msg", operation+" "+model.Name()),
 	}
+	attributes = append(attributes, instrumentationBaggageAttributes(ctx)...)
 	attributes = append(attributes, modelSettingAttributes(params.Settings)...)
 	if definitions := telemetryToolDefinitions(params); definitions != "" {
 		attributes = append(attributes, attribute.String("gen_ai.tool.definitions", definitions))
 	}
+	properties := map[string]any{}
 	if model.includeModelRequestParameters {
 		attributes = append(attributes, attribute.String("model_request_parameters", telemetryRequestParameters(params)))
+		properties["model_request_parameters"] = map[string]any{"type": "object"}
 	}
+	attributes = append(attributes, attribute.String(
+		"logfire.json_schema", telemetryJSON(map[string]any{"type": "object", "properties": properties}),
+	))
 	spanCtx, span := model.tracer.Start(
 		ctx, operation+" "+model.Name(), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attributes...),
 	)
@@ -315,13 +322,24 @@ func (request *instrumentedRequest) finish(
 				request.model.version,
 			)),
 		)
+		properties := map[string]any{
+			"gen_ai.input.messages":  map[string]any{"type": "array"},
+			"gen_ai.output.messages": map[string]any{"type": "array"},
+		}
+		if request.model.includeModelRequestParameters {
+			properties["model_request_parameters"] = map[string]any{"type": "object"}
+		}
 		if request.model.includeContent && request.params.Instructions != "" {
 			attributes = append(attributes, attribute.String(
 				"gen_ai.system_instructions", telemetryJSON([]map[string]any{{
 					"type": "text", "content": request.params.Instructions,
 				}}),
 			))
+			properties["gen_ai.system_instructions"] = map[string]any{"type": "array"}
 		}
+		attributes = append(attributes, attribute.String(
+			"logfire.json_schema", telemetryJSON(map[string]any{"type": "object", "properties": properties}),
+		))
 		if firstChunk > 0 {
 			attributes = append(attributes, attribute.Float64(
 				"gen_ai.client.operation.time_to_first_chunk", firstChunk.Seconds(),

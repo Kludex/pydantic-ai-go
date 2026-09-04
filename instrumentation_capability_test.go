@@ -146,6 +146,11 @@ func TestInstrumentationCapabilityRecordsRunRequestsAndTools(t *testing.T) {
 	if args, _ := toolAttributes["gen_ai.tool.call.arguments"].(string); !strings.Contains(args, "go") {
 		t.Fatalf("tool arguments missing: %s", args)
 	}
+	if toolAttributes["logfire.msg"] != "running tool: lookup" ||
+		toolAttributes["gen_ai.agent.name"] != "support" ||
+		!strings.Contains(toolAttributes["logfire.json_schema"].(string), "gen_ai.tool.call.result") {
+		t.Fatalf("tool Logfire attributes are incomplete: %+v", toolAttributes)
+	}
 
 	var metrics metricdata.ResourceMetrics
 	if err := reader.Collect(t.Context(), &metrics); err != nil {
@@ -399,6 +404,10 @@ func TestInstrumentationCapabilityToolValidationFailure(t *testing.T) {
 				t.Fatalf("validation failure span missing: %+v", exporter.GetSpans())
 			}
 			attributes := instrumentationSpanAttributes(validation.Attributes)
+			if attributes["logfire.msg"] != "invalid tool call: lookup" ||
+				!strings.Contains(attributes["logfire.json_schema"].(string), "gen_ai.tool.name") {
+				t.Fatalf("validation Logfire attributes are incomplete: %+v", attributes)
+			}
 			arguments, argumentsPresent := attributes["gen_ai.tool.call.arguments"].(string)
 			resultText, resultPresent := attributes["gen_ai.tool.call.result"].(string)
 			if includeContent {
@@ -501,6 +510,27 @@ func TestInstrumentationCapabilityErrorsAndEmptyModel(t *testing.T) {
 	toolSpans := exporter.GetSpans()
 	if len(toolSpans) != 1 || toolSpans[0].Status.Code != codes.Error {
 		t.Fatalf("tool error was not recorded: %+v", toolSpans)
+	}
+
+	for _, test := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "retry", err: ai.Retryf("try again"), want: "try again"},
+		{name: "failed", err: ai.ToolFailedf("not available"), want: "not available"},
+	} {
+		exporter.Reset()
+		if _, err := instrumentation.WrapToolExecution(
+			t.Context(), nil, ai.ToolHookContext{Call: ai.ToolCallPart{ToolName: test.name}}, nil,
+			func(context.Context, any) (any, error) { return nil, test.err },
+		); !errors.Is(err, test.err) {
+			t.Fatalf("unexpected %s error: %v", test.name, err)
+		}
+		attributes := instrumentationSpanAttributes(exporter.GetSpans()[0].Attributes)
+		if attributes["gen_ai.tool.call.result"] != test.want {
+			t.Fatalf("%s model-visible result missing: %+v", test.name, attributes)
+		}
 	}
 
 	exporter.Reset()

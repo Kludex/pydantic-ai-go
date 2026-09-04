@@ -109,8 +109,20 @@ type RunAgentInput struct {
 	RunID string `json:"runId"`
 	// Messages is untrusted client-held history.
 	Messages []Message `json:"messages"`
+	// Tools contains client-executed frontend tool definitions.
+	Tools []FrontendTool `json:"tools,omitempty"`
 	// Resume contains approval decisions for prior interrupts.
 	Resume []ResumeEntry `json:"resume,omitempty"`
+}
+
+// FrontendTool describes one client-executed tool available for this run.
+type FrontendTool struct {
+	// Name is the model-facing tool name.
+	Name string `json:"name"`
+	// Description explains when the model should call the tool.
+	Description string `json:"description"`
+	// Parameters is the tool's JSON Schema.
+	Parameters map[string]any `json:"parameters,omitempty"`
 }
 
 // ResumeEntry resolves one prior approval interrupt.

@@ -108,6 +108,12 @@ func main() {
 
 `TransformStream` is useful when agent events arrive through a queue or durable workflow instead of an HTTP request.
 
+## Run frontend tools
+
+Include AG-UI `tools` in the run input to expose functions implemented by the frontend. The adapter registers them as run-scoped external tools. It never executes them on the server.
+
+A frontend tool emits the normal `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END` events without a server result. Keep the assistant tool call and the frontend's matching tool message in the next request history. This lets the model continue without registering the client tool on the reusable agent.
+
 ## Approve deferred tools
 
 Tools registered with `WithApprovalRequired` finish the AG-UI run with an interrupt outcome. Each interrupt ID uses `int-<toolCallId>` and advertises the resume payload schema.
@@ -151,4 +157,4 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 The adapter supports text and multimodal user messages, assistant reasoning, function calls, structured tool results, secure client-held history, versioned thinking and reasoning streams, normalized text and tool streaming, event timestamps, cancellation, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-Frontend tools, state snapshots and deltas, file preservation, external-execution interrupts, custom events, and forwarded context remain.
+State snapshots and deltas, file preservation, external-execution interrupts, custom events, and forwarded context remain.

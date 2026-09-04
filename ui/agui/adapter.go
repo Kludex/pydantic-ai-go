@@ -55,6 +55,20 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		}
 		runOptions := append([]ai.RunOption(nil), options...)
 		runOptions = append(runOptions, ai.WithMessageHistory(history), ai.WithConversationID(threadID))
+		if len(input.Tools) > 0 {
+			tools := make([]ai.Tool[Deps], len(input.Tools))
+			for index, tool := range input.Tools {
+				if tool.Name == "" {
+					err := fmt.Errorf("agui: frontend tool name must not be empty")
+					yield(Event{Type: EventRunError, Message: err.Error()}, err)
+					return
+				}
+				tools[index] = ai.NewRawExternalTool[Deps](ai.ToolDefinition{
+					Name: tool.Name, Description: tool.Description, Schema: cloneMap(tool.Parameters),
+				})
+			}
+			runOptions = append(runOptions, ai.WithRunTools(tools...))
+		}
 		if deferred != nil {
 			runOptions = append(runOptions, ai.WithDeferredToolResults(*deferred))
 		}

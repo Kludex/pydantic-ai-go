@@ -329,6 +329,41 @@ func TestHandlerValidation(t *testing.T) {
 	}
 }
 
+func TestFrontendTools(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	input := agui.RunAgentInput{
+		ThreadID: "thread", RunID: "run",
+		Messages: []agui.Message{{ID: "user", Role: "user", Content: "show weather"}},
+		Tools: []agui.FrontendTool{{
+			Name: "weather", Description: "Read browser weather.",
+			Parameters: map[string]any{
+				"type": "object", "properties": map[string]any{"city": map[string]any{"type": "string"}},
+			},
+		}},
+	}
+	var events []agui.Event
+	for event, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(t.Context(), input, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	start := events[eventIndex(events, agui.EventToolCallStart)]
+	if start.ToolCallName != "weather" || eventIndex(events, agui.EventToolCallEnd) < 0 ||
+		eventIndex(events, agui.EventToolCallResult) >= 0 {
+		t.Fatalf("unexpected frontend tool lifecycle: %#v", events)
+	}
+	empty := input
+	empty.Tools = []agui.FrontendTool{{}}
+	var got error
+	for _, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(t.Context(), empty, struct{}{}) {
+		got = err
+	}
+	if got == nil || !strings.Contains(got.Error(), "frontend tool name") {
+		t.Fatalf("unexpected frontend tool error: %v", got)
+	}
+}
+
 func TestApprovalInterruptAndResume(t *testing.T) {
 	executions := 0
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())

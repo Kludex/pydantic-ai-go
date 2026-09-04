@@ -21,6 +21,7 @@ packages=(
     ./embeddings/fakes
     ./embeddings/google
     ./embeddings/infer
+    ./embeddings/ollama
     ./embeddings/openai
     ./embeddings/voyageai
     ./models/fakes

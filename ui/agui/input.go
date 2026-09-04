@@ -55,23 +55,83 @@ func prepareRunInput(
 	if err != nil {
 		return ai.UserPromptPart{}, nil, nil, err
 	}
+	kinds := make(map[string]string, len(input.Resume))
 	for _, entry := range input.Resume {
-		if strings.HasPrefix(entry.InterruptID, "int-") {
-			options.ResolvedToolCallIDs = append(options.ResolvedToolCallIDs, strings.TrimPrefix(entry.InterruptID, "int-"))
+		toolCallID, kind, ok := resumeToolCall(entry.InterruptID)
+		if !ok {
+			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("agui: invalid interrupt ID %q", entry.InterruptID)
 		}
+		if _, exists := kinds[toolCallID]; exists {
+			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("agui: duplicate resume for tool call %q", toolCallID)
+		}
+		kinds[toolCallID] = kind
+		options.ResolvedToolCallIDs = append(options.ResolvedToolCallIDs, toolCallID)
 	}
+	messages = annotateDeferredKinds(messages, kinds)
 	history, _, err := ai.SanitizeMessages(messages, options)
 	if err != nil {
 		return ai.UserPromptPart{}, nil, nil, err
 	}
-	results := ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{}}
+	results := ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{}, Calls: map[string]any{}}
 	for _, entry := range input.Resume {
-		if !strings.HasPrefix(entry.InterruptID, "int-") || len(entry.InterruptID) == len("int-") {
-			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("agui: invalid interrupt ID %q", entry.InterruptID)
+		toolCallID, kind, _ := resumeToolCall(entry.InterruptID)
+		if kind == "approval" {
+			results.Approvals[toolCallID] = resumeApproval(entry)
+			continue
 		}
-		results.Approvals[strings.TrimPrefix(entry.InterruptID, "int-")] = resumeApproval(entry)
+		result, err := resumeExternalResult(entry)
+		if err != nil {
+			return ai.UserPromptPart{}, nil, nil, err
+		}
+		results.Calls[toolCallID] = result
 	}
 	return ai.UserPromptPart{}, history, &results, nil
+}
+
+func resumeToolCall(interruptID string) (string, string, bool) {
+	if strings.HasPrefix(interruptID, "int-") && len(interruptID) > len("int-") {
+		return strings.TrimPrefix(interruptID, "int-"), "approval", true
+	}
+	if strings.HasPrefix(interruptID, "ext-") && len(interruptID) > len("ext-") {
+		return strings.TrimPrefix(interruptID, "ext-"), "external", true
+	}
+	return "", "", false
+}
+
+func annotateDeferredKinds(messages []ai.ModelMessage, kinds map[string]string) []ai.ModelMessage {
+	for index, message := range messages {
+		response, ok := message.(ai.ModelResponse)
+		if !ok {
+			continue
+		}
+		stored := map[string]any{}
+		for _, call := range response.ToolCalls() {
+			if kind := kinds[call.ToolCallID]; kind != "" {
+				stored[call.ToolCallID] = kind
+			}
+		}
+		if len(stored) == 0 {
+			continue
+		}
+		response.Metadata = map[string]any{ai.DeferredToolKindsMetadataKey: stored}
+		messages[index] = response
+	}
+	return messages
+}
+
+func resumeExternalResult(entry ResumeEntry) (any, error) {
+	if entry.Status == "cancelled" {
+		return &ai.ToolFailedError{Message: "Cancelled by user."}, nil
+	}
+	var payload struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(entry.Payload, &payload); err != nil || len(payload.Result) == 0 {
+		return nil, fmt.Errorf("agui: external tool result for %q requires a result", entry.InterruptID)
+	}
+	var result any
+	_ = json.Unmarshal(payload.Result, &result)
+	return result, nil
 }
 
 func resumeApproval(entry ResumeEntry) ai.ToolApproval {

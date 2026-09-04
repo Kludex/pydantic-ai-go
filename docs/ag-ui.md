@@ -114,6 +114,22 @@ Include AG-UI `tools` in the run input to expose functions implemented by the fr
 
 A frontend tool emits the normal `TOOL_CALL_START`, `TOOL_CALL_ARGS`, and `TOOL_CALL_END` events without a server result. Keep the assistant tool call and the frontend's matching tool message in the next request history. This lets the model continue without registering the client tool on the reusable agent.
 
+## Resume externally executed tools
+
+Tools registered for external execution finish with an interrupt outcome. Each interrupt keeps the original tool-call ID and uses an `ext-` interrupt ID. Its response schema requires a `result` value.
+
+Send the original assistant tool call back with a matching resume entry:
+
+```json
+{
+  "interruptId": "ext-call_remote",
+  "status": "resolved",
+  "payload": {"result": {"temperature": 21}}
+}
+```
+
+Use `status: "cancelled"` to return a failed tool result to the model. The adapter rejects duplicate, malformed, and unmatched resumes. It restores the external pending kind on sanitized client history before continuing the agent loop.
+
 ## Approve deferred tools
 
 Tools registered with `WithApprovalRequired` finish the AG-UI run with an interrupt outcome. Each interrupt ID uses `int-<toolCallId>` and advertises the resume payload schema.
@@ -165,4 +181,4 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 The adapter supports text and multimodal user messages, assistant reasoning, function calls, structured tool results, secure client-held history, versioned thinking and reasoning streams, normalized text and tool streaming, event timestamps, cancellation, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-State snapshots and deltas, external-execution interrupts, custom events, and forwarded context remain.
+State snapshots and deltas, custom events, and forwarded context remain.

@@ -432,6 +432,90 @@ func TestFrontendTools(t *testing.T) {
 	}
 }
 
+func TestExternalInterruptAndResume(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	agent.AddTool(ai.NewRawExternalTool[struct{}](ai.ToolDefinition{
+		Name: "remote", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+	}))
+	adapter := agui.NewAdapter(agent, agui.Config{})
+	initial := agui.RunAgentInput{Messages: []agui.Message{{ID: "user", Role: "user", Content: "run"}}}
+	var outcome *agui.RunOutcome
+	for event, err := range adapter.RunStream(t.Context(), initial, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == agui.EventRunFinished {
+			outcome = event.Outcome
+		}
+	}
+	if outcome == nil || outcome.Type != "interrupt" || len(outcome.Interrupts) != 1 ||
+		outcome.Interrupts[0].ID != "ext-call_remote" ||
+		outcome.Interrupts[0].ResponseSchema["type"] != "object" {
+		t.Fatalf("unexpected external interrupt: %#v", outcome)
+	}
+	base := agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "user", Role: "user", Content: "run"},
+		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{{
+			ID: "call_remote", Type: "function", Function: agui.ToolCallFunction{Name: "remote", Arguments: `{}`},
+		}}},
+	}}
+	resolved := base
+	resolved.Resume = []agui.ResumeEntry{{InterruptID: "ext-call_remote", Payload: []byte(`{"result":{"ok":true}}`)}}
+	resultSeen := false
+	for event, err := range adapter.RunStream(t.Context(), resolved, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == agui.EventToolCallResult && strings.Contains(event.Content.(string), `"ok":true`) {
+			resultSeen = true
+		}
+	}
+	if !resultSeen {
+		t.Fatal("external result was not resumed")
+	}
+
+	for _, entry := range []agui.ResumeEntry{
+		{InterruptID: "ext-call_remote", Payload: []byte(`{}`)},
+		{InterruptID: "ext-call_remote", Payload: []byte(`{`)},
+	} {
+		input := base
+		input.Resume = []agui.ResumeEntry{entry}
+		var got error
+		for _, err := range adapter.RunStream(t.Context(), input, struct{}{}) {
+			got = err
+		}
+		if got == nil || !strings.Contains(got.Error(), "requires a result") {
+			t.Fatalf("unexpected invalid external result error: %v", got)
+		}
+	}
+	cancelled := base
+	cancelled.Resume = []agui.ResumeEntry{{InterruptID: "ext-call_remote", Status: "cancelled"}}
+	for _, err := range adapter.RunStream(t.Context(), cancelled, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	duplicate := base
+	duplicate.Resume = []agui.ResumeEntry{{InterruptID: "ext-call_remote"}, {InterruptID: "int-call_remote"}}
+	var got error
+	for _, err := range adapter.RunStream(t.Context(), duplicate, struct{}{}) {
+		got = err
+	}
+	if got == nil || !strings.Contains(got.Error(), "duplicate resume") {
+		t.Fatalf("unexpected duplicate error: %v", got)
+	}
+	missing := base
+	missing.Messages[1].ToolCalls = nil
+	missing.Resume = []agui.ResumeEntry{{InterruptID: "ext-call_remote", Payload: []byte(`{"result":true}`)}}
+	got = nil
+	for _, err := range adapter.RunStream(t.Context(), missing, struct{}{}) {
+		got = err
+	}
+	if got == nil {
+		t.Fatal("resume without a matching tool call was accepted")
+	}
+}
+
 func TestApprovalInterruptAndResume(t *testing.T) {
 	executions := 0
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())

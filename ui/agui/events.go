@@ -139,6 +139,14 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 		})
 	case ai.DeferredToolRequestsEvent:
 		transformer.outcome = RunOutcome{Type: "interrupt"}
+		for _, call := range value.Requests.Calls {
+			transformer.outcome.Interrupts = append(transformer.outcome.Interrupts, Interrupt{
+				ID: "ext-" + call.ToolCallID, Reason: "tool_call", ToolCallID: call.ToolCallID,
+				Message:        fmt.Sprintf("Provide the result of %s(%s).", call.ToolName, call.Args),
+				ResponseSchema: externalResultResponseSchema(),
+				Metadata:       cloneMap(value.Requests.Metadata[call.ToolCallID]),
+			})
+		}
 		for _, call := range value.Requests.Approvals {
 			transformer.outcome.Interrupts = append(transformer.outcome.Interrupts, Interrupt{
 				ID: "int-" + call.ToolCallID, Reason: "tool_call", ToolCallID: call.ToolCallID,
@@ -383,6 +391,14 @@ func (transformer *eventTransformer) toolResult(yield func(Event, error) bool, t
 		Type: EventToolCallResult, MessageID: fmt.Sprintf("%s:tool:%d", transformer.runID, transformer.result),
 		Role: "tool", ToolCallID: toolCallID, Content: content,
 	}, nil)
+}
+
+func externalResultResponseSchema() map[string]any {
+	return map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"result": map[string]any{}},
+		"required":   []string{"result"},
+	}
 }
 
 func approvalResponseSchema() map[string]any {

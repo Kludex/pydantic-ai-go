@@ -400,10 +400,22 @@ func TestHandlerValidation(t *testing.T) {
 type forwardedDeps struct {
 	input agui.ForwardedInput
 	err   error
+	emit  bool
 }
 
 func (deps *forwardedDeps) SetAGUIRunInput(input agui.ForwardedInput) error {
 	deps.input = input
+	if deps.emit {
+		if err := input.Events.EmitStateSnapshot(map[string]any{"count": 1}); err != nil {
+			return err
+		}
+		if err := input.Events.EmitStateDelta([]any{map[string]any{"op": "replace", "path": "/count", "value": 2}}); err != nil {
+			return err
+		}
+		if err := input.Events.EmitCustom("notice", map[string]any{"text": "ready"}); err != nil {
+			return err
+		}
+	}
 	return deps.err
 }
 
@@ -459,6 +471,62 @@ func TestForwardedInput(t *testing.T) {
 	}
 	if got == nil || !strings.Contains(got.Error(), "clone forwarded properties") {
 		t.Fatalf("unexpected props clone error: %v", got)
+	}
+
+	deps.emit = true
+	input.State = nil
+	input.ForwardedProps = nil
+	var emitted []agui.Event
+	for event, err := range adapter.RunStream(t.Context(), input, deps) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == agui.EventStateSnapshot || event.Type == agui.EventStateDelta || event.Type == agui.EventCustom {
+			emitted = append(emitted, event)
+		}
+	}
+	if len(emitted) != 3 || emitted[0].Snapshot.(map[string]any)["count"] != float64(1) ||
+		emitted[1].Delta.([]any)[0].(map[string]any)["op"] != "replace" ||
+		emitted[2].Name != "notice" || emitted[2].Value.(map[string]any)["text"] != "ready" ||
+		emitted[0].Timestamp == 0 {
+		t.Fatalf("unexpected application events: %#v", emitted)
+	}
+	for event := range adapter.RunStream(t.Context(), input, deps) {
+		if event.Type == agui.EventStateSnapshot {
+			break
+		}
+	}
+	deps.emit = false
+	for event := range adapter.RunStream(t.Context(), input, deps) {
+		switch {
+		case event.Type == agui.EventTextMessageEnd:
+			if err := deps.input.Events.EmitCustom("before-finish", true); err != nil {
+				t.Fatal(err)
+			}
+		case event.Type == agui.EventCustom && event.Name == "before-finish":
+			if err := deps.input.Events.EmitCustom("at-finish", true); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if event.Type == agui.EventCustom && event.Name == "at-finish" {
+			break
+		}
+	}
+
+	queue := &agui.EventQueue{}
+	cycleMap := map[string]any{}
+	cycleMap["self"] = cycleMap
+	cycleSlice := []any{nil}
+	cycleSlice[0] = cycleSlice
+	for name, err := range map[string]error{
+		"snapshot": queue.EmitStateSnapshot(cycleMap),
+		"delta":    queue.EmitStateDelta(cycleSlice),
+		"name":     queue.EmitCustom("", true),
+		"custom":   queue.EmitCustom("event", cycleMap),
+	} {
+		if err == nil {
+			t.Fatalf("invalid %s event was accepted", name)
+		}
 	}
 }
 

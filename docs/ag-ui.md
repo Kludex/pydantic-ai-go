@@ -114,6 +114,8 @@ Implement `RunInputReceiver` on your dependency value to receive frontend state,
 
 The receiver gets a detached JSON snapshot. Changes cannot mutate the request. Return an error to reject the run before the model is called. Dependencies that do not implement the interface ignore these optional application values.
 
+`ForwardedInput.Events` is a run-scoped, concurrency-safe queue. Tools and application code can call `EmitStateSnapshot`, `EmitStateDelta`, or `EmitCustom`. The adapter detaches each JSON value and emits queued events before the terminal run event. State deltas use RFC 6902 JSON Patch arrays.
+
 ## Run frontend tools
 
 Include AG-UI `tools` in the run input to expose functions implemented by the frontend. The adapter registers them as run-scoped external tools. It never executes them on the server.
@@ -187,4 +189,4 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 The adapter supports text and multimodal user messages, assistant reasoning, function calls, structured tool results, secure client-held history, versioned thinking and reasoning streams, normalized text and tool streaming, event timestamps, cancellation, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-Outbound state snapshots and deltas and custom events remain.
+Developer-role messages, encrypted typed-tool history, and raw provider event metadata remain.

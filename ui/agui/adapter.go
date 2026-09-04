@@ -48,12 +48,14 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		runID = nextID("run")
 	}
 	return func(yield func(Event, error) bool) {
+		var applicationEvents *EventQueue
 		if receiver, ok := any(deps).(RunInputReceiver); ok {
 			forwarded, err := detachedForwardedInput(input, threadID, runID)
 			if err != nil {
 				yield(Event{Type: EventRunError, Message: err.Error()}, err)
 				return
 			}
+			applicationEvents = forwarded.Events
 			if err := receiver.SetAGUIRunInput(forwarded); err != nil {
 				err = fmt.Errorf("agui: apply forwarded input: %w", err)
 				yield(Event{Type: EventRunError, Message: err.Error()}, err)
@@ -96,7 +98,14 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 			Version: adapter.config.Version, ThreadID: threadID, RunID: runID,
 			PreserveFileData: adapter.config.PreserveFileData,
 		}) {
+			terminal := event.Type == EventRunFinished || event.Type == EventRunError
+			if terminal && !yieldQueuedEvents(yield, applicationEvents) {
+				return
+			}
 			if !yield(event, eventErr) || eventErr != nil {
+				return
+			}
+			if !terminal && !yieldQueuedEvents(yield, applicationEvents) {
 				return
 			}
 		}
@@ -166,6 +175,18 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 	}
 }
 
+func yieldQueuedEvents(yield func(Event, error) bool, queue *EventQueue) bool {
+	if queue == nil {
+		return true
+	}
+	for _, event := range queue.drain() {
+		if !yield(event, nil) {
+			return false
+		}
+	}
+	return true
+}
+
 func detachedForwardedInput(input RunAgentInput, threadID string, runID string) (ForwardedInput, error) {
 	state, err := detachedJSONValue(input.State)
 	if err != nil {
@@ -177,7 +198,7 @@ func detachedForwardedInput(input RunAgentInput, threadID string, runID string) 
 	}
 	return ForwardedInput{
 		ThreadID: threadID, RunID: runID, State: state,
-		Context: append([]Context(nil), input.Context...), ForwardedProps: props,
+		Context: append([]Context(nil), input.Context...), ForwardedProps: props, Events: &EventQueue{},
 	}, nil
 }
 

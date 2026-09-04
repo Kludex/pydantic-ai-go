@@ -57,6 +57,12 @@ const (
 	EventActivitySnapshot EventType = "ACTIVITY_SNAPSHOT"
 	// EventActivityDelta applies a JSON Patch to one AG-UI activity value.
 	EventActivityDelta EventType = "ACTIVITY_DELTA"
+	// EventStateSnapshot replaces frontend-managed state.
+	EventStateSnapshot EventType = "STATE_SNAPSHOT"
+	// EventStateDelta applies a JSON Patch to frontend-managed state.
+	EventStateDelta EventType = "STATE_DELTA"
+	// EventCustom carries application-defined data.
+	EventCustom EventType = "CUSTOM"
 )
 
 // Event is one JSON-encoded AG-UI event. Fields not used by Type are omitted.
@@ -73,8 +79,8 @@ type Event struct {
 	MessageID string `json:"messageId,omitempty"`
 	// Role is assistant or tool when the event starts a message.
 	Role string `json:"role,omitempty"`
-	// Delta contains incremental text or JSON arguments.
-	Delta string `json:"delta,omitempty"`
+	// Delta contains incremental text, JSON arguments, or a state patch array.
+	Delta any `json:"delta,omitempty"`
 	// ToolCallID identifies one model tool call.
 	ToolCallID string `json:"toolCallId,omitempty"`
 	// ToolCallName is the model-facing function name.
@@ -83,6 +89,12 @@ type Event struct {
 	ParentMessageID string `json:"parentMessageId,omitempty"`
 	// Content contains a tool result or complete activity snapshot.
 	Content any `json:"content,omitempty"`
+	// Snapshot contains a complete application state value.
+	Snapshot any `json:"snapshot,omitempty"`
+	// Name identifies a custom event.
+	Name string `json:"name,omitempty"`
+	// Value contains custom event data.
+	Value any `json:"value,omitempty"`
 	// Subtype identifies a message or tool-call encrypted value.
 	Subtype string `json:"subtype,omitempty"`
 	// EntityID identifies the message or tool call carrying an encrypted value.
@@ -138,6 +150,8 @@ type ForwardedInput struct {
 	Context []Context
 	// ForwardedProps contains application-specific request data.
 	ForwardedProps any
+	// Events emits state and custom events for this run.
+	Events *EventQueue
 }
 
 // Context is one frontend-provided description and value pair.

@@ -164,6 +164,55 @@ Register external tools with `AddExternalTool`. The adapter stores their pending
 
 Use `output-error` and `errorText` when execution fails. The adapter resumes the original call IDs as one deferred result batch. It rejects missing, duplicate, incomplete, and malformed result metadata. This prevents a partial batch from rerunning completed work.
 
+## Stream custom data and sources
+
+```go
+package main
+
+import (
+    "context"
+    "net/http"
+
+    ai "github.com/Kludex/pydantic-ai-go"
+    "github.com/Kludex/pydantic-ai-go/models/openai"
+    "github.com/Kludex/pydantic-ai-go/ui/vercel"
+)
+
+type ReportArgs struct {
+    Topic string `json:"topic"`
+}
+
+func main() {
+    agent := ai.NewAgent[struct{}, string](openai.NewModel("gpt-5-mini"))
+    ai.AddSimpleTool(agent, "report", func(
+        _ context.Context, args ReportArgs,
+    ) (ai.ToolReturn, error) {
+        metadata, err := vercel.ToolResultMetadata(
+            vercel.Chunk{Type: "data-progress", Data: map[string]any{"percent": 100}},
+            vercel.Chunk{
+                Type:     vercel.ChunkSourceURL,
+                SourceID: "source-1",
+                URL:      "https://example.com/report",
+                Title:    "Report source",
+            },
+        )
+        if err != nil {
+            return ai.ToolReturn{}, err
+        }
+        return ai.ToolReturn{ReturnValue: "Report complete: " + args.Topic, Metadata: metadata}, nil
+    })
+
+    adapter := vercel.NewAdapter(agent, vercel.Config{})
+    if err := http.ListenAndServe(":8080", adapter.Handler(struct{}{})); err != nil {
+        panic(err)
+    }
+}
+```
+
+`ToolResultMetadata` accepts custom `data-*`, `source-url`, `source-document`, and `file` chunks. The adapter emits them after the tool output. It rejects control chunks so tool metadata cannot corrupt stream lifecycle state. The helper copies every chunk before the run stores it.
+
+Set `Transient` to `true` on a custom data chunk when the frontend should not retain it in message history. Retained custom data and source parts remain UI-only when the client sends the history back. They are not added to the next model request.
+
 ## Preserve compaction and discovered tools
 
 The adapter uses `data-compaction` parts for provider compaction boundaries. It uses `data-tool-availability-delta` parts for tools revealed during a run. Keep these data parts in client-held history so later requests preserve the compacted context and deferred-tool visibility.
@@ -182,4 +231,4 @@ A canceled run emits an `abort` chunk followed by `[DONE]`. This keeps cancellat
 
 The adapter supports AI SDK UI versions 5 through 7 for text, files, reasoning, function and provider-native tool inputs and outputs, approval and external-tool resumes, compaction boundaries, tool-availability changes, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
 
-Vercel AI source and custom data parts, and remaining version-specific fields remain.
+Remaining version-specific fields remain.

@@ -1,6 +1,7 @@
 package vercel_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -111,13 +112,13 @@ func TestTransformStreamVariants(t *testing.T) {
 		files[1].URL != "data:image/png;base64,c2Vjb25k" || files[1].MediaType != "image/png" {
 		t.Fatalf("unexpected files: %#v", files)
 	}
-	compaction := chunks[chunkIndex(chunks, vercel.ChunkDataCompaction)].Data
+	compaction := chunks[chunkIndex(chunks, vercel.ChunkDataCompaction)].Data.(map[string]any)
 	if compaction["content"] != "summary" || compaction["id"] != "compact-1" ||
 		compaction["provider_name"] != "openai" ||
 		compaction["provider_details"].(map[string]any)["encrypted"] != "value" {
 		t.Fatalf("unexpected compaction data: %#v", compaction)
 	}
-	availability := chunks[chunkIndex(chunks, vercel.ChunkDataToolAvailability)].Data
+	availability := chunks[chunkIndex(chunks, vercel.ChunkDataToolAvailability)].Data.(map[string]any)
 	if availability["tool_call_id"] != "reveal-1" || availability["added"].([]string)[0] != "search" {
 		t.Fatalf("unexpected tool availability data: %#v", availability)
 	}
@@ -131,6 +132,123 @@ func TestTransformStreamVariants(t *testing.T) {
 		finishMetadata["pydantic_ai"].(map[string]any)["timestamp"] != "2026-09-04T10:00:00Z" {
 		t.Fatalf("unexpected message metadata: %#v", finishMetadata)
 	}
+}
+
+func TestTransformToolResultChunks(t *testing.T) {
+	data := map[string]any{"nested": map[string]any{"value": "original"}}
+	metadata, err := vercel.ToolResultMetadata(
+		vercel.Chunk{Type: "data-custom", ID: "data-1", Data: data},
+		vercel.Chunk{Type: "data-null", Transient: true},
+		vercel.Chunk{
+			Type: vercel.ChunkSourceURL, SourceID: "source-1", URL: "https://example.com", Title: "Example",
+			ProviderMetadata: map[string]any{"provider": map[string]any{"id": "citation"}},
+		},
+		vercel.Chunk{
+			Type: vercel.ChunkSourceDocument, SourceID: "source-2", MediaType: "application/pdf",
+			Title: "Document", Filename: "document.pdf",
+		},
+		vercel.Chunk{Type: vercel.ChunkFile, URL: "data:text/plain;base64,aGk=", MediaType: "text/plain"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data["nested"].(map[string]any)["value"] = "changed"
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{
+			ToolCallID: "call", Content: "done", Metadata: metadata,
+		}}, nil)
+	})
+	var chunks []vercel.Chunk
+	for chunk, err := range vercel.TransformStream(stream, "") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	custom := chunks[chunkIndex(chunks, "data-custom")]
+	if custom.ID != "data-1" || custom.Data.(map[string]any)["nested"].(map[string]any)["value"] != "original" {
+		t.Fatalf("unexpected custom data chunk: %#v", custom)
+	}
+	nullChunk := chunks[chunkIndex(chunks, "data-null")]
+	encoded, err := json.Marshal(nullChunk)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"data":null`) || !strings.Contains(string(encoded), `"transient":true`) {
+		t.Fatalf("unexpected null data chunk: %s", encoded)
+	}
+	source := chunks[chunkIndex(chunks, vercel.ChunkSourceURL)]
+	document := chunks[chunkIndex(chunks, vercel.ChunkSourceDocument)]
+	file := chunks[chunkIndex(chunks, vercel.ChunkFile)]
+	if source.SourceID != "source-1" || source.Title != "Example" ||
+		source.ProviderMetadata["provider"].(map[string]any)["id"] != "citation" ||
+		document.SourceID != "source-2" || document.Filename != "document.pdf" ||
+		file.MediaType != "text/plain" {
+		t.Fatalf("unexpected data-carrying chunks: source=%#v document=%#v file=%#v", source, document, file)
+	}
+	custom.Data.(map[string]any)["nested"].(map[string]any)["value"] = "client"
+	stored := metadata["pydantic_ai_go_vercel_chunks"].([]any)[0].(map[string]any)
+	if stored["data"].(map[string]any)["nested"].(map[string]any)["value"] != "original" {
+		t.Fatal("emitted custom data shares tool metadata")
+	}
+}
+
+func TestToolResultMetadataValidation(t *testing.T) {
+	tests := []vercel.Chunk{
+		{Type: vercel.ChunkStart},
+		{Type: vercel.ChunkSourceURL},
+		{Type: vercel.ChunkSourceDocument},
+		{Type: vercel.ChunkFile},
+		{Type: "data-bad", Data: func() {}},
+	}
+	for _, chunk := range tests {
+		if _, err := vercel.ToolResultMetadata(chunk); err == nil {
+			t.Fatalf("expected validation error for %#v", chunk)
+		}
+	}
+	for _, value := range []any{
+		"invalid",
+		[]any{func() {}},
+		[]any{map[string]any{"type": 1}},
+		[]any{map[string]any{"type": "start"}},
+	} {
+		stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+			yield(ai.OutputToolResultEvent{Part: ai.ToolReturnPart{Metadata: map[string]any{
+				"pydantic_ai_go_vercel_chunks": value,
+			}}}, nil)
+		})
+		var got error
+		for _, err := range vercel.TransformStream(stream, "") {
+			got = err
+		}
+		if got == nil {
+			t.Fatalf("expected malformed tool result metadata error for %#v", value)
+		}
+	}
+}
+
+func TestTransformToolResultConsumerStops(t *testing.T) {
+	metadata, err := vercel.ToolResultMetadata(vercel.Chunk{Type: "data-custom", Data: "value"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []ai.StreamEvent{
+		ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "call", Content: "done", Metadata: metadata}},
+		ai.OutputToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "call", Content: "done", Metadata: metadata}},
+	} {
+		stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) { yield(event, nil) })
+		vercel.TransformStream(stream, "")(func(chunk vercel.Chunk, _ error) bool {
+			return chunk.Type != vercel.ChunkToolOutputAvailable
+		})
+	}
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{
+			ToolCallID: "call", Content: "done", Metadata: metadata,
+		}}, nil)
+	})
+	vercel.TransformStream(stream, "")(func(chunk vercel.Chunk, _ error) bool {
+		return chunk.Type != "data-custom"
+	})
 }
 
 func TestTransformExternalToolMetadata(t *testing.T) {

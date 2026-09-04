@@ -121,7 +121,9 @@ func userMessage(parts []UIMessagePart) ([]ai.RequestPart, error) {
 			}
 			contents = append(contents, file)
 		case string(ChunkDataToolAvailability):
-			requestParts = append(requestParts, toolAvailabilityPart(part.Data))
+			if data, ok := part.Data.(map[string]any); ok {
+				requestParts = append(requestParts, toolAvailabilityPart(data))
+			}
 		default:
 			if !strings.HasPrefix(part.Type, "data-") {
 				return nil, fmt.Errorf("vercel: unsupported user part %q", part.Type)
@@ -174,10 +176,22 @@ func assistantMessage(
 				ProviderDetails: cloneMap(metadata.providerDetails),
 			})
 		case part.Type == string(ChunkDataCompaction):
-			if compaction, ok := compactionPart(part.Data); ok {
-				response.Parts = append(response.Parts, compaction)
+			if data, ok := part.Data.(map[string]any); ok {
+				if compaction, ok := compactionPart(data); ok {
+					response.Parts = append(response.Parts, compaction)
+				}
 			}
-		case strings.HasPrefix(part.Type, "data-"):
+		case part.Type == string(ChunkSourceURL):
+			if part.SourceID == "" || part.URL == "" {
+				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: source-url requires sourceId and url")
+			}
+		case part.Type == string(ChunkSourceDocument):
+			if part.SourceID == "" || part.MediaType == "" || part.Title == "" {
+				return ai.ModelResponse{}, nil, fmt.Errorf(
+					"vercel: source-document requires sourceId, mediaType, and title",
+				)
+			}
+		case strings.HasPrefix(part.Type, "data-"), part.Type == "step-start":
 		case strings.HasPrefix(part.Type, "tool-"):
 			if part.ToolCallID == "" {
 				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: tool part requires a toolCallId")

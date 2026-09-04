@@ -177,9 +177,15 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 	case ai.OutputToolCallEvent:
 		return state.toolAvailable(yield, value.Part, false)
 	case ai.FunctionToolResultEvent:
-		return state.requestResult(yield, value.Part, false)
+		if !state.requestResult(yield, value.Part, false) {
+			return false
+		}
+		return state.resultChunks(yield, value.Part)
 	case ai.OutputToolResultEvent:
-		return state.requestResult(yield, value.Part, false)
+		if !state.requestResult(yield, value.Part, false) {
+			return false
+		}
+		return state.resultChunks(yield, value.Part)
 	case ai.ToolAvailabilityDeltaEvent:
 		return yield(Chunk{Type: ChunkDataToolAvailability, Data: toolAvailabilityData(value.Part)}, nil)
 	case ai.DeferredToolRequestsEvent:
@@ -207,6 +213,24 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		state.finishReason = vercelFinishReason(value.FinishReason)
 		state.messageMetadata = dumpMessageMetadata(value.Metadata, value.Timestamp)
 		return state.finishStep(yield)
+	}
+	return true
+}
+
+func (state *transformState) resultChunks(yield func(Chunk, error) bool, part ai.RequestPart) bool {
+	result, ok := part.(ai.ToolReturnPart)
+	if !ok {
+		return true
+	}
+	chunks, err := toolResultChunks(result.Metadata)
+	if err != nil {
+		yield(Chunk{Type: ChunkError, ErrorText: err.Error()}, err)
+		return false
+	}
+	for _, chunk := range chunks {
+		if !yield(chunk, nil) {
+			return false
+		}
 	}
 	return true
 }

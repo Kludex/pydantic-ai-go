@@ -3,6 +3,7 @@ package vercel
 
 import (
 	"encoding/json"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -51,6 +52,10 @@ const (
 	ChunkToolApprovalRequest ChunkType = "tool-approval-request"
 	// ChunkFile carries one model-generated file as a data URL.
 	ChunkFile ChunkType = "file"
+	// ChunkSourceURL carries one cited URL.
+	ChunkSourceURL ChunkType = "source-url"
+	// ChunkSourceDocument carries one cited document.
+	ChunkSourceDocument ChunkType = "source-document"
 	// ChunkDataCompaction carries a durable compaction boundary.
 	ChunkDataCompaction ChunkType = "data-compaction"
 	// ChunkDataToolAvailability carries tools revealed by an earlier result.
@@ -85,18 +90,39 @@ type Chunk struct {
 	ProviderExecuted *bool `json:"providerExecuted,omitempty"`
 	// ApprovalID identifies one tool approval request.
 	ApprovalID string `json:"approvalId,omitempty"`
-	// URL contains a generated file as a data URL.
+	// URL contains a generated file or cited source URL.
 	URL string `json:"url,omitempty"`
-	// MediaType is the IANA media type of a file.
+	// MediaType is the IANA media type of a file or document source.
 	MediaType string `json:"mediaType,omitempty"`
+	// Filename is the optional name of a document source.
+	Filename string `json:"filename,omitempty"`
+	// SourceID identifies one cited source.
+	SourceID string `json:"sourceId,omitempty"`
+	// Title is the display title of a cited source.
+	Title string `json:"title,omitempty"`
 	// Data contains a protocol-specific data-part payload.
-	Data map[string]any `json:"data,omitempty"`
+	Data any `json:"data,omitempty"`
+	// Transient prevents a custom data part from entering UI message history.
+	Transient bool `json:"transient,omitempty"`
 	// ProviderMetadata preserves provider-specific part state.
 	ProviderMetadata map[string]any `json:"providerMetadata,omitempty"`
 	// MessageMetadata preserves application metadata and the response timestamp.
 	MessageMetadata map[string]any `json:"messageMetadata,omitempty"`
 	// Reason explains why a run was aborted.
 	Reason string `json:"reason,omitempty"`
+}
+
+// MarshalJSON preserves the required data field on custom data chunks, including JSON null.
+func (c Chunk) MarshalJSON() ([]byte, error) {
+	type chunk Chunk
+	if !strings.HasPrefix(string(c.Type), "data-") {
+		return json.Marshal(chunk(c))
+	}
+	encoded, err := json.Marshal(chunk(c))
+	if err != nil || c.Data != nil {
+		return encoded, err
+	}
+	return append(encoded[:len(encoded)-1], `,"data":null}`...), nil
 }
 
 // RequestData is a Vercel AI submit-message or regenerate-message request.
@@ -125,7 +151,7 @@ type UIMessage struct {
 
 // UIMessagePart is the supported subset of a Vercel AI message part.
 type UIMessagePart struct {
-	// Type is text, reasoning, or a tool-name-prefixed discriminator.
+	// Type identifies a text, reasoning, file, source, data, or tool part.
 	Type string `json:"type"`
 	// Text contains text or reasoning content.
 	Text string `json:"text,omitempty"`
@@ -147,9 +173,13 @@ type UIMessagePart struct {
 	MediaType string `json:"mediaType,omitempty"`
 	// Filename is the optional display name supplied by the client.
 	Filename string `json:"filename,omitempty"`
+	// SourceID identifies one cited source.
+	SourceID string `json:"sourceId,omitempty"`
+	// Title is the display title of a cited source.
+	Title string `json:"title,omitempty"`
 	// Data contains a data-name-prefixed part payload.
-	Data map[string]any `json:"data,omitempty"`
-	// ProviderMetadata preserves provider-specific text, reasoning, or file state.
+	Data any `json:"data,omitempty"`
+	// ProviderMetadata preserves provider-specific text, reasoning, file, or source state.
 	ProviderMetadata map[string]any `json:"providerMetadata,omitempty"`
 	// CallProviderMetadata preserves provider-specific tool-call state.
 	CallProviderMetadata map[string]any `json:"callProviderMetadata,omitempty"`

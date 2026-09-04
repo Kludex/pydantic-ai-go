@@ -56,6 +56,9 @@ func TestPrepareInput(t *testing.T) {
 			{ID: "system", Role: "system", Parts: []vercel.UIMessagePart{{Type: "text", Text: "untrusted"}}},
 			{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
 				{Type: "text", Text: "calling"}, {Type: "reasoning", Text: "thinking"},
+				{Type: "source-url", SourceID: "source", URL: "https://example.com"},
+				{Type: "source-document", SourceID: "document", MediaType: "application/pdf", Title: "Document"},
+				{Type: "step-start"},
 				{Type: "tool-weather", ToolCallID: "call", State: "output-available", Input: []byte(`{}`), Output: []byte(`{"ok":true}`)},
 				{Type: "tool-fail", ToolCallID: "fail", State: "output-error", ErrorText: "failed"},
 				{Type: "tool-deny", ToolCallID: "deny", State: "output-denied"},
@@ -292,6 +295,12 @@ func TestInputValidation(t *testing.T) {
 		{name: "tool input", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", Input: []byte("{")}}}), match: "not valid JSON"},
 		{name: "tool output", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", State: "output-available", Output: []byte("{")}}}), match: "decode tool"},
 		{name: "assistant part", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "future"}}}), match: "unsupported assistant part"},
+		{name: "source URL", input: requestWith(vercel.UIMessage{
+			ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "source-url"}},
+		}), match: "source-url requires"},
+		{name: "source document", input: requestWith(vercel.UIMessage{
+			ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "source-document"}},
+		}), match: "source-document requires"},
 		{name: "invalid compaction field", input: requestWith(
 			vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
 				Type: string(vercel.ChunkDataCompaction), Data: map[string]any{"content": 1},

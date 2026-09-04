@@ -160,13 +160,15 @@ func resumeApproval(entry ResumeEntry) ai.ToolApproval {
 
 func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessage, error) {
 	converted := make([]ai.ModelMessage, 0, len(messages))
+	toolNames := map[string]string{}
+	toolKinds := map[string]ai.ToolPartKind{}
 	for _, message := range messages {
 		if message.ID == "" {
 			return nil, fmt.Errorf("agui: message ID must not be empty")
 		}
 		switch message.Role {
-		case "system":
-			content, err := textMessageContent(message.Content, "system")
+		case "system", "developer":
+			content, err := textMessageContent(message.Content, message.Role)
 			if err != nil {
 				return nil, err
 			}
@@ -244,9 +246,22 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 				if !json.Valid(args) {
 					return nil, fmt.Errorf("agui: tool call %q arguments are not valid JSON", call.ID)
 				}
-				parts = append(parts, ai.ToolCallPart{
-					ToolName: call.Function.Name, ToolCallID: call.ID, Args: append(json.RawMessage(nil), args...),
-				})
+				toolNames[call.ID] = call.Function.Name
+				kind, _ := encryptedToolMetadata(call.EncryptedValue)
+				if kind != "" {
+					toolKinds[call.ID] = kind
+				}
+				if providerName, originalID, ok := nativeToolCallID(call.ID); ok {
+					parts = append(parts, ai.NativeToolCallPart{
+						ToolName: call.Function.Name, ToolCallID: originalID, Args: append(json.RawMessage(nil), args...),
+						ProviderName: providerName, ToolKind: kind,
+					})
+				} else {
+					parts = append(parts, ai.ToolCallPart{
+						ToolName: call.Function.Name, ToolCallID: call.ID, Args: append(json.RawMessage(nil), args...),
+						ToolKind: kind,
+					})
+				}
 			}
 			converted = appendResponse(converted, parts)
 		case "tool":
@@ -259,14 +274,72 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 			}
 			var content any
 			_ = json.Unmarshal(encoded, &content)
-			converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{
-				ToolName: message.Name, ToolCallID: message.ToolCallID, Content: content,
-			}}})
+			toolName := toolNames[message.ToolCallID]
+			if toolName == "" {
+				toolName = message.Name
+			}
+			kind, outcome := encryptedToolMetadata(message.EncryptedValue)
+			if outcome == "" {
+				if kind == "" {
+					kind = toolKinds[message.ToolCallID]
+				}
+				outcome = ai.ToolReturnOutcomeSuccess
+			}
+			if message.Error != "" && outcome == ai.ToolReturnOutcomeSuccess {
+				outcome = ai.ToolReturnOutcomeFailed
+				kind = ""
+			}
+			if providerName, originalID, ok := nativeToolCallID(message.ToolCallID); ok {
+				converted = appendResponse(converted, []ai.ResponsePart{ai.NativeToolReturnPart{
+					ToolName: toolName, ToolCallID: originalID, Content: content, ProviderName: providerName,
+					ToolKind: kind, Outcome: outcome,
+				}})
+			} else {
+				converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{
+					ToolName: toolName, ToolCallID: message.ToolCallID, Content: content, ToolKind: kind, Outcome: outcome,
+				}}})
+			}
 		default:
 			return nil, fmt.Errorf("agui: unsupported message role %q", message.Role)
 		}
 	}
 	return converted, nil
+}
+
+func encryptedToolMetadata(value string) (ai.ToolPartKind, ai.ToolReturnOutcome) {
+	var metadata struct {
+		PydanticAI struct {
+			ToolKind string `json:"tool_kind"`
+			Outcome  string `json:"outcome"`
+		} `json:"pydantic_ai"`
+	}
+	if json.Unmarshal([]byte(value), &metadata) != nil {
+		return "", ""
+	}
+	kind := ai.ToolPartKind(metadata.PydanticAI.ToolKind)
+	switch kind {
+	case ai.ToolPartKindToolSearch, ai.ToolPartKindCapabilityLoad, ai.ToolPartKindWebSearch,
+		ai.ToolPartKindWebFetch, ai.ToolPartKindCodeExecution, ai.ToolPartKindImageGeneration,
+		ai.ToolPartKindFileSearch, ai.ToolPartKindMCPServer, ai.ToolPartKindAdvisor:
+	default:
+		kind = ""
+	}
+	outcome := ai.ToolReturnOutcome(metadata.PydanticAI.Outcome)
+	switch outcome {
+	case ai.ToolReturnOutcomeFailed, ai.ToolReturnOutcomeDenied, ai.ToolReturnOutcomeInterrupted:
+		kind = ""
+	default:
+		outcome = ""
+	}
+	return kind, outcome
+}
+
+func nativeToolCallID(value string) (string, string, bool) {
+	parts := strings.SplitN(value, "|", 3)
+	if len(parts) != 3 || parts[0] != "pyd_ai_builtin" || parts[2] == "" {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
 }
 
 func fileActivityPart(content map[string]any) (ai.FilePart, error) {

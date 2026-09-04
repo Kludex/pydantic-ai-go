@@ -179,6 +179,14 @@ AG-UI `0.1.19` and later receives `ACTIVITY_SNAPSHOT` events for provider-neutra
 
 Keep those activity messages in client-held history. The adapter reconstructs `CompactionPart` and `ToolAvailabilityDeltaPart` values on the next request. Unknown application activity types remain UI-only and are not sent to the model. Older protocol versions omit activity events.
 
+## Preserve typed tools
+
+AG-UI `0.1.13` and later receives namespaced `REASONING_ENCRYPTED_VALUE` events for typed tool calls and non-successful results. Echo those encrypted values on `ToolCall.encryptedValue` and tool-message `encryptedValue` fields. The adapter accepts only known tool kinds and failed, denied, or interrupted outcomes. Invalid client claims degrade to ordinary tool history.
+
+Provider-native calls use `pyd_ai_builtin|<provider>|<call-id>` protocol IDs. The adapter restores the original provider and call ID when history returns.
+
+System and developer messages both become system prompt parts. Secure sanitization still removes them unless you explicitly set `AllowSystemPrompts`.
+
 ## Event ordering
 
 Each model response owns one assistant message. The adapter emits `TEXT_MESSAGE_START` before text or tool-call events from that response. A tool call uses that message ID as `parentMessageId`, including responses that start with a tool and contain no text.
@@ -189,4 +197,4 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 The adapter supports text and multimodal user messages, assistant reasoning, function calls, structured tool results, secure client-held history, versioned thinking and reasoning streams, normalized text and tool streaming, event timestamps, cancellation, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-Developer-role messages, encrypted typed-tool history, and raw provider event metadata remain.
+The adapter covers the audited AG-UI message, interrupt, and event surface.

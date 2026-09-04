@@ -220,6 +220,8 @@ type Message struct {
 	ToolCallID string `json:"toolCallId,omitempty"`
 	// Name is the function name for a tool result.
 	Name string `json:"name,omitempty"`
+	// Error contains frontend-provided tool failure text.
+	Error string `json:"error,omitempty"`
 	// EncryptedValue preserves reasoning or typed-tool metadata.
 	EncryptedValue string `json:"encryptedValue,omitempty"`
 	// ActivityType identifies an activity message contract.
@@ -262,6 +264,8 @@ type ToolCall struct {
 	Type string `json:"type"`
 	// Function contains the name and encoded arguments.
 	Function ToolCallFunction `json:"function"`
+	// EncryptedValue preserves namespaced typed-tool metadata.
+	EncryptedValue string `json:"encryptedValue,omitempty"`
 }
 
 // ToolCallFunction describes one AG-UI function call.

@@ -26,6 +26,7 @@ type eventTransformer struct {
 	activity         int
 	calls            map[string]bool
 	partCalls        map[string]string
+	nativeCalls      map[string]string
 	partActivities   map[string]string
 	outcome          RunOutcome
 	stopped          bool
@@ -62,16 +63,22 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 			}
 		case ai.ToolCallPart:
 			transformer.partCalls[value.PartID] = part.ToolCallID
-			transformer.startToolCall(yield, part.ToolCallID, part.ToolName, string(part.Args))
+			transformer.startToolCall(yield, part.ToolCallID, part.ToolName, string(part.Args), part.ToolKind)
 		case ai.NativeToolCallPart:
-			transformer.partCalls[value.PartID] = part.ToolCallID
-			transformer.startToolCall(yield, part.ToolCallID, part.ToolName, string(part.Args))
+			protocolID := nativeProtocolToolCallID(part.ProviderName, part.ToolCallID)
+			transformer.partCalls[value.PartID] = protocolID
+			transformer.nativeCalls[part.ToolCallID] = protocolID
+			transformer.startToolCall(yield, protocolID, part.ToolName, string(part.Args), part.ToolKind)
 		case ai.NativeToolReturnPart:
 			content, err := encodeResult(part.Content)
 			if err != nil {
 				return err
 			}
-			transformer.toolResult(yield, part.ToolCallID, content)
+			protocolID := transformer.nativeCalls[part.ToolCallID]
+			if protocolID == "" {
+				protocolID = nativeProtocolToolCallID(part.ProviderName, part.ToolCallID)
+			}
+			transformer.toolResult(yield, protocolID, content, part.ToolKind, part.Outcome)
 		}
 	case ai.PartDeltaEvent:
 		switch delta := value.Delta.(type) {
@@ -118,21 +125,23 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 			transformer.endReasoning(yield, part)
 		}
 	case ai.FunctionToolCallEvent:
-		transformer.endToolCall(yield, value.Part.ToolCallID, value.Part.ToolName, string(value.Part.Args))
+		transformer.endToolCall(yield, value.Part.ToolCallID, value.Part.ToolName, string(value.Part.Args), value.Part.ToolKind)
 	case ai.OutputToolCallEvent:
-		transformer.endToolCall(yield, value.Part.ToolCallID, value.Part.ToolName, string(value.Part.Args))
+		transformer.endToolCall(yield, value.Part.ToolCallID, value.Part.ToolName, string(value.Part.Args), value.Part.ToolKind)
 	case ai.FunctionToolResultEvent:
 		toolCallID, content, err := resultContent(value.Part)
 		if err != nil {
 			return err
 		}
-		transformer.toolResult(yield, toolCallID, content)
+		kind, outcome := toolResultMetadata(value.Part)
+		transformer.toolResult(yield, toolCallID, content, kind, outcome)
 	case ai.OutputToolResultEvent:
 		toolCallID, content, err := resultContent(value.Part)
 		if err != nil {
 			return err
 		}
-		transformer.toolResult(yield, toolCallID, content)
+		kind, outcome := toolResultMetadata(value.Part)
+		transformer.toolResult(yield, toolCallID, content, kind, outcome)
 	case ai.ToolAvailabilityDeltaEvent:
 		transformer.activitySnapshot(yield, "pydantic_ai_tool_availability_delta", map[string]any{
 			"added": append([]string(nil), value.Part.ToolsAdded...), "tool_call_id": value.Part.ToolCallID,
@@ -352,7 +361,7 @@ func (transformer *eventTransformer) closeMessage(yield func(Event, error) bool)
 }
 
 func (transformer *eventTransformer) startToolCall(
-	yield func(Event, error) bool, toolCallID string, name string, args string,
+	yield func(Event, error) bool, toolCallID string, name string, args string, kind ai.ToolPartKind,
 ) {
 	if transformer.calls[toolCallID] {
 		return
@@ -367,16 +376,22 @@ func (transformer *eventTransformer) startToolCall(
 	}, nil) {
 		return
 	}
+	if kind != "" && transformer.version.atLeast(0, 1, 13) {
+		yield(Event{
+			Type: EventReasoningEncryptedValue, Subtype: "tool-call", EntityID: toolCallID,
+			EncryptedValue: encryptedToolValue(kind, ""),
+		}, nil)
+	}
 	if args != "" {
 		yield(Event{Type: EventToolCallArgs, ToolCallID: toolCallID, Delta: args}, nil)
 	}
 }
 
 func (transformer *eventTransformer) endToolCall(
-	yield func(Event, error) bool, toolCallID string, name string, args string,
+	yield func(Event, error) bool, toolCallID string, name string, args string, kind ai.ToolPartKind,
 ) {
 	if _, exists := transformer.calls[toolCallID]; !exists {
-		transformer.startToolCall(yield, toolCallID, name, args)
+		transformer.startToolCall(yield, toolCallID, name, args, kind)
 	}
 	if transformer.calls[toolCallID] {
 		return
@@ -385,12 +400,44 @@ func (transformer *eventTransformer) endToolCall(
 	yield(Event{Type: EventToolCallEnd, ToolCallID: toolCallID}, nil)
 }
 
-func (transformer *eventTransformer) toolResult(yield func(Event, error) bool, toolCallID string, content string) {
+func (transformer *eventTransformer) toolResult(
+	yield func(Event, error) bool, toolCallID string, content string,
+	kind ai.ToolPartKind, outcome ai.ToolReturnOutcome,
+) {
 	transformer.result++
+	messageID := fmt.Sprintf("%s:tool:%d", transformer.runID, transformer.result)
 	yield(Event{
-		Type: EventToolCallResult, MessageID: fmt.Sprintf("%s:tool:%d", transformer.runID, transformer.result),
-		Role: "tool", ToolCallID: toolCallID, Content: content,
+		Type: EventToolCallResult, MessageID: messageID, Role: "tool", ToolCallID: toolCallID, Content: content,
 	}, nil)
+	if outcome != "" && outcome != ai.ToolReturnOutcomeSuccess && transformer.version.atLeast(0, 1, 13) {
+		yield(Event{
+			Type: EventReasoningEncryptedValue, Subtype: "message", EntityID: messageID,
+			EncryptedValue: encryptedToolValue(kind, outcome),
+		}, nil)
+	}
+}
+
+func toolResultMetadata(part ai.RequestPart) (ai.ToolPartKind, ai.ToolReturnOutcome) {
+	if value, ok := part.(ai.ToolReturnPart); ok {
+		return value.ToolKind, value.Outcome
+	}
+	return "", ""
+}
+
+func encryptedToolValue(kind ai.ToolPartKind, outcome ai.ToolReturnOutcome) string {
+	payload := map[string]any{}
+	if kind != "" {
+		payload["tool_kind"] = kind
+	}
+	if outcome != "" && outcome != ai.ToolReturnOutcomeSuccess {
+		payload["outcome"] = outcome
+	}
+	encoded, _ := json.Marshal(map[string]any{"pydantic_ai": payload})
+	return string(encoded)
+}
+
+func nativeProtocolToolCallID(providerName string, toolCallID string) string {
+	return "pyd_ai_builtin|" + providerName + "|" + toolCallID
 }
 
 func externalResultResponseSchema() map[string]any {

@@ -145,8 +145,9 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 		}
 		transformer := eventTransformer{
 			runID: runID, version: version, preserveFileData: config.PreserveFileData,
-			calls: map[string]bool{}, partCalls: map[string]string{}, partActivities: map[string]string{},
-			outcome: RunOutcome{Type: "success"},
+			calls: map[string]bool{}, partCalls: map[string]string{}, nativeCalls: map[string]string{},
+			partActivities: map[string]string{},
+			outcome:        RunOutcome{Type: "success"},
 		}
 		for event, eventErr := range stream {
 			if eventErr != nil {

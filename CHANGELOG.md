@@ -38,6 +38,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Forward detached AG-UI state, context, custom properties, and resolved run IDs to dependencies implementing `RunInputReceiver`.
 - Add a run-scoped AG-UI queue for state snapshots, JSON Patch deltas, and custom events.
 - Widen AG-UI `Event.Delta` to carry state patch arrays as well as streamed text.
+- Preserve AG-UI developer messages, typed-tool kinds, failed outcomes, and provider-native identities through encrypted metadata and echoed history.
 
 ### Deprecated
 

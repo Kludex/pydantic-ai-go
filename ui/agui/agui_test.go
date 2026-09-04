@@ -154,6 +154,102 @@ func TestPrepareMultimodalInput(t *testing.T) {
 	}
 }
 
+func TestPrepareTypedToolHistory(t *testing.T) {
+	input := agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "developer", Role: "developer", Content: "trusted instruction"},
+		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{
+			{ID: "local", Function: agui.ToolCallFunction{Name: "search_tools", Arguments: `{}`},
+				EncryptedValue: `{"pydantic_ai":{"tool_kind":"tool-search"}}`},
+			{ID: "pyd_ai_builtin|openai|native", Function: agui.ToolCallFunction{Name: "web_search", Arguments: `{}`},
+				EncryptedValue: `{"pydantic_ai":{"tool_kind":"web-search"}}`},
+		}},
+		{ID: "local-result", Role: "tool", ToolCallID: "local", Content: "found"},
+		{ID: "native-result", Role: "tool", ToolCallID: "pyd_ai_builtin|openai|native", Content: "blocked",
+			EncryptedValue: `{"pydantic_ai":{"tool_kind":"web-search","outcome":"denied"}}`},
+		{ID: "user", Role: "user", Content: "continue"},
+	}}
+	prompt, history, _, err := agui.PrepareInput(input, ai.MessageSanitizationOptions{AllowSystemPrompts: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt.Content != "continue" || len(history) < 3 {
+		t.Fatalf("unexpected typed history: %#v %#v", prompt, history)
+	}
+	instruction := history[0].(ai.ModelRequest).Parts[0].(ai.SystemPromptPart)
+	var localCall ai.ToolCallPart
+	var nativeCall ai.NativeToolCallPart
+	var localResult ai.ToolReturnPart
+	var nativeResult ai.NativeToolReturnPart
+	for _, message := range history {
+		switch message := message.(type) {
+		case ai.ModelResponse:
+			for _, part := range message.Parts {
+				switch part := part.(type) {
+				case ai.ToolCallPart:
+					localCall = part
+				case ai.NativeToolCallPart:
+					nativeCall = part
+				case ai.NativeToolReturnPart:
+					nativeResult = part
+				}
+			}
+		case ai.ModelRequest:
+			for _, part := range message.Parts {
+				if value, ok := part.(ai.ToolReturnPart); ok {
+					localResult = value
+				}
+			}
+		}
+	}
+	if instruction.Content != "trusted instruction" || localCall.ToolKind != ai.ToolPartKindToolSearch ||
+		nativeCall.ToolCallID != "native" || nativeCall.ProviderName != "openai" ||
+		nativeCall.ToolKind != ai.ToolPartKindWebSearch || localResult.ToolName != "search_tools" ||
+		localResult.ToolKind != ai.ToolPartKindToolSearch || nativeResult.ToolName != "web_search" ||
+		nativeResult.Outcome != ai.ToolReturnOutcomeDenied || nativeResult.ToolKind != "" {
+		t.Fatalf("unexpected typed parts: %#v %#v %#v %#v", localCall, nativeCall, localResult, nativeResult)
+	}
+
+	input.Messages[1].ToolCalls[0].EncryptedValue = `not-json`
+	input.Messages[1].ToolCalls[1].ID = "pyd_ai_builtin|broken"
+	input.Messages[2].EncryptedValue = `{"pydantic_ai":{"tool_kind":"unknown","outcome":"unknown"}}`
+	input.Messages[3].ToolCallID = "pyd_ai_builtin|broken"
+	input.Messages[3].EncryptedValue = ""
+	input.Messages[3].Error = "failed"
+	_, history, _, err = agui.PrepareInput(input, ai.MessageSanitizationOptions{AllowSystemPrompts: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls []ai.ToolCallPart
+	var returns []ai.ToolReturnPart
+	for _, message := range history {
+		switch message := message.(type) {
+		case ai.ModelResponse:
+			for _, part := range message.Parts {
+				if value, ok := part.(ai.ToolCallPart); ok {
+					calls = append(calls, value)
+				}
+			}
+		case ai.ModelRequest:
+			for _, part := range message.Parts {
+				if value, ok := part.(ai.ToolReturnPart); ok {
+					returns = append(returns, value)
+				}
+			}
+		}
+	}
+	if len(calls) != 2 || len(returns) != 2 || calls[0].ToolKind != "" ||
+		returns[0].Outcome != ai.ToolReturnOutcomeSuccess || returns[1].Outcome != ai.ToolReturnOutcomeFailed {
+		t.Fatalf("malformed metadata did not degrade safely: %#v", history)
+	}
+	_, _, _, err = agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "orphan", Role: "tool", Name: "fallback", ToolCallID: "orphan", Content: "result"},
+		{ID: "user", Role: "user", Content: "continue"},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestPrepareActivities(t *testing.T) {
 	compaction := map[string]any{
 		"content": "summary", "id": "compact", "provider_name": "openai",

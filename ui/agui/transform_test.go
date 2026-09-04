@@ -1,6 +1,7 @@
 package agui_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"iter"
@@ -148,6 +149,55 @@ func TestTransformLazyReasoning(t *testing.T) {
 	}
 	if starts != 2 || encrypted != 1 {
 		t.Fatalf("unexpected lazy reasoning lifecycles: starts=%d encrypted=%d", starts, encrypted)
+	}
+}
+
+func TestTransformTypedToolMetadata(t *testing.T) {
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		call := ai.ToolCallPart{
+			ToolName: "load", ToolCallID: "call", Args: json.RawMessage(`{}`),
+			ToolKind: ai.ToolPartKindCapabilityLoad,
+		}
+		yield(ai.PartStartEvent{PartID: "call", Part: call}, nil)
+		yield(ai.FunctionToolCallEvent{Part: call}, nil)
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{
+			ToolName: "load", ToolCallID: "call", Content: "denied",
+			ToolKind: ai.ToolPartKindCapabilityLoad, Outcome: ai.ToolReturnOutcomeDenied,
+		}}, nil)
+		yield(ai.PartStartEvent{PartID: "native-result", Part: ai.NativeToolReturnPart{
+			ToolName: "search", ToolCallID: "native", ProviderName: "openai", Content: "found",
+		}}, nil)
+	})
+	var events []agui.Event
+	for event, err := range agui.TransformStream(stream, "thread", "run") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	var toolMetadata, resultMetadata *agui.Event
+	for index := range events {
+		event := &events[index]
+		if event.Type == agui.EventReasoningEncryptedValue && event.Subtype == "tool-call" {
+			toolMetadata = event
+		}
+		if event.Type == agui.EventReasoningEncryptedValue && event.Subtype == "message" {
+			resultMetadata = event
+		}
+	}
+	if toolMetadata == nil || toolMetadata.EntityID != "call" ||
+		!strings.Contains(toolMetadata.EncryptedValue, `"tool_kind":"capability-load"`) ||
+		resultMetadata == nil || !strings.Contains(resultMetadata.EncryptedValue, `"outcome":"denied"`) {
+		t.Fatalf("unexpected typed tool metadata: %#v", events)
+	}
+	native := events[eventIndex(events, agui.EventToolCallResult)]
+	for _, event := range events {
+		if event.Type == agui.EventToolCallResult && strings.HasPrefix(event.ToolCallID, "pyd_ai_builtin|") {
+			native = event
+		}
+	}
+	if native.ToolCallID != "pyd_ai_builtin|openai|native" {
+		t.Fatalf("unexpected native result identity: %#v", events)
 	}
 }
 

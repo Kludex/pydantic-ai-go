@@ -20,75 +20,114 @@ const (
 type DataCollection string
 
 const (
+	// DataCollectionAllow permits providers that retain request data.
 	DataCollectionAllow DataCollection = "allow"
-	DataCollectionDeny  DataCollection = "deny"
+	// DataCollectionDeny selects only providers that do not retain request data.
+	DataCollectionDeny DataCollection = "deny"
 )
 
 // ProviderSort selects how OpenRouter ranks eligible providers.
 type ProviderSort string
 
 const (
-	ProviderSortPrice      ProviderSort = "price"
+	// ProviderSortPrice prioritizes the lowest-cost provider.
+	ProviderSortPrice ProviderSort = "price"
+	// ProviderSortThroughput prioritizes generation throughput.
 	ProviderSortThroughput ProviderSort = "throughput"
-	ProviderSortLatency    ProviderSort = "latency"
+	// ProviderSortLatency prioritizes request latency.
+	ProviderSortLatency ProviderSort = "latency"
 )
 
 // Quantization identifies an upstream model's numeric representation.
 type Quantization string
 
 const (
-	QuantizationInt4    Quantization = "int4"
-	QuantizationInt8    Quantization = "int8"
-	QuantizationFP4     Quantization = "fp4"
-	QuantizationFP6     Quantization = "fp6"
-	QuantizationFP8     Quantization = "fp8"
-	QuantizationFP16    Quantization = "fp16"
-	QuantizationBF16    Quantization = "bf16"
-	QuantizationFP32    Quantization = "fp32"
+	// QuantizationInt4 selects 4-bit integer weights.
+	QuantizationInt4 Quantization = "int4"
+	// QuantizationInt8 selects 8-bit integer weights.
+	QuantizationInt8 Quantization = "int8"
+	// QuantizationFP4 selects 4-bit floating-point weights.
+	QuantizationFP4 Quantization = "fp4"
+	// QuantizationFP6 selects 6-bit floating-point weights.
+	QuantizationFP6 Quantization = "fp6"
+	// QuantizationFP8 selects 8-bit floating-point weights.
+	QuantizationFP8 Quantization = "fp8"
+	// QuantizationFP16 selects 16-bit floating-point weights.
+	QuantizationFP16 Quantization = "fp16"
+	// QuantizationBF16 selects bfloat16 weights.
+	QuantizationBF16 Quantization = "bf16"
+	// QuantizationFP32 selects 32-bit floating-point weights.
+	QuantizationFP32 Quantization = "fp32"
+	// QuantizationUnknown permits providers without reported quantization.
 	QuantizationUnknown Quantization = "unknown"
 )
 
 // MaxPrice caps OpenRouter prices in US dollars per million units.
 type MaxPrice struct {
-	Prompt     float64 `json:"prompt,omitempty"`
+	// Prompt caps prompt-token price.
+	Prompt float64 `json:"prompt,omitempty"`
+	// Completion caps completion-token price.
 	Completion float64 `json:"completion,omitempty"`
-	Image      float64 `json:"image,omitempty"`
-	Audio      float64 `json:"audio,omitempty"`
-	Request    float64 `json:"request,omitempty"`
+	// Image caps image-unit price.
+	Image float64 `json:"image,omitempty"`
+	// Audio caps audio-unit price.
+	Audio float64 `json:"audio,omitempty"`
+	// Request caps per-request price.
+	Request float64 `json:"request,omitempty"`
 }
 
 // ProviderRouting controls which upstream providers OpenRouter may use.
 type ProviderRouting struct {
-	Order             []string       `json:"order,omitempty"`
-	AllowFallbacks    *bool          `json:"allow_fallbacks,omitempty"`
-	RequireParameters *bool          `json:"require_parameters,omitempty"`
-	DataCollection    DataCollection `json:"data_collection,omitempty"`
-	ZeroDataRetention *bool          `json:"zdr,omitempty"`
-	Only              []string       `json:"only,omitempty"`
-	Ignore            []string       `json:"ignore,omitempty"`
-	Quantizations     []Quantization `json:"quantizations,omitempty"`
-	Sort              ProviderSort   `json:"sort,omitempty"`
-	MaxPrice          *MaxPrice      `json:"max_price,omitempty"`
+	// Order lists preferred providers in priority order.
+	Order []string `json:"order,omitempty"`
+	// AllowFallbacks permits routing beyond the preferred provider.
+	AllowFallbacks *bool `json:"allow_fallbacks,omitempty"`
+	// RequireParameters selects providers supporting every request parameter.
+	RequireParameters *bool `json:"require_parameters,omitempty"`
+	// DataCollection controls provider retention policy.
+	DataCollection DataCollection `json:"data_collection,omitempty"`
+	// ZeroDataRetention requires a zero-data-retention provider.
+	ZeroDataRetention *bool `json:"zdr,omitempty"`
+	// Only restricts routing to these providers.
+	Only []string `json:"only,omitempty"`
+	// Ignore excludes these providers.
+	Ignore []string `json:"ignore,omitempty"`
+	// Quantizations restricts acceptable model representations.
+	Quantizations []Quantization `json:"quantizations,omitempty"`
+	// Sort selects provider ranking behavior.
+	Sort ProviderSort `json:"sort,omitempty"`
+	// MaxPrice rejects providers above any configured price cap.
+	MaxPrice *MaxPrice `json:"max_price,omitempty"`
 }
 
 // ReasoningEffort controls OpenRouter reasoning depth.
 type ReasoningEffort string
 
 const (
-	ReasoningEffortNone    ReasoningEffort = "none"
+	// ReasoningEffortNone disables reasoning.
+	ReasoningEffortNone ReasoningEffort = "none"
+	// ReasoningEffortMinimal requests minimal reasoning.
 	ReasoningEffortMinimal ReasoningEffort = "minimal"
-	ReasoningEffortLow     ReasoningEffort = "low"
-	ReasoningEffortMedium  ReasoningEffort = "medium"
-	ReasoningEffortHigh    ReasoningEffort = "high"
-	ReasoningEffortXHigh   ReasoningEffort = "xhigh"
+	// ReasoningEffortLow requests low reasoning effort.
+	ReasoningEffortLow ReasoningEffort = "low"
+	// ReasoningEffortMedium requests medium reasoning effort.
+	ReasoningEffortMedium ReasoningEffort = "medium"
+	// ReasoningEffortHigh requests high reasoning effort.
+	ReasoningEffortHigh ReasoningEffort = "high"
+	// ReasoningEffortXHigh requests the highest available reasoning effort.
+	ReasoningEffortXHigh ReasoningEffort = "xhigh"
 )
 
 // Reasoning configures OpenRouter's cross-provider reasoning extension.
 type Reasoning struct {
-	Effort    ReasoningEffort `json:"effort,omitempty"`
-	MaxTokens int             `json:"max_tokens,omitempty"`
-	Exclude   *bool           `json:"exclude,omitempty"`
-	Enabled   *bool           `json:"enabled,omitempty"`
+	// Effort selects a provider-portable reasoning depth.
+	Effort ReasoningEffort `json:"effort,omitempty"`
+	// MaxTokens limits reasoning tokens.
+	MaxTokens int `json:"max_tokens,omitempty"`
+	// Exclude omits reasoning content from the response.
+	Exclude *bool `json:"exclude,omitempty"`
+	// Enabled explicitly enables or disables reasoning.
+	Enabled *bool `json:"enabled,omitempty"`
 }
 
 // IsEnabled reports whether this configuration requests reasoning.
@@ -101,8 +140,10 @@ func (reasoning Reasoning) IsEnabled() bool {
 type CacheTTL string
 
 const (
+	// CacheTTL5Minutes keeps a cache breakpoint for five minutes.
 	CacheTTL5Minutes CacheTTL = "5m"
-	CacheTTL1Hour    CacheTTL = "1h"
+	// CacheTTL1Hour keeps a cache breakpoint for one hour.
+	CacheTTL1Hour CacheTTL = "1h"
 )
 
 const (
@@ -113,20 +154,31 @@ const (
 
 // UsageConfig requests OpenRouter's extended usage and cost fields.
 type UsageConfig struct {
+	// Include requests detailed token usage and provider cost.
 	Include bool `json:"include"`
 }
 
 // Settings combines portable settings with OpenRouter routing extensions.
 type Settings struct {
-	Common               ai.ModelSettings
-	Models               []string
-	Provider             *ProviderRouting
-	Preset               string
-	Transforms           []Transform
-	Reasoning            *Reasoning
-	Usage                *UsageConfig
-	CacheInstructions    CacheTTL
-	CacheMessages        CacheTTL
+	// Common contains portable model settings.
+	Common ai.ModelSettings
+	// Models lists fallback model IDs in priority order.
+	Models []string
+	// Provider controls upstream routing.
+	Provider *ProviderRouting
+	// Preset applies a saved OpenRouter request preset.
+	Preset string
+	// Transforms modify prompts before provider dispatch.
+	Transforms []Transform
+	// Reasoning configures OpenRouter's reasoning extension.
+	Reasoning *Reasoning
+	// Usage requests detailed provider usage.
+	Usage *UsageConfig
+	// CacheInstructions caches the final stable instruction boundary.
+	CacheInstructions CacheTTL
+	// CacheMessages caches recent message boundaries.
+	CacheMessages CacheTTL
+	// CacheToolDefinitions caches the final function-tool definition.
 	CacheToolDefinitions CacheTTL
 }
 

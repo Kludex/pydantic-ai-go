@@ -337,7 +337,9 @@ func TestRequestTextResponse(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"id": "message-1", "model": "claude-sonnet-4-5", "stop_reason": "end_turn",
 			"service_tier": "standard",
-			"content": [{"type": "text", "text": "Hello!"}],
+			"content": [{"type": "text", "text": "Hello!", "citations": [{
+				"type": "char_location", "cited_text": "Hello", "start_char_index": 0, "end_char_index": 5
+			}]}],
 			"usage": {
 				"input_tokens": 12, "output_tokens": 3,
 				"cache_creation_input_tokens": 3, "cache_read_input_tokens": 4
@@ -369,6 +371,16 @@ func TestRequestTextResponse(t *testing.T) {
 	}
 	if resp.Text() != "Hello!" {
 		t.Fatalf("unexpected text %q", resp.Text())
+	}
+	text := resp.Parts[0].(ai.TextPart)
+	citations := text.ProviderDetails["citations"].([]map[string]any)
+	if len(citations) != 1 || citations[0]["type"] != "char_location" || citations[0]["cited_text"] != "Hello" {
+		t.Fatalf("unexpected citations: %#v", citations)
+	}
+	cloned := ai.ModelRequestContext{Messages: []ai.ModelMessage{*resp}}.Clone().Messages[0].(ai.ModelResponse)
+	citations[0]["type"] = "mutated"
+	if cloned.Parts[0].(ai.TextPart).ProviderDetails["citations"].([]map[string]any)[0]["type"] != "char_location" {
+		t.Fatal("response cloning shared citation metadata")
 	}
 	if resp.ProviderName != "anthropic" || resp.ProviderURL == "" || resp.ProviderResponseID != "message-1" ||
 		resp.FinishReason != ai.FinishReasonStop || resp.ProviderDetails["finish_reason"] != "end_turn" ||

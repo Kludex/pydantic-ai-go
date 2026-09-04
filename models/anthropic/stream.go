@@ -67,12 +67,13 @@ type streamEvent struct {
 	} `json:"message"`
 	ContentBlock responseContentBlock `json:"content_block"`
 	Delta        struct {
-		Type        string `json:"type"`
-		StopReason  string `json:"stop_reason"`
-		Text        string `json:"text"`
-		Thinking    string `json:"thinking"`
-		PartialJSON string `json:"partial_json"`
-		Signature   string `json:"signature"`
+		Type        string         `json:"type"`
+		StopReason  string         `json:"stop_reason"`
+		Text        string         `json:"text"`
+		Thinking    string         `json:"thinking"`
+		PartialJSON string         `json:"partial_json"`
+		Signature   string         `json:"signature"`
+		Citation    map[string]any `json:"citation"`
 		Container   *struct {
 			ID string `json:"id"`
 		} `json:"container"`
@@ -99,6 +100,7 @@ func (m *Model) eventStream(
 		searchCalls := make(map[int]responseContentBlock)
 		searchArgs := make(map[int]*strings.Builder)
 		mcpToolNames := make(map[string]string)
+		citations := make(map[int][]map[string]any)
 		for scanner.Scan() {
 			data, ok := strings.CutPrefix(scanner.Text(), "data:")
 			if !ok {
@@ -195,6 +197,16 @@ func (m *Model) eventStream(
 			case "content_block_delta":
 				if arguments, ok := searchArgs[event.Index]; ok && event.Delta.Type == "input_json_delta" {
 					arguments.WriteString(event.Delta.PartialJSON)
+					continue
+				}
+				if event.Delta.Type == "citations_delta" {
+					citations[event.Index] = append(citations[event.Index], event.Delta.Citation)
+					if !yield(ai.TextDeltaEvent{
+						PartID: strconv.Itoa(event.Index), ProviderName: "anthropic",
+						ProviderDetails: map[string]any{"citations": cloneAnthropicCitations(citations[event.Index])},
+					}, nil) {
+						return
+					}
 					continue
 				}
 				if !emitContentBlockDelta(yield, event) {
@@ -371,8 +383,6 @@ func emitContentBlockDelta(yield func(ai.ModelStreamEvent, error) bool, event st
 		return yield(ai.ThinkingDeltaEvent{
 			PartID: partID, SignatureDelta: event.Delta.Signature, ProviderName: "anthropic",
 		}, nil)
-	case "citations_delta":
-		return true
 	default:
 		return yield(nil, fmt.Errorf("anthropic: unsupported content block delta type %q", event.Delta.Type))
 	}

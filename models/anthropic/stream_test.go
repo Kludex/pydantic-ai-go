@@ -70,11 +70,12 @@ func TestStreamEvents(t *testing.T) {
 			`{"type":"message_start","message":{"id":"message-stream","model":"claude-stream","usage":{"input_tokens":5,"output_tokens":1,"cache_creation_input_tokens":3,"cache_read_input_tokens":4}}}`,
 			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":"H"}}`,
 			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"i"}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"char_location","cited_text":"H"}}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"page_location","cited_text":"i"}}}`,
 			`{"type":"content_block_stop","index":0}`,
 			`{"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":"A"}}`,
 			`{"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":"B"}}`,
 			`{"type":"content_block_delta","index":1,"delta":{"type":"signature_delta","signature":"ignored"}}`,
-			`{"type":"content_block_delta","index":1,"delta":{"type":"citations_delta"}}`,
 			`{"type":"content_block_start","index":2,"content_block":{"type":"tool_use","id":"c1","name":"work","input":{}}}`,
 			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"{\"x\":"}}`,
 			`{"type":"content_block_delta","index":2,"delta":{"type":"input_json_delta","partial_json":"1}"}}`,
@@ -94,6 +95,7 @@ func TestStreamEvents(t *testing.T) {
 		t.Fatalf("stream request not configured: stream=%v accept=%q custom=%q body=%v", gotStream, gotAccept, gotCustom, gotBody)
 	}
 	var text, thinking, signature, args string
+	var citations []map[string]any
 	var textPartID, thinkingPartID, argsPartID string
 	var start ai.ToolCallStartEvent
 	var compaction ai.CompactionEvent
@@ -103,6 +105,9 @@ func TestStreamEvents(t *testing.T) {
 		case ai.TextDeltaEvent:
 			text += event.Delta
 			textPartID = event.PartID
+			if value, ok := event.ProviderDetails["citations"].([]map[string]any); ok {
+				citations = value
+			}
 		case ai.ThinkingDeltaEvent:
 			thinking += event.Delta
 			thinkingPartID = event.PartID
@@ -121,7 +126,8 @@ func TestStreamEvents(t *testing.T) {
 		}
 	}
 	if text != "Hi" || thinking != "AB" || signature != "ignored" || start.ToolName != "work" ||
-		start.ToolCallID != "c1" || args != `{"x":1}` || compaction.PartID != "3" ||
+		start.ToolCallID != "c1" || args != `{"x":1}` || len(citations) != 2 ||
+		citations[0]["type"] != "char_location" || citations[1]["type"] != "page_location" || compaction.PartID != "3" ||
 		compaction.Content != "Summary." || compaction.ProviderName != "anthropic" ||
 		compaction.ProviderDetails["encrypted_content"] != "opaque" {
 		t.Fatalf(
@@ -139,6 +145,15 @@ func TestStreamEvents(t *testing.T) {
 		finish.ProviderDetails["finish_reason"] != "tool_use" || finish.State != ai.ModelResponseStateComplete {
 		t.Fatalf("unexpected finish %+v", finish)
 	}
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stream(func(event ai.ModelStreamEvent, eventErr error) bool {
+		text, ok := event.(ai.TextDeltaEvent)
+		_, citation := text.ProviderDetails["citations"]
+		return eventErr == nil && (!ok || !citation)
+	})
 }
 
 func TestPauseTurnStreamIsSuspended(t *testing.T) {

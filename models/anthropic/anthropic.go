@@ -1758,19 +1758,20 @@ type messagesResponse struct {
 }
 
 type responseContentBlock struct {
-	Type             string          `json:"type"`
-	Text             string          `json:"text"`
-	Thinking         string          `json:"thinking"`
-	Signature        string          `json:"signature"`
-	ID               string          `json:"id"`
-	Name             string          `json:"name"`
-	Input            json.RawMessage `json:"input"`
-	ToolUseID        string          `json:"tool_use_id"`
-	Content          json.RawMessage `json:"content"`
-	EncryptedContent string          `json:"encrypted_content"`
-	Caller           map[string]any  `json:"caller"`
-	ServerName       string          `json:"server_name"`
-	IsError          bool            `json:"is_error"`
+	Type             string           `json:"type"`
+	Text             string           `json:"text"`
+	Citations        []map[string]any `json:"citations"`
+	Thinking         string           `json:"thinking"`
+	Signature        string           `json:"signature"`
+	ID               string           `json:"id"`
+	Name             string           `json:"name"`
+	Input            json.RawMessage  `json:"input"`
+	ToolUseID        string           `json:"tool_use_id"`
+	Content          json.RawMessage  `json:"content"`
+	EncryptedContent string           `json:"encrypted_content"`
+	Caller           map[string]any   `json:"caller"`
+	ServerName       string           `json:"server_name"`
+	IsError          bool             `json:"is_error"`
 }
 
 type anthropicUsage struct {
@@ -1855,7 +1856,11 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	for _, block := range mr.Content {
 		switch block.Type {
 		case "text":
-			resp.Parts = append(resp.Parts, ai.TextPart{Content: block.Text})
+			var details map[string]any
+			if len(block.Citations) > 0 {
+				details = map[string]any{"citations": cloneAnthropicCitations(block.Citations)}
+			}
+			resp.Parts = append(resp.Parts, ai.TextPart{Content: block.Text, ProviderDetails: details})
 		case "compaction":
 			var details map[string]any
 			if block.EncryptedContent != "" {
@@ -1982,6 +1987,15 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 		}
 	}
 	return resp, nil
+}
+
+func cloneAnthropicCitations(citations []map[string]any) []map[string]any {
+	cloned := make([]map[string]any, len(citations))
+	for index, citation := range citations {
+		encoded, _ := json.Marshal(citation)
+		_ = json.Unmarshal(encoded, &cloned[index])
+	}
+	return cloned
 }
 
 func rawJSONString(raw json.RawMessage) string {

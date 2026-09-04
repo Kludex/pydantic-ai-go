@@ -29,6 +29,7 @@ func TestModels(t *testing.T) {
 		{"bedrock:us.amazon.nova-lite-v1:0", "bedrock"},
 		{"cerebras:gpt-oss-120b", "cerebras"},
 		{"groq:openai/gpt-oss-20b", "groq"},
+		{"huggingface:Qwen/Qwen3-32B", "huggingface"},
 		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},
 		{"zai:glm-5.3-flash", "zai"},

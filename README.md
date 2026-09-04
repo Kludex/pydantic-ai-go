@@ -217,6 +217,7 @@ The bundled providers use the same `ai.Model` interface.
 | Google Gemini | `google.NewModel("gemini-2.5-flash")` | `GOOGLE_API_KEY` |
 | Cerebras | `cerebras.NewModel("gpt-oss-120b")` | `CEREBRAS_API_KEY` |
 | Groq | `groq.NewModel("openai/gpt-oss-20b")` | `GROQ_API_KEY` |
+| Hugging Face | `huggingface.NewModel("Qwen/Qwen3-32B")` | `HF_TOKEN` |
 | Ollama | `ollama.NewModel("qwen3")` | `OLLAMA_BASE_URL`, `OLLAMA_API_KEY` |
 | OpenRouter | `openrouter.NewModel("anthropic/claude-sonnet-4.6")` | `OPENROUTER_API_KEY` |
 | Z.AI | `zai.NewModel("glm-5.3-flash")` | `ZAI_API_KEY` |

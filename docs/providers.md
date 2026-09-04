@@ -205,6 +205,38 @@ Cerebras returns reasoning either through the OpenAI-compatible `reasoning` fiel
 
 Use `cerebras.Settings` for the typed `ClearThinking` and legacy `DisableReasoning` controls. `Settings.Build` returns detached `ai.ModelSettings` and rejects conflicts with `ExtraBody`.
 
+## Hugging Face Inference Providers
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/huggingface"
+)
+
+func main() {
+	model := huggingface.NewModel(
+		"Qwen/Qwen3-32B",
+		huggingface.WithInferenceProvider("together"),
+	)
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Explain why the sky is blue.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `HF_TOKEN`. The default endpoint lets Hugging Face select a provider automatically. Use `WithInferenceProvider` to route through a named provider or `WithBaseURL` for an explicit OpenAI-compatible endpoint.
+
+The adapter supports static and streamed text, function tools, URL or inline image input, usage, finish reasons, and `<think>` reasoning. Reasoning becomes `ThinkingPart` and replays with tags on later same-provider turns. Hugging Face does not expose native JSON Schema output through this API. Use the default tool output or prompted output instead. Audio, video, documents, uploaded files, and non-image binary input fail before transport.
+
 ## Ollama
 
 ```go

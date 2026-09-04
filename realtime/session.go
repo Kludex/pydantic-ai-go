@@ -117,7 +117,7 @@ func WithToolExecutor(executor ToolExecutor) SessionOption {
 }
 
 // WithImageRetention samples image frames and bounds retained image history.
-// every must be at least one. A negative maximum keeps every sampled frame.
+// every must be at least one. A maximum of -1 keeps every sampled frame.
 func WithImageRetention(every, maximum int) SessionOption {
 	return func(config *sessionConfig) {
 		config.retainImagesEvery = every

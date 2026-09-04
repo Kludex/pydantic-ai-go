@@ -166,6 +166,7 @@ package main
 
 import (
     "context"
+    "encoding/base64"
 
     ai "github.com/Kludex/pydantic-ai-go"
     "github.com/Kludex/pydantic-ai-go/realtime"
@@ -181,10 +182,13 @@ func main() {
     }
     defer func() { _ = session.Close(ctx) }()
 
-    frame := ai.BinaryContent{
-        Data: []byte{0x89, 0x50, 0x4e, 0x47},
-        MediaType: "image/png",
+    frameData, err := base64.StdEncoding.DecodeString(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
+    )
+    if err != nil {
+        panic(err)
     }
+    frame := ai.BinaryContent{Data: frameData, MediaType: "image/png"}
     if err := session.Send(ctx, frame); err != nil {
         panic(err)
     }

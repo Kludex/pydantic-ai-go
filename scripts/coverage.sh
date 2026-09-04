@@ -36,6 +36,7 @@ packages=(
     ./models/groq
     ./models/huggingface
     ./models/infer
+    ./models/mistral
     ./models/ollama
     ./models/zai
     ./mcp

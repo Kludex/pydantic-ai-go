@@ -32,6 +32,7 @@ func TestModels(t *testing.T) {
 		{"crusoe:openai/gpt-oss-120b", "crusoe"},
 		{"groq:openai/gpt-oss-20b", "groq"},
 		{"huggingface:Qwen/Qwen3-32B", "huggingface"},
+		{"mistral:mistral-large-latest", "mistral"},
 		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},
 		{"zai:glm-5.3-flash", "zai"},

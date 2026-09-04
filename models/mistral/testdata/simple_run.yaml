@@ -1,0 +1,69 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 192
+        host: api.mistral.ai
+        body: '{"model":"mistral-small-latest","messages":[{"role":"system","content":"Answer with a single word."},{"role":"user","content":"What is the capital of France?"}],"stream":false,"n":1,"top_p":1}'
+        headers:
+            Accept:
+                - application/json
+            Content-Type:
+                - application/json
+        url: https://api.mistral.ai/v1/chat/completions
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: '{"id":"b9e59a3b02e647278a71f4a79bdced6d","created":1788531128,"model":"mistral-small-latest","usage":{"prompt_tokens":30,"total_tokens":32,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":0},"service_tier":"standard"},"object":"chat.completion","choices":[{"index":0,"finish_reason":"stop","message":{"role":"assistant","tool_calls":null,"content":"Paris"}}]}'
+        headers:
+            Access-Control-Allow-Origin:
+                - '*'
+            Alt-Svc:
+                - h3=":443"; ma=86400
+            Cf-Cache-Status:
+                - DYNAMIC
+            Cf-Ray:
+                - a35d965f1a780a5c-AMS
+            Content-Type:
+                - application/json
+            Date:
+                - Fri, 04 Sep 2026 14:12:08 GMT
+            Mistral-Correlation-Id:
+                - 01a06cc3-3784-768c-9688-caf0e641178f
+            Server:
+                - cloudflare
+            Strict-Transport-Security:
+                - max-age=15552000; includeSubDomains; preload
+            X-Content-Type-Options:
+                - nosniff
+            X-Envoy-Upstream-Service-Time:
+                - "257"
+            X-Kong-Proxy-Latency:
+                - "14"
+            X-Kong-Request-Id:
+                - 01a06cc3-3784-768c-9688-caf0e641178f
+            X-Kong-Upstream-Latency:
+                - "258"
+            X-Max-Retry-Attempts-Reached:
+                - "false"
+            X-Ratelimit-Limit-Req-Minute:
+                - "1000"
+            X-Ratelimit-Limit-Tokens-Minute:
+                - "500000"
+            X-Ratelimit-Remaining-Req-Minute:
+                - "999"
+            X-Ratelimit-Remaining-Tokens-Minute:
+                - "499968"
+            X-Ratelimit-Tokens-Query-Cost:
+                - "32"
+        status: 200 OK
+        code: 200
+        duration: 362.073417ms

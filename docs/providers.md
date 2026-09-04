@@ -303,6 +303,37 @@ Set `HF_TOKEN`. The default endpoint lets Hugging Face select a provider automat
 
 The adapter supports static and streamed text, function tools, URL or inline image input, usage, finish reasons, and `<think>` reasoning. Reasoning becomes `ThinkingPart` and replays with tags on later same-provider turns. Hugging Face does not expose native JSON Schema output through this API. Use the default tool output or prompted output instead. Audio, video, documents, uploaded files, and non-image binary input fail before transport.
 
+## Mistral
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/mistral"
+)
+
+func main() {
+	model := mistral.NewModel("mistral-large-latest")
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Explain why the sky is blue.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `MISTRAL_API_KEY`. Set `MISTRAL_BASE_URL` only when you use a compatible gateway.
+
+The adapter uses Mistral's native Chat Completions contract. It supports static and streamed text, thinking chunks, function tools, tool-based structured output, prompt cache keys, tool selection, parallel calls, usage, and portable generation settings.
+
+Mistral accepts direct or downloaded images, inline images, direct or downloaded PDFs, and downloaded text documents. Audio, video, uploaded-file references, and other binary media fail before transport. Models in the Mistral Small 4 and Medium 3.5 families map enabled reasoning to `high` and disabled reasoning to `none`. Magistral reasoning is always enabled, so the adapter omits `reasoning_effort`.
+
 ## Ollama
 
 ```go

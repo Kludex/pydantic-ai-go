@@ -19,7 +19,7 @@ $ go run ./cmd/pydantic-ai-go \
     -mcp-config ./mcp.json
 ```
 
-The command supports `openai`, `openai-responses`, `anthropic`, `google`, `bedrock`, `cerebras`, `cohere`, `crusoe`, `groq`, `huggingface`, `ollama`, `openrouter`, and `zai` provider prefixes.
+The command supports `openai`, `openai-responses`, `anthropic`, `google`, `bedrock`, `cerebras`, `cohere`, `crusoe`, `groq`, `huggingface`, `mistral`, `ollama`, `openrouter`, and `zai` provider prefixes.
 
 ## Run terminal chat from your program
 

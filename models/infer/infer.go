@@ -15,6 +15,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/google"
 	"github.com/Kludex/pydantic-ai-go/models/groq"
 	"github.com/Kludex/pydantic-ai-go/models/huggingface"
+	"github.com/Kludex/pydantic-ai-go/models/mistral"
 	"github.com/Kludex/pydantic-ai-go/models/ollama"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 	"github.com/Kludex/pydantic-ai-go/models/openrouter"
@@ -60,6 +61,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"crusoe":           func(name string) (ai.Model, error) { return crusoe.NewModel(name), nil },
 		"groq":             func(name string) (ai.Model, error) { return groq.NewModel(name), nil },
 		"huggingface":      func(name string) (ai.Model, error) { return huggingface.NewModel(name), nil },
+		"mistral":          func(name string) (ai.Model, error) { return mistral.NewModel(name), nil },
 		"ollama":           func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
 		"openrouter":       func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
 		"zai":              func(name string) (ai.Model, error) { return zai.NewModel(name), nil },

@@ -2,9 +2,9 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@8c5838dd327f8b588525f6b2ee8605ba6426f410`.
+Audited upstream baseline: `pydantic/pydantic-ai@3a3e5612786c64e19312f20e3c998553edf1353b`.
 
-The seven commits after `3a3e56127` add durable-operation model ownership and cleanup, Temporal/DBOS per-run capability rejection, Prefect task-journaled dynamic tool discovery, and inactive-hook traceback elision. The durable requirements are recorded below. Go's optional hook interfaces already omit unimplemented wrappers and error hooks rather than adding no-op stack frames. The remaining changes remove an expired Anthropic dependency pin and clarify that `EqualsExpected` cannot fail when a case has no expected output; neither requires a Go runtime change.
+The seven commits after `8c5838dd3` add durable-operation model ownership and cleanup, Temporal/DBOS per-run capability rejection, Prefect task-journaled dynamic tool discovery, and inactive-hook traceback elision. The durable requirements are recorded below. Go's optional hook interfaces already omit unimplemented wrappers and error hooks rather than adding no-op stack frames. The remaining changes remove an expired Anthropic dependency pin and clarify that `EqualsExpected` cannot fail when a case has no expected output; neither requires a Go runtime change.
 
 Status:
 
@@ -260,9 +260,6 @@ Status:
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 
-## Next work
+## Audit status
 
-1. Complete richer OpenTelemetry request/tool Logfire schemas/messages, remaining event shapes, and message-fragment caching/mutation diagnostics; agent descriptions, variable instructions, run metadata/schemas, output-function spans, stable instruction-part serialization, and dedicated side-compaction spans are complete.
-2. Extend MCP shared sessions with task-extension-specific APIs; model-backed sampling, elicitation, current-protocol multi-round-trip input retries, OAuth transport attachment, and authorization guidance are complete.
-3. Extend upstream message fixtures as remaining persisted part types land.
-4. Add the remaining provider-native tools, response content, metadata, and OpenAI-compatible providers; provider-neutral video URLs with safe force-download behavior, dependency-driven native-tool factories, OpenAI Responses web search/file search/code execution/image generation/MCP servers, Gemini file search/code execution/web search/fetch/image generation, Anthropic advisor/memory/code execution/web search/fetch/MCP servers, Z.AI Chat Completions, realtime speech history, OpenAI refusal handling, Google prompt-feedback blocks, system-prompt reinjection, tool return-schema advertisement, and the `pydantic-evals-go` task adapter are complete.
+No known parity work remains against the pinned upstream baseline. The daily `agentic-ai-sync` workflow reviews later upstream commits and advances `.upstream-sync.json` with each completed sync.

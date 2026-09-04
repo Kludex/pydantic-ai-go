@@ -90,7 +90,7 @@ Status:
 - [x] Failed and interrupted tool returns use Anthropic error results and Gemini error responses.
 - [x] Unknown or prepared-out tool calls produce corrective prompts with currently available tool names and per-name retry budgets; a deferred-but-hidden tool receives one free availability correction before later refusals charge its budget.
 - [x] Per-tool deadlines via `WithToolTimeout`; cooperating cancellation becomes a retry and consumes only that tool's budget.
-- [~] Tool metadata is cloned for per-step preparation and excluded from provider payloads; provider-specific options remain.
+- [x] Tool metadata is cloned for per-step preparation and excluded from provider payloads. Provider-specific strictness, schema transforms, return-schema advertisement, native pairing, retry limits, timeouts, and deferred behavior are covered by their dedicated entries.
 - [x] Function toolsets compose through combined, filtered, prefixed, renamed, prepared, metadata, return-schema, retry-default, and timeout-default wrappers; listing and instructions reevaluate per step, wrapped calls retain original names, and toolsets can be agent-wide or per-run.
 - [x] `RequireApprovalToolset` wraps all or selected original names, and `RequireApprovalToolsetWhen` evaluates validated calls dynamically; both forward instructions and run/step/open/close lifecycle.
 - [x] Stateful remote toolsets support local `ToolsetID` propagation, per-run isolation, per-step replacement, open/close lifecycle, reverse-order rollback, and lifecycle forwarding through built-in wrappers.

@@ -38,6 +38,7 @@ packages=(
     ./models/infer
     ./models/mistral
     ./models/ollama
+    ./models/snowflake
     ./models/zai
     ./mcp
     ./ui/agui

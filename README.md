@@ -223,6 +223,7 @@ The bundled providers use the same `ai.Model` interface.
 | Mistral | `mistral.NewModel("mistral-large-latest")` | `MISTRAL_API_KEY` |
 | Ollama | `ollama.NewModel("qwen3")` | `OLLAMA_BASE_URL`, `OLLAMA_API_KEY` |
 | OpenRouter | `openrouter.NewModel("anthropic/claude-sonnet-4.6")` | `OPENROUTER_API_KEY` |
+| Snowflake Cortex | `snowflake.NewModel("claude-sonnet-4-6")` | `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_TOKEN` |
 | Z.AI | `zai.NewModel("glm-5.3-flash")` | `ZAI_API_KEY` |
 
 Provider options configure caller-owned clients, endpoints, credentials, and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints and Azure API versions. See [Amazon Bedrock](docs/bedrock.md) for AWS SDK configuration and Converse behavior.

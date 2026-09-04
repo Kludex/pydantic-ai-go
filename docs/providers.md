@@ -419,6 +419,37 @@ OpenRouter adjusts JSON Schema for the routed provider. Google routes inline def
 
 Anthropic routes cannot combine reasoning with forced tool choice. When structured output infers a required output tool, the model sends `tool_choice: "auto"` and keeps reasoning enabled. An explicit required or list choice fails before transport instead of letting OpenRouter silently remove reasoning.
 
+## Snowflake Cortex
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/snowflake"
+)
+
+func main() {
+	model := snowflake.NewModel("claude-sonnet-4-6")
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Explain why the sky is blue.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `SNOWFLAKE_ACCOUNT` and `SNOWFLAKE_TOKEN`. `SNOWFLAKE_ACCOUNT` accepts a bare account identifier or its `snowflakecomputing.com` hostname. Use `SNOWFLAKE_BASE_URL` for private connectivity.
+
+Snowflake Cortex exposes an OpenAI-compatible Chat Completions endpoint inside your Snowflake account. The adapter supports static and streamed text, reasoning details, function tools, JSON Schema output, generation settings, and usage for Claude and OpenAI model families. Claude models use Cortex's `reasoning` object and default to temperature `1` when reasoning is enabled.
+
+Cortex does not support function tools or native JSON Schema output for its Llama, Mistral, Mixtral, DeepSeek, and Snowflake model families. The adapter rejects those requests before transport. Use prompted output for those models.
+
 ## Z.AI
 
 ```go

@@ -19,6 +19,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/ollama"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 	"github.com/Kludex/pydantic-ai-go/models/openrouter"
+	"github.com/Kludex/pydantic-ai-go/models/snowflake"
 	"github.com/Kludex/pydantic-ai-go/models/zai"
 )
 
@@ -64,6 +65,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"mistral":          func(name string) (ai.Model, error) { return mistral.NewModel(name), nil },
 		"ollama":           func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
 		"openrouter":       func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
+		"snowflake":        func(name string) (ai.Model, error) { return snowflake.NewModel(name), nil },
 		"zai":              func(name string) (ai.Model, error) { return zai.NewModel(name), nil },
 	}}
 	for _, option := range options {

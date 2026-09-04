@@ -22,19 +22,32 @@ import (
 
 // Settings configures Gemini Live-specific generation, speech, and session behavior.
 type Settings struct {
-	Temperature             *float32
-	TopP                    *float32
-	TopK                    *float32
-	Seed                    *int32
-	Voice                   string
-	LanguageCode            string
-	InputTranscription      *bool
-	OutputTranscription     *bool
-	AffectiveDialog         *bool
-	ProactiveAudio          *bool
-	AsyncToolCalls          bool
+	// Temperature controls response randomness.
+	Temperature *float32
+	// TopP controls nucleus sampling.
+	TopP *float32
+	// TopK limits the candidate tokens considered at each step.
+	TopK *float32
+	// Seed requests best-effort deterministic sampling.
+	Seed *int32
+	// Voice selects a Gemini prebuilt voice.
+	Voice string
+	// LanguageCode is the BCP 47 speech output language.
+	LanguageCode string
+	// InputTranscription enables native user speech transcription.
+	InputTranscription *bool
+	// OutputTranscription enables model speech transcription.
+	OutputTranscription *bool
+	// AffectiveDialog enables emotion-aware delivery where supported.
+	AffectiveDialog *bool
+	// ProactiveAudio allows the model to decide whether input needs a response.
+	ProactiveAudio *bool
+	// AsyncToolCalls keeps supported native-audio generation active while tools run.
+	AsyncToolCalls bool
+	// EnableSessionResumption explicitly controls provider resume handles.
 	EnableSessionResumption *bool
-	ConfigOverrides         func(*genai.LiveConnectConfig)
+	// ConfigOverrides applies advanced official SDK configuration last.
+	ConfigOverrides func(*genai.LiveConnectConfig)
 }
 
 // LiveSession is the official SDK session surface used by Connection.

@@ -25,7 +25,9 @@ const defaultBaseURL = "https://api.x.ai/v1"
 
 // Settings configures xAI-specific voice and VAD behavior.
 type Settings struct {
-	Voice         string
+	// Voice selects a built-in name or custom xAI voice ID.
+	Voice string
+	// TurnDetection replaces portable server VAD configuration.
 	TurnDetection map[string]any
 }
 

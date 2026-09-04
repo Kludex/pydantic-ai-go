@@ -22,16 +22,19 @@ type Event = any
 
 // TurnCompleteEvent contains the finalized provider response.
 type TurnCompleteEvent struct {
+	// Response is the detached finalized provider response.
 	Response ai.ModelResponse
 }
 
 // InputSpeechStartEvent reports server-detected user speech.
 type InputSpeechStartEvent struct {
+	// ItemID identifies the detected input segment when available.
 	ItemID string
 }
 
 // InputSpeechEndEvent reports the end of server-detected user speech.
 type InputSpeechEndEvent struct {
+	// ItemID identifies the detected input segment when available.
 	ItemID string
 }
 
@@ -43,35 +46,45 @@ type OutputSpeechEndEvent struct{}
 
 // ResponseInterruptedEvent reports a cancelled response.
 type ResponseInterruptedEvent struct {
+	// PlayedMilliseconds is the amount of audio retained in provider history.
 	PlayedMilliseconds *int
 }
 
 // InputTranscriptionErrorEvent reports a recoverable transcription failure.
 type InputTranscriptionErrorEvent struct {
+	// ItemID identifies the input segment that failed.
 	ItemID string
-	Err    error
+	// Err describes the recoverable transcription failure.
+	Err error
 }
 
 // SessionReconnectEvent reports a successful transport reconnect.
 type SessionReconnectEvent struct {
+	// StateRestored reports that the provider resumed in-flight state.
 	StateRestored bool
 }
 
 // SessionErrorEvent reports a recoverable provider error.
 type SessionErrorEvent struct {
+	// Err describes a recoverable provider or protocol error.
 	Err error
 }
 
 // TranscriptUpdate is an incremental, render-ready transcript update.
 type TranscriptUpdate struct {
-	Index      int
-	Speaker    ai.SpeechSpeaker
-	Delta      string
+	// Index identifies one speech part for the session lifetime.
+	Index int
+	// Speaker identifies the user or assistant turn.
+	Speaker ai.SpeechSpeaker
+	// Delta is newly appended text and is empty for a revision.
+	Delta string
+	// Transcript is the complete render-ready text so far.
 	Transcript string
 }
 
 // ToolExecutor executes provider-requested local tools.
 type ToolExecutor interface {
+	// ExecuteTool runs one provider-requested local function.
 	ExecuteTool(ctx context.Context, call ai.ToolCallPart) (any, error)
 }
 

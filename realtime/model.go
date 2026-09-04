@@ -11,12 +11,17 @@ import (
 
 // Error reports a realtime transport or protocol failure.
 type Error struct {
+	// Provider identifies the failed realtime service.
 	Provider string
-	Model    string
-	Message  string
-	Err      error
+	// Model identifies the requested realtime model.
+	Model string
+	// Message describes the failed operation.
+	Message string
+	// Err is the underlying transport or protocol error.
+	Err error
 }
 
+// Error describes the realtime failure.
 func (err *Error) Error() string {
 	prefix := "realtime"
 	if err.Provider != "" {
@@ -36,9 +41,12 @@ func (err *Error) Unwrap() error { return err.Err }
 
 // ConnectParams contains detached session initialization state.
 type ConnectParams struct {
+	// Messages seeds portable conversation history.
 	Messages []ai.ModelMessage
+	// Settings configures the provider session.
 	Settings Settings
-	Request  ai.ModelRequestParams
+	// Request carries instructions and available tools.
+	Request ai.ModelRequestParams
 }
 
 // Model opens persistent bidirectional connections.
@@ -55,22 +63,30 @@ type Model interface {
 
 // ClientSecret is a short-lived browser credential.
 type ClientSecret struct {
-	Value           string
-	ExpiresAt       time.Time
+	// Value is the short-lived browser credential.
+	Value string
+	// ExpiresAt is the credential expiration time.
+	ExpiresAt time.Time
+	// ProviderDetails contains detached non-secret response fields.
 	ProviderDetails map[string]any
 }
 
 // ProviderSession identifies an existing provider-side media session.
 type ProviderSession interface {
+	// ProviderName returns the service that owns the media session.
 	ProviderName() string
+	// SessionID returns the opaque provider session identifier.
 	SessionID() string
 }
 
 // WebRTCSession identifies a provider-side WebRTC call.
 type WebRTCSession struct {
+	// Provider identifies the service that owns the call.
 	Provider string
-	ID       string
-	Details  map[string]any
+	// ID is the provider-assigned call identifier.
+	ID string
+	// Details contains detached signaling response metadata.
+	Details map[string]any
 }
 
 // ProviderName returns the provider that owns the call.
@@ -81,7 +97,9 @@ func (session WebRTCSession) SessionID() string { return session.ID }
 
 // WebRTCAnswer contains the provider SDP answer and sideband session handle.
 type WebRTCAnswer struct {
-	SDP     string
+	// SDP is the provider answer returned to the browser.
+	SDP string
+	// Session identifies the call for server-side control.
 	Session WebRTCSession
 }
 

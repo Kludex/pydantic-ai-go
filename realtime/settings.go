@@ -12,8 +12,11 @@ import (
 type ToolChoice string
 
 const (
-	ToolChoiceAuto     ToolChoice = "auto"
-	ToolChoiceNone     ToolChoice = "none"
+	// ToolChoiceAuto lets the provider choose whether to call a tool.
+	ToolChoiceAuto ToolChoice = "auto"
+	// ToolChoiceNone prevents function calls.
+	ToolChoiceNone ToolChoice = "none"
+	// ToolChoiceRequired requires at least one function call where supported.
 	ToolChoiceRequired ToolChoice = "required"
 )
 
@@ -21,49 +24,74 @@ const (
 type AudioRetention string
 
 const (
+	// AudioRetentionTranscriptOnly drops raw audio after transcription.
 	AudioRetentionTranscriptOnly AudioRetention = "transcript_only"
-	AudioRetentionInput          AudioRetention = "input_audio"
-	AudioRetentionOutput         AudioRetention = "output_audio"
-	AudioRetentionAll            AudioRetention = "all"
+	// AudioRetentionInput additionally keeps user audio.
+	AudioRetentionInput AudioRetention = "input_audio"
+	// AudioRetentionOutput additionally keeps assistant audio.
+	AudioRetentionOutput AudioRetention = "output_audio"
+	// AudioRetentionAll keeps user and assistant audio.
+	AudioRetentionAll AudioRetention = "all"
 )
 
 // OutputModality selects speech or plain text generation.
 type OutputModality string
 
 const (
+	// OutputModalityAudio requests spoken output.
 	OutputModalityAudio OutputModality = "audio"
-	OutputModalityText  OutputModality = "text"
+	// OutputModalityText requests plain text output.
+	OutputModalityText OutputModality = "text"
 )
 
 // TurnDetection configures cross-provider voice activity detection.
 type TurnDetection struct {
-	Enabled         bool
-	Sensitivity     string
-	PrefixPadding   time.Duration
+	// Enabled selects automatic VAD instead of push-to-talk.
+	Enabled bool
+	// Sensitivity accepts low, medium, or high.
+	Sensitivity string
+	// PrefixPadding retains audio immediately before detected speech.
+	PrefixPadding time.Duration
+	// SilenceDuration controls how long silence must last to end a turn.
 	SilenceDuration time.Duration
 }
 
 // ReconnectPolicy configures bounded transport reconnection.
 type ReconnectPolicy struct {
-	MaxAttempts   int
+	// MaxAttempts bounds dial attempts for one dropped connection.
+	MaxAttempts int
+	// MaxReconnects bounds successful reconnects for the session lifetime.
 	MaxReconnects int
-	BaseDelay     time.Duration
-	MaxDelay      time.Duration
-	Jitter        bool
+	// BaseDelay is the initial exponential backoff.
+	BaseDelay time.Duration
+	// MaxDelay caps exponential backoff.
+	MaxDelay time.Duration
+	// Jitter randomizes each backoff delay.
+	Jitter bool
 }
 
 // Settings configures one realtime provider session.
 type Settings struct {
-	MaxTokens               int
-	ParallelToolCalls       *bool
-	ToolChoice              ToolChoice
+	// MaxTokens bounds each model response. Zero uses the provider default.
+	MaxTokens int
+	// ParallelToolCalls controls concurrent provider function calls.
+	ParallelToolCalls *bool
+	// ToolChoice controls whether and which functions may be called.
+	ToolChoice ToolChoice
+	// InputTranscriptionModel selects a provider transcription model. An empty value disables it.
 	InputTranscriptionModel *string
-	OutputModality          OutputModality
-	Thinking                ai.ThinkingLevel
-	TurnDetection           *TurnDetection
-	HandshakeTimeout        time.Duration
-	Reconnect               *ReconnectPolicy
-	Provider                map[string]any
+	// OutputModality selects speech or plain text.
+	OutputModality OutputModality
+	// Thinking configures provider reasoning where supported.
+	Thinking ai.ThinkingLevel
+	// TurnDetection configures automatic VAD or manual turns.
+	TurnDetection *TurnDetection
+	// HandshakeTimeout bounds initial protocol negotiation.
+	HandshakeTimeout time.Duration
+	// Reconnect enables bounded recovery from transport drops.
+	Reconnect *ReconnectPolicy
+	// Provider contains detached provider-prefixed settings.
+	Provider map[string]any
 }
 
 func (settings Settings) normalized() (Settings, error) {

@@ -27,11 +27,16 @@ const defaultBaseURL = "https://api.openai.com/v1"
 
 // Settings configures OpenAI-specific realtime behavior.
 type Settings struct {
-	Voice               string
+	// Voice selects a built-in name or provider custom voice ID.
+	Voice string
+	// InputNoiseReduction selects near-field or far-field processing.
 	InputNoiseReduction string
-	OutputSpeed         float64
-	TurnDetection       map[string]any
-	Truncation          any
+	// OutputSpeed is the playback speed multiplier from 0.25 through 1.5.
+	OutputSpeed float64
+	// TurnDetection replaces portable VAD configuration.
+	TurnDetection map[string]any
+	// Truncation configures provider conversation-window retention.
+	Truncation any
 }
 
 // Option configures a Model.

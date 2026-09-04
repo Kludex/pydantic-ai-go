@@ -98,6 +98,9 @@ func (connection *Connection) SetMessageHistory(history func() []ai.ModelMessage
 
 // Send writes one normalized input frame.
 func (connection *Connection) Send(ctx context.Context, input realtime.Input) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	switch input := input.(type) {
 	case realtime.AudioInput:
 		if len(input.Data)%2 != 0 {

@@ -157,12 +157,25 @@ func TestOpenAIRealtimeSession(t *testing.T) {
 	if !found {
 		t.Fatalf("provider response was not retained: %+v", messages)
 	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		mutex.Lock()
+		frameCount := len(received)
+		mutex.Unlock()
+		if frameCount >= 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for client frames: got %d", frameCount)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if err := session.Close(t.Context()); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	mutex.Lock()
 	defer mutex.Unlock()
-	if len(received) < 3 || received[0]["type"] != "session.update" {
+	if received[0]["type"] != "session.update" {
 		t.Fatalf("unexpected client frames: %+v", received)
 	}
 }

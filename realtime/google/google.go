@@ -145,8 +145,12 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsToolReturnSchema = true
 	profile.SupportedNativeTools = map[string]bool{"web_search": true}
 	profile.AudioInputSampleRate = 16000
+	apiKey := os.Getenv("GOOGLE_API_KEY")
+	if apiKey == "" {
+		apiKey = os.Getenv("GEMINI_API_KEY")
+	}
 	model := &Model{
-		name: name, apiKey: firstNonEmpty(os.Getenv("GOOGLE_API_KEY"), os.Getenv("GEMINI_API_KEY")),
+		name: name, apiKey: apiKey,
 		httpClient: http.DefaultClient, profile: profile,
 	}
 	for _, option := range options {
@@ -734,14 +738,5 @@ func render(value any) string {
 }
 
 func ptr[T any](value T) *T { return &value }
-
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
 
 var _ realtime.Model = (*Model)(nil)

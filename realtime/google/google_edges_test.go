@@ -18,6 +18,8 @@ type unsupportedInput struct{}
 func (unsupportedInput) RealtimeInputKind() string { return "unsupported" }
 
 func TestGoogleOptionsAndOfficialConnector(t *testing.T) {
+	t.Setenv("GOOGLE_API_KEY", "key")
+	_ = googlert.NewModel("environment-model")
 	t.Setenv("GOOGLE_API_KEY", "")
 	t.Setenv("GEMINI_API_KEY", "")
 	client, err := genai.NewClient(t.Context(), &genai.ClientConfig{

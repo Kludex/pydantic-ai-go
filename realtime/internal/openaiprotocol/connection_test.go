@@ -180,6 +180,15 @@ func TestConnectionSendAndEvents(t *testing.T) {
 			t.Fatalf("expected closed write error for %T", input)
 		}
 	}
+	failedWrite, err := openaiprotocol.New(openaiprotocol.Config{
+		Provider: "test", Model: "model", Socket: socket, Mapper: mapper,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := failedWrite.Send(t.Context(), realtime.CreateResponse{}); err == nil {
+		t.Fatal("expected response creation write error")
+	}
 	close(frames)
 	receivedMu.Lock()
 	if len(received) < 8 {

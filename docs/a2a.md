@@ -62,6 +62,8 @@ Stored task history is client-controlled. The executor calls `SanitizeMessages` 
 
 `RequestContext.ContextID` becomes the agent conversation ID. Use `Config.ResolveDeps` for authenticated request-specific dependencies. It may run concurrently.
 
+Loaded `RequestContext.RelatedTasks` are added before the current task history. Each task gets a visible boundary, followed by its messages and artifacts. The same sanitization policy covers related and current task content. Configure the official SDK's `ReferencedTasksLoader` with your task store when you want `Message.ReferenceTasks` resolved automatically.
+
 ## Task lifecycle
 
 A new task emits submitted and working states. An existing task starts at working. Text and generated files stream as one append-only A2A artifact. `Config.ArtifactName`, `ArtifactDescription`, `ArtifactExtensions`, and `ArtifactMetadata` describe its first event. Metadata must contain JSON-compatible values. A successful run ends completed.
@@ -74,4 +76,4 @@ The official A2A server owns task storage, event queues, push notifications, ret
 
 The integration provides server-side execution through the official Go SDK, text, data, and file input, sanitized task history, named and annotated streamed artifacts, structured-output fallback, dependency resolution, deferred input-required state, failure state, and cancellation.
 
-Client-side A2A model calls, related-task context, extension negotiation, push notification policy, and mapping deferred A2A follow-up messages back to `DeferredToolResults` remain.
+Client-side A2A model calls, extension negotiation, push notification policy, and mapping deferred A2A follow-up messages back to `DeferredToolResults` remain.

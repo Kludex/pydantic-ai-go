@@ -104,15 +104,39 @@ func TestExecutorStreamsArtifacts(t *testing.T) {
 		),
 		requestMessage,
 	}}
+	related := &protocol.Task{
+		ID: "related", ContextID: "related-context",
+		History: []*protocol.Message{
+			nil,
+			protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "related question"}),
+			protocol.NewMessage(protocol.MessageRoleAgent, protocol.TextPart{Text: "related answer"}),
+		},
+		Artifacts: []*protocol.Artifact{nil, {}, {
+			ID: "related-artifact", Parts: protocol.ContentParts{
+				protocol.TextPart{Text: "artifact text"}, protocol.DataPart{Data: map[string]any{"value": true}},
+			},
+		}},
+	}
 	request := &a2asrv.RequestContext{
 		Message: requestMessage, StoredTask: stored, TaskID: "task", ContextID: "context",
+		RelatedTasks: []*protocol.Task{nil, {ID: "task"}, related, related},
 	}
 	queue := &recordingQueue{}
 	if err := executor.Execute(context.Background(), request, queue); err != nil {
 		t.Fatal(err)
 	}
-	if len(captured) < 3 {
-		t.Fatalf("history and prompt were not passed to the agent: %#v", captured)
+	if len(captured) < 5 {
+		t.Fatalf("related history, task history, and prompt were not passed to the agent: %#v", captured)
+	}
+	relatedRequest := captured[0].(ai.ModelRequest)
+	marker := relatedRequest.Parts[0].(ai.UserPromptPart)
+	relatedUser := relatedRequest.Parts[1].(ai.UserPromptPart)
+	relatedResponse := captured[1].(ai.ModelResponse)
+	if marker.Content != `Related A2A task "related":` || relatedUser.Contents[0].(ai.TextContent).Text != "related question" ||
+		relatedResponse.Parts[0].(ai.TextPart).Content != "related answer" || len(relatedResponse.Parts) != 3 ||
+		relatedResponse.Parts[1].(ai.TextPart).Content != "artifact text" ||
+		relatedResponse.Parts[2].(ai.TextPart).Content != `{"value":true}` {
+		t.Fatalf("unexpected related task context: %#v", captured[:2])
 	}
 	if len(queue.events) != 4 {
 		t.Fatalf("unexpected events: %#v", queue.events)
@@ -295,6 +319,7 @@ func TestExecutorInputFilesAndFailures(t *testing.T) {
 		name    string
 		message *protocol.Message
 		history []*protocol.Message
+		related []*protocol.Task
 		options ai.MessageSanitizationOptions
 	}{
 		{name: "empty", message: protocol.NewMessage(protocol.MessageRoleUser)},
@@ -313,13 +338,23 @@ func TestExecutorInputFilesAndFailures(t *testing.T) {
 		{name: "bad agent bytes", message: protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "run"}),
 			history: []*protocol.Message{protocol.NewMessage(protocol.MessageRoleAgent,
 				protocol.FilePart{File: protocol.FileBytes{Bytes: "%%%"}})}},
+		{name: "related history", message: protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "run"}),
+			related: []*protocol.Task{{ID: "related", History: []*protocol.Message{
+				protocol.NewMessage(protocol.MessageRoleUnspecified, protocol.TextPart{Text: "bad"}),
+			}}}},
+		{name: "related artifact", message: protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "run"}),
+			related: []*protocol.Task{{ID: "related", Artifacts: []*protocol.Artifact{{
+				ID: "artifact", Parts: protocol.ContentParts{protocol.FilePart{File: protocol.FileURI{
+					URI: "https://example.com/file",
+				}}},
+			}}}}},
 		{name: "sanitization", message: protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "run"}),
 			options: ai.MessageSanitizationOptions{AllowedFileURLSchemes: []string{"bad scheme"}}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			request := &a2asrv.RequestContext{
-				Message: test.message, StoredTask: &protocol.Task{History: test.history},
+				Message: test.message, StoredTask: &protocol.Task{History: test.history}, RelatedTasks: test.related,
 				TaskID: "task", ContextID: "context",
 			}
 			executor := a2aintegration.NewExecutor(

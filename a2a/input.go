@@ -23,6 +23,24 @@ func prepareRequest(
 		return nil, nil, err
 	}
 	var history []ai.ModelMessage
+	seenTasks := map[protocol.TaskID]struct{}{}
+	if request.TaskID != "" {
+		seenTasks[protocol.TaskID(request.TaskID)] = struct{}{}
+	}
+	for _, task := range request.RelatedTasks {
+		if task == nil {
+			continue
+		}
+		if _, seen := seenTasks[task.ID]; seen {
+			continue
+		}
+		seenTasks[task.ID] = struct{}{}
+		messages, err := relatedTaskMessages(task)
+		if err != nil {
+			return nil, nil, err
+		}
+		history = append(history, messages...)
+	}
 	if request.StoredTask != nil {
 		for _, message := range request.StoredTask.History {
 			if message == nil || message.ID == request.Message.ID {
@@ -42,6 +60,36 @@ func prepareRequest(
 	return prompt, history, nil
 }
 
+func relatedTaskMessages(task *protocol.Task) ([]ai.ModelMessage, error) {
+	messages := make([]ai.ModelMessage, 0, 1+len(task.History)+len(task.Artifacts))
+	messages = append(messages, ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
+		Content: fmt.Sprintf("Related A2A task %q:", task.ID),
+	}}})
+	for _, message := range task.History {
+		if message == nil {
+			continue
+		}
+		converted, err := modelMessage(message)
+		if err != nil {
+			return nil, fmt.Errorf("ai/a2a: related task %q: %w", task.ID, err)
+		}
+		messages = append(messages, converted)
+	}
+	for _, artifact := range task.Artifacts {
+		if artifact == nil {
+			continue
+		}
+		parts, err := modelResponseParts(artifact.Parts)
+		if err != nil {
+			return nil, fmt.Errorf("ai/a2a: related task %q artifact %q: %w", task.ID, artifact.ID, err)
+		}
+		if len(parts) > 0 {
+			messages = append(messages, ai.ModelResponse{Parts: parts})
+		}
+	}
+	return messages, nil
+}
+
 func modelMessage(message *protocol.Message) (ai.ModelMessage, error) {
 	switch message.Role {
 	case protocol.MessageRoleUser:
@@ -51,26 +99,34 @@ func modelMessage(message *protocol.Message) (ai.ModelMessage, error) {
 		}
 		return ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: content}}}, nil
 	case protocol.MessageRoleAgent:
-		parts := make([]ai.ResponsePart, 0, len(message.Parts))
-		for _, part := range message.Parts {
-			switch value := part.(type) {
-			case protocol.TextPart:
-				parts = append(parts, ai.TextPart{Content: value.Text})
-			case protocol.DataPart:
-				encoded, _ := json.Marshal(value.Data)
-				parts = append(parts, ai.TextPart{Content: string(encoded)})
-			case protocol.FilePart:
-				binary, err := fileBinary(value)
-				if err != nil {
-					return nil, err
-				}
-				parts = append(parts, ai.FilePart{Content: binary})
-			}
+		parts, err := modelResponseParts(message.Parts)
+		if err != nil {
+			return nil, err
 		}
 		return ai.ModelResponse{Parts: parts}, nil
 	default:
 		return nil, fmt.Errorf("ai/a2a: unsupported message role %q", message.Role)
 	}
+}
+
+func modelResponseParts(parts protocol.ContentParts) ([]ai.ResponsePart, error) {
+	converted := make([]ai.ResponsePart, 0, len(parts))
+	for _, part := range parts {
+		switch value := part.(type) {
+		case protocol.TextPart:
+			converted = append(converted, ai.TextPart{Content: value.Text})
+		case protocol.DataPart:
+			encoded, _ := json.Marshal(value.Data)
+			converted = append(converted, ai.TextPart{Content: string(encoded)})
+		case protocol.FilePart:
+			binary, err := fileBinary(value)
+			if err != nil {
+				return nil, err
+			}
+			converted = append(converted, ai.FilePart{Content: binary})
+		}
+	}
+	return converted, nil
 }
 
 func userContents(parts protocol.ContentParts) ([]ai.UserContent, error) {

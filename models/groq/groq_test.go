@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -59,6 +60,256 @@ func TestModelAndSettings(t *testing.T) {
 	defaults.ExtraBody["custom"] = false
 	if model.DefaultModelSettings().ExtraBody["custom"] != true {
 		t.Fatal("default settings were not detached")
+	}
+}
+
+func TestTaggedThinking(t *testing.T) {
+	var staticRequests int
+	var streamRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.Header.Get("Accept") == "text/event-stream" {
+			streamRequests++
+			switch streamRequests {
+			case 1:
+				_, _ = response.Write([]byte("data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"content\":\"pre<th\"}}]}\n\n" +
+					"data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"content\":\"ink>rea\"}}]}\n\n" +
+					"data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"content\":\"son</think>post\"}}]}\n\n" +
+					"data: [DONE]\n\n"))
+			case 2:
+				_, _ = response.Write([]byte("data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"content\":\"<think>x\"}}]}\n\n" +
+					"data: [DONE]\n\n"))
+			case 3:
+				_, _ = response.Write([]byte("data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"content\":\"tail<\"}}]}\n\n" +
+					"data: invalid\n\n"))
+			case 4:
+				_, _ = response.Write([]byte("data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"tool_calls\":[{" +
+					"\"index\":0,\"id\":\"call\",\"function\":{\"name\":\"lookup\",\"arguments\":\"{}\"}}]}}]}\n\n" +
+					"data: [DONE]\n\n"))
+			case 5:
+				_, _ = response.Write([]byte("data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"content\":\"tail<\"}}]}\n\n" +
+					"data: invalid\n\n"))
+			case 6:
+				_, _ = response.Write([]byte("data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"content\":\"tail<\"}}]}\n\n" +
+					"data: [DONE]\n\n"))
+			default:
+				_, _ = response.Write([]byte("data: {\"model\":\"model\",\"choices\":[{\"delta\":{\"content\":\"text\"}}]}\n\n" +
+					"data: [DONE]\n\n"))
+			}
+			return
+		}
+		staticRequests++
+		content := `<think>a</think>b<think>c</think>d`
+		if staticRequests == 2 {
+			content = `before<think>unclosed`
+		}
+		_, _ = response.Write([]byte(`{"model":"model","choices":[{"finish_reason":"stop","message":{"content":` +
+			strconv.Quote(content) + `}}]}`))
+	}))
+	defer server.Close()
+	model := groq.NewModel("deepseek-r1", groq.WithBaseURL(server.URL), groq.WithAPIKey("key"),
+		groq.WithHTTPClient(server.Client()))
+
+	response, err := model.Request(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil || len(response.Parts) != 4 {
+		t.Fatalf("unexpected tagged response: %#v %v", response, err)
+	}
+	if response.Parts[0].(ai.ThinkingPart).Content != "a" || response.Parts[1].(ai.TextPart).Content != "b" ||
+		response.Parts[2].(ai.ThinkingPart).Content != "c" || response.Parts[3].(ai.TextPart).Content != "d" {
+		t.Fatalf("unexpected tagged response parts: %#v", response.Parts)
+	}
+	response, err = model.Request(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil || len(response.Parts) != 2 || response.Parts[0].(ai.TextPart).Content != "before" ||
+		response.Parts[1].(ai.TextPart).Content != "unclosed" {
+		t.Fatalf("unexpected unclosed tagged response: %#v %v", response, err)
+	}
+
+	stream, err := model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ai.ModelStreamEvent
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 5 || events[0].(ai.TextDeltaEvent).Delta != "pre" ||
+		events[1].(ai.ThinkingDeltaEvent).Delta != "rea" ||
+		events[2].(ai.ThinkingDeltaEvent).Delta != "son" ||
+		events[3].(ai.TextDeltaEvent).Delta != "post" {
+		t.Fatalf("unexpected tagged stream: %#v", events)
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events = nil
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			break
+		}
+		events = append(events, event)
+	}
+	if len(events) != 2 || events[0].(ai.TextDeltaEvent).Delta != "tail" ||
+		events[1].(ai.TextDeltaEvent).Delta != "<" {
+		t.Fatalf("pending tagged text was lost on error: %#v", events)
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for range stream {
+		count++
+		if count == 2 {
+			break
+		}
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count = 0
+	for range stream {
+		count++
+		if count == 2 {
+			break
+		}
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
+	}
+}
+
+func TestToolUseFailedResponses(t *testing.T) {
+	bodies := []string{
+		`{"error":{"code":"tool_use_failed","failed_generation":"{\"name\":\"lookup\",\"arguments\":{\"city\":\"Paris\"}}"}}`,
+		`{"code":"tool_use_failed","failed_generation":"plain fallback"}`,
+		`{"error":{"code":"tool_use_failed","failed_generation":""}}`,
+		`not json`,
+		`{"error":{"code":"tool_use_failed","failed_generation":"{\"name\":\"lookup\",\"arguments\":{}}"}}`,
+		`{"code":"tool_use_failed","failed_generation":"plain fallback"}`,
+		`{"error":{"code":"tool_use_failed","failed_generation":""}}`,
+		`{"error":{"code":"other","failed_generation":"ignored"}}`,
+		`{"error":{"code":"tool_use_failed","failed_generation":"{\"name\":\"lookup\",\"arguments\":{}}"}}`,
+		`{"code":"tool_use_failed","failed_generation":"plain fallback"}`,
+	}
+	request := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		body := bodies[request]
+		request++
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(body))
+	}))
+	defer server.Close()
+	model := groq.NewModel("model", groq.WithBaseURL(server.URL), groq.WithAPIKey("key"),
+		groq.WithHTTPClient(server.Client()))
+
+	result, err := model.Request(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil || len(result.Parts) != 1 || result.FinishReason != ai.FinishReasonError {
+		t.Fatalf("unexpected failed-tool response: %#v %v", result, err)
+	}
+	call := result.Parts[0].(ai.ToolCallPart)
+	if call.ToolName != "lookup" || string(call.Args) != `{"city":"Paris"}` ||
+		!strings.HasPrefix(call.ToolCallID, "groq-failed:") {
+		t.Fatalf("unexpected recovered tool call: %#v", call)
+	}
+	result, err = model.Request(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil || result.Text() != "plain fallback" {
+		t.Fatalf("unexpected fallback text: %#v %v", result, err)
+	}
+	result, err = model.Request(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil || len(result.Parts) != 0 {
+		t.Fatalf("unexpected empty failed generation: %#v %v", result, err)
+	}
+	if _, err = model.Request(context.Background(), nil, ai.ModelRequestParams{}); err == nil {
+		t.Fatal("unrelated API error was normalized")
+	}
+
+	stream, err := model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ai.ModelStreamEvent
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 3 {
+		t.Fatalf("unexpected failed-tool stream: %#v", events)
+	}
+	start := events[0].(ai.ToolCallStartEvent)
+	if start.ToolName != "lookup" || events[1].(ai.ToolCallDeltaEvent).ArgsDelta != `{}` ||
+		events[2].(ai.FinishEvent).FinishReason != ai.FinishReasonError {
+		t.Fatalf("unexpected recovered tool stream: %#v", events)
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events = nil
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 2 || events[0].(ai.TextDeltaEvent).Delta != "plain fallback" {
+		t.Fatalf("unexpected fallback text stream: %#v", events)
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events = nil
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 1 {
+		t.Fatalf("unexpected empty failed stream: %#v", events)
+	}
+	if stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{}); err == nil || stream != nil {
+		t.Fatalf("unrelated streamed API error was normalized: %v", err)
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
+	}
+	stream, err = model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
 	}
 }
 
@@ -247,7 +498,8 @@ func TestCompoundWebSearch(t *testing.T) {
 				"data: {\"id\":\"completion\",\"model\":\"groq/compound\"," +
 				"\"choices\":[{\"index\":0,\"delta\":{\"content\":\"found\",\"executed_tools\":[{" +
 				"\"index\":0,\"type\":\"search\",\"arguments\":\"{\\\"query\\\":\\\"Go\\\"}\"," +
-				"\"output\":\"stream result\"}]},\"finish_reason\":\"stop\"}]}\n\n" +
+				"\"output\":\"stream result\"}]},\"finish_reason\":\"stop\"}]," +
+				"\"x_groq\":{\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}}\n\n" +
 				"data: [DONE]\n\n"))
 			return
 		}
@@ -305,9 +557,11 @@ func TestCompoundWebSearch(t *testing.T) {
 	delta, deltaOK := events[1].(ai.ToolCallDeltaEvent)
 	streamResult, resultOK := events[2].(ai.NativeToolReturnEvent)
 	text, textOK := events[3].(ai.TextDeltaEvent)
-	if !startOK || !deltaOK || !resultOK || !textOK || !start.Native ||
+	finish, finishOK := events[4].(ai.FinishEvent)
+	if !startOK || !deltaOK || !resultOK || !textOK || !finishOK || !start.Native ||
 		start.ToolKind != ai.ToolPartKindWebSearch || delta.ArgsDelta != `{"query":"Go"}` ||
-		streamResult.Part.Content != "stream result" || text.Delta != "found" {
+		streamResult.Part.Content != "stream result" || text.Delta != "found" ||
+		finish.Usage.InputTokens != 5 || finish.Usage.OutputTokens != 2 {
 		t.Fatalf("unexpected executed search lifecycle: %#v", events)
 	}
 	if len(bodies) != 2 {

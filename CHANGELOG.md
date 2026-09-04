@@ -56,6 +56,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Translate portable reasoning by Groq model family and report Qwen 3 effort overrides.
 - Normalize Groq compound search executions into provider-native call and return parts.
 - Restrict Groq multimodal prompts to supported URL and inline images before transport.
+- Recover Groq `tool_use_failed` payloads as retryable static and streamed model output.
+- Read terminal Groq streaming usage from the `x_groq` envelope.
+- Split Groq `<think>` content across static and streamed chunk boundaries.
 - Align reflected schemas with custom JSON marshalers, `json:",string"`, fixed arrays, JSON-compatible map keys, numeric JSON values, and Go's embedded-field selection rules.
 
 ### Deprecated

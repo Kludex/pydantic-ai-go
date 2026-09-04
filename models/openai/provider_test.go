@@ -570,7 +570,8 @@ func TestOpenAIExecutedToolsCompatibility(t *testing.T) {
 			_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"executed_tools":[`+
 				`{"index":0,"type":"search","arguments":"{\"query\":\"Go\"}","output":"found"}]}}]}`+"\n\n")
 			_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"executed_tools":[`+
-				`{"index":0,"type":"search","arguments":"{\"query\":\"Go\"}","output":"duplicate"}]}}]}`+"\n\n")
+				`{"index":0,"type":"search","arguments":"{\"query\":\"Go\"}","output":"duplicate"}]}}],`+
+				`"x_groq":{"usage":{"prompt_tokens":7,"completion_tokens":3}}}`+"\n\n")
 			_, _ = io.WriteString(response, "data: [DONE]\n\n")
 			return
 		}
@@ -636,8 +637,10 @@ func TestOpenAIExecutedToolsCompatibility(t *testing.T) {
 	start := events[0].(ai.ToolCallStartEvent)
 	delta := events[1].(ai.ToolCallDeltaEvent)
 	toolResult := events[2].(ai.NativeToolReturnEvent)
+	finish := events[3].(ai.FinishEvent)
 	if !start.Native || start.ToolKind != ai.ToolPartKindWebSearch || delta.ArgsDelta != `{"query":"Go"}` ||
-		toolResult.Part.Content != "found" || start.ToolCallID != toolResult.Part.ToolCallID {
+		toolResult.Part.Content != "found" || start.ToolCallID != toolResult.Part.ToolCallID ||
+		finish.Usage.InputTokens != 7 || finish.Usage.OutputTokens != 3 {
 		t.Fatalf("unexpected executed tool events: %#v", events)
 	}
 

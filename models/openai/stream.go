@@ -88,6 +88,9 @@ type chatChunk struct {
 		} `json:"logprobs"`
 	} `json:"choices"`
 	Usage *chatUsage `json:"usage"`
+	XGroq *struct {
+		Usage *chatUsage `json:"usage"`
+	} `json:"x_groq"`
 	Error *chatError `json:"error"`
 }
 
@@ -189,10 +192,14 @@ func (m *Model) eventStream(
 			if m.chatCompatibility.ExtendedMetadata && chunk.Provider != "" {
 				providerDetails["downstream_provider"] = chunk.Provider
 			}
-			if chunk.Usage != nil {
-				usage = chunk.Usage.usage()
+			chunkUsage := chunk.Usage
+			if chunkUsage == nil && m.chatCompatibility.ExecutedTools && chunk.XGroq != nil {
+				chunkUsage = chunk.XGroq.Usage
+			}
+			if chunkUsage != nil {
+				usage = chunkUsage.usage()
 				if m.chatCompatibility.ExtendedMetadata {
-					addExtendedChatUsageDetails(providerDetails, *chunk.Usage)
+					addExtendedChatUsageDetails(providerDetails, *chunkUsage)
 				}
 			}
 			if len(chunk.Choices) == 0 {

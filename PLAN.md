@@ -283,6 +283,7 @@ Once the package is up to date with PydanticAI itself, add a [gh-aw](https://git
 - HTTP-level retry policy (delegate to the injected `http.Client`/transport)
 - On-demand capability loading, self-extension, harness features
 - Non-standard MCP task extensions until they are supported by the official Go SDK; MCP multi-round-trip input remains owned by the SDK session
+- Bundled Temporal, DBOS, and Prefect agent-loop runtimes. The public `durable` operation contract composes application-owned SDK callbacks without importing optional workflow engines; Prefect has no official Go SDK.
 
 ## Open Decisions
 

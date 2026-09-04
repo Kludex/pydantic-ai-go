@@ -11,16 +11,23 @@ import (
 type CacheTTL string
 
 const (
+	// CacheTTL5Minutes keeps a cache breakpoint for five minutes.
 	CacheTTL5Minutes CacheTTL = "5m"
-	CacheTTL1Hour    CacheTTL = "1h"
+	// CacheTTL1Hour keeps a cache breakpoint for one hour.
+	CacheTTL1Hour CacheTTL = "1h"
 )
 
 // Settings combines portable settings with Anthropic prompt caching.
 type Settings struct {
-	Common               ai.ModelSettings
-	Cache                CacheTTL
-	CacheInstructions    CacheTTL
-	CacheMessages        CacheTTL
+	// Common contains portable model settings.
+	Common ai.ModelSettings
+	// Cache enables automatic prompt-cache placement with this retention.
+	Cache CacheTTL
+	// CacheInstructions caches the final stable instruction boundary.
+	CacheInstructions CacheTTL
+	// CacheMessages caches recent message boundaries.
+	CacheMessages CacheTTL
+	// CacheToolDefinitions caches the final function-tool definition.
 	CacheToolDefinitions CacheTTL
 }
 

@@ -65,8 +65,10 @@ func WithDeferredToolSupport(enabled bool) Option {
 
 // SchemaWarning describes a lossy strict-schema conversion.
 type SchemaWarning struct {
+	// ToolName identifies the transformed definition.
 	ToolName string
-	Message  string
+	// Message explains which schema behavior was not preserved.
+	Message string
 }
 
 // WithSchemaWarningHandler receives inspectable warnings when Anthropic's
@@ -294,10 +296,13 @@ func (m *Model) setRequestHeaders(req *http.Request, payload *messagesRequest, s
 
 // APIError is a non-200 response from the Anthropic API.
 type APIError struct {
+	// StatusCode is the HTTP response status.
 	StatusCode int
-	Body       string
+	// Body is the provider response body.
+	Body string
 }
 
+// Error formats the provider status and body.
 func (e *APIError) Error() string {
 	return fmt.Sprintf("anthropic: API returned status %d: %s", e.StatusCode, e.Body)
 }

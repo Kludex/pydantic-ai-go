@@ -435,6 +435,36 @@ Set `GOOGLE_API_KEY` or the legacy `GEMINI_API_KEY`. `GOOGLE_API_KEY` takes prec
 
 Gemini accepts image, document, audio, and video content. Ordinary URLs are downloaded with SSRF protection. Gemini Files API URLs and YouTube videos are sent directly.
 
+### Cached content
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/google"
+)
+
+func main() {
+	settings, err := (google.Settings{CachedContent: "cachedContents/example"}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](
+		google.NewModel("gemini-2.5-flash"),
+		ai.WithModelSettings(settings),
+	)
+	if _, err := agent.Run(context.Background(), "Use the cached context.", struct{}{}); err != nil {
+		log.Fatal(err)
+	}
+}
+```
+
+Create the cached-content resource with Gemini or Vertex before the run. The resource owns system instructions and tools. The provider omits local system and tool declarations because Google rejects requests that combine them with `cachedContent`.
+
 ## Google Cloud Vertex AI
 
 ```go

@@ -39,6 +39,58 @@ func newNamedServer(t *testing.T, name string, handler http.HandlerFunc, extra .
 	return google.NewModel(name, append(opts, extra...)...)
 }
 
+func TestCachedContentSettings(t *testing.T) {
+	temperature := 0.2
+	common := ai.ModelSettings{Temperature: &temperature, ExtraBody: map[string]any{"custom": true}}
+	settings, err := (google.Settings{Common: common, CachedContent: "cachedContents/example"}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.ExtraBody["custom"] = false
+	if common.ExtraBody["custom"] != true {
+		t.Fatal("Google settings share caller-owned extra body")
+	}
+	var body map[string]any
+	model := newNamedServer(t, "gemini-3-flash", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"role":"model","parts":[{"text":"ok"}]}}]}`))
+	})
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{
+		Instructions: "ignored",
+		Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		NativeTools:  []ai.NativeTool{ai.WebSearchTool{}},
+		Settings:     settings,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["cachedContent"] != "cachedContents/example" || body["systemInstruction"] != nil ||
+		body["tools"] != nil || body["toolConfig"] != nil {
+		t.Fatalf("unexpected cached-content request: %#v", body)
+	}
+	empty, err := (google.Settings{CachedContent: "cachedContents/empty"}).Build()
+	if err != nil || empty.ExtraBody["google_cached_content"] != "cachedContents/empty" {
+		t.Fatalf("unexpected empty common settings: %#v %v", empty, err)
+	}
+	if _, err := (google.Settings{Common: ai.ModelSettings{ExtraBody: map[string]any{
+		"google_cached_content": "existing",
+	}}, CachedContent: "duplicate"}).Build(); err == nil {
+		t.Fatal("expected cached-content setting conflict")
+	}
+	plain, err := (google.Settings{Common: common}).Build()
+	if err != nil || plain.ExtraBody["custom"] != true {
+		t.Fatalf("unexpected plain settings: %#v %v", plain, err)
+	}
+	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		ExtraBody: map[string]any{"google_cached_content": 1},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "non-empty string") {
+		t.Fatalf("unexpected invalid cached content error: %v", err)
+	}
+}
+
 func TestGoogleCountTokensByTransport(t *testing.T) {
 	for _, transport := range []google.Transport{google.TransportGeminiAPI, google.TransportVertexAI} {
 		t.Run(string(transport), func(t *testing.T) {

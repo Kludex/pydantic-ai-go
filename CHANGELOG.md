@@ -42,6 +42,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Infer embedding models for the audited OpenAI-compatible provider aliases, including environment-configured LiteLLM and Snowflake endpoints.
 - Send native JSON Schema output through Anthropic `output_config.format` on supported Claude model families.
 - Extend reflected JSON Schema with embedded structs, nullable pointers, JSON/time/text/base64 representations, and common validation annotations.
+- Add typed Gemini and Vertex cached-content references with API-required system and tool omission.
 
 ### Deprecated
 

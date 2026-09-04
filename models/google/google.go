@@ -236,6 +236,7 @@ type generateRequest struct {
 	Contents          []content         `json:"contents"`
 	Tools             []toolsParam      `json:"tools,omitempty"`
 	ToolConfig        *toolConfig       `json:"toolConfig,omitempty"`
+	CachedContent     string            `json:"cachedContent,omitempty"`
 	GenerationConfig  *generationConfig `json:"generationConfig,omitempty"`
 }
 
@@ -633,6 +634,10 @@ func (m *Model) buildPayload(
 		req.SystemInstruction = &content{Parts: []part{{Text: params.Instructions}}}
 	}
 	settings := params.Settings
+	cachedContentName, err := cachedContent(settings)
+	if err != nil {
+		return nil, err
+	}
 	thinking, err := googleThinking(m.name, settings.Thinking)
 	if err != nil {
 		return nil, err
@@ -708,6 +713,12 @@ func (m *Model) buildPayload(
 			req.ToolConfig = &toolConfig{}
 		}
 		req.ToolConfig.IncludeServerSideToolInvocations = true
+	}
+	if cachedContentName != "" {
+		req.CachedContent = cachedContentName
+		req.SystemInstruction = nil
+		req.Tools = nil
+		req.ToolConfig = nil
 	}
 	return req, nil
 }

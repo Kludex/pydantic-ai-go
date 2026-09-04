@@ -1,6 +1,7 @@
 package agui
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ var errConsumerStopped = errors.New("agui: stream consumer stopped")
 type eventTransformer struct {
 	runID            string
 	version          protocolVersion
+	preserveFileData bool
 	messageID        string
 	messageOpen      bool
 	response         int
@@ -24,6 +26,7 @@ type eventTransformer struct {
 	activity         int
 	calls            map[string]bool
 	partCalls        map[string]string
+	partActivities   map[string]string
 	outcome          RunOutcome
 	stopped          bool
 }
@@ -52,6 +55,11 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 				"content": part.Content, "id": part.ID, "provider_name": part.ProviderName,
 				"provider_details": cloneMap(part.ProviderDetails),
 			})
+		case ai.FilePart:
+			if transformer.preserveFileData {
+				transformer.partActivities[value.PartID] = transformer.nextActivityID()
+				transformer.fileSnapshot(yield, transformer.partActivities[value.PartID], part)
+			}
 		case ai.ToolCallPart:
 			transformer.partCalls[value.PartID] = part.ToolCallID
 			transformer.startToolCall(yield, part.ToolCallID, part.ToolName, string(part.Args))
@@ -85,6 +93,15 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 			}
 			if delta.ArgsDelta != "" {
 				yield(Event{Type: EventToolCallArgs, ToolCallID: toolCallID, Delta: delta.ArgsDelta}, nil)
+			}
+		case ai.FilePartDelta:
+			if transformer.preserveFileData {
+				messageID := transformer.partActivities[value.PartID]
+				if messageID == "" {
+					messageID = transformer.nextActivityID()
+					transformer.partActivities[value.PartID] = messageID
+				}
+				transformer.fileSnapshot(yield, messageID, delta.Part)
 			}
 		case ai.NativeToolCallPartDelta:
 			converted := ai.ToolCallPartDelta(delta)
@@ -146,12 +163,47 @@ func (transformer *eventTransformer) activitySnapshot(
 	if !transformer.version.atLeast(0, 1, 19) {
 		return
 	}
+	transformer.emitActivitySnapshot(yield, transformer.nextActivityID(), activityType, content)
+}
+
+func (transformer *eventTransformer) nextActivityID() string {
 	transformer.activity++
+	return fmt.Sprintf("%s:activity:%d", transformer.runID, transformer.activity)
+}
+
+func (transformer *eventTransformer) emitActivitySnapshot(
+	yield func(Event, error) bool, messageID string, activityType string, content map[string]any,
+) {
 	replace := true
 	yield(Event{
-		Type: EventActivitySnapshot, MessageID: fmt.Sprintf("%s:activity:%d", transformer.runID, transformer.activity),
-		ActivityType: activityType, Content: content, Replace: &replace,
+		Type: EventActivitySnapshot, MessageID: messageID, ActivityType: activityType,
+		Content: content, Replace: &replace,
 	}, nil)
+}
+
+func (transformer *eventTransformer) fileSnapshot(
+	yield func(Event, error) bool, messageID string, part ai.FilePart,
+) {
+	if !transformer.version.atLeast(0, 1, 19) {
+		return
+	}
+	content := map[string]any{
+		"url":        "data:" + part.Content.MediaType + ";base64," + base64.StdEncoding.EncodeToString(part.Content.Data),
+		"media_type": part.Content.MediaType,
+	}
+	if part.ID != "" {
+		content["id"] = part.ID
+	}
+	if part.ProviderName != "" {
+		content["provider_name"] = part.ProviderName
+	}
+	if len(part.ProviderDetails) > 0 {
+		content["provider_details"] = cloneMap(part.ProviderDetails)
+	}
+	if len(part.Content.VendorMetadata) > 0 {
+		content["vendor_metadata"] = cloneMap(part.Content.VendorMetadata)
+	}
+	transformer.emitActivitySnapshot(yield, messageID, "pydantic_ai_file", content)
 }
 
 func (transformer *eventTransformer) startReasoning(yield func(Event, error) bool, part ai.ThinkingPart) {

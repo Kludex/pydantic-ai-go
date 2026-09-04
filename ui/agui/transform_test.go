@@ -151,6 +151,48 @@ func TestTransformLazyReasoning(t *testing.T) {
 	}
 }
 
+func TestTransformFiles(t *testing.T) {
+	first := ai.FilePart{
+		Content: ai.BinaryContent{Data: []byte("first"), MediaType: "image/png", VendorMetadata: map[string]any{"v": "one"}},
+		ID:      "file", ProviderName: "openai", ProviderDetails: map[string]any{"p": "one"},
+	}
+	second := first
+	second.Content.Data = []byte("second")
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.PartStartEvent{PartID: "file", Part: first}, nil)
+		yield(ai.PartDeltaEvent{PartID: "file", Delta: ai.FilePartDelta{Part: second}}, nil)
+		yield(ai.PartDeltaEvent{PartID: "late-file", Delta: ai.FilePartDelta{Part: second}}, nil)
+	})
+	for _, config := range []agui.StreamConfig{
+		{Version: "0.1.19"},
+		{Version: "0.1.18", PreserveFileData: true},
+		{Version: "0.1.19", PreserveFileData: true},
+	} {
+		var files []agui.Event
+		for event, err := range agui.TransformStreamWithConfig(stream, config) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.ActivityType == "pydantic_ai_file" {
+				files = append(files, event)
+			}
+		}
+		if !config.PreserveFileData || config.Version == "0.1.18" {
+			if len(files) != 0 {
+				t.Fatalf("files were not omitted: %#v", files)
+			}
+			continue
+		}
+		if len(files) != 3 || files[0].MessageID != files[1].MessageID || files[1].MessageID == files[2].MessageID ||
+			files[0].Content.(map[string]any)["url"] != "data:image/png;base64,Zmlyc3Q=" ||
+			files[1].Content.(map[string]any)["url"] != "data:image/png;base64,c2Vjb25k" ||
+			files[0].Content.(map[string]any)["id"] != "file" ||
+			files[0].Content.(map[string]any)["provider_name"] != "openai" {
+			t.Fatalf("unexpected file snapshots: %#v", files)
+		}
+	}
+}
+
 func TestTransformActivities(t *testing.T) {
 	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
 		yield(ai.PartStartEvent{PartID: "compaction", Part: ai.CompactionPart{

@@ -141,6 +141,14 @@ Versions before `0.1.13` receive the legacy `THINKING_*` lifecycle. Version `0.1
 
 Every event includes a Unix-millisecond `timestamp`. A canceled agent run closes any open text message and emits `RUN_FINISHED` without a success or interrupt outcome because AG-UI has no cancellation outcome.
 
+## Preserve generated and uploaded files
+
+Set `Config.PreserveFileData` to emit generated `FilePart` values as `pydantic_ai_file` activity snapshots. File replacement deltas reuse the same activity message ID. The activity carries a data URL plus detached provider metadata.
+
+The same setting reconstructs echoed `pydantic_ai_file` and `pydantic_ai_uploaded_file` activities. Uploaded provider references still require `Config.Sanitization.AllowUploadedFiles`. This second trust gate prevents file preservation from granting access to client-supplied provider files by itself.
+
+File activities require AG-UI `0.1.19` or later. The default remains disabled because data URLs duplicate binary output in client-held history.
+
 ## Preserve durable activities
 
 AG-UI `0.1.19` and later receives `ACTIVITY_SNAPSHOT` events for provider-neutral compaction boundaries and tools revealed during a run. The reserved activity types are `pydantic_ai_compaction` and `pydantic_ai_tool_availability_delta`.
@@ -157,4 +165,4 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 The adapter supports text and multimodal user messages, assistant reasoning, function calls, structured tool results, secure client-held history, versioned thinking and reasoning streams, normalized text and tool streaming, event timestamps, cancellation, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-State snapshots and deltas, file preservation, external-execution interrupts, custom events, and forwarded context remain.
+State snapshots and deltas, external-execution interrupts, custom events, and forwarded context remain.

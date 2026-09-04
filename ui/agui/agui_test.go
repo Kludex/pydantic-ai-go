@@ -202,6 +202,74 @@ func TestPrepareActivities(t *testing.T) {
 	}
 }
 
+func TestPreserveFileActivities(t *testing.T) {
+	var captured []ai.ModelMessage
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		captured = messages
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	input := agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "file", Role: "activity", ActivityType: "pydantic_ai_file", Content: map[string]any{
+			"url": "data:image/png;base64,aW1hZ2U=", "id": "generated", "provider_name": "openai",
+			"provider_details": map[string]any{"detail": "value"},
+			"vendor_metadata":  map[string]any{"vendor": "value"},
+		}},
+		{ID: "uploaded", Role: "activity", ActivityType: "pydantic_ai_uploaded_file", Content: map[string]any{
+			"file_id": "file-1", "provider_name": "openai", "media_type": "application/pdf",
+			"identifier": "document", "vendor_metadata": map[string]any{"purpose": "input"},
+		}},
+		{ID: "user", Role: "user", Content: "continue"},
+	}}
+	config := agui.Config{PreserveFileData: true}
+	config.Sanitization.AllowUploadedFiles = true
+	for _, err := range agui.NewAdapter(ai.NewAgent[struct{}, string](model), config).RunStream(t.Context(), input, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(captured) != 3 {
+		t.Fatalf("unexpected preserved history: %#v", captured)
+	}
+	file := captured[0].(ai.ModelResponse).Parts[0].(ai.FilePart)
+	uploaded := captured[1].(ai.ModelRequest).Parts[0].(ai.UserPromptPart).Contents[0].(ai.UploadedFile)
+	if string(file.Content.Data) != "image" || file.ID != "generated" || file.ProviderName != "openai" ||
+		file.ProviderDetails["detail"] != "value" || file.Content.VendorMetadata["vendor"] != "value" ||
+		uploaded.FileID != "file-1" || uploaded.MediaType != "application/pdf" || uploaded.Identifier != "document" ||
+		uploaded.VendorMetadata["purpose"] != "input" {
+		t.Fatalf("unexpected preserved files: %#v %#v", file, uploaded)
+	}
+
+	for _, malformed := range []agui.Message{
+		{ID: "file", Role: "activity", ActivityType: "pydantic_ai_file", Content: map[string]any{}},
+		{ID: "file", Role: "activity", ActivityType: "pydantic_ai_file", Content: map[string]any{"url": "invalid"}},
+		{ID: "upload", Role: "activity", ActivityType: "pydantic_ai_uploaded_file", Content: map[string]any{}},
+	} {
+		invalid := input
+		invalid.Messages = []agui.Message{malformed, {ID: "user", Role: "user", Content: "continue"}}
+		var got error
+		for _, err := range agui.NewAdapter(ai.NewAgent[struct{}, string](model), config).RunStream(
+			t.Context(), invalid, struct{}{},
+		) {
+			got = err
+		}
+		if got == nil {
+			t.Fatalf("malformed file activity was accepted: %#v", malformed)
+		}
+	}
+
+	ignored := input
+	ignored.Messages[0].Content = map[string]any{}
+	for _, err := range agui.NewAdapter(ai.NewAgent[struct{}, string](model), agui.Config{}).RunStream(
+		t.Context(), ignored, struct{}{},
+	) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestPrepareReasoningInput(t *testing.T) {
 	encrypted := `{"id":"thinking-id","signature":"signature","provider_name":"anthropic","provider_details":{"redacted":false}}`
 	prompt, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{

@@ -14,7 +14,13 @@ import (
 func PrepareInput(
 	input RunAgentInput, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
-	messages, err := convertMessages(input.Messages)
+	return prepareInput(input, options, false)
+}
+
+func prepareInput(
+	input RunAgentInput, options ai.MessageSanitizationOptions, preserveFileData bool,
+) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
+	messages, err := convertMessages(input.Messages, preserveFileData)
 	if err != nil {
 		return ai.UserPromptPart{}, nil, ai.MessageSanitizationReport{}, err
 	}
@@ -39,13 +45,13 @@ func PrepareInput(
 }
 
 func prepareRunInput(
-	input RunAgentInput, options ai.MessageSanitizationOptions,
+	input RunAgentInput, options ai.MessageSanitizationOptions, preserveFileData bool,
 ) (ai.UserPromptPart, []ai.ModelMessage, *ai.DeferredToolResults, error) {
 	if len(input.Resume) == 0 {
-		prompt, history, _, err := PrepareInput(input, options)
+		prompt, history, _, err := prepareInput(input, options, preserveFileData)
 		return prompt, history, nil, err
 	}
-	messages, err := convertMessages(input.Messages)
+	messages, err := convertMessages(input.Messages, preserveFileData)
 	if err != nil {
 		return ai.UserPromptPart{}, nil, nil, err
 	}
@@ -92,7 +98,7 @@ func resumeApproval(entry ResumeEntry) ai.ToolApproval {
 	return ai.ToolDenied{Message: payload.Reason}
 }
 
-func convertMessages(messages []Message) ([]ai.ModelMessage, error) {
+func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessage, error) {
 	converted := make([]ai.ModelMessage, 0, len(messages))
 	for _, message := range messages {
 		if message.ID == "" {
@@ -128,6 +134,22 @@ func convertMessages(messages []Message) ([]ai.ModelMessage, error) {
 				converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{
 					toolAvailabilityActivityPart(content),
 				}})
+			case "pydantic_ai_file":
+				if preserveFileData {
+					part, err := fileActivityPart(content)
+					if err != nil {
+						return nil, err
+					}
+					converted = appendResponse(converted, []ai.ResponsePart{part})
+				}
+			case "pydantic_ai_uploaded_file":
+				if preserveFileData {
+					part, err := uploadedFileActivityPart(content)
+					if err != nil {
+						return nil, err
+					}
+					converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{part}})
+				}
 			}
 		case "reasoning":
 			content, err := textMessageContent(message.Content, "reasoning")
@@ -185,6 +207,41 @@ func convertMessages(messages []Message) ([]ai.ModelMessage, error) {
 		}
 	}
 	return converted, nil
+}
+
+func fileActivityPart(content map[string]any) (ai.FilePart, error) {
+	value, ok := content["url"].(string)
+	if !ok || value == "" {
+		return ai.FilePart{}, fmt.Errorf("agui: file activity requires a non-empty data URL")
+	}
+	vendorMetadata, _ := content["vendor_metadata"].(map[string]any)
+	decoded, err := decodeDataURL(value, vendorMetadata)
+	if err != nil {
+		return ai.FilePart{}, fmt.Errorf("agui: file activity: %w", err)
+	}
+	binary := decoded.(ai.BinaryContent)
+	part := ai.FilePart{Content: binary}
+	part.ID, _ = content["id"].(string)
+	part.ProviderName, _ = content["provider_name"].(string)
+	if details, ok := content["provider_details"].(map[string]any); ok {
+		part.ProviderDetails = cloneMap(details)
+	}
+	return part, nil
+}
+
+func uploadedFileActivityPart(content map[string]any) (ai.UserPromptPart, error) {
+	fileID, fileOK := content["file_id"].(string)
+	providerName, providerOK := content["provider_name"].(string)
+	if !fileOK || fileID == "" || !providerOK || providerName == "" {
+		return ai.UserPromptPart{}, fmt.Errorf("agui: uploaded-file activity requires a file ID and provider name")
+	}
+	mediaType, _ := content["media_type"].(string)
+	identifier, _ := content["identifier"].(string)
+	vendorMetadata, _ := content["vendor_metadata"].(map[string]any)
+	return ai.UserPromptPart{Contents: []ai.UserContent{ai.UploadedFile{
+		FileID: fileID, ProviderName: providerName, MediaType: mediaType, Identifier: identifier,
+		VendorMetadata: cloneMap(vendorMetadata),
+	}}}, nil
 }
 
 func compactionActivityPart(content map[string]any) (ai.CompactionPart, bool) {

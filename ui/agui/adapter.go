@@ -48,7 +48,9 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		runID = nextID("run")
 	}
 	return func(yield func(Event, error) bool) {
-		prompt, history, deferred, err := prepareRunInput(input, adapter.config.Sanitization)
+		prompt, history, deferred, err := prepareRunInput(
+			input, adapter.config.Sanitization, adapter.config.PreserveFileData,
+		)
 		if err != nil {
 			yield(Event{Type: EventRunError, Message: err.Error()}, err)
 			return
@@ -80,6 +82,7 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		}
 		for event, eventErr := range TransformStreamWithConfig(stream.Events(), StreamConfig{
 			Version: adapter.config.Version, ThreadID: threadID, RunID: runID,
+			PreserveFileData: adapter.config.PreserveFileData,
 		}) {
 			if !yield(event, eventErr) || eventErr != nil {
 				return
@@ -120,7 +123,8 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 			return
 		}
 		transformer := eventTransformer{
-			runID: runID, version: version, calls: map[string]bool{}, partCalls: map[string]string{},
+			runID: runID, version: version, preserveFileData: config.PreserveFileData,
+			calls: map[string]bool{}, partCalls: map[string]string{}, partActivities: map[string]string{},
 			outcome: RunOutcome{Type: "success"},
 		}
 		for event, eventErr := range stream {

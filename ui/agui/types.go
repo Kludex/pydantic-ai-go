@@ -231,6 +231,8 @@ type Config struct {
 	Version string
 	// Sanitization controls untrusted history. The zero value is secure.
 	Sanitization ai.MessageSanitizationOptions
+	// PreserveFileData round-trips generated and provider-hosted files through reserved activities.
+	PreserveFileData bool
 	// MaxRequestBytes bounds an HTTP request body. Zero defaults to 10 MiB.
 	MaxRequestBytes int64
 }
@@ -243,4 +245,6 @@ type StreamConfig struct {
 	ThreadID string
 	// RunID identifies the frontend run.
 	RunID string
+	// PreserveFileData emits generated files through reserved activity snapshots.
+	PreserveFileData bool
 }

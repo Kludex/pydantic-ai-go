@@ -1167,20 +1167,15 @@ func googleWebSearchParts(
 	if responseID == "" {
 		callID = "web_search"
 	}
-	return &ai.NativeToolCallPart{
-			ToolName:     "web_search",
-			ToolCallID:   callID,
-			ToolKind:     ai.ToolPartKindWebSearch,
-			Args:         args,
-			ProviderName: providerName,
-		}, &ai.NativeToolReturnPart{
-			ToolName:     "web_search",
-			ToolCallID:   callID,
-			ToolKind:     ai.ToolPartKindWebSearch,
-			Content:      results,
-			Timestamp:    timestamp,
-			ProviderName: providerName,
-		}
+	call := &ai.NativeToolCallPart{
+		ToolName: "web_search", ToolCallID: callID, ToolKind: ai.ToolPartKindWebSearch,
+		Args: args, ProviderName: providerName,
+	}
+	result := &ai.NativeToolReturnPart{
+		ToolName: "web_search", ToolCallID: callID, ToolKind: ai.ToolPartKindWebSearch,
+		Content: results, Timestamp: timestamp, ProviderName: providerName,
+	}
+	return call, result
 }
 
 func googleWebFetchParts(
@@ -1214,13 +1209,15 @@ func googleWebFetchParts(
 	if responseID == "" {
 		callID = "web_fetch"
 	}
-	return &ai.NativeToolCallPart{
-			ToolName: "web_fetch", ToolCallID: callID, ToolKind: ai.ToolPartKindWebFetch,
-			Args: args, ProviderName: providerName,
-		}, &ai.NativeToolReturnPart{
-			ToolName: "web_fetch", ToolCallID: callID, ToolKind: ai.ToolPartKindWebFetch,
-			Content: results, Timestamp: timestamp, ProviderName: providerName,
-		}
+	call := &ai.NativeToolCallPart{
+		ToolName: "web_fetch", ToolCallID: callID, ToolKind: ai.ToolPartKindWebFetch,
+		Args: args, ProviderName: providerName,
+	}
+	result := &ai.NativeToolReturnPart{
+		ToolName: "web_fetch", ToolCallID: callID, ToolKind: ai.ToolPartKindWebFetch,
+		Content: results, Timestamp: timestamp, ProviderName: providerName,
+	}
+	return call, result
 }
 
 func cloneGoogleMap(source map[string]any) map[string]any {
@@ -1270,13 +1267,15 @@ func googleFileSearchParts(
 	if responseID == "" {
 		callID = "file_search"
 	}
-	return &ai.NativeToolCallPart{
-			ToolName: "file_search", Args: json.RawMessage(`{}`), ToolCallID: callID,
-			ToolKind: ai.ToolPartKindFileSearch, ProviderName: providerName,
-		}, &ai.NativeToolReturnPart{
-			ToolName: "file_search", ToolCallID: callID, ToolKind: ai.ToolPartKindFileSearch,
-			Content: contexts, Timestamp: timestamp, ProviderName: providerName,
-		}
+	call := &ai.NativeToolCallPart{
+		ToolName: "file_search", Args: json.RawMessage(`{}`), ToolCallID: callID,
+		ToolKind: ai.ToolPartKindFileSearch, ProviderName: providerName,
+	}
+	result := &ai.NativeToolReturnPart{
+		ToolName: "file_search", ToolCallID: callID, ToolKind: ai.ToolPartKindFileSearch,
+		Content: contexts, Timestamp: timestamp, ProviderName: providerName,
+	}
+	return call, result
 }
 
 func googleNativeCallID(id, responseID, toolType string, index int) string {

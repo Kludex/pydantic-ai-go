@@ -1086,21 +1086,15 @@ func responsesCodeExecutionParts(
 	if len(logs) > 0 {
 		content["logs"] = logs
 	}
-	return ai.NativeToolCallPart{
-			ToolName:     "code_execution",
-			Args:         args,
-			ToolCallID:   item.ID,
-			ToolKind:     ai.ToolPartKindCodeExecution,
-			ID:           item.ID,
-			ProviderName: "openai",
-		}, files, ai.NativeToolReturnPart{
-			ToolName:     "code_execution",
-			ToolCallID:   item.ID,
-			ToolKind:     ai.ToolPartKindCodeExecution,
-			Content:      content,
-			Timestamp:    timestamp,
-			ProviderName: "openai",
-		}, nil
+	call := ai.NativeToolCallPart{
+		ToolName: "code_execution", Args: args, ToolCallID: item.ID,
+		ToolKind: ai.ToolPartKindCodeExecution, ID: item.ID, ProviderName: "openai",
+	}
+	result := ai.NativeToolReturnPart{
+		ToolName: "code_execution", ToolCallID: item.ID, ToolKind: ai.ToolPartKindCodeExecution,
+		Content: content, Timestamp: timestamp, ProviderName: "openai",
+	}
+	return call, files, result, nil
 }
 
 func responsesMCPParts(
@@ -1127,13 +1121,15 @@ func responsesMCPParts(
 		})
 		content = map[string]any{"output": item.Output, "error": item.Error}
 	}
-	return ai.NativeToolCallPart{
-			ToolName: toolName, Args: args, ToolCallID: item.ID, ToolKind: ai.ToolPartKindMCPServer,
-			ID: item.ID, ProviderName: "openai",
-		}, ai.NativeToolReturnPart{
-			ToolName: toolName, ToolCallID: item.ID, ToolKind: ai.ToolPartKindMCPServer,
-			Content: content, Timestamp: timestamp, ProviderName: "openai",
-		}, nil
+	call := ai.NativeToolCallPart{
+		ToolName: toolName, Args: args, ToolCallID: item.ID, ToolKind: ai.ToolPartKindMCPServer,
+		ID: item.ID, ProviderName: "openai",
+	}
+	result := ai.NativeToolReturnPart{
+		ToolName: toolName, ToolCallID: item.ID, ToolKind: ai.ToolPartKindMCPServer,
+		Content: content, Timestamp: timestamp, ProviderName: "openai",
+	}
+	return call, result, nil
 }
 
 func responsesSearchParts(
@@ -1150,13 +1146,15 @@ func responsesSearchParts(
 	if item.Results != nil {
 		content["results"] = item.Results
 	}
-	return ai.NativeToolCallPart{
-			ToolName: toolName, Args: arguments, ToolCallID: item.ID, ToolKind: toolKind,
-			ID: item.ID, ProviderName: "openai",
-		}, ai.NativeToolReturnPart{
-			ToolName: toolName, ToolCallID: item.ID, ToolKind: toolKind,
-			Content: content, Timestamp: timestamp, ProviderName: "openai",
-		}
+	call := ai.NativeToolCallPart{
+		ToolName: toolName, Args: arguments, ToolCallID: item.ID, ToolKind: toolKind,
+		ID: item.ID, ProviderName: "openai",
+	}
+	result := ai.NativeToolReturnPart{
+		ToolName: toolName, ToolCallID: item.ID, ToolKind: toolKind,
+		Content: content, Timestamp: timestamp, ProviderName: "openai",
+	}
+	return call, result
 }
 
 func responsesFileSearchParts(
@@ -1167,13 +1165,15 @@ func responsesFileSearchParts(
 	if item.Results != nil {
 		content["results"] = item.Results
 	}
-	return ai.NativeToolCallPart{
-			ToolName: "file_search", Args: args, ToolCallID: item.ID, ToolKind: ai.ToolPartKindFileSearch,
-			ID: item.ID, ProviderName: "openai",
-		}, ai.NativeToolReturnPart{
-			ToolName: "file_search", ToolCallID: item.ID, ToolKind: ai.ToolPartKindFileSearch,
-			Content: content, Timestamp: timestamp, ProviderName: "openai",
-		}
+	call := ai.NativeToolCallPart{
+		ToolName: "file_search", Args: args, ToolCallID: item.ID, ToolKind: ai.ToolPartKindFileSearch,
+		ID: item.ID, ProviderName: "openai",
+	}
+	result := ai.NativeToolReturnPart{
+		ToolName: "file_search", ToolCallID: item.ID, ToolKind: ai.ToolPartKindFileSearch,
+		Content: content, Timestamp: timestamp, ProviderName: "openai",
+	}
+	return call, result
 }
 
 func responsesImageGenerationParts(
@@ -1201,13 +1201,15 @@ func responsesImageGenerationParts(
 		file = &generated
 		content["status"] = "completed"
 	}
-	return ai.NativeToolCallPart{
-			ToolName: "image_generation", ToolCallID: item.ID, ToolKind: ai.ToolPartKindImageGeneration,
-			ID: item.ID, ProviderName: "openai",
-		}, file, ai.NativeToolReturnPart{
-			ToolName: "image_generation", ToolCallID: item.ID, ToolKind: ai.ToolPartKindImageGeneration,
-			Content: content, Timestamp: timestamp, ProviderName: "openai",
-		}, nil
+	call := ai.NativeToolCallPart{
+		ToolName: "image_generation", ToolCallID: item.ID, ToolKind: ai.ToolPartKindImageGeneration,
+		ID: item.ID, ProviderName: "openai",
+	}
+	result := ai.NativeToolReturnPart{
+		ToolName: "image_generation", ToolCallID: item.ID, ToolKind: ai.ToolPartKindImageGeneration,
+		Content: content, Timestamp: timestamp, ProviderName: "openai",
+	}
+	return call, file, result, nil
 }
 
 func responsesGeneratedImage(itemID, encoded, outputFormat string) (ai.FilePart, error) {

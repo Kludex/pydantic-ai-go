@@ -1095,23 +1095,17 @@ func (model *Model) executedToolParts(
 	content, _ := executedToolContent(tool)
 	callID := fmt.Sprintf("groq-search:%d", tool.Index)
 	details := map[string]any{"index": tool.Index, "type": tool.Type}
-	return ai.NativeToolCallPart{
-			ToolName:        "web_search",
-			Args:            arguments,
-			ToolCallID:      callID,
-			ToolKind:        ai.ToolPartKindWebSearch,
-			ID:              callID,
-			ProviderName:    model.providerName,
-			ProviderDetails: details,
-		}, ai.NativeToolReturnPart{
-			ToolName:        "web_search",
-			Content:         content,
-			ToolCallID:      callID,
-			ToolKind:        ai.ToolPartKindWebSearch,
-			Outcome:         ai.ToolReturnOutcomeSuccess,
-			ProviderName:    model.providerName,
-			ProviderDetails: maps.Clone(details),
-		}, true, nil
+	call := ai.NativeToolCallPart{
+		ToolName: "web_search", Args: arguments, ToolCallID: callID,
+		ToolKind: ai.ToolPartKindWebSearch, ID: callID, ProviderName: model.providerName,
+		ProviderDetails: details,
+	}
+	result := ai.NativeToolReturnPart{
+		ToolName: "web_search", Content: content, ToolCallID: callID,
+		ToolKind: ai.ToolPartKindWebSearch, Outcome: ai.ToolReturnOutcomeSuccess, ProviderName: model.providerName,
+		ProviderDetails: maps.Clone(details),
+	}
+	return call, result, true, nil
 }
 
 func executedToolContent(tool chatExecutedTool) (any, bool) {

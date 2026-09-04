@@ -72,8 +72,50 @@ A deferred approval or external tool call ends the response in input-required st
 
 The official A2A server owns task storage, event queues, push notifications, retries, and transport cancellation. The executor does not close its queue.
 
+## Resume deferred tools
+
+```go
+package main
+
+import (
+    "encoding/json"
+    "fmt"
+    "log"
+
+    a2aintegration "github.com/Kludex/pydantic-ai-go/a2a"
+)
+
+func main() {
+    part, err := a2aintegration.NewDeferredResultsPart(a2aintegration.DeferredResults{
+        Calls: map[string]a2aintegration.DeferredCallResult{
+            "call-id": {
+                Outcome: a2aintegration.DeferredCallSucceeded,
+                Value: map[string]any{"result": "done"},
+            },
+        },
+        Approvals: map[string]a2aintegration.DeferredApproval{
+            "approval-id": {Approved: true},
+        },
+    })
+    if err != nil {
+        log.Fatal(err)
+    }
+    encoded, err := json.Marshal(part)
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(string(encoded))
+}
+```
+
+An input-required status contains one `pydantic-ai-go/deferred-tool-requests` data part. It includes pending IDs, arguments, metadata, and opaque model history. Send one `pydantic-ai-go/deferred-tool-results` part in the next user message. `NewDeferredResultsPart` creates that part without requiring you to depend on its wire representation.
+
+You must resolve every pending ID exactly once. External calls accept successful values, terminal failures, or retry messages. Approvals accept a decision and optional replacement arguments. The executor restores the stored model history and resumes without repeating completed tool side effects.
+
+Keep the SDK task store authoritative. The executor reads continuation state from `StoredTask`, not from ordinary user history.
+
 ## Current scope
 
 The integration provides server-side execution through the official Go SDK, text, data, and file input, sanitized task history, named and annotated streamed artifacts, structured-output fallback, dependency resolution, deferred input-required state, failure state, and cancellation.
 
-Client-side A2A model calls, extension negotiation, push notification policy, and mapping deferred A2A follow-up messages back to `DeferredToolResults` remain.
+Client-side A2A model calls, extension negotiation, and push notification policy remain.

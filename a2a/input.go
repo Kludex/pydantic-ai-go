@@ -14,50 +14,67 @@ import (
 
 func prepareRequest(
 	request *a2asrv.RequestContext, options ai.MessageSanitizationOptions,
-) ([]ai.UserContent, []ai.ModelMessage, error) {
+) ([]ai.UserContent, []ai.ModelMessage, *ai.DeferredToolResults, error) {
 	if request.Message.Role != protocol.MessageRoleUser {
-		return nil, nil, fmt.Errorf("ai/a2a: request message must have the user role")
+		return nil, nil, nil, fmt.Errorf("ai/a2a: request message must have the user role")
 	}
-	prompt, err := userContents(request.Message.Parts)
+	prompt, wireResults, err := requestContents(request.Message.Parts)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	var history []ai.ModelMessage
-	seenTasks := map[protocol.TaskID]struct{}{}
-	if request.TaskID != "" {
-		seenTasks[protocol.TaskID(request.TaskID)] = struct{}{}
+	state, err := deferredState(request.StoredTask)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	for _, task := range request.RelatedTasks {
-		if task == nil {
-			continue
-		}
-		if _, seen := seenTasks[task.ID]; seen {
-			continue
-		}
-		seenTasks[task.ID] = struct{}{}
-		messages, err := relatedTaskMessages(task)
-		if err != nil {
-			return nil, nil, err
-		}
-		history = append(history, messages...)
+	history, deferredResults, err := resolveDeferred(state, wireResults)
+	if err != nil {
+		return nil, nil, nil, err
 	}
-	if request.StoredTask != nil {
-		for _, message := range request.StoredTask.History {
-			if message == nil || message.ID == request.Message.ID {
+	if state == nil {
+		seenTasks := map[protocol.TaskID]struct{}{}
+		if request.TaskID != "" {
+			seenTasks[protocol.TaskID(request.TaskID)] = struct{}{}
+		}
+		for _, task := range request.RelatedTasks {
+			if task == nil {
 				continue
 			}
-			converted, err := modelMessage(message)
-			if err != nil {
-				return nil, nil, err
+			if _, seen := seenTasks[task.ID]; seen {
+				continue
 			}
-			history = append(history, converted)
+			seenTasks[task.ID] = struct{}{}
+			messages, err := relatedTaskMessages(task)
+			if err != nil {
+				return nil, nil, nil, err
+			}
+			history = append(history, messages...)
+		}
+		if request.StoredTask != nil {
+			for _, message := range request.StoredTask.History {
+				if message == nil || message.ID == request.Message.ID {
+					continue
+				}
+				converted, err := modelMessage(message)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				history = append(history, converted)
+			}
+		}
+	}
+	if deferredResults != nil {
+		for id := range deferredResults.Calls {
+			options.ResolvedToolCallIDs = append(options.ResolvedToolCallIDs, id)
+		}
+		for id := range deferredResults.Approvals {
+			options.ResolvedToolCallIDs = append(options.ResolvedToolCallIDs, id)
 		}
 	}
 	history, _, err = ai.SanitizeMessages(history, options)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return prompt, history, nil
+	return prompt, history, deferredResults, nil
 }
 
 func relatedTaskMessages(task *protocol.Task) ([]ai.ModelMessage, error) {
@@ -127,6 +144,31 @@ func modelResponseParts(parts protocol.ContentParts) ([]ai.ResponsePart, error) 
 		}
 	}
 	return converted, nil
+}
+
+func requestContents(parts protocol.ContentParts) ([]ai.UserContent, *DeferredResults, error) {
+	visible := make(protocol.ContentParts, 0, len(parts))
+	var deferred *DeferredResults
+	for _, part := range parts {
+		data, ok := part.(protocol.DataPart)
+		if !ok || data.Data["type"] != deferredResultsKind {
+			visible = append(visible, part)
+			continue
+		}
+		if deferred != nil {
+			return nil, nil, fmt.Errorf("ai/a2a: request contains multiple deferred result parts")
+		}
+		parsed, err := parseDeferredResults(data.Data)
+		if err != nil {
+			return nil, nil, err
+		}
+		deferred = parsed
+	}
+	if len(visible) == 0 && deferred != nil {
+		return nil, deferred, nil
+	}
+	content, err := userContents(visible)
+	return content, deferred, err
 }
 
 func userContents(parts protocol.ContentParts) ([]ai.UserContent, error) {

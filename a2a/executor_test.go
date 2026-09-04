@@ -279,9 +279,59 @@ func TestExecutorDeferredAndCancellation(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent)
-	if status.Status.State != protocol.TaskStateInputRequired || !status.Final {
+	if status.Status.State != protocol.TaskStateInputRequired || !status.Final || status.Status.Message == nil {
 		t.Fatalf("unexpected deferred status: %#v", status)
 	}
+	state := status.Status.Message.Parts[0].(protocol.DataPart).Data
+	approvals := state["approvals"].([]any)
+	approvalID := approvals[0].(map[string]any)["id"].(string)
+	resultPart, err := a2aintegration.NewDeferredResultsPart(a2aintegration.DeferredResults{
+		Approvals: map[string]a2aintegration.DeferredApproval{approvalID: {
+			Approved: true, OverrideArgs: json.RawMessage(`{"approved":true}`),
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume := &a2asrv.RequestContext{
+		Message: protocol.NewMessage(protocol.MessageRoleUser, resultPart), TaskID: "task", ContextID: "context",
+		StoredTask: &protocol.Task{ID: "task", Status: status.Status, History: []*protocol.Message{request.Message}},
+	}
+	queue = &recordingQueue{}
+	if err := executor.Execute(context.Background(), resume, queue); err != nil {
+		t.Fatal(err)
+	}
+	if resumed := queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent); resumed.Status.State != protocol.TaskStateCompleted {
+		t.Fatalf("approval did not resume the task: %#v", queue.events)
+	}
+
+	queue = &recordingQueue{}
+	if err := executor.Execute(context.Background(), request, queue); err != nil {
+		t.Fatal(err)
+	}
+	status = queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent)
+	state = status.Status.Message.Parts[0].(protocol.DataPart).Data
+	approvalID = state["approvals"].([]any)[0].(map[string]any)["id"].(string)
+	resultPart, err = a2aintegration.NewDeferredResultsPart(a2aintegration.DeferredResults{
+		Approvals: map[string]a2aintegration.DeferredApproval{approvalID: {Message: "not allowed"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resume.Message = protocol.NewMessage(protocol.MessageRoleUser, resultPart)
+	resume.StoredTask = &protocol.Task{ID: "task", Status: status.Status}
+	queue = &recordingQueue{}
+	if err := executor.Execute(context.Background(), resume, queue); err != nil {
+		t.Fatal(err)
+	}
+	if denied := queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent); denied.Status.State != protocol.TaskStateCompleted {
+		t.Fatalf("denial did not resume the task: %#v", queue.events)
+	}
+
+	if err := executor.Execute(context.Background(), request, &recordingQueue{failAt: 3}); err == nil {
+		t.Fatal("expected input-required queue error")
+	}
+
 	queue = &recordingQueue{}
 	if err := executor.Cancel(context.Background(), request, queue); err != nil {
 		t.Fatal(err)
@@ -289,6 +339,245 @@ func TestExecutorDeferredAndCancellation(t *testing.T) {
 	status = queue.events[0].(*protocol.TaskStatusUpdateEvent)
 	if status.Status.State != protocol.TaskStateCanceled || !status.Final {
 		t.Fatalf("unexpected canceled status: %#v", status)
+	}
+}
+
+func TestExecutorExternalDeferredResults(t *testing.T) {
+	tests := []struct {
+		name     string
+		result   a2aintegration.DeferredCallResult
+		partKind string
+	}{
+		{name: "success", result: a2aintegration.DeferredCallResult{
+			Outcome: a2aintegration.DeferredCallSucceeded, Value: map[string]any{"answer": 42},
+		}, partKind: "return"},
+		{name: "failed", result: a2aintegration.DeferredCallResult{
+			Outcome: a2aintegration.DeferredCallFailed, Message: "remote failed",
+		}, partKind: "return"},
+		{name: "retry", result: a2aintegration.DeferredCallResult{
+			Outcome: a2aintegration.DeferredCallRetry, Message: "try again",
+		}, partKind: "retry"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requests := 0
+			model := fakes.NewFunctionModel(func(
+				_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				requests++
+				if requests == 1 {
+					return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+						ToolName: "external", ToolCallID: "external-call", Args: json.RawMessage(`{"value":1}`),
+					}}}, nil
+				}
+				latest := messages[len(messages)-1].(ai.ModelRequest).Parts[0]
+				if test.partKind == "return" {
+					if _, ok := latest.(ai.ToolReturnPart); !ok {
+						t.Fatalf("unexpected deferred return: %#v", latest)
+					}
+				} else if _, ok := latest.(ai.RetryPromptPart); !ok {
+					t.Fatalf("unexpected deferred retry: %#v", latest)
+				}
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+			})
+			agent := ai.NewAgent[struct{}, string](model)
+			agent.AddRawTool(ai.ToolDefinition{Name: "external", Schema: map[string]any{"type": "object"}},
+				func(context.Context, json.RawMessage) (any, error) {
+					return ai.RequestExternalToolExecution(map[string]any{"queue": "remote"}), nil
+				}, ai.WithDynamicExternalExecution())
+			executor := a2aintegration.NewExecutor(agent, a2aintegration.Config[struct{}]{})
+			request := &a2asrv.RequestContext{
+				Message: protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "run"}),
+				TaskID:  "task", ContextID: "context",
+			}
+			queue := &recordingQueue{}
+			if err := executor.Execute(t.Context(), request, queue); err != nil {
+				t.Fatal(err)
+			}
+			status := queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent)
+			state := status.Status.Message.Parts[0].(protocol.DataPart).Data
+			pending := state["calls"].([]any)[0].(map[string]any)
+			if pending["id"] != "external-call" || pending["name"] != "external" ||
+				pending["metadata"].(map[string]any)["queue"] != "remote" {
+				t.Fatalf("unexpected pending external call: %#v", pending)
+			}
+			part, err := a2aintegration.NewDeferredResultsPart(a2aintegration.DeferredResults{
+				Calls:    map[string]a2aintegration.DeferredCallResult{"external-call": test.result},
+				Metadata: map[string]map[string]any{"external-call": {"worker": "one"}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			resume := &a2asrv.RequestContext{
+				Message: protocol.NewMessage(protocol.MessageRoleUser, part), TaskID: "task", ContextID: "context",
+				StoredTask: &protocol.Task{ID: "task", Status: status.Status},
+			}
+			queue = &recordingQueue{}
+			if err := executor.Execute(t.Context(), resume, queue); err != nil {
+				t.Fatal(err)
+			}
+			if final := queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent); final.Status.State != protocol.TaskStateCompleted {
+				t.Fatalf("external result did not resume: %#v", queue.events)
+			}
+		})
+	}
+}
+
+func TestExecutorDeferredFailures(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "external", ToolCallID: "external-call", Args: json.RawMessage(`{}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[struct{}, string](model)
+	agent.AddRawTool(ai.ToolDefinition{Name: "external", Schema: map[string]any{"type": "object"}},
+		func(context.Context, json.RawMessage) (any, error) {
+			return ai.RequestExternalToolExecution(nil), nil
+		}, ai.WithDynamicExternalExecution())
+	executor := a2aintegration.NewExecutor(agent, a2aintegration.Config[struct{}]{})
+	initial := &a2asrv.RequestContext{
+		Message: protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "run"}),
+		TaskID:  "task", ContextID: "context",
+	}
+	queue := &recordingQueue{}
+	if err := executor.Execute(t.Context(), initial, queue); err != nil {
+		t.Fatal(err)
+	}
+	status := queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent)
+	baseState := status.Status.Message.Parts[0].(protocol.DataPart).Data
+
+	cloneState := func() map[string]any {
+		encoded, err := json.Marshal(baseState)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var cloned map[string]any
+		if err := json.Unmarshal(encoded, &cloned); err != nil {
+			t.Fatal(err)
+		}
+		return cloned
+	}
+	stored := func(data map[string]any) *protocol.Task {
+		return &protocol.Task{ID: "task", Status: protocol.TaskStatus{
+			State:   protocol.TaskStateInputRequired,
+			Message: protocol.NewMessage(protocol.MessageRoleAgent, protocol.DataPart{Data: data}),
+		}}
+	}
+	valid, err := a2aintegration.NewDeferredResultsPart(a2aintegration.DeferredResults{
+		Calls: map[string]a2aintegration.DeferredCallResult{"external-call": {
+			Outcome: a2aintegration.DeferredCallSucceeded, Value: "done",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	makePart := func(results a2aintegration.DeferredResults) protocol.DataPart {
+		part, err := a2aintegration.NewDeferredResultsPart(results)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return part
+	}
+
+	badStoredEncoding := cloneState()
+	badStoredEncoding["calls"] = make(chan int)
+	badStoredShape := cloneState()
+	badStoredShape["calls"] = "invalid"
+	missingMessages := cloneState()
+	missingMessages["messages"] = ""
+	invalidMessages := cloneState()
+	invalidMessages["messages"] = "invalid"
+	approvalState := cloneState()
+	approvalState["approvals"] = approvalState["calls"]
+	delete(approvalState, "calls")
+
+	tests := []struct {
+		name   string
+		parts  []protocol.Part
+		stored *protocol.Task
+	}{
+		{name: "results without state", parts: []protocol.Part{valid}},
+		{name: "missing results", parts: []protocol.Part{protocol.TextPart{Text: "continue"}}, stored: stored(cloneState())},
+		{name: "duplicate results", parts: []protocol.Part{valid, valid}, stored: stored(cloneState())},
+		{name: "stored encoding", parts: []protocol.Part{valid}, stored: stored(badStoredEncoding)},
+		{name: "stored shape", parts: []protocol.Part{valid}, stored: stored(badStoredShape)},
+		{name: "missing messages", parts: []protocol.Part{valid}, stored: stored(missingMessages)},
+		{name: "invalid messages", parts: []protocol.Part{valid}, stored: stored(invalidMessages)},
+		{name: "result encoding", parts: []protocol.Part{protocol.DataPart{Data: map[string]any{
+			"type": "pydantic-ai-go/deferred-tool-results", "calls": make(chan int),
+		}}}, stored: stored(cloneState())},
+		{name: "result shape", parts: []protocol.Part{protocol.DataPart{Data: map[string]any{
+			"type": "pydantic-ai-go/deferred-tool-results", "calls": "invalid",
+		}}}, stored: stored(cloneState())},
+		{name: "incomplete calls", parts: []protocol.Part{makePart(a2aintegration.DeferredResults{})}, stored: stored(cloneState())},
+		{name: "missing call", parts: []protocol.Part{makePart(a2aintegration.DeferredResults{Calls: map[string]a2aintegration.DeferredCallResult{
+			"other": {Outcome: a2aintegration.DeferredCallSucceeded},
+		}})}, stored: stored(cloneState())},
+		{name: "invalid outcome", parts: []protocol.Part{makePart(a2aintegration.DeferredResults{Calls: map[string]a2aintegration.DeferredCallResult{
+			"external-call": {Outcome: "unknown"},
+		}})}, stored: stored(cloneState())},
+		{name: "incomplete approvals", parts: []protocol.Part{makePart(a2aintegration.DeferredResults{})}, stored: stored(approvalState)},
+		{name: "missing approval", parts: []protocol.Part{makePart(a2aintegration.DeferredResults{Approvals: map[string]a2aintegration.DeferredApproval{
+			"other": {Approved: true},
+		}})}, stored: stored(approvalState)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := &a2asrv.RequestContext{
+				Message: protocol.NewMessage(protocol.MessageRoleUser, test.parts...), StoredTask: test.stored,
+				TaskID: "task", ContextID: "context",
+			}
+			queue := &recordingQueue{}
+			if err := executor.Execute(t.Context(), request, queue); err != nil {
+				t.Fatal(err)
+			}
+			final := queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent)
+			if final.Status.State != protocol.TaskStateFailed {
+				t.Fatalf("invalid deferred input was accepted: %#v", queue.events)
+			}
+		})
+	}
+	if requests != 1 {
+		t.Fatalf("invalid deferred inputs reached the model %d times", requests-1)
+	}
+
+	plain := a2aintegration.NewExecutor(
+		ai.NewAgent[struct{}, string](fakes.NewTestModel()), a2aintegration.Config[struct{}]{},
+	)
+	unrelatedState := &protocol.Task{ID: "task", Status: protocol.TaskStatus{
+		State:   protocol.TaskStateInputRequired,
+		Message: protocol.NewMessage(protocol.MessageRoleAgent, protocol.TextPart{Text: "application input"}),
+	}}
+	if err := plain.Execute(t.Context(), &a2asrv.RequestContext{
+		Message:    protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "continue"}),
+		StoredTask: unrelatedState, TaskID: "task", ContextID: "context",
+	}, &recordingQueue{}); err != nil {
+		t.Fatal(err)
+	}
+
+	badAgent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	badAgent.AddRawTool(ai.ToolDefinition{Name: "external", Schema: map[string]any{"type": "object"}},
+		func(context.Context, json.RawMessage) (any, error) {
+			return ai.RequestExternalToolExecution(map[string]any{"invalid": make(chan int)}), nil
+		}, ai.WithDynamicExternalExecution())
+	badExecutor := a2aintegration.NewExecutor(badAgent, a2aintegration.Config[struct{}]{})
+	if err := badExecutor.Execute(t.Context(), initial, &recordingQueue{}); err == nil {
+		t.Fatal("non-JSON deferred request metadata was accepted")
+	}
+
+	if _, err := a2aintegration.NewDeferredResultsPart(a2aintegration.DeferredResults{
+		Calls: map[string]a2aintegration.DeferredCallResult{"call": {
+			Outcome: a2aintegration.DeferredCallSucceeded, Value: make(chan int),
+		}},
+	}); err == nil {
+		t.Fatal("non-JSON deferred result was accepted")
 	}
 }
 

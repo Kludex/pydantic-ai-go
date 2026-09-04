@@ -65,7 +65,7 @@ func (executor *Executor[Deps, Output]) Execute(
 	if queue == nil {
 		return fmt.Errorf("ai/a2a: event queue must not be nil")
 	}
-	prompt, history, err := prepareRequest(request, executor.config.Sanitization)
+	prompt, history, deferredResults, err := prepareRequest(request, executor.config.Sanitization)
 	if err != nil {
 		return executor.fail(ctx, request, queue, err)
 	}
@@ -86,6 +86,9 @@ func (executor *Executor[Deps, Output]) Execute(
 	}
 	options := append([]ai.RunOption(nil), executor.config.RunOptions...)
 	options = append(options, ai.WithMessageHistory(history), ai.WithConversationID(request.ContextID))
+	if deferredResults != nil {
+		options = append(options, ai.WithDeferredToolResults(*deferredResults))
+	}
 	stream := executor.agent.RunStreamParts(ctx, prompt, deps, options...)
 	var artifactID protocol.ArtifactID
 	emitted := false
@@ -122,11 +125,12 @@ func (executor *Executor[Deps, Output]) Execute(
 			deferred = true
 		}
 	}
+	result := stream.Result()
 	if deferred {
-		return executor.finish(ctx, request, queue, protocol.TaskStateInputRequired, nil)
+		pending := result.Deferred()
+		return executor.inputRequired(ctx, request, queue, result.Messages(), *pending)
 	}
 	if !emitted {
-		result := stream.Result()
 		if result != nil {
 			encoded, err := json.Marshal(result.Output)
 			if err != nil {
@@ -161,6 +165,23 @@ func (executor *Executor[Deps, Output]) fail(
 	ctx context.Context, request *a2asrv.RequestContext, queue eventqueue.Queue, runErr error,
 ) error {
 	return executor.finish(ctx, request, queue, protocol.TaskStateFailed, runErr)
+}
+
+func (*Executor[Deps, Output]) inputRequired(
+	ctx context.Context, request *a2asrv.RequestContext, queue eventqueue.Queue,
+	messages []ai.ModelMessage, deferred ai.DeferredToolRequests,
+) error {
+	part, err := newDeferredRequestPart(messages, deferred)
+	if err != nil {
+		return err
+	}
+	message := protocol.NewMessageForTask(protocol.MessageRoleAgent, request, part)
+	event := protocol.NewStatusUpdateEvent(request, protocol.TaskStateInputRequired, message)
+	event.Final = true
+	if err := queue.Write(ctx, event); err != nil {
+		return fmt.Errorf("ai/a2a: publish input-required state: %w", err)
+	}
+	return nil
 }
 
 func (*Executor[Deps, Output]) finish(

@@ -2,6 +2,7 @@
 package schema
 
 import (
+	"cmp"
 	"encoding"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // ForType returns a JSON Schema for any supported Go type.
@@ -31,6 +33,7 @@ func For(t reflect.Type) (map[string]any, error) {
 
 var (
 	jsonRawMessageType = reflect.TypeFor[json.RawMessage]()
+	jsonNumberType     = reflect.TypeFor[json.Number]()
 	jsonMarshalerType  = reflect.TypeFor[json.Marshaler]()
 	textMarshalerType  = reflect.TypeFor[encoding.TextMarshaler]()
 	timeType           = reflect.TypeFor[time.Time]()
@@ -45,53 +48,24 @@ func forStruct(t reflect.Type, path string, active map[reflect.Type]string) (map
 
 	properties := map[string]any{}
 	var required []string
-	for i := range t.NumField() {
-		f := t.Field(i)
-		if !f.IsExported() {
-			continue
-		}
-		name, omitempty, skip := jsonName(f)
-		if skip {
-			continue
-		}
-		if f.Anonymous && strings.Split(f.Tag.Get("json"), ",")[0] == "" {
-			embeddedType := f.Type
-			if embeddedType.Kind() == reflect.Pointer {
-				embeddedType = embeddedType.Elem()
-				omitempty = true
-			}
-			if embeddedType.Kind() == reflect.Struct {
-				embedded, err := forStruct(embeddedType, path, active)
-				if err != nil {
-					return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
-				}
-				for propertyName, property := range embedded["properties"].(map[string]any) {
-					properties[propertyName] = property
-				}
-				if !omitempty {
-					if names, ok := embedded["required"].([]string); ok {
-						required = append(required, names...)
-					}
-				}
-				continue
-			}
-		}
-		fieldSchema, err := forType(f.Type, path+"/properties/"+escapeJSONPointer(name), active)
+	for _, selected := range fieldsForStruct(t) {
+		field := selected.field
+		fieldSchema, err := forType(field.Type, path+"/properties/"+escapeJSONPointer(selected.name), active)
 		if err != nil {
-			return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
+			return nil, fmt.Errorf("schema: field %s: %w", field.Name, err)
 		}
-		if jsonStringOption(f) {
-			fieldSchema, err = stringEncodedSchema(f.Type)
+		if jsonStringOption(field) {
+			fieldSchema, err = stringEncodedSchema(field.Type)
 			if err != nil {
-				return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
+				return nil, fmt.Errorf("schema: field %s: %w", field.Name, err)
 			}
 		}
-		if err := applyTag(fieldSchema, f.Tag.Get("jsonschema")); err != nil {
-			return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
+		if err := applyTag(fieldSchema, field.Tag.Get("jsonschema")); err != nil {
+			return nil, fmt.Errorf("schema: field %s: %w", field.Name, err)
 		}
-		properties[name] = fieldSchema
-		if !omitempty || hasSchemaFlag(f.Tag.Get("jsonschema"), "required") {
-			required = append(required, name)
+		properties[selected.name] = fieldSchema
+		if !selected.optional || hasSchemaFlag(field.Tag.Get("jsonschema"), "required") {
+			required = append(required, selected.name)
 		}
 	}
 	s := map[string]any{
@@ -119,6 +93,9 @@ func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[s
 	if t == timeType {
 		return map[string]any{"type": "string", "format": "date-time"}, nil
 	}
+	if t == jsonNumberType {
+		return map[string]any{"type": "number"}, nil
+	}
 	if t.Implements(textMarshalerType) || reflect.PointerTo(t).Implements(textMarshalerType) {
 		return map[string]any{"type": "string"}, nil
 	}
@@ -131,7 +108,7 @@ func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[s
 	case reflect.Bool:
 		return map[string]any{"type": "boolean"}, nil
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr:
 		return map[string]any{"type": "integer"}, nil
 	case reflect.Float32, reflect.Float64:
 		return map[string]any{"type": "number"}, nil
@@ -169,7 +146,7 @@ func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[s
 
 func supportedMapKey(key reflect.Type) bool {
 	if key.Kind() == reflect.String || key.Kind() >= reflect.Int && key.Kind() <= reflect.Int64 ||
-		key.Kind() >= reflect.Uint && key.Kind() <= reflect.Uint64 {
+		key.Kind() >= reflect.Uint && key.Kind() <= reflect.Uintptr {
 		return true
 	}
 	return key.Implements(textMarshalerType) || reflect.PointerTo(key).Implements(textMarshalerType)
@@ -194,29 +171,143 @@ func stringEncodedSchema(t reflect.Type) (map[string]any, error) {
 	}
 	switch t.Kind() {
 	case reflect.Bool, reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Uintptr,
+		reflect.Float32, reflect.Float64:
 		return map[string]any{"type": "string"}, nil
 	default:
 		return nil, fmt.Errorf("json string option is not supported for %s", t)
 	}
 }
 
-func jsonName(f reflect.StructField) (name string, omitempty, skip bool) {
-	tag := f.Tag.Get("json")
-	if tag == "-" {
-		return "", false, true
+type selectedField struct {
+	field       reflect.StructField
+	name        string
+	index       []int
+	tagged      bool
+	tagPriority int
+	optional    bool
+}
+
+func fieldsForStruct(root reflect.Type) []selectedField {
+	type embedded struct {
+		typeOf   reflect.Type
+		index    []int
+		optional bool
 	}
-	name = f.Name
-	parts := strings.Split(tag, ",")
-	if parts[0] != "" {
-		name = parts[0]
-	}
-	for _, opt := range parts[1:] {
-		if opt == "omitempty" || opt == "omitzero" {
-			omitempty = true
+	current := []embedded{}
+	next := []embedded{{typeOf: root}}
+	var count, nextCount map[reflect.Type]int
+	visited := map[reflect.Type]bool{}
+	var fields []selectedField
+	for len(next) > 0 {
+		current, next = next, current[:0]
+		count, nextCount = nextCount, map[reflect.Type]int{}
+		for _, parent := range current {
+			if visited[parent.typeOf] {
+				continue
+			}
+			visited[parent.typeOf] = true
+			for index := range parent.typeOf.NumField() {
+				field := parent.typeOf.Field(index)
+				fieldType := field.Type
+				if fieldType.Kind() == reflect.Pointer {
+					fieldType = fieldType.Elem()
+				}
+				if !field.IsExported() && (!field.Anonymous || fieldType.Kind() != reflect.Struct) {
+					continue
+				}
+				name, optional, skip, tagged := jsonName(field)
+				if skip {
+					continue
+				}
+				fieldIndex := append(slices.Clone(parent.index), index)
+				if tagged || !field.Anonymous || fieldType.Kind() != reflect.Struct {
+					tagPriority := 1
+					if tagged {
+						tagPriority = 0
+					}
+					candidate := selectedField{
+						field: field, name: name, index: fieldIndex, tagged: tagged, tagPriority: tagPriority,
+						optional: optional || parent.optional,
+					}
+					fields = append(fields, candidate)
+					if count[parent.typeOf] > 1 {
+						fields = append(fields, candidate)
+					}
+					continue
+				}
+				nextCount[fieldType]++
+				if nextCount[fieldType] == 1 {
+					next = append(next, embedded{
+						typeOf: fieldType, index: fieldIndex,
+						optional: parent.optional || field.Type.Kind() == reflect.Pointer,
+					})
+				}
+			}
 		}
 	}
-	return name, omitempty, false
+	slices.SortFunc(fields, func(first, second selectedField) int {
+		if order := strings.Compare(first.name, second.name); order != 0 {
+			return order
+		}
+		if order := cmp.Compare(len(first.index), len(second.index)); order != 0 {
+			return order
+		}
+		if order := cmp.Compare(first.tagPriority, second.tagPriority); order != 0 {
+			return order
+		}
+		return slices.Compare(first.index, second.index)
+	})
+	selected := fields[:0]
+	for start := 0; start < len(fields); {
+		end := start + 1
+		for end < len(fields) && fields[end].name == fields[start].name {
+			end++
+		}
+		if end-start == 1 || len(fields[start].index) != len(fields[start+1].index) ||
+			fields[start].tagged != fields[start+1].tagged {
+			selected = append(selected, fields[start])
+		}
+		start = end
+	}
+	slices.SortFunc(selected, func(first, second selectedField) int {
+		return slices.Compare(first.index, second.index)
+	})
+	return selected
+}
+
+func jsonName(field reflect.StructField) (name string, optional, skip, tagged bool) {
+	tag := field.Tag.Get("json")
+	if tag == "-" {
+		return "", false, true, false
+	}
+	name = field.Name
+	parts := strings.Split(tag, ",")
+	if validJSONTagName(parts[0]) {
+		name = parts[0]
+		tagged = true
+	}
+	for _, option := range parts[1:] {
+		if option == "omitempty" || option == "omitzero" {
+			optional = true
+		}
+	}
+	return name, optional, false, tagged
+}
+
+func validJSONTagName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, character := range name {
+		if strings.ContainsRune("!#$%&()*+-./:;<=>?@[]^_{|}~ ", character) {
+			continue
+		}
+		if !unicode.IsLetter(character) && !unicode.IsDigit(character) {
+			return false
+		}
+	}
+	return true
 }
 
 func applyTag(schema map[string]any, tag string) error {

@@ -23,6 +23,27 @@ type jsonValue struct{}
 
 func (jsonValue) MarshalJSON() ([]byte, error) { return []byte(`{"custom":true}`), nil }
 
+type embeddedConflictA struct {
+	Value string
+}
+
+type embeddedConflictB struct {
+	Value int
+}
+
+type embeddedTaggedConflict struct {
+	Value bool `json:"Value"`
+}
+
+type hiddenEmbedded struct {
+	Visible string `json:"visible"`
+}
+
+type recursiveEmbedded struct {
+	*recursiveEmbedded
+	Value string `json:"value"`
+}
+
 type everything struct {
 	Name     string            `json:"name" jsonschema:"description=A name"`
 	Count    int               `json:"count"`
@@ -163,6 +184,9 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 		IntMap     map[int]string       `json:"int_map"`
 		TextMap    map[textValue]string `json:"text_map"`
 		Custom     jsonValue            `json:"custom"`
+		Number     json.Number          `json:"number"`
+		Pointer    uintptr              `json:"pointer"`
+		PointerMap map[uintptr]string   `json:"pointer_map"`
 	}
 	result, err := schema.For(reflect.TypeFor[value]())
 	if err != nil {
@@ -191,7 +215,10 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 		properties["fixed_bytes"].(map[string]any)["items"].(map[string]any)["type"] != "integer" ||
 		properties["int_map"].(map[string]any)["type"] != "object" ||
 		properties["text_map"].(map[string]any)["type"] != "object" ||
-		len(properties["custom"].(map[string]any)) != 0 {
+		len(properties["custom"].(map[string]any)) != 0 ||
+		properties["number"].(map[string]any)["type"] != "number" ||
+		properties["pointer"].(map[string]any)["type"] != "integer" ||
+		properties["pointer_map"].(map[string]any)["type"] != "object" {
 		t.Fatalf("unexpected reflected schema: %#v", result)
 	}
 	if _, ok := properties["embedded"]; !ok {
@@ -227,6 +254,112 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 
 func nonNullSchema(value map[string]any) map[string]any {
 	return value["anyOf"].([]any)[0].(map[string]any)
+}
+
+func TestReflectedSchemaMatchesEmbeddedJSONFields(t *testing.T) {
+	t.Run("shallow field wins", func(t *testing.T) {
+		type value struct {
+			embeddedConflictA
+			Value bool
+		}
+		result, err := schema.For(reflect.TypeFor[value]())
+		if err != nil {
+			t.Fatal(err)
+		}
+		property := result["properties"].(map[string]any)["Value"].(map[string]any)
+		if property["type"] != "boolean" {
+			t.Fatalf("shallow field did not win: %#v", result)
+		}
+	})
+	t.Run("equal fields conflict", func(t *testing.T) {
+		type value struct {
+			embeddedConflictA
+			embeddedConflictB
+		}
+		result, err := schema.For(reflect.TypeFor[value]())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result["properties"].(map[string]any)) != 0 {
+			t.Fatalf("conflicting fields were retained: %#v", result)
+		}
+	})
+	t.Run("tagged field wins", func(t *testing.T) {
+		type untaggedConflict struct {
+			Value string
+		}
+		type value struct {
+			untaggedConflict
+			embeddedTaggedConflict
+		}
+		result, err := schema.For(reflect.TypeFor[value]())
+		if err != nil {
+			t.Fatal(err)
+		}
+		properties := result["properties"].(map[string]any)
+		if properties["Value"].(map[string]any)["type"] != "boolean" {
+			t.Fatalf("tagged field did not win: %#v", result)
+		}
+	})
+	t.Run("duplicate embedded type conflicts", func(t *testing.T) {
+		type first struct{ embeddedConflictA }
+		type second struct{ embeddedConflictA }
+		type value struct {
+			first
+			second
+		}
+		result, err := schema.For(reflect.TypeFor[value]())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(result["properties"].(map[string]any)) != 0 {
+			t.Fatalf("duplicate embedded fields were retained: %#v", result)
+		}
+	})
+	t.Run("pointer and hidden embedding", func(t *testing.T) {
+		var recursive recursiveEmbedded
+		_ = recursive.recursiveEmbedded
+		type value struct {
+			*hiddenEmbedded
+			*recursiveEmbedded
+		}
+		result, err := schema.For(reflect.TypeFor[value]())
+		if err != nil {
+			t.Fatal(err)
+		}
+		properties := result["properties"].(map[string]any)
+		if properties["visible"].(map[string]any)["type"] != "string" ||
+			properties["value"].(map[string]any)["type"] != "string" {
+			t.Fatalf("embedded fields were not promoted: %#v", result)
+		}
+		if _, exists := result["required"]; exists {
+			t.Fatalf("pointer-embedded fields were required: %#v", result)
+		}
+	})
+	t.Run("named embedding", func(t *testing.T) {
+		type value struct {
+			embeddedConflictA `json:"nested"`
+		}
+		result, err := schema.For(reflect.TypeFor[value]())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if result["properties"].(map[string]any)["nested"].(map[string]any)["type"] != "object" {
+			t.Fatalf("named embedded field was promoted: %#v", result)
+		}
+	})
+	t.Run("invalid tag name", func(t *testing.T) {
+		typeWithInvalidTag := reflect.StructOf([]reflect.StructField{{
+			Name: "Value", Type: reflect.TypeFor[string](), Tag: `json:"bad\\name"`,
+		}})
+		result, err := schema.For(typeWithInvalidTag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, exists := result["properties"].(map[string]any)["Value"]; !exists {
+			t.Fatalf("invalid JSON tag name was accepted: %#v", result)
+		}
+	})
 }
 
 func TestForRejectsNonStructs(t *testing.T) {

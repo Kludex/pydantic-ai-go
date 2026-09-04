@@ -239,7 +239,7 @@ The minimal useful agent: typed runs against OpenAI.
 - `RunContext[Deps]`
 - `AddTool` / `AddSimpleTool` / `AddRawTool`, schema reflection, `Retryf`, retry caps
 - Structured output via output tool, validation-error retries
-- Loop implemented middleware-shaped internally (hooks not yet public)
+- Loop implemented middleware-shaped internally (public hooks shipped in v0.3)
 - `models/openai` (Chat Completions), `models/fakes` (`TestModel`, `FunctionModel`)
 - OTel tracing
 - Error taxonomy, cassette-based provider tests, 100% coverage
@@ -257,7 +257,7 @@ The minimal useful agent: typed runs against OpenAI.
 - Public `Capability` + hook interfaces (`RunWrapper`, `ModelRequestWrapper`, `ToolCallWrapper`, `InstructionsProvider`)
 - `WithCapabilities`, slice-order composition (first is outermost)
 - Dogfood: usage limits reimplemented as an internal `ModelRequestWrapper` capability
-- Output validation stays `AddOutputValidator` (a typed method): construction options are untyped, so a `WithOutputValidator` option cannot carry `Deps`/`Output` - Open Decision 1 resolved in favor of methods for typed extension points
+- Output validation stays `AddOutputValidator` (a typed method): construction options are untyped, so a `WithOutputValidator` option cannot carry `Deps`/`Output` - Resolved Decision 1 favors methods for typed extension points
 - History processors expressed as `ModelRequestWrapper` capabilities (no separate API needed)
 - `models/openai` Responses API constructor (`NewResponsesModel`)
 
@@ -285,9 +285,9 @@ Once the package is up to date with PydanticAI itself, add a [gh-aw](https://git
 - Non-standard MCP task extensions until they are supported by the official Go SDK; MCP multi-round-trip input remains owned by the SDK session
 - Bundled Temporal, DBOS, and Prefect agent-loop runtimes. The public `durable` operation contract composes application-owned SDK callbacks without importing optional workflow engines; Prefect has no official Go SDK.
 
-## Open Decisions
+## Resolved Decisions
 
-1. **`Option` typing** - construction options are currently untyped (`Option`); anything needing `Deps` (dynamic instructions) may force `Option[Deps]` or a method-based API. Resolve while stubbing v0.1.
-2. **Schema library** - `invopop/jsonschema` vs in-house `internal/schema`. Start with `invopop`, wrap it so it can be swapped.
-3. **Provider transport** - direct HTTP (small deps, clean cassettes) vs official SDKs (features faster). Leaning direct HTTP for openai; revisit per provider.
-4. **`RunContextAny` shape** - concrete struct with `Deps any`, or interface. Decide when capabilities land (v0.3), but keep `RunContext[Deps]` convertible to it from v0.1.
+1. **`Option` typing** - construction options stay untyped. APIs that depend on `Deps` or `Output` use typed agent methods or run options.
+2. **Schema library** - reflected schemas use the focused in-house `internal/schema` package behind public tool and output APIs.
+3. **Provider transport** - each provider owns the narrowest faithful transport. Direct HTTP keeps compatible APIs small; official SDKs are used where they own protocol state, such as AWS, MCP, A2A, and Gemini Live.
+4. **Untyped run context** - typed tools receive `RunContext[Deps]`; capability middleware receives the detached `RunInfo` view instead of a second concrete `RunContextAny` type.

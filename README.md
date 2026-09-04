@@ -216,6 +216,7 @@ The bundled providers use the same `ai.Model` interface.
 | Anthropic | `anthropic.NewModel("claude-sonnet-4-5")` | `ANTHROPIC_API_KEY` |
 | Google Gemini | `google.NewModel("gemini-2.5-flash")` | `GOOGLE_API_KEY` |
 | Groq | `groq.NewModel("openai/gpt-oss-20b")` | `GROQ_API_KEY` |
+| Ollama | `ollama.NewModel("qwen3")` | `OLLAMA_BASE_URL`, `OLLAMA_API_KEY` |
 | OpenRouter | `openrouter.NewModel("anthropic/claude-sonnet-4.6")` | `OPENROUTER_API_KEY` |
 | Z.AI | `zai.NewModel("glm-5.3-flash")` | `ZAI_API_KEY` |
 

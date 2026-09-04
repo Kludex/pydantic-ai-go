@@ -28,6 +28,7 @@ func TestModels(t *testing.T) {
 		{"google:gemini-2.5-flash", "google"},
 		{"bedrock:us.amazon.nova-lite-v1:0", "bedrock"},
 		{"groq:openai/gpt-oss-20b", "groq"},
+		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},
 		{"zai:glm-5.3-flash", "zai"},
 	}

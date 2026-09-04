@@ -11,6 +11,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/models/bedrock"
 	"github.com/Kludex/pydantic-ai-go/models/google"
 	"github.com/Kludex/pydantic-ai-go/models/groq"
+	"github.com/Kludex/pydantic-ai-go/models/ollama"
 	"github.com/Kludex/pydantic-ai-go/models/openai"
 	"github.com/Kludex/pydantic-ai-go/models/openrouter"
 	"github.com/Kludex/pydantic-ai-go/models/zai"
@@ -51,6 +52,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"google":           func(name string) (ai.Model, error) { return google.NewModel(name), nil },
 		"bedrock":          func(name string) (ai.Model, error) { return bedrock.NewModel(name), nil },
 		"groq":             func(name string) (ai.Model, error) { return groq.NewModel(name), nil },
+		"ollama":           func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
 		"openrouter":       func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
 		"zai":              func(name string) (ai.Model, error) { return zai.NewModel(name), nil },
 	}}

@@ -175,6 +175,34 @@ func main() {
 
 The compatibility layer sends OpenAI wire formats. It cannot make an endpoint support OpenAI features that the endpoint does not implement.
 
+## Ollama
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/ollama"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](ollama.NewModel("qwen3"))
+	result, err := agent.Run(context.Background(), "Explain why the sky is blue.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+The model connects to `http://localhost:11434/v1` by default. Set `OLLAMA_BASE_URL` or `OLLAMA_HOST` to use another server. Set `OLLAMA_API_KEY` when the endpoint requires authentication.
+
+Ollama exposes Chat Completions through its OpenAI-compatible endpoint. The adapter preserves `reasoning` as `ThinkingPart`, sends `max_tokens`, rejects unsupported documents, and disables strict function-tool extensions. Local Ollama supports native JSON Schema output. Ollama Cloud does not enforce supplied schemas, so native output fails before transport there. Use tool or prompted output instead.
+
 ## OpenRouter
 
 ```go

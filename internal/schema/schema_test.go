@@ -19,6 +19,10 @@ type textValue int
 
 func (textValue) MarshalText() ([]byte, error) { return []byte("value"), nil }
 
+type jsonValue struct{}
+
+func (jsonValue) MarshalJSON() ([]byte, error) { return []byte(`{"custom":true}`), nil }
+
 type everything struct {
 	Name     string            `json:"name" jsonschema:"description=A name"`
 	Count    int               `json:"count"`
@@ -140,19 +144,25 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 	type value struct {
 		Embedded
 		*OptionalEmbedded
-		Time    time.Time       `json:"time"`
-		Raw     json.RawMessage `json:"raw"`
-		Data    []byte          `json:"data"`
-		Text    textValue       `json:"text"`
-		Code    int             `json:"code" jsonschema:"title=Code,minimum=1,maximum=9,multipleOf=2,default=2,example=4"`
-		Name    string          `json:"name" jsonschema:"format=email,pattern=^[a-z]+$,minLength=1,maxLength=20,readOnly=true"`
-		List    []string        `json:"list" jsonschema:"minItems=1,maxItems=3"`
-		Forced  string          `json:"forced,omitempty" jsonschema:"required,A required value"`
-		Flags   []string        `json:"flags" jsonschema:"uniqueItems,minContains=1,maxContains=2"`
-		Choice  any             `json:"choice" jsonschema:"oneOf=[{\"type\":\"string\"},{\"type\":\"null\"}],examples=[\"one\",\"two\"],const=\"one\""`
-		Object  map[string]any  `json:"object" jsonschema:"additionalProperties=false,deprecated,contentMediaType=application/json"`
-		Scalar  string          `json:"scalar" jsonschema:"examples=single"`
-		Escaped string          `json:"escaped" jsonschema:"const=\"a\\\"b\""`
+		Time       time.Time            `json:"time"`
+		Raw        json.RawMessage      `json:"raw"`
+		Data       []byte               `json:"data"`
+		Text       textValue            `json:"text"`
+		Code       int                  `json:"code" jsonschema:"title=Code,minimum=1,maximum=9,multipleOf=2,default=2,example=4"`
+		Name       string               `json:"name" jsonschema:"format=email,pattern=^[a-z]+$,minLength=1,maxLength=20,readOnly=true"`
+		List       []string             `json:"list" jsonschema:"minItems=1,maxItems=3"`
+		Forced     string               `json:"forced,omitempty" jsonschema:"required,A required value"`
+		Flags      []string             `json:"flags" jsonschema:"uniqueItems,minContains=1,maxContains=2"`
+		Choice     any                  `json:"choice" jsonschema:"oneOf=[{\"type\":\"string\"},{\"type\":\"null\"}],examples=[\"one\",\"two\"],const=\"one\""`
+		Object     map[string]any       `json:"object" jsonschema:"additionalProperties=false,deprecated,contentMediaType=application/json"`
+		Scalar     string               `json:"scalar" jsonschema:"examples=single"`
+		Escaped    string               `json:"escaped" jsonschema:"const=\"a\\\"b\""`
+		StringInt  int                  `json:"string_int,string"`
+		StringPtr  *bool                `json:"string_ptr,string,omitempty"`
+		FixedBytes [2]byte              `json:"fixed_bytes"`
+		IntMap     map[int]string       `json:"int_map"`
+		TextMap    map[textValue]string `json:"text_map"`
+		Custom     jsonValue            `json:"custom"`
 	}
 	result, err := schema.For(reflect.TypeFor[value]())
 	if err != nil {
@@ -174,7 +184,14 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 		properties["object"].(map[string]any)["additionalProperties"] != false ||
 		properties["object"].(map[string]any)["deprecated"] != true ||
 		properties["scalar"].(map[string]any)["examples"].([]any)[0] != "single" ||
-		properties["escaped"].(map[string]any)["const"] != `a"b` {
+		properties["escaped"].(map[string]any)["const"] != `a"b` ||
+		properties["string_int"].(map[string]any)["type"] != "string" ||
+		nonNullSchema(properties["string_ptr"].(map[string]any))["type"] != "string" ||
+		properties["fixed_bytes"].(map[string]any)["minItems"] != 2 ||
+		properties["fixed_bytes"].(map[string]any)["items"].(map[string]any)["type"] != "integer" ||
+		properties["int_map"].(map[string]any)["type"] != "object" ||
+		properties["text_map"].(map[string]any)["type"] != "object" ||
+		len(properties["custom"].(map[string]any)) != 0 {
 		t.Fatalf("unexpected reflected schema: %#v", result)
 	}
 	if _, ok := properties["embedded"]; !ok {
@@ -226,10 +243,18 @@ func TestForRejectsUnsupportedFields(t *testing.T) {
 		t.Fatal("expected error for chan field")
 	}
 	type badMap struct {
-		M map[int]string `json:"m"`
+		M map[float64]string `json:"m"`
 	}
 	if _, err := schema.For(reflect.TypeFor[badMap]()); err == nil {
-		t.Fatal("expected error for non-string map key")
+		t.Fatal("expected error for unsupported map key")
+	}
+	for _, fieldType := range []reflect.Type{reflect.TypeFor[[]string](), reflect.TypeFor[*[]string]()} {
+		typeWithStringOption := reflect.StructOf([]reflect.StructField{{
+			Name: "Value", Type: fieldType, Tag: `json:"value,string"`,
+		}})
+		if _, err := schema.For(typeWithStringOption); err == nil {
+			t.Fatalf("expected error for unsupported %s json string option", fieldType)
+		}
 	}
 	type badSlice struct {
 		S []chan int `json:"s"`

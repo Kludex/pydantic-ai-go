@@ -31,6 +31,7 @@ func For(t reflect.Type) (map[string]any, error) {
 
 var (
 	jsonRawMessageType = reflect.TypeFor[json.RawMessage]()
+	jsonMarshalerType  = reflect.TypeFor[json.Marshaler]()
 	textMarshalerType  = reflect.TypeFor[encoding.TextMarshaler]()
 	timeType           = reflect.TypeFor[time.Time]()
 )
@@ -79,6 +80,12 @@ func forStruct(t reflect.Type, path string, active map[reflect.Type]string) (map
 		if err != nil {
 			return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
 		}
+		if jsonStringOption(f) {
+			fieldSchema, err = stringEncodedSchema(f.Type)
+			if err != nil {
+				return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
+			}
+		}
 		if err := applyTag(fieldSchema, f.Tag.Get("jsonschema")); err != nil {
 			return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
 		}
@@ -115,6 +122,9 @@ func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[s
 	if t.Implements(textMarshalerType) || reflect.PointerTo(t).Implements(textMarshalerType) {
 		return map[string]any{"type": "string"}, nil
 	}
+	if t.Implements(jsonMarshalerType) || reflect.PointerTo(t).Implements(jsonMarshalerType) {
+		return map[string]any{}, nil
+	}
 	switch t.Kind() {
 	case reflect.String:
 		return map[string]any{"type": "string"}, nil
@@ -126,16 +136,21 @@ func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[s
 	case reflect.Float32, reflect.Float64:
 		return map[string]any{"type": "number"}, nil
 	case reflect.Slice, reflect.Array:
-		if t.Elem().Kind() == reflect.Uint8 {
+		if t.Kind() == reflect.Slice && t.Elem().Kind() == reflect.Uint8 {
 			return map[string]any{"type": "string", "contentEncoding": "base64"}, nil
 		}
 		items, err := forType(t.Elem(), path+"/items", active)
 		if err != nil {
 			return nil, err
 		}
-		return map[string]any{"type": "array", "items": items}, nil
+		schema := map[string]any{"type": "array", "items": items}
+		if t.Kind() == reflect.Array {
+			schema["minItems"] = t.Len()
+			schema["maxItems"] = t.Len()
+		}
+		return schema, nil
 	case reflect.Map:
-		if t.Key().Kind() != reflect.String {
+		if !supportedMapKey(t.Key()) {
 			return nil, fmt.Errorf("unsupported map key type %s", t.Key())
 		}
 		values, err := forType(t.Elem(), path+"/additionalProperties", active)
@@ -149,6 +164,40 @@ func forType(t reflect.Type, path string, active map[reflect.Type]string) (map[s
 		return map[string]any{}, nil
 	default:
 		return nil, fmt.Errorf("unsupported type %s", t)
+	}
+}
+
+func supportedMapKey(key reflect.Type) bool {
+	if key.Kind() == reflect.String || key.Kind() >= reflect.Int && key.Kind() <= reflect.Int64 ||
+		key.Kind() >= reflect.Uint && key.Kind() <= reflect.Uint64 {
+		return true
+	}
+	return key.Implements(textMarshalerType) || reflect.PointerTo(key).Implements(textMarshalerType)
+}
+
+func jsonStringOption(field reflect.StructField) bool {
+	for _, option := range strings.Split(field.Tag.Get("json"), ",")[1:] {
+		if option == "string" {
+			return true
+		}
+	}
+	return false
+}
+
+func stringEncodedSchema(t reflect.Type) (map[string]any, error) {
+	if t.Kind() == reflect.Pointer {
+		inner, err := stringEncodedSchema(t.Elem())
+		if err != nil {
+			return nil, err
+		}
+		return map[string]any{"anyOf": []any{inner, map[string]any{"type": "null"}}}, nil
+	}
+	switch t.Kind() {
+	case reflect.Bool, reflect.String, reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64, reflect.Float32, reflect.Float64:
+		return map[string]any{"type": "string"}, nil
+	default:
+		return nil, fmt.Errorf("json string option is not supported for %s", t)
 	}
 }
 

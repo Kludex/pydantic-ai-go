@@ -9,7 +9,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -73,7 +73,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -119,7 +119,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -153,7 +153,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -186,7 +186,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 type Deps struct {
@@ -246,7 +246,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 func main() {
@@ -293,7 +293,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -333,7 +333,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 func main() {
@@ -373,7 +373,7 @@ import (
 	"os"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -417,7 +417,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 type MemoryCommand struct {
@@ -455,7 +455,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/google"
+	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 )
 
 func main() {
@@ -485,7 +485,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 func main() {
@@ -517,7 +517,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -564,7 +564,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -613,7 +613,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {

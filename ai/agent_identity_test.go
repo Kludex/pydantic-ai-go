@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )

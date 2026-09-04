@@ -9,7 +9,7 @@ import (
     "context"
     "fmt"
 
-    "github.com/Kludex/pydantic-ai-go/durable"
+    "github.com/Kludex/pydantic-ai-go/ai/durable"
 )
 
 type backend struct{}
@@ -73,8 +73,8 @@ import (
     "fmt"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/durable"
-    "github.com/Kludex/pydantic-ai-go/models/openai"
+    "github.com/Kludex/pydantic-ai-go/ai/durable"
+    "github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {

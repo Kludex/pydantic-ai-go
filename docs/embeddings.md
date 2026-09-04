@@ -10,8 +10,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/openai"
 )
 
 func main() {
@@ -39,8 +39,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/openai"
 )
 
 func main() {
@@ -76,9 +76,9 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/fakes"
-	"github.com/Kludex/pydantic-ai-go/embeddings/infer"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/infer"
 )
 
 func main() {
@@ -113,8 +113,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/openai"
 )
 
 func main() {
@@ -140,7 +140,7 @@ Settings are copied at configuration and request boundaries. `ExtraHeaders` appl
 
 ## OpenAI-compatible endpoints
 
-Use `models/openai.ProviderConfig` to set endpoint identity, authentication, query parameters, and dynamic request preparation.
+Use `ai/models/openai.ProviderConfig` to set endpoint identity, authentication, query parameters, and dynamic request preparation.
 
 ```go
 package main
@@ -149,9 +149,9 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	embeddingopenai "github.com/Kludex/pydantic-ai-go/embeddings/openai"
-	modelopenai "github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	embeddingopenai "github.com/Kludex/pydantic-ai-go/ai/embeddings/openai"
+	modelopenai "github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -183,8 +183,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/ollama"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/ollama"
 )
 
 func main() {
@@ -210,8 +210,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	embeddinggoogle "github.com/Kludex/pydantic-ai-go/embeddings/google"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	embeddinggoogle "github.com/Kludex/pydantic-ai-go/ai/embeddings/google"
 )
 
 func main() {
@@ -247,9 +247,9 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	embeddinggoogle "github.com/Kludex/pydantic-ai-go/embeddings/google"
-	modelgoogle "github.com/Kludex/pydantic-ai-go/models/google"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	embeddinggoogle "github.com/Kludex/pydantic-ai-go/ai/embeddings/google"
+	modelgoogle "github.com/Kludex/pydantic-ai-go/ai/models/google"
 )
 
 func main() {
@@ -281,8 +281,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/cohere"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/cohere"
 )
 
 func main() {
@@ -320,8 +320,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/voyageai"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/voyageai"
 )
 
 func main() {
@@ -352,8 +352,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/bedrock"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/bedrock"
 )
 
 func main() {
@@ -386,8 +386,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/openai"
 )
 
 func main() {
@@ -417,8 +417,8 @@ import (
 	"context"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/openai"
 )
 
 func main() {
@@ -452,8 +452,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/embeddings"
-	"github.com/Kludex/pydantic-ai-go/embeddings/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
+	"github.com/Kludex/pydantic-ai-go/ai/embeddings/fakes"
 )
 
 func main() {

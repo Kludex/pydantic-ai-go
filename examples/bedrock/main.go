@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/bedrock"
+	"github.com/Kludex/pydantic-ai-go/ai/models/bedrock"
 )
 
 func main() {

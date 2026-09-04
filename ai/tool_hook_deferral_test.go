@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
 
 func deferredHookModel(t *testing.T, inspect func(ai.ToolReturnPart)) ai.Model {

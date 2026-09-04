@@ -15,8 +15,8 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	aimcp "github.com/Kludex/pydantic-ai-go/ai/mcp"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -56,8 +56,8 @@ import (
 	"os"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	aimcp "github.com/Kludex/pydantic-ai-go/ai/mcp"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -100,8 +100,8 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	aimcp "github.com/Kludex/pydantic-ai-go/ai/mcp"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -180,8 +180,8 @@ import (
 	"fmt"
 	"log"
 
-	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	aimcp "github.com/Kludex/pydantic-ai-go/ai/mcp"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -251,7 +251,7 @@ import (
 	"fmt"
 	"log"
 
-	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
+	aimcp "github.com/Kludex/pydantic-ai-go/ai/mcp"
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/modelcontextprotocol/go-sdk/oauthex"
@@ -309,8 +309,8 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	aimcp "github.com/Kludex/pydantic-ai-go/mcp"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	aimcp "github.com/Kludex/pydantic-ai-go/ai/mcp"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/Kludex/pydantic-ai-go/internal/schema"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 // OutputFunction describes structured data produced by the model and a

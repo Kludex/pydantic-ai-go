@@ -13,7 +13,7 @@ import (
 	"github.com/JohannesKaufmann/html-to-markdown/v2/converter"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/base"
 	"github.com/JohannesKaufmann/html-to-markdown/v2/plugin/commonmark"
-	"github.com/Kludex/pydantic-ai-go/internal/download"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 	"golang.org/x/net/html"
 	"golang.org/x/net/html/charset"
 )

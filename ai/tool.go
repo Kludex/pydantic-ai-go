@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Kludex/pydantic-ai-go/internal/schema"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 // RunContext carries run-scoped data into tools and dynamic hooks. The

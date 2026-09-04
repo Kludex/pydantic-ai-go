@@ -10,7 +10,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
 
 type explicitCompactionModel struct {

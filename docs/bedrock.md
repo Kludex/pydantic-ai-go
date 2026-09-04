@@ -10,7 +10,7 @@ import (
     "fmt"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/models/bedrock"
+    "github.com/Kludex/pydantic-ai-go/ai/models/bedrock"
 )
 
 func main() {
@@ -47,7 +47,7 @@ import (
     "fmt"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/models/bedrock"
+    "github.com/Kludex/pydantic-ai-go/ai/models/bedrock"
 )
 
 func main() {
@@ -83,7 +83,7 @@ import (
     "github.com/aws/aws-sdk-go-v2/credentials"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/models/bedrock"
+    "github.com/Kludex/pydantic-ai-go/ai/models/bedrock"
 )
 
 func main() {
@@ -123,7 +123,7 @@ import (
     "github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/models/anthropic"
+    "github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 func main() {
@@ -179,7 +179,7 @@ import (
     "fmt"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/models/bedrock"
+    "github.com/Kludex/pydantic-ai-go/ai/models/bedrock"
 )
 
 type Answer struct {

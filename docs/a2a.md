@@ -11,9 +11,9 @@ import (
     protocol "github.com/a2aproject/a2a-go/a2a"
     "github.com/a2aproject/a2a-go/a2asrv"
 
-    a2aintegration "github.com/Kludex/pydantic-ai-go/a2a"
+    a2aintegration "github.com/Kludex/pydantic-ai-go/ai/a2a"
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/models/openai"
+    "github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -86,7 +86,7 @@ import (
     "github.com/a2aproject/a2a-go/a2aclient"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    a2aintegration "github.com/Kludex/pydantic-ai-go/a2a"
+    a2aintegration "github.com/Kludex/pydantic-ai-go/ai/a2a"
 )
 
 func main() {
@@ -139,7 +139,7 @@ import (
     "fmt"
     "log"
 
-    a2aintegration "github.com/Kludex/pydantic-ai-go/a2a"
+    a2aintegration "github.com/Kludex/pydantic-ai-go/ai/a2a"
 )
 
 func main() {

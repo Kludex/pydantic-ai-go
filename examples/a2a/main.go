@@ -7,9 +7,9 @@ import (
 	protocol "github.com/a2aproject/a2a-go/a2a"
 	"github.com/a2aproject/a2a-go/a2asrv"
 
-	a2aintegration "github.com/Kludex/pydantic-ai-go/a2a"
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	a2aintegration "github.com/Kludex/pydantic-ai-go/ai/a2a"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {

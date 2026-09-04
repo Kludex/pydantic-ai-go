@@ -11,7 +11,7 @@ import (
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
 
 // streamingModel wraps a FunctionModel and streams scripted events.

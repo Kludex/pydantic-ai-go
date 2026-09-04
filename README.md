@@ -31,7 +31,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 type WeatherArgs struct {
@@ -88,7 +88,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 type City struct {
@@ -130,7 +130,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -176,7 +176,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -232,7 +232,7 @@ Provider options configure caller-owned clients, endpoints, credentials, and def
 
 ## Test an agent without network calls
 
-Use `models/fakes` in tests:
+Use `ai/models/fakes` in tests:
 
 ```go
 package weather_test
@@ -242,7 +242,7 @@ import (
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
 
 func TestAgent(t *testing.T) {

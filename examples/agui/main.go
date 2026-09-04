@@ -5,8 +5,8 @@ import (
 	"net/http"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
-	"github.com/Kludex/pydantic-ai-go/ui/agui"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/ui/agui"
 )
 
 func main() {

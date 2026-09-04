@@ -8,7 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
-- The core `ai` package now uses `github.com/Kludex/pydantic-ai-go/ai`, keeping Go source and tests out of the repository root.
+- All library packages now live under `ai/`. The core package uses `github.com/Kludex/pydantic-ai-go/ai`, and subpackages use paths such as `github.com/Kludex/pydantic-ai-go/ai/models/openai`.
 
 ### Added
 

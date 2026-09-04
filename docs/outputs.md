@@ -11,7 +11,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 type City struct {
@@ -48,7 +48,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 type Answer interface {
@@ -122,7 +122,7 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 type CityInput struct {
@@ -170,7 +170,7 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -209,7 +209,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -248,7 +248,7 @@ import (
 	"fmt"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 type City struct {
@@ -283,7 +283,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 type City struct {

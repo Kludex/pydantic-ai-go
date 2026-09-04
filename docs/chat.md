@@ -30,8 +30,8 @@ import (
     "context"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/cli"
-    "github.com/Kludex/pydantic-ai-go/models/openai"
+    "github.com/Kludex/pydantic-ai-go/ai/cli"
+    "github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -68,8 +68,8 @@ import (
     "net/http"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/models/openai"
-    "github.com/Kludex/pydantic-ai-go/webchat"
+    "github.com/Kludex/pydantic-ai-go/ai/models/openai"
+    "github.com/Kludex/pydantic-ai-go/ai/webchat"
 )
 
 func main() {
@@ -98,7 +98,7 @@ package main
 import (
     "fmt"
 
-    "github.com/Kludex/pydantic-ai-go/models/infer"
+    "github.com/Kludex/pydantic-ai-go/ai/models/infer"
 )
 
 func main() {

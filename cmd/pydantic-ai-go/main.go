@@ -10,9 +10,9 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/cli"
-	"github.com/Kludex/pydantic-ai-go/models/infer"
-	"github.com/Kludex/pydantic-ai-go/webchat"
+	"github.com/Kludex/pydantic-ai-go/ai/cli"
+	"github.com/Kludex/pydantic-ai-go/ai/models/infer"
+	"github.com/Kludex/pydantic-ai-go/ai/webchat"
 )
 
 func main() {

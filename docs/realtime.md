@@ -10,8 +10,8 @@ import (
     "fmt"
     "os/signal"
 
-    "github.com/Kludex/pydantic-ai-go/realtime"
-    openairt "github.com/Kludex/pydantic-ai-go/realtime/openai"
+    "github.com/Kludex/pydantic-ai-go/ai/realtime"
+    openairt "github.com/Kludex/pydantic-ai-go/ai/realtime/openai"
 )
 
 func main() {
@@ -53,8 +53,8 @@ import (
     "context"
     "os"
 
-    "github.com/Kludex/pydantic-ai-go/realtime"
-    azurert "github.com/Kludex/pydantic-ai-go/realtime/azure"
+    "github.com/Kludex/pydantic-ai-go/ai/realtime"
+    azurert "github.com/Kludex/pydantic-ai-go/ai/realtime/azure"
 )
 
 func main() {
@@ -93,8 +93,8 @@ import (
     "context"
     "fmt"
 
-    "github.com/Kludex/pydantic-ai-go/realtime"
-    openairt "github.com/Kludex/pydantic-ai-go/realtime/openai"
+    "github.com/Kludex/pydantic-ai-go/ai/realtime"
+    openairt "github.com/Kludex/pydantic-ai-go/ai/realtime/openai"
 )
 
 func main() {
@@ -147,8 +147,8 @@ import (
     "fmt"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/realtime"
-    openairt "github.com/Kludex/pydantic-ai-go/realtime/openai"
+    "github.com/Kludex/pydantic-ai-go/ai/realtime"
+    openairt "github.com/Kludex/pydantic-ai-go/ai/realtime/openai"
 )
 
 type input struct {
@@ -209,8 +209,8 @@ import (
     "encoding/base64"
 
     ai "github.com/Kludex/pydantic-ai-go/ai"
-    "github.com/Kludex/pydantic-ai-go/realtime"
-    googlert "github.com/Kludex/pydantic-ai-go/realtime/google"
+    "github.com/Kludex/pydantic-ai-go/ai/realtime"
+    googlert "github.com/Kludex/pydantic-ai-go/ai/realtime/google"
 )
 
 func main() {
@@ -245,8 +245,8 @@ package main
 import (
     "context"
 
-    "github.com/Kludex/pydantic-ai-go/realtime"
-    xairt "github.com/Kludex/pydantic-ai-go/realtime/xai"
+    "github.com/Kludex/pydantic-ai-go/ai/realtime"
+    xairt "github.com/Kludex/pydantic-ai-go/ai/realtime/xai"
 )
 
 func main() {

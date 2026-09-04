@@ -8,7 +8,7 @@ linters:
   exclusions:
     rules:
       # Sampling remains part of the MCP compatibility window and upstream parity surface.
-      - path: ^mcp/sampling(_messages|_model|_test)?\.go$
+      - path: ^ai/mcp/sampling(_messages|_model|_test)?\.go$
         text: "SA1019:"
         linters:
           - staticcheck

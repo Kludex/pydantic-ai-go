@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"strings"
 
-	"github.com/Kludex/pydantic-ai-go/internal/schema"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 // OutputAlternative describes one member of a UnionOutput. Kind is the stable

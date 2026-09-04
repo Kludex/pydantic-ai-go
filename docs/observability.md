@@ -11,7 +11,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -64,7 +64,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
@@ -191,7 +191,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {

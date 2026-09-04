@@ -13,7 +13,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -45,7 +45,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -81,7 +81,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -126,7 +126,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -155,7 +155,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -186,7 +186,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/cohere"
+	"github.com/Kludex/pydantic-ai-go/ai/models/cohere"
 )
 
 func main() {
@@ -224,7 +224,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/crusoe"
+	"github.com/Kludex/pydantic-ai-go/ai/models/crusoe"
 )
 
 func main() {
@@ -252,7 +252,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/cerebras"
+	"github.com/Kludex/pydantic-ai-go/ai/models/cerebras"
 )
 
 func main() {
@@ -282,7 +282,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/huggingface"
+	"github.com/Kludex/pydantic-ai-go/ai/models/huggingface"
 )
 
 func main() {
@@ -314,7 +314,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/mistral"
+	"github.com/Kludex/pydantic-ai-go/ai/models/mistral"
 )
 
 func main() {
@@ -345,7 +345,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/ollama"
+	"github.com/Kludex/pydantic-ai-go/ai/models/ollama"
 )
 
 func main() {
@@ -373,7 +373,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openrouter"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
 )
 
 func main() {
@@ -430,7 +430,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/snowflake"
+	"github.com/Kludex/pydantic-ai-go/ai/models/snowflake"
 )
 
 func main() {
@@ -460,7 +460,7 @@ import (
 	"fmt"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/bedrockmantle"
+	"github.com/Kludex/pydantic-ai-go/ai/models/bedrockmantle"
 )
 
 func main() {
@@ -492,7 +492,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/xai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/xai"
 )
 
 func main() {
@@ -525,7 +525,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/zai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/zai"
 )
 
 func main() {
@@ -575,7 +575,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/azure"
+	"github.com/Kludex/pydantic-ai-go/ai/models/azure"
 )
 
 func main() {
@@ -603,7 +603,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/Kludex/pydantic-ai-go/models/azure"
+	"github.com/Kludex/pydantic-ai-go/ai/models/azure"
 )
 
 func main() {
@@ -634,7 +634,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 func main() {
@@ -664,7 +664,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 func main() {
@@ -700,7 +700,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 func main() {
@@ -738,7 +738,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
 func main() {
@@ -777,7 +777,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/google"
+	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 )
 
 func main() {
@@ -804,7 +804,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/google"
+	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 )
 
 func main() {
@@ -834,7 +834,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/google"
+	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 )
 
 func main() {
@@ -869,7 +869,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/google"
+	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 )
 
 func main() {
@@ -909,7 +909,7 @@ import (
 	"fmt"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -935,7 +935,7 @@ import (
 	"fmt"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func main() {
@@ -965,7 +965,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/groq"
+	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
 )
 
 func main() {
@@ -1006,7 +1006,7 @@ import (
 	"log"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/groq"
+	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
 )
 
 func main() {

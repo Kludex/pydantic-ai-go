@@ -19,17 +19,17 @@ The core package, providers, and capabilities use separate import paths so consu
 ```
 github.com/Kludex/pydantic-ai-go
 ├── ai/                                  // package ai: Agent, Model, messages, tools, loop, usage, tracing
-├── internal/schema/                     // JSON schema reflection (private, free to churn)
-├── models/openai/                       // package openai: implements ai.Model
-├── models/anthropic/
-├── models/google/
-├── models/fakes/                        // package fakes: TestModel, FunctionModel for users' tests
-├── capabilities/mcp/                    // v0.4+
-├── a2a/                                 // official A2A server and client adapters
+│   ├── internal/schema/                 // JSON schema reflection (private, free to churn)
+│   ├── ai/models/openai/                   // package openai: implements ai.Model
+│   ├── ai/models/anthropic/
+│   ├── ai/models/google/
+│   ├── ai/models/fakes/                    // package fakes: TestModel, FunctionModel for users' tests
+│   ├── ai/mcp/                             // official MCP client and toolset adapters
+│   └── ai/a2a/                             // official A2A server and client adapters
 └── examples/
 ```
 
-Rule: the core package owns everything a user touches on every run. Providers are separate because you import only what you use. Implementation details live under `internal/`.
+Rule: the core package owns everything a user touches on every run. Providers are separate because you import only what you use. All library packages share the `ai/` source tree. Implementation details live under `ai/internal/`.
 
 ## Core API
 
@@ -241,14 +241,14 @@ The minimal useful agent: typed runs against OpenAI.
 - `AddTool` / `AddSimpleTool` / `AddRawTool`, schema reflection, `Retryf`, retry caps
 - Structured output via output tool, validation-error retries
 - Loop implemented middleware-shaped internally (public hooks shipped in v0.3)
-- `models/openai` (Chat Completions), `models/fakes` (`TestModel`, `FunctionModel`)
+- `ai/models/openai` (Chat Completions), `ai/models/fakes` (`TestModel`, `FunctionModel`)
 - OTel tracing
 - Error taxonomy, cassette-based provider tests, 100% coverage
 
 ### v0.2 - Streaming and providers (shipped)
 
 - `StreamingModel`, `Agent.RunStream`: text deltas, partial tool calls, event stream
-- `models/anthropic`, `models/google`
+- `ai/models/anthropic`, `ai/models/google`
 - `WithMessageHistory` (multi-turn), `NewMessages()` on results
 - Multimodal user input: `RunParts` / `UserPart` (images, files)
 - Native JSON-mode structured output where providers support it
@@ -260,7 +260,7 @@ The minimal useful agent: typed runs against OpenAI.
 - Dogfood: usage limits reimplemented as an internal `ModelRequestWrapper` capability
 - Output validation stays `AddOutputValidator` (a typed method): construction options are untyped, so a `WithOutputValidator` option cannot carry `Deps`/`Output` - Resolved Decision 1 favors methods for typed extension points
 - History processors expressed as `ModelRequestWrapper` capabilities (no separate API needed)
-- `models/openai` Responses API constructor (`NewResponsesModel`)
+- `ai/models/openai` Responses API constructor (`NewResponsesModel`)
 
 ### v0.4 - Ecosystem
 
@@ -289,6 +289,6 @@ Once the package is up to date with PydanticAI itself, add a [gh-aw](https://git
 ## Resolved Decisions
 
 1. **`Option` typing** - construction options stay untyped. APIs that depend on `Deps` or `Output` use typed agent methods or run options.
-2. **Schema library** - reflected schemas use the focused in-house `internal/schema` package behind public tool and output APIs.
+2. **Schema library** - reflected schemas use the focused in-house `ai/internal/schema` package behind public tool and output APIs.
 3. **Provider transport** - each provider owns the narrowest faithful transport. Direct HTTP keeps compatible APIs small; official SDKs are used where they own protocol state, such as AWS, MCP, A2A, and Gemini Live.
 4. **Untyped run context** - typed tools receive `RunContext[Deps]`; capability middleware receives the detached `RunInfo` view instead of a second concrete `RunContextAny` type.

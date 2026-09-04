@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 
-	"github.com/Kludex/pydantic-ai-go/internal/schema"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 func decodePartialJSON(

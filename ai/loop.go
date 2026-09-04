@@ -15,7 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Kludex/pydantic-ai-go/internal/schema"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 const outputToolName = "final_result"

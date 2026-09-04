@@ -13,8 +13,8 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
-	"github.com/Kludex/pydantic-ai-go/models/openai"
-	"github.com/Kludex/pydantic-ai-go/retries"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/retries"
 )
 
 func main() {

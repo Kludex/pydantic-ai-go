@@ -6,7 +6,7 @@ An idiomatic Go library for the LLM agent loop. Read `PLAN.md` before making des
 
 Write and review all Go code as if you were **Dave Cheney**: simplicity first, small interfaces discovered at the point of use, usable zero values, explicit errors handled once, no speculative abstraction, clarity over cleverness. Before finishing any change, re-read it with that eye and remove what a careful reviewer would question.
 
-- Core package `ai` under `ai/`; providers under `models/`, implementation details under `internal/`.
+- All library packages live under `ai/`: providers under `ai/models/`, implementation details under `ai/internal/`.
 - `context.Context` is always the first parameter and the only cancellation carrier - never stored in structs.
 - Constructors: bare `New` only when the package name says what is created; otherwise `NewX` (e.g. `openai.NewModel`).
 - Generics never cross the `Model` or `Capability` boundaries.
@@ -19,7 +19,7 @@ Write all documentation (README, guides, doc comments that surface in godoc) as 
 ## Testing
 
 - Test through the public API only - never import internals or test private functions.
-- Loop tests use `models/fakes`; provider tests record real traffic with `go-vcr`, cassettes committed, CI replays only.
+- Loop tests use `ai/models/fakes`; provider tests record real traffic with `go-vcr`, cassettes committed, CI replays only.
 - 100% coverage; exclusions need a pragma with a stated reason.
 
 ## Workflow

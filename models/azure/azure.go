@@ -24,11 +24,16 @@ type TokenProvider func(context.Context) (string, error)
 // serverless endpoints use the current OpenAI-compatible API without an API
 // version query parameter.
 type Config struct {
-	Endpoint      string
-	APIKey        string
-	APIVersion    string
+	// Endpoint is the Azure resource, deployment, or serverless base URL.
+	Endpoint string
+	// APIKey authenticates requests with an Azure resource key.
+	APIKey string
+	// APIVersion selects the legacy Azure deployment API version.
+	APIVersion string
+	// TokenProvider supplies a fresh Microsoft Entra token for each request.
 	TokenProvider TokenProvider
-	HTTPClient    *http.Client
+	// HTTPClient performs requests. Nil uses the shared default client.
+	HTTPClient *http.Client
 }
 
 // NewModel creates an OpenAI Chat Completions model for an Azure deployment.

@@ -10,6 +10,7 @@ Module: `github.com/Kludex/pydantic-ai-go`, package `ai`. Go 1.25.
 - **Generics replace runtime validation.** `Agent[Deps, Output]` carries types end to end. Generics never cross the `Model` or `Capability` boundaries - those stay untyped so providers and capabilities are reusable across agents.
 - **Idiomatic Go over API parity.** `context.Context` first everywhere, explicit errors, small structural interfaces, `http.Handler`-style middleware, `New`/`NewX` constructors, usable zero values where possible.
 - **Two shapes per extension point, not a signature matrix.** PydanticAI's flexible signatures are a Python affordance. In Go, explicit variants (`AddTool` / `AddSimpleTool`) beat reflection-based signature sniffing.
+- **Provider traits stay with providers.** `ModelProfile` contains wrapper-visible output and message behavior. Wire-level settings, strict-tool support, reasoning families, and native-tool versions stay in each provider package, where they can validate requests without exposing a global matrix that drifts from provider APIs.
 
 ## Package Layout
 

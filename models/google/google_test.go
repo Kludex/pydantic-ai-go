@@ -463,14 +463,16 @@ func TestGooglePromptFeedbackBlock(t *testing.T) {
 			"promptFeedback":{
 				"blockReason":"PROHIBITED_CONTENT","blockReasonMessage":"The prompt was blocked.",
 				"safetyRatings":[{"category":"HARM_CATEGORY_DANGEROUS_CONTENT","blocked":true}]
-			}
+			},
+			"usageMetadata":{"trafficType":"PROVISIONED_THROUGHPUT"}
 		}`))
 	})
 	_, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "blocked", struct{}{})
 	var filtered *ai.ContentFilterError
 	if !errors.As(err, &filtered) || filtered.Response().FinishReason != ai.FinishReasonContentFilter ||
 		filtered.Response().ProviderDetails["block_reason"] != "PROHIBITED_CONTENT" ||
-		filtered.Response().ProviderDetails["block_reason_message"] != "The prompt was blocked." {
+		filtered.Response().ProviderDetails["block_reason_message"] != "The prompt was blocked." ||
+		filtered.Response().ProviderDetails["traffic_type"] != "PROVISIONED_THROUGHPUT" {
 		t.Fatalf("unexpected prompt block: %v response=%+v", err, filtered)
 	}
 	ratings, ok := filtered.Response().ProviderDetails["safety_ratings"].([]map[string]any)
@@ -539,6 +541,7 @@ func TestRequestTextResponse(t *testing.T) {
 				"logprobsResult": {"chosenCandidates": [{"token": "Hello", "logProbability": -0.25}]}
 			}],
 			"usageMetadata": {
+				"trafficType": "ON_DEMAND",
 				"promptTokenCount": 12, "candidatesTokenCount": 3,
 				"cachedContentTokenCount": 4, "thoughtsTokenCount": 2,
 				"toolUsePromptTokenCount": 7,
@@ -610,7 +613,7 @@ func TestRequestTextResponse(t *testing.T) {
 	if resp.ModelName != "gemini-2.5-flash" || resp.ProviderName != "google" || resp.ProviderURL == "" ||
 		resp.ProviderResponseID != "response-1" || resp.FinishReason != ai.FinishReasonStop ||
 		resp.ProviderDetails["finish_reason"] != "STOP" || resp.ProviderDetails["service_tier"] != "priority" ||
-		resp.ProviderDetails["avg_logprobs"] != -0.25 || resp.ProviderDetails["logprobs"] == nil {
+		resp.ProviderDetails["traffic_type"] != "ON_DEMAND" || resp.ProviderDetails["avg_logprobs"] != -0.25 || resp.ProviderDetails["logprobs"] == nil {
 		t.Fatalf("unexpected response metadata %+v", resp)
 	}
 }

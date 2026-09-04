@@ -1045,6 +1045,7 @@ type generateResponse struct {
 }
 
 type googleUsage struct {
+	TrafficType                string        `json:"trafficType"`
 	PromptTokenCount           int           `json:"promptTokenCount"`
 	CandidatesTokenCount       int           `json:"candidatesTokenCount"`
 	CachedContentTokenCount    int           `json:"cachedContentTokenCount"`
@@ -1059,6 +1060,12 @@ type googleUsage struct {
 type tokenDetail struct {
 	Modality   string `json:"modality"`
 	TokenCount int    `json:"tokenCount"`
+}
+
+func (u googleUsage) hasTokens() bool {
+	return u.PromptTokenCount != 0 || u.CandidatesTokenCount != 0 || u.CachedContentTokenCount != 0 ||
+		u.ThoughtsTokenCount != 0 || u.ToolUsePromptTokenCount != 0 || len(u.PromptTokensDetails) > 0 ||
+		len(u.CacheTokensDetails) > 0 || len(u.CandidatesTokensDetails) > 0 || len(u.ToolUsePromptTokensDetails) > 0
 }
 
 func (u googleUsage) usage() ai.Usage {
@@ -1322,6 +1329,9 @@ func parseResponse(data []byte, providerName string, fileSearchEnabled bool) (*a
 			return nil, fmt.Errorf("google: response has no candidates")
 		}
 		providerDetails := map[string]any{"block_reason": gr.PromptFeedback.BlockReason}
+		if gr.UsageMetadata.TrafficType != "" {
+			providerDetails["traffic_type"] = gr.UsageMetadata.TrafficType
+		}
 		if gr.PromptFeedback.BlockReasonMessage != "" {
 			providerDetails["block_reason_message"] = gr.PromptFeedback.BlockReasonMessage
 		}
@@ -1335,6 +1345,9 @@ func parseResponse(data []byte, providerName string, fileSearchEnabled bool) (*a
 		}, nil
 	}
 	providerDetails := map[string]any{}
+	if gr.UsageMetadata.TrafficType != "" {
+		providerDetails["traffic_type"] = gr.UsageMetadata.TrafficType
+	}
 	if gr.Candidates[0].FinishReason != "" {
 		providerDetails["finish_reason"] = gr.Candidates[0].FinishReason
 	}

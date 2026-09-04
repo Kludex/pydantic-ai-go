@@ -553,6 +553,7 @@ func TestStreamEvents(t *testing.T) {
 			`{"candidates":[{"content":{"parts":[{"thought":true,"text":"plan","thoughtSignature":"thinking-signature"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"functionCall":{"id":"c1","name":"work","args":{"x":1}},"thoughtSignature":"tool-signature"}]}}]}`,
 			`{"candidates":[{"content":{"parts":[{"text":"lo"}]},"finishReason":"STOP","safetyRatings":[{"category":"HARM_CATEGORY_HATE_SPEECH","probability":"NEGLIGIBLE"}],"avgLogprobs":-0.25,"logprobsResult":{"chosenCandidates":[{"token":"lo"}]}}],"usageMetadata":{"promptTokenCount":5,"candidatesTokenCount":3}}`,
+			`{"usageMetadata":{"trafficType":"ON_DEMAND"}}`,
 		})(w, r)
 	})
 	events, err := collectGoogleStream(t, model, ai.ModelRequestParams{Settings: ai.ModelSettings{
@@ -605,7 +606,7 @@ func TestStreamEvents(t *testing.T) {
 		finish.Usage.OutputTokens != 3 || finish.ProviderName != "google" || finish.ProviderURL == "" ||
 		finish.ProviderResponseID != "response-stream" || finish.FinishReason != ai.FinishReasonStop ||
 		finish.ProviderDetails["finish_reason"] != "STOP" || finish.ProviderDetails["service_tier"] != "flex" ||
-		finish.ProviderDetails["avg_logprobs"] != -0.25 || finish.ProviderDetails["logprobs"] == nil ||
+		finish.ProviderDetails["traffic_type"] != "ON_DEMAND" || finish.ProviderDetails["avg_logprobs"] != -0.25 || finish.ProviderDetails["logprobs"] == nil ||
 		len(finish.ProviderDetails["safety_ratings"].([]map[string]any)) != 1 {
 		t.Fatalf("unexpected finish %+v", finish)
 	}

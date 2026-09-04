@@ -64,6 +64,7 @@ func (m *Model) eventStream(
 		modelName := m.name
 		responseID := ""
 		finishReason := ""
+		trafficType := ""
 		responseTimestamp := time.Now().UTC()
 		webSearchEmitted := false
 		var logprobs map[string]any
@@ -102,8 +103,11 @@ func (m *Model) eventStream(
 			if chunk.ModelVersion != "" {
 				modelName = chunk.ModelVersion
 			}
-			if chunk.UsageMetadata.PromptTokenCount != 0 || chunk.UsageMetadata.CandidatesTokenCount != 0 {
+			if chunk.UsageMetadata.hasTokens() {
 				usage = chunk.UsageMetadata.usage()
+			}
+			if chunk.UsageMetadata.TrafficType != "" {
+				trafficType = chunk.UsageMetadata.TrafficType
 			}
 			if len(chunk.Candidates) == 0 {
 				if chunk.PromptFeedback.BlockReason != "" {
@@ -362,6 +366,9 @@ func (m *Model) eventStream(
 		}
 		if serviceTier != "" {
 			providerDetails["service_tier"] = strings.ToLower(serviceTier)
+		}
+		if trafficType != "" {
+			providerDetails["traffic_type"] = trafficType
 		}
 		if groundingMetadata != nil {
 			providerDetails["grounding_metadata"] = groundingMetadata

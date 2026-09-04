@@ -56,7 +56,11 @@ func prepareRunInput(
 			}
 			options.ResolvedToolCallIDs = append(options.ResolvedToolCallIDs, part.ToolCallID)
 			if part.Approval != nil && part.Approval.Approved != nil && *part.Approval.Approved {
-				decisions[part.ToolCallID] = ai.ToolApproved{}
+				approval := ai.ToolApproved{}
+				if len(part.Input) > 0 {
+					approval.OverrideArgs = append(json.RawMessage(nil), part.Input...)
+				}
+				decisions[part.ToolCallID] = approval
 			} else {
 				reason := ""
 				if part.Approval != nil {

@@ -186,11 +186,17 @@ func TestHandlerValidation(t *testing.T) {
 
 func TestApprovalRequestAndResume(t *testing.T) {
 	executions := 0
+	var received map[string]any
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
 	agent.AddRawTool(ai.ToolDefinition{
-		Name: "approve", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
-	}, func(context.Context, json.RawMessage) (any, error) {
+		Name: "approve", Schema: map[string]any{
+			"type": "object", "properties": map[string]any{"value": map[string]any{"type": "string"}},
+		},
+	}, func(_ context.Context, args json.RawMessage) (any, error) {
 		executions++
+		if err := json.Unmarshal(args, &received); err != nil {
+			return nil, err
+		}
 		return "done", nil
 	}, ai.WithApprovalRequired())
 	adapter := vercel.NewAdapter(agent, vercel.Config{SDKVersion: 6})
@@ -213,7 +219,8 @@ func TestApprovalRequestAndResume(t *testing.T) {
 	resume := requestWith(
 		vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}}},
 		vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
-			Type: "tool-approve", ToolCallID: "call_approve", State: "approval-responded", Input: []byte(`{}`),
+			Type: "tool-approve", ToolCallID: "call_approve", State: "approval-responded",
+			Input:    []byte(`{"value":"edited"}`),
 			Approval: &vercel.ToolApproval{ID: "call_approve", Approved: &approved},
 		}}},
 	)
@@ -222,8 +229,8 @@ func TestApprovalRequestAndResume(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if executions != 1 {
-		t.Fatalf("approval did not execute tool: %d", executions)
+	if executions != 1 || received["value"] != "edited" {
+		t.Fatalf("approval did not execute edited arguments: executions=%d args=%#v", executions, received)
 	}
 }
 

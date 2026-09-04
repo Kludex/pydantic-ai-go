@@ -101,8 +101,10 @@ Set `SDKVersion` to 6 or 7 to emit `tool-approval-request` chunks for tools regi
 
 `approved` is a strict JSON boolean. Missing decisions deny by default. The adapter resumes the original tool-call ID and does not create a second call.
 
+To change the arguments before execution, replace the tool part's `input` value and approve it. The adapter validates and executes that replacement instead of the model-generated arguments.
+
 ## Current scope
 
 The adapter supports AI SDK UI versions 5 through 7 for text, reasoning, function and provider-native tool inputs and outputs, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
 
-Vercel AI file and source parts, data parts, provider metadata, message metadata, approval argument replacement, external deferred resumes, compaction activities, tool-availability data, cancellation chunks, and remaining version-specific fields remain.
+Vercel AI file and source parts, data parts, provider metadata, message metadata, external deferred resumes, compaction activities, tool-availability data, cancellation chunks, and remaining version-specific fields remain.

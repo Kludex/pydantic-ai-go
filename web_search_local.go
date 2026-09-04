@@ -19,22 +19,30 @@ const (
 
 // LocalWebSearchConfig controls the DuckDuckGo local web-search tool.
 type LocalWebSearchConfig struct {
+	// HTTPClient performs search requests. Nil uses an isolated default client.
 	HTTPClient *http.Client
-	Endpoint   string
-	Timeout    time.Duration
+	// Endpoint overrides the DuckDuckGo HTML endpoint.
+	Endpoint string
+	// Timeout bounds each search. Zero defaults to 30 seconds.
+	Timeout time.Duration
+	// MaxResults limits returned results. Zero keeps every first-page result.
 	MaxResults int
 }
 
 // WebSearchArgs is the model-generated input for local web search.
 type WebSearchArgs struct {
+	// Query is the text sent to the search endpoint.
 	Query string `json:"query" jsonschema_description:"The web search query."`
 }
 
 // WebSearchResult is one DuckDuckGo result returned to the model.
 type WebSearchResult struct {
+	// Title is the normalized result title.
 	Title string `json:"title"`
-	URL   string `json:"href"`
-	Body  string `json:"body"`
+	// URL is the resolved destination URL.
+	URL string `json:"href"`
+	// Body is the normalized result excerpt.
+	Body string `json:"body"`
 }
 
 // NewLocalWebSearchTool creates a DuckDuckGo HTML-search fallback.

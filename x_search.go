@@ -7,8 +7,10 @@ import (
 
 // XSearchCapabilityConfig configures native X search and an optional custom local fallback.
 type XSearchCapabilityConfig[Deps any] struct {
+	// Native configures provider-hosted X search.
 	Native XSearchTool
-	Local  Toolset[Deps]
+	// Local is the fallback used when the selected model lacks native support.
+	Local Toolset[Deps]
 }
 
 // NewXSearchCapability creates native-first X search. A nil Local requires native support.

@@ -27,25 +27,37 @@ var excessiveWebFetchNewlines = regexp.MustCompile(`\n{3,}`)
 
 // LocalWebFetchConfig controls the SSRF-protected local web-fetch tool.
 type LocalWebFetchConfig struct {
-	MaxContentLength    int
+	// MaxContentLength limits returned text by Unicode code points. Zero defaults to 50,000.
+	MaxContentLength int
+	// DisableContentLimit returns complete text after the bounded download.
 	DisableContentLimit bool
-	AllowLocalURLs      bool
-	Timeout             time.Duration
-	MaxDownloadBytes    int64
-	AllowedDomains      []string
-	BlockedDomains      []string
-	Headers             map[string]string
+	// AllowLocalURLs permits loopback and private network targets.
+	AllowLocalURLs bool
+	// Timeout bounds the complete fetch. Zero uses the downloader default.
+	Timeout time.Duration
+	// MaxDownloadBytes bounds compressed and decompressed response data. Zero defaults to 50 MiB.
+	MaxDownloadBytes int64
+	// AllowedDomains restricts destinations when non-empty.
+	AllowedDomains []string
+	// BlockedDomains rejects matching destinations in addition to SSRF defaults.
+	BlockedDomains []string
+	// Headers adds detached request headers.
+	Headers map[string]string
 }
 
 // WebFetchArgs is the model-generated input for a local web fetch.
 type WebFetchArgs struct {
+	// URL is the HTTP or HTTPS destination to fetch.
 	URL string `json:"url" jsonschema_description:"The HTTP or HTTPS URL to fetch."`
 }
 
 // WebFetchResult is textual URL content returned to the model.
 type WebFetchResult struct {
-	URL     string `json:"url"`
-	Title   string `json:"title"`
+	// URL is the final destination after redirects.
+	URL string `json:"url"`
+	// Title is the HTML document title when available.
+	Title string `json:"title"`
+	// Content is normalized Markdown, JSON, or plain text.
 	Content string `json:"content"`
 }
 

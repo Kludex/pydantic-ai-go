@@ -15,6 +15,7 @@ type ToolReturnSchemaSelector func(
 // IncludeToolReturnSchemas enables model-facing return schemas. A nil Select
 // enables every tool. Explicit per-tool inclusion or omission takes precedence.
 type IncludeToolReturnSchemas struct {
+	// Select decides which otherwise-unconfigured tools advertise return schemas.
 	Select ToolReturnSchemaSelector
 }
 

@@ -25,12 +25,18 @@ const (
 
 // PricingDiagnostic describes why automatic pricing was incomplete or noteworthy.
 type PricingDiagnostic struct {
-	Kind         PricingDiagnosticKind
-	ModelName    string
+	// Kind classifies the diagnostic.
+	Kind PricingDiagnosticKind
+	// ModelName identifies the model used for lookup.
+	ModelName string
+	// ProviderName identifies the provider used for lookup.
 	ProviderName string
-	ProviderURL  string
-	Message      string
-	Err          error
+	// ProviderURL is the provider endpoint used for lookup.
+	ProviderURL string
+	// Message summarizes the diagnostic.
+	Message string
+	// Err contains the underlying pricing error when available.
+	Err error
 }
 
 // PricingDiagnosticSink receives optional best-effort pricing diagnostics.

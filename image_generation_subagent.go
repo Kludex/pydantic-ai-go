@@ -11,6 +11,7 @@ const defaultImageGenerationInstructions = "Generate an image based on the user 
 
 // ImageGenerationArgs is the model-facing input for the default local image-generation tool.
 type ImageGenerationArgs struct {
+	// Prompt describes the image to generate.
 	Prompt string `json:"prompt" jsonschema_description:"A description of the image to generate."`
 }
 
@@ -22,9 +23,13 @@ type ImageGenerationFallbackModelFunc[Deps any] func(
 
 // ImageGenerationSubagentConfig configures the default local image-generation subagent.
 type ImageGenerationSubagentConfig[Deps any] struct {
-	Model        Model
+	// Model is the fixed image-capable subagent model.
+	Model Model
+	// ResolveModel selects an image-capable model for each call.
 	ResolveModel ImageGenerationFallbackModelFunc[Deps]
-	Native       ImageGenerationTool
+	// Native configures the subagent's provider-native image tool.
+	Native ImageGenerationTool
+	// Instructions overrides the default image-generation prompt.
 	Instructions string
 }
 

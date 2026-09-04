@@ -9,6 +9,7 @@ const defaultXSearchInstructions = "Search X/Twitter based on the user query. Re
 
 // XSearchArgs is the model-facing input for the default local X-search tool.
 type XSearchArgs struct {
+	// Query describes the posts or topics to find.
 	Query string `json:"query" jsonschema_description:"The X/Twitter search query."`
 }
 
@@ -20,9 +21,13 @@ type XSearchFallbackModelFunc[Deps any] func(
 
 // XSearchSubagentConfig configures the default local X-search subagent.
 type XSearchSubagentConfig[Deps any] struct {
-	Model        Model
+	// Model is the fixed X-search subagent model.
+	Model Model
+	// ResolveModel selects an X-search model for each call.
 	ResolveModel XSearchFallbackModelFunc[Deps]
-	Native       XSearchTool
+	// Native configures the subagent's provider-hosted X-search tool.
+	Native XSearchTool
+	// Instructions overrides the default X-search prompt.
 	Instructions string
 }
 

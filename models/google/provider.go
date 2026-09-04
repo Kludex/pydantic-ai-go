@@ -29,11 +29,17 @@ type RequestPreparationFunc func(*http.Request) error
 
 // ProviderConfig configures the transport used by a Google model.
 type ProviderConfig struct {
-	Transport      Transport
-	Name           string
-	BaseURL        string
-	APIKey         string
-	HTTPClient     *http.Client
+	// Transport selects the Gemini Developer API or Vertex AI wire route.
+	Transport Transport
+	// Name is persisted in responses, usage, and telemetry.
+	Name string
+	// BaseURL is the transport-specific API endpoint.
+	BaseURL string
+	// APIKey authenticates Gemini API or Vertex Express Mode requests.
+	APIKey string
+	// HTTPClient performs requests. Nil uses the shared default client.
+	HTTPClient *http.Client
+	// PrepareRequest adds dynamic authentication or routing data.
 	PrepareRequest RequestPreparationFunc
 }
 
@@ -71,12 +77,18 @@ type TokenProvider func(context.Context) (string, error)
 // APIKey enables Vertex AI Express Mode. Otherwise TokenProvider or Application
 // Default Credentials provides OAuth authentication.
 type VertexConfig struct {
-	Project       string
-	Location      string
-	APIKey        string
+	// Project is the Google Cloud project ID.
+	Project string
+	// Location is the Vertex region, multi-region, or global endpoint.
+	Location string
+	// APIKey enables Vertex AI Express Mode.
+	APIKey string
+	// TokenProvider supplies a fresh OAuth access token for each request.
 	TokenProvider TokenProvider
-	Endpoint      string
-	HTTPClient    *http.Client
+	// Endpoint overrides the derived Vertex API endpoint.
+	Endpoint string
+	// HTTPClient performs requests. Nil uses an authenticated default client.
+	HTTPClient *http.Client
 }
 
 // NewVertexModel creates a model routed through Google Cloud Vertex AI.

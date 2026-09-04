@@ -12,11 +12,17 @@ type RequestPreparationFunc func(*http.Request) error
 
 // ProviderConfig configures Cohere API access. Headers are copied.
 type ProviderConfig struct {
-	Name           string
-	BaseURL        string
-	APIKey         string
-	HTTPClient     *http.Client
-	Headers        http.Header
+	// Name is persisted in responses, usage, and telemetry.
+	Name string
+	// BaseURL is the Cohere-compatible API endpoint.
+	BaseURL string
+	// APIKey is sent as a bearer token.
+	APIKey string
+	// HTTPClient performs requests. Nil uses the shared default client.
+	HTTPClient *http.Client
+	// Headers contains detached provider-wide request headers.
+	Headers http.Header
+	// PrepareRequest adds dynamic authentication or routing data.
 	PrepareRequest RequestPreparationFunc
 }
 
@@ -28,9 +34,13 @@ func (config ProviderConfig) Clone() ProviderConfig {
 
 // APIError reports a non-successful Cohere HTTP response.
 type APIError struct {
-	StatusCode   int
-	Body         string
-	Headers      http.Header
+	// StatusCode is the HTTP response status.
+	StatusCode int
+	// Body is the provider response body.
+	Body string
+	// Headers contains a detached response-header snapshot.
+	Headers http.Header
+	// ProviderName identifies the endpoint that returned the error.
 	ProviderName string
 }
 

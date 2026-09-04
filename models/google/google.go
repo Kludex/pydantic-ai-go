@@ -217,10 +217,13 @@ func (m *Model) CountTokens(
 
 // APIError is a non-200 response from the Gemini API.
 type APIError struct {
+	// StatusCode is the HTTP response status.
 	StatusCode int
-	Body       string
+	// Body is the provider response body.
+	Body string
 }
 
+// Error formats the provider status and body.
 func (e *APIError) Error() string {
 	return fmt.Sprintf("google: API returned status %d: %s", e.StatusCode, e.Body)
 }

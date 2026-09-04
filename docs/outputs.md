@@ -31,7 +31,7 @@ func main() {
 
 The agent reflects a Draft 2020-12 JSON Schema. It validates the raw response before decoding it into `City`.
 
-Reflection follows `json` names and optional fields. It promotes anonymous embedded structs. Pointers accept `null`. `time.Time`, text marshalers, `[]byte`, and `json.RawMessage` use their JSON representations. Use `jsonschema` entries such as `description=...`, `enum=...`, `minimum=...`, `maxLength=...`, `format=...`, or `pattern=...` for additional constraints.
+Reflection follows `json` names and optional fields. It promotes anonymous embedded structs. Pointers accept `null`. `time.Time`, text marshalers, `[]byte`, and `json.RawMessage` use their JSON representations. Use `jsonschema` entries such as `description=...`, `enum=...`, `minimum=...`, `maxLength=...`, `format=...`, or `pattern=...` for additional constraints. Bare text becomes a description, and `required` overrides `omitempty`. JSON-valued entries such as `oneOf=[{"type":"string"},{"type":"null"}]` may contain commas.
 
 ## Multiple output alternatives
 

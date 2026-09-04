@@ -48,6 +48,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Add profile-aware Anthropic adaptive thinking, effort mapping, and model-specific reasoning restrictions.
 - Add OpenAI Chat Completions input for provider-hosted document file IDs.
 - Add names, descriptions, extension URIs, and detached metadata to streamed A2A artifacts.
+- Expand reflected JSON Schema annotations with required fields, constants, compositions, conditions, containment, content metadata, and comma-safe JSON values.
 
 ### Deprecated
 

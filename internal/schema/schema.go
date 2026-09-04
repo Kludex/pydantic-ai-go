@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -82,7 +83,7 @@ func forStruct(t reflect.Type, path string, active map[reflect.Type]string) (map
 			return nil, fmt.Errorf("schema: field %s: %w", f.Name, err)
 		}
 		properties[name] = fieldSchema
-		if !omitempty {
+		if !omitempty || hasSchemaFlag(f.Tag.Get("jsonschema"), "required") {
 			required = append(required, name)
 		}
 	}
@@ -173,40 +174,115 @@ func applyTag(schema map[string]any, tag string) error {
 	if tag == "" {
 		return nil
 	}
+	entries, err := splitSchemaTag(tag)
+	if err != nil {
+		return err
+	}
 	var enum []any
-	for _, entry := range strings.Split(tag, ",") {
-		key, value, _ := strings.Cut(entry, "=")
+	for _, entry := range entries {
+		key, value, hasValue := strings.Cut(entry, "=")
+		if !hasValue {
+			switch key {
+			case "required":
+				continue
+			case "uniqueItems", "readOnly", "writeOnly", "deprecated":
+				schema[key] = true
+			default:
+				if _, exists := schema["description"]; exists {
+					return fmt.Errorf("unknown annotation %q", key)
+				}
+				schema["description"] = key
+			}
+			continue
+		}
 		switch key {
-		case "description", "title", "format", "pattern":
+		case "$id", "$anchor", "$dynamicAnchor", "$comment", "description", "title", "format", "pattern",
+			"contentEncoding", "contentMediaType":
 			schema[key] = value
 		case "enum":
 			enum = append(enum, parseTagValue(value))
-		case "default", "example":
+		case "default", "example", "const":
 			schema[key] = parseTagValue(value)
+		case "examples":
+			parsed := parseTagValue(value)
+			if values, ok := parsed.([]any); ok {
+				schema[key] = values
+			} else {
+				schema[key] = []any{parsed}
+			}
 		case "minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf":
 			number, err := strconv.ParseFloat(value, 64)
 			if err != nil {
 				return fmt.Errorf("invalid %s value %q", key, value)
 			}
 			schema[key] = number
-		case "minLength", "maxLength", "minItems", "maxItems", "minProperties", "maxProperties":
+		case "minLength", "maxLength", "minItems", "maxItems", "minContains", "maxContains", "minProperties",
+			"maxProperties":
 			number, err := strconv.Atoi(value)
 			if err != nil || number < 0 {
 				return fmt.Errorf("invalid %s value %q", key, value)
 			}
 			schema[key] = number
-		case "readOnly", "writeOnly", "deprecated":
+		case "readOnly", "writeOnly", "deprecated", "uniqueItems", "additionalProperties",
+			"unevaluatedProperties":
 			boolean, err := strconv.ParseBool(value)
 			if err != nil {
 				return fmt.Errorf("invalid %s value %q", key, value)
 			}
 			schema[key] = boolean
+		case "allOf", "anyOf", "oneOf", "not", "if", "then", "else", "contains", "prefixItems", "propertyNames",
+			"dependentRequired", "dependentSchemas":
+			parsed := parseTagValue(value)
+			if _, unparsed := parsed.(string); unparsed {
+				return fmt.Errorf("invalid %s JSON value %q", key, value)
+			}
+			schema[key] = parsed
+		default:
+			return fmt.Errorf("unknown annotation %q", key)
 		}
 	}
 	if len(enum) > 0 {
 		schema["enum"] = enum
 	}
 	return nil
+}
+
+func hasSchemaFlag(tag, flag string) bool {
+	entries, _ := splitSchemaTag(tag)
+	return slices.Contains(entries, flag)
+}
+
+func splitSchemaTag(tag string) ([]string, error) {
+	var entries []string
+	start := 0
+	depth := 0
+	quoted := false
+	escaped := false
+	for index, character := range tag {
+		switch {
+		case escaped:
+			escaped = false
+		case character == '\\' && quoted:
+			escaped = true
+		case character == '"':
+			quoted = !quoted
+		case !quoted && (character == '[' || character == '{'):
+			depth++
+		case !quoted && (character == ']' || character == '}'):
+			depth--
+			if depth < 0 {
+				return nil, fmt.Errorf("invalid annotation nesting")
+			}
+		case !quoted && depth == 0 && character == ',':
+			entries = append(entries, strings.TrimSpace(tag[start:index]))
+			start = index + 1
+		}
+	}
+	if quoted || depth != 0 {
+		return nil, fmt.Errorf("invalid annotation nesting")
+	}
+	entries = append(entries, strings.TrimSpace(tag[start:]))
+	return entries, nil
 }
 
 func parseTagValue(value string) any {

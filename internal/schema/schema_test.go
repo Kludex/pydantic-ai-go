@@ -3,6 +3,8 @@ package schema_test
 import (
 	"encoding/json"
 	"reflect"
+	"slices"
+	"strconv"
 	"testing"
 	"time"
 
@@ -138,13 +140,19 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 	type value struct {
 		Embedded
 		*OptionalEmbedded
-		Time time.Time       `json:"time"`
-		Raw  json.RawMessage `json:"raw"`
-		Data []byte          `json:"data"`
-		Text textValue       `json:"text"`
-		Code int             `json:"code" jsonschema:"title=Code,minimum=1,maximum=9,multipleOf=2,default=2,example=4"`
-		Name string          `json:"name" jsonschema:"format=email,pattern=^[a-z]+$,minLength=1,maxLength=20,readOnly=true"`
-		List []string        `json:"list" jsonschema:"minItems=1,maxItems=3"`
+		Time    time.Time       `json:"time"`
+		Raw     json.RawMessage `json:"raw"`
+		Data    []byte          `json:"data"`
+		Text    textValue       `json:"text"`
+		Code    int             `json:"code" jsonschema:"title=Code,minimum=1,maximum=9,multipleOf=2,default=2,example=4"`
+		Name    string          `json:"name" jsonschema:"format=email,pattern=^[a-z]+$,minLength=1,maxLength=20,readOnly=true"`
+		List    []string        `json:"list" jsonschema:"minItems=1,maxItems=3"`
+		Forced  string          `json:"forced,omitempty" jsonschema:"required,A required value"`
+		Flags   []string        `json:"flags" jsonschema:"uniqueItems,minContains=1,maxContains=2"`
+		Choice  any             `json:"choice" jsonschema:"oneOf=[{\"type\":\"string\"},{\"type\":\"null\"}],examples=[\"one\",\"two\"],const=\"one\""`
+		Object  map[string]any  `json:"object" jsonschema:"additionalProperties=false,deprecated,contentMediaType=application/json"`
+		Scalar  string          `json:"scalar" jsonschema:"examples=single"`
+		Escaped string          `json:"escaped" jsonschema:"const=\"a\\\"b\""`
 	}
 	result, err := schema.For(reflect.TypeFor[value]())
 	if err != nil {
@@ -158,7 +166,15 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 		properties["code"].(map[string]any)["minimum"] != float64(1) ||
 		properties["code"].(map[string]any)["default"] != float64(2) ||
 		properties["name"].(map[string]any)["readOnly"] != true ||
-		properties["list"].(map[string]any)["maxItems"] != 3 {
+		properties["list"].(map[string]any)["maxItems"] != 3 ||
+		properties["forced"].(map[string]any)["description"] != "A required value" ||
+		properties["flags"].(map[string]any)["uniqueItems"] != true ||
+		len(properties["choice"].(map[string]any)["oneOf"].([]any)) != 2 ||
+		properties["choice"].(map[string]any)["const"] != "one" ||
+		properties["object"].(map[string]any)["additionalProperties"] != false ||
+		properties["object"].(map[string]any)["deprecated"] != true ||
+		properties["scalar"].(map[string]any)["examples"].([]any)[0] != "single" ||
+		properties["escaped"].(map[string]any)["const"] != `a"b` {
 		t.Fatalf("unexpected reflected schema: %#v", result)
 	}
 	if _, ok := properties["embedded"]; !ok {
@@ -173,13 +189,19 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 			t.Fatal("pointer-embedded field was required")
 		}
 	}
+	if !slices.Contains(required, "forced") {
+		t.Fatal("required annotation did not override omitempty")
+	}
 
-	for _, tag := range []string{"minimum=nope", "minLength=-1", "readOnly=nope"} {
+	for _, tag := range []string{
+		"minimum=nope", "minLength=-1", "readOnly=nope", "oneOf=nope", "unknown=value",
+		"description=known,unknown", `oneOf=[{"type":"string"}`, `description="unterminated`, "description=x,]",
+	} {
 		type invalid struct {
 			Value int `json:"value"`
 		}
 		field, _ := reflect.TypeFor[invalid]().FieldByName("Value")
-		field.Tag = reflect.StructTag(`json:"value" jsonschema:"` + tag + `"`)
+		field.Tag = reflect.StructTag(`json:"value" jsonschema:` + strconv.Quote(tag))
 		if _, err := schema.For(reflect.StructOf([]reflect.StructField{field})); err == nil {
 			t.Fatalf("invalid tag %q was accepted", tag)
 		}

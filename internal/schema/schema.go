@@ -336,8 +336,8 @@ func applyTag(schema map[string]any, tag string) error {
 			continue
 		}
 		switch key {
-		case "$id", "$anchor", "$dynamicAnchor", "$comment", "description", "title", "format", "pattern",
-			"contentEncoding", "contentMediaType":
+		case "$id", "$schema", "$anchor", "$dynamicAnchor", "$ref", "$dynamicRef", "$comment", "description",
+			"title", "format", "pattern", "contentEncoding", "contentMediaType":
 			schema[key] = value
 		case "enum":
 			enum = append(enum, parseTagValue(value))
@@ -363,20 +363,56 @@ func applyTag(schema map[string]any, tag string) error {
 				return fmt.Errorf("invalid %s value %q", key, value)
 			}
 			schema[key] = number
-		case "readOnly", "writeOnly", "deprecated", "uniqueItems", "additionalProperties",
-			"unevaluatedProperties":
+		case "readOnly", "writeOnly", "deprecated", "uniqueItems":
 			boolean, err := strconv.ParseBool(value)
 			if err != nil {
 				return fmt.Errorf("invalid %s value %q", key, value)
 			}
 			schema[key] = boolean
-		case "allOf", "anyOf", "oneOf", "not", "if", "then", "else", "contains", "prefixItems", "propertyNames",
-			"dependentRequired", "dependentSchemas":
+		case "type":
 			parsed := parseTagValue(value)
-			if _, unparsed := parsed.(string); unparsed {
+			switch parsed.(type) {
+			case string, []any:
+				schema[key] = parsed
+			default:
 				return fmt.Errorf("invalid %s JSON value %q", key, value)
 			}
-			schema[key] = parsed
+		case "additionalProperties", "unevaluatedProperties", "unevaluatedItems", "items", "contains", "not", "if",
+			"then", "else", "propertyNames", "contentSchema":
+			parsed := parseTagValue(value)
+			switch parsed.(type) {
+			case bool, map[string]any:
+				schema[key] = parsed
+			default:
+				return fmt.Errorf("invalid %s JSON value %q", key, value)
+			}
+		case "$defs", "$vocabulary", "definitions", "properties", "patternProperties", "dependentRequired",
+			"dependentSchemas", "discriminator":
+			parsed := parseTagValue(value)
+			object, ok := parsed.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid %s JSON value %q", key, value)
+			}
+			schema[key] = object
+		case "allOf", "anyOf", "oneOf", "prefixItems", "required":
+			parsed := parseTagValue(value)
+			array, ok := parsed.([]any)
+			if !ok {
+				return fmt.Errorf("invalid %s JSON value %q", key, value)
+			}
+			schema[key] = array
+		case "schema", "schemaOverride":
+			parsed := parseTagValue(value)
+			object, ok := parsed.(map[string]any)
+			if !ok {
+				return fmt.Errorf("invalid %s JSON value %q", key, value)
+			}
+			if key == "schemaOverride" {
+				clear(schema)
+			}
+			for field, fieldValue := range object {
+				schema[field] = fieldValue
+			}
 		default:
 			return fmt.Errorf("unknown annotation %q", key)
 		}

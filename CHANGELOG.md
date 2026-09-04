@@ -60,6 +60,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Read terminal Groq streaming usage from the `x_groq` envelope.
 - Split Groq `<think>` content across static and streamed chunk boundaries.
 - Align reflected schemas with custom JSON marshalers, `json:",string"`, fixed arrays, JSON-compatible map keys, numeric JSON values, and Go's embedded-field selection rules.
+- Complete Draft 2020-12 reflected-schema annotations with structured merge and replacement escapes.
 
 ### Deprecated
 

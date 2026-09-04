@@ -33,6 +33,8 @@ The agent reflects a Draft 2020-12 JSON Schema. It validates the raw response be
 
 Reflection follows `json` names and optional fields. It promotes anonymous embedded structs. Pointers accept `null`. `time.Time`, `json.Number`, text and JSON marshalers, `[]byte`, fixed arrays, JSON-compatible map keys, `json:",string"` fields, and `json.RawMessage` use their encoded JSON representations. Embedded fields follow `encoding/json` depth, tag, and conflict rules. Use `jsonschema` entries such as `description=...`, `enum=...`, `minimum=...`, `maxLength=...`, `format=...`, or `pattern=...` for additional constraints. Bare text becomes a description, and `required` overrides `omitempty`. JSON-valued entries such as `oneOf=[{"type":"string"},{"type":"null"}]` may contain commas.
 
+All Draft 2020-12 keywords are available as annotations. Use `schema={...}` to merge keywords that reflection cannot infer. Use `schemaOverride={...}` to replace the reflected field schema completely. These two forms also preserve provider extensions and schemas copied from Pydantic.
+
 ## Multiple output alternatives
 
 Use `UnionOutput` when the model can return one of several Go types:

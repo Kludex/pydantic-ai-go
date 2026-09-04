@@ -165,28 +165,35 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 	type value struct {
 		Embedded
 		*OptionalEmbedded
-		Time       time.Time            `json:"time"`
-		Raw        json.RawMessage      `json:"raw"`
-		Data       []byte               `json:"data"`
-		Text       textValue            `json:"text"`
-		Code       int                  `json:"code" jsonschema:"title=Code,minimum=1,maximum=9,multipleOf=2,default=2,example=4"`
-		Name       string               `json:"name" jsonschema:"format=email,pattern=^[a-z]+$,minLength=1,maxLength=20,readOnly=true"`
-		List       []string             `json:"list" jsonschema:"minItems=1,maxItems=3"`
-		Forced     string               `json:"forced,omitempty" jsonschema:"required,A required value"`
-		Flags      []string             `json:"flags" jsonschema:"uniqueItems,minContains=1,maxContains=2"`
-		Choice     any                  `json:"choice" jsonschema:"oneOf=[{\"type\":\"string\"},{\"type\":\"null\"}],examples=[\"one\",\"two\"],const=\"one\""`
-		Object     map[string]any       `json:"object" jsonschema:"additionalProperties=false,deprecated,contentMediaType=application/json"`
-		Scalar     string               `json:"scalar" jsonschema:"examples=single"`
-		Escaped    string               `json:"escaped" jsonschema:"const=\"a\\\"b\""`
-		StringInt  int                  `json:"string_int,string"`
-		StringPtr  *bool                `json:"string_ptr,string,omitempty"`
-		FixedBytes [2]byte              `json:"fixed_bytes"`
-		IntMap     map[int]string       `json:"int_map"`
-		TextMap    map[textValue]string `json:"text_map"`
-		Custom     jsonValue            `json:"custom"`
-		Number     json.Number          `json:"number"`
-		Pointer    uintptr              `json:"pointer"`
-		PointerMap map[uintptr]string   `json:"pointer_map"`
+		Time         time.Time            `json:"time"`
+		Raw          json.RawMessage      `json:"raw"`
+		Data         []byte               `json:"data"`
+		Text         textValue            `json:"text"`
+		Code         int                  `json:"code" jsonschema:"title=Code,minimum=1,maximum=9,multipleOf=2,default=2,example=4"`
+		Name         string               `json:"name" jsonschema:"format=email,pattern=^[a-z]+$,minLength=1,maxLength=20,readOnly=true"`
+		List         []string             `json:"list" jsonschema:"minItems=1,maxItems=3"`
+		Forced       string               `json:"forced,omitempty" jsonschema:"required,A required value"`
+		Flags        []string             `json:"flags" jsonschema:"uniqueItems,minContains=1,maxContains=2"`
+		Choice       any                  `json:"choice" jsonschema:"oneOf=[{\"type\":\"string\"},{\"type\":\"null\"}],examples=[\"one\",\"two\"],const=\"one\""`
+		Object       map[string]any       `json:"object" jsonschema:"additionalProperties=false,deprecated,contentMediaType=application/json"`
+		Scalar       string               `json:"scalar" jsonschema:"examples=single"`
+		Escaped      string               `json:"escaped" jsonschema:"const=\"a\\\"b\""`
+		StringInt    int                  `json:"string_int,string"`
+		StringPtr    *bool                `json:"string_ptr,string,omitempty"`
+		FixedBytes   [2]byte              `json:"fixed_bytes"`
+		IntMap       map[int]string       `json:"int_map"`
+		TextMap      map[textValue]string `json:"text_map"`
+		Custom       jsonValue            `json:"custom"`
+		Number       json.Number          `json:"number"`
+		Pointer      uintptr              `json:"pointer"`
+		PointerMap   map[uintptr]string   `json:"pointer_map"`
+		Advanced     any                  `json:"advanced" jsonschema:"type=[\"string\",\"null\"],unevaluatedItems=false"`
+		Items        any                  `json:"items" jsonschema:"items={\"type\":\"string\"},contentSchema={\"type\":\"object\"}"`
+		SchemaObject any                  `json:"schema_object" jsonschema:"properties={\"name\":{}},patternProperties={\"^x\":{}}"`
+		Defs         any                  `json:"defs" jsonschema:"$defs={\"value\":{}},required=[\"name\"],$ref=#/$defs/value"`
+		Dynamic      any                  `json:"dynamic" jsonschema:"$schema=2020-12,$dynamicRef=#value"`
+		Merged       string               `json:"merged" jsonschema:"schema={\"x-provider-keyword\":{\"enabled\":true}}"`
+		Overridden   int                  `json:"overridden" jsonschema:"schemaOverride={\"type\":\"string\",\"const\":\"one\"}"`
 	}
 	result, err := schema.For(reflect.TypeFor[value]())
 	if err != nil {
@@ -218,7 +225,17 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 		len(properties["custom"].(map[string]any)) != 0 ||
 		properties["number"].(map[string]any)["type"] != "number" ||
 		properties["pointer"].(map[string]any)["type"] != "integer" ||
-		properties["pointer_map"].(map[string]any)["type"] != "object" {
+		properties["pointer_map"].(map[string]any)["type"] != "object" ||
+		len(properties["advanced"].(map[string]any)["type"].([]any)) != 2 ||
+		properties["advanced"].(map[string]any)["unevaluatedItems"] != false ||
+		properties["items"].(map[string]any)["items"].(map[string]any)["type"] != "string" ||
+		properties["schema_object"].(map[string]any)["properties"].(map[string]any)["name"] == nil ||
+		properties["defs"].(map[string]any)["$ref"] != "#/$defs/value" ||
+		properties["dynamic"].(map[string]any)["$dynamicRef"] != "#value" ||
+		properties["merged"].(map[string]any)["x-provider-keyword"].(map[string]any)["enabled"] != true ||
+		properties["overridden"].(map[string]any)["type"] != "string" ||
+		properties["overridden"].(map[string]any)["const"] != "one" ||
+		len(properties["overridden"].(map[string]any)) != 2 {
 		t.Fatalf("unexpected reflected schema: %#v", result)
 	}
 	if _, ok := properties["embedded"]; !ok {
@@ -239,6 +256,7 @@ func TestForSupportsJSONRepresentationsAndTags(t *testing.T) {
 
 	for _, tag := range []string{
 		"minimum=nope", "minLength=-1", "readOnly=nope", "oneOf=nope", "unknown=value",
+		"type=1", "items=[]", "properties=[]", "required={}", "schema=[]", "schemaOverride=false",
 		"description=known,unknown", `oneOf=[{"type":"string"}`, `description="unterminated`, "description=x,]",
 	} {
 		type invalid struct {

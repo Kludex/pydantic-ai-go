@@ -1,0 +1,63 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 168
+        host: generativelanguage.googleapis.com
+        body: '{"requests":[{"model":"models/gemini-embedding-001","content":{"parts":[{"text":"What is durable execution?"}]},"taskType":"RETRIEVAL_QUERY","outputDimensionality":8}]}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: |
+            {
+              "embeddings": [
+                {
+                  "values": [
+                    0.009013516,
+                    0.02807411,
+                    0.0015941504,
+                    -0.06727511,
+                    -0.006272325,
+                    4.9196355e-05,
+                    0.004579815,
+                    -0.014810199
+                  ]
+                }
+              ]
+            }
+        headers:
+            Alt-Svc:
+                - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+            Content-Type:
+                - application/json; charset=UTF-8
+            Date:
+                - Thu, 03 Sep 2026 17:42:30 GMT
+            Server:
+                - scaffolding on HTTPServer2
+            Server-Timing:
+                - gfet4t7; dur=242
+            Vary:
+                - Origin
+                - X-Origin
+                - Referer
+            X-Content-Type-Options:
+                - nosniff
+            X-Frame-Options:
+                - SAMEORIGIN
+            X-Xss-Protection:
+                - "0"
+        status: 200 OK
+        code: 200
+        duration: 329.15975ms

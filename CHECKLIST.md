@@ -237,7 +237,7 @@ Status:
 
 - [x] `gofmt`, `go vet`, `golangci-lint`, tests, and per-package 100% coverage in pre-commit.
 - [x] Recorded OpenAI and Anthropic traffic with credentials filtered.
-- [ ] Record Google Gemini and AWS Bedrock embedding cassettes when credentials are available.
+- [x] Recorded credential-filtered Google Gemini and AWS Bedrock embedding cassettes with bounded dimensions, real provider responses, replay-only behavior without credentials, stable method/URL matching, and committed token/dimension assertions.
 - [x] CI runs the race detector plus repeated concurrent/parallel/enqueue stress tests.
 - [x] CI covers Go 1.25 and 1.26, vet, lint, tests, 100% per-package coverage, replay-only cassettes, and a clean post-test worktree.
 - [x] The README starts with concise, runnable agent-and-tool setup and includes verified structured-output, streaming, conversation-history, provider-selection, and fake-model examples. Focused instruction, output, provider, HTTP-retry, MCP, capability, history-sanitization/trimming/summarization, usage-limit/token-counting, multimodal-input, and OpenTelemetry guides cover stable source-qualified prompts, output functions and unions, OpenAI-compatible/Azure setup, transport retries, shared-session lifecycle, direct protocol operations, safe untrusted-history custody, image, video, audio, and document URLs plus inline media, privacy, format compatibility, and usage attribution.

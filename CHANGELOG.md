@@ -25,7 +25,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - A runnable Logfire OTLP export example with privacy-safe defaults.
 - PydanticAI-compatible message serialization, multimodal content, speech history, compaction boundaries, cache points, sanitization, and history repair.
 - Evaluation task adapters for `pydantic-evals-go`.
-- Recorded provider tests, deterministic fake models, race tests, and per-package 100% statement coverage.
+- Recorded generation and Google Gemini/AWS Bedrock embedding provider tests, deterministic fake models, race tests, and per-package 100% statement coverage.
 
 ### Changed
 

@@ -87,6 +87,39 @@ func TestPrepareInput(t *testing.T) {
 	}
 }
 
+func TestPrepareDynamicToolAndStreamingReasoning(t *testing.T) {
+	providerMetadata := map[string]any{"pydantic_ai": map[string]any{"signature": "untrusted-stream-signature"}}
+	denied := false
+	prompt, history, _, err := vercel.PrepareInput(vercel.RequestData{
+		Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+			{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
+				{Type: "reasoning", Text: "partial", State: "streaming", ProviderMetadata: providerMetadata},
+				{
+					Type: "dynamic-tool", ToolName: "lookup", ToolCallID: "dynamic", State: "output-denied",
+					Input: []byte(`{"query":"go"}`), Approval: &vercel.ToolApproval{
+						ID: "approval", Approved: &denied, Reason: "policy",
+					},
+				},
+			}},
+			{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "continue"}}},
+		},
+	}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt.Content != "continue" || len(history) != 2 {
+		t.Fatalf("unexpected input: prompt=%#v history=%#v", prompt, history)
+	}
+	response := history[0].(ai.ModelResponse)
+	thinking := response.Parts[0].(ai.ThinkingPart)
+	call := response.Parts[1].(ai.ToolCallPart)
+	result := history[1].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
+	if thinking.Signature != "" || call.ToolName != "lookup" || result.Content != "policy" ||
+		result.Outcome != ai.ToolReturnOutcomeDenied {
+		t.Fatalf("unexpected dynamic history: thinking=%#v call=%#v result=%#v", thinking, call, result)
+	}
+}
+
 func TestPrepareInputFiles(t *testing.T) {
 	prompt, history, _, err := vercel.PrepareInput(vercel.RequestData{
 		Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
@@ -167,7 +200,7 @@ func TestPrepareInputMetadata(t *testing.T) {
 						"provider_details": map[string]any{"status": "complete"},
 					}),
 				},
-				{Type: "tool-future", ToolCallID: "future", Input: []byte(`{}`), ProviderExecuted: &providerExecuted,
+				{Type: "tool-future", ToolCallID: "future", State: "input-available", Input: []byte(`{}`), ProviderExecuted: &providerExecuted,
 					CallProviderMetadata: providerMetadata(map[string]any{"tool_kind": "future"})},
 			}},
 			{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "continue"}}},
@@ -282,6 +315,16 @@ func TestInputValidation(t *testing.T) {
 			vercel.UIMessage{ID: "system", Role: "system", Parts: []vercel.UIMessagePart{{Type: "file"}}},
 			vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
 		), match: "support only text"},
+		{name: "system text state", input: requestWith(
+			vercel.UIMessage{ID: "system", Role: "system", Parts: []vercel.UIMessagePart{{Type: "text", State: "future"}}},
+			vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
+		), match: "unsupported text state"},
+		{name: "user mixed text state", input: requestWith(vercel.UIMessage{
+			ID: "one", Role: "user", Parts: []vercel.UIMessagePart{
+				{Type: "text", State: "future"},
+				{Type: "file", URL: "data:text/plain;base64,aGk=", MediaType: "text/plain"},
+			},
+		}), match: "unsupported text state"},
 		{name: "user file URL", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "file"}}}), match: "file URL"},
 		{name: "user part", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "source-url"}}}), match: "unsupported user part"},
 		{name: "data encoding", input: requestWith(vercel.UIMessage{ID: "one", Role: "user", Parts: []vercel.UIMessagePart{{Type: "file", URL: "data:text/plain,hello"}}}), match: "base64 data"},
@@ -292,9 +335,21 @@ func TestInputValidation(t *testing.T) {
 			vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
 		), match: "decode assistant file"},
 		{name: "tool ID", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather"}}}), match: "requires a toolCallId"},
-		{name: "tool input", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", Input: []byte("{")}}}), match: "not valid JSON"},
+		{name: "dynamic tool name", input: requestWith(vercel.UIMessage{
+			ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "dynamic-tool", ToolCallID: "call"}},
+		}), match: "requires a toolName"},
+		{name: "tool input", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", State: "input-available", Input: []byte("{")}}}), match: "not valid JSON"},
+		{name: "tool state", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{
+			Type: "tool-weather", ToolCallID: "call", State: "future",
+		}}}), match: "unsupported tool state"},
 		{name: "tool output", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-weather", ToolCallID: "call", State: "output-available", Output: []byte("{")}}}), match: "decode tool"},
 		{name: "assistant part", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "future"}}}), match: "unsupported assistant part"},
+		{name: "text state", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{
+			Type: "text", State: "future",
+		}}}), match: "unsupported text state"},
+		{name: "reasoning state", input: requestWith(vercel.UIMessage{ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{
+			Type: "reasoning", State: "future",
+		}}}), match: "unsupported reasoning state"},
 		{name: "source URL", input: requestWith(vercel.UIMessage{
 			ID: "one", Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "source-url"}},
 		}), match: "source-url requires"},
@@ -439,7 +494,7 @@ func TestApprovalRequestAndResume(t *testing.T) {
 		vercel.UIMessage{ID: "assistant", Role: "assistant", Metadata: map[string]any{
 			"pydantic_ai": map[string]any{"timestamp": "2026-09-04T10:00:00Z"},
 		}, Parts: []vercel.UIMessagePart{{
-			Type: "tool-approve", ToolCallID: "call_approve", State: "approval-responded",
+			Type: "dynamic-tool", ToolName: "approve", ToolCallID: "call_approve", State: "approval-responded",
 			Input:    []byte(`{"value":"edited"}`),
 			Approval: &vercel.ToolApproval{ID: "call_approve", Approved: &approved},
 		}}},
@@ -460,8 +515,9 @@ func TestExternalToolRequestAndResume(t *testing.T) {
 		state     string
 		output    json.RawMessage
 		errorText string
+		dynamic   bool
 	}{
-		{name: "output", state: "output-available", output: json.RawMessage(`"remote result"`)},
+		{name: "output", state: "output-available", output: json.RawMessage(`"remote result"`), dynamic: true},
 		{name: "error", state: "output-error", errorText: "worker failed"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -476,7 +532,7 @@ func TestExternalToolRequestAndResume(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if chunk.Type == vercel.ChunkFinish {
+				if chunk.Type == vercel.ChunkMessageMetadata {
 					finishMetadata = chunk.MessageMetadata
 				}
 			}
@@ -487,13 +543,18 @@ func TestExternalToolRequestAndResume(t *testing.T) {
 			if err := json.Unmarshal(encoded, &finishMetadata); err != nil {
 				t.Fatal(err)
 			}
+			part := vercel.UIMessagePart{
+				Type: "tool-remote", ToolCallID: "call_remote", State: test.state,
+				Input: []byte(`{}`), Output: test.output, ErrorText: test.errorText,
+			}
+			if test.dynamic {
+				part.Type = "dynamic-tool"
+				part.ToolName = "remote"
+			}
 			resume := requestWith(
 				vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}}},
 				vercel.UIMessage{ID: "assistant", Role: "assistant", Metadata: finishMetadata,
-					Parts: []vercel.UIMessagePart{{
-						Type: "tool-remote", ToolCallID: "call_remote", State: test.state,
-						Input: []byte(`{}`), Output: test.output, ErrorText: test.errorText,
-					}}},
+					Parts: []vercel.UIMessagePart{part}},
 			)
 			textSeen := false
 			for chunk, err := range adapter.RunStream(context.Background(), resume, struct{}{}) {

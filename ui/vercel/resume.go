@@ -3,7 +3,6 @@ package vercel
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -25,7 +24,7 @@ func prepareRunInput(
 				externalIDs[callID] = struct{}{}
 			}
 			for _, part := range message.Parts {
-				if !strings.HasPrefix(part.Type, "tool-") {
+				if !isToolPart(part) {
 					continue
 				}
 				if part.State == "approval-responded" {
@@ -81,7 +80,7 @@ func externalToolResult(part UIMessagePart) (any, error) {
 	if part.State != "output-available" && part.State != "output-error" && part.State != "output-denied" {
 		return nil, fmt.Errorf("vercel: external tool %q result is incomplete", part.ToolCallID)
 	}
-	name := strings.TrimPrefix(part.Type, "tool-")
+	name, _ := toolPartName(part)
 	content, outcome, err := toolOutput(part, name)
 	if err != nil {
 		return nil, err

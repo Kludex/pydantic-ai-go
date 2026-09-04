@@ -98,6 +98,9 @@ func messageText(parts []UIMessagePart) (string, error) {
 		if part.Type != "text" {
 			return "", fmt.Errorf("vercel: %q messages support only text parts", part.Type)
 		}
+		if !validPartState(part.State) {
+			return "", fmt.Errorf("vercel: unsupported text state %q", part.State)
+		}
 		text = append(text, part.Text)
 	}
 	return strings.Join(text, ""), nil
@@ -113,6 +116,9 @@ func userMessage(parts []UIMessagePart) ([]ai.RequestPart, error) {
 	for _, part := range parts {
 		switch part.Type {
 		case "text":
+			if !validPartState(part.State) {
+				return nil, fmt.Errorf("vercel: unsupported text state %q", part.State)
+			}
 			contents = append(contents, ai.TextContent{Text: part.Text})
 		case "file":
 			file, err := userFile(part)
@@ -153,15 +159,25 @@ func assistantMessage(
 	for _, part := range parts {
 		switch {
 		case part.Type == "text":
+			if !validPartState(part.State) {
+				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: unsupported text state %q", part.State)
+			}
 			metadata := loadPartMetadata(part.ProviderMetadata)
 			response.Parts = append(response.Parts, ai.TextPart{
 				Content: part.Text, ID: metadata.id, ProviderName: metadata.providerName,
 				ProviderDetails: cloneMap(metadata.providerDetails),
 			})
 		case part.Type == "reasoning":
+			if !validPartState(part.State) {
+				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: unsupported reasoning state %q", part.State)
+			}
 			metadata := loadPartMetadata(part.ProviderMetadata)
+			signature := metadata.signature
+			if part.State == "streaming" {
+				signature = ""
+			}
 			response.Parts = append(response.Parts, ai.ThinkingPart{
-				Content: part.Text, ID: metadata.id, Signature: metadata.signature,
+				Content: part.Text, ID: metadata.id, Signature: signature,
 				ProviderName: metadata.providerName, ProviderDetails: cloneMap(metadata.providerDetails),
 			})
 		case part.Type == "file":
@@ -192,11 +208,20 @@ func assistantMessage(
 				)
 			}
 		case strings.HasPrefix(part.Type, "data-"), part.Type == "step-start":
-		case strings.HasPrefix(part.Type, "tool-"):
+		case isToolPart(part):
 			if part.ToolCallID == "" {
 				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: tool part requires a toolCallId")
 			}
-			name := strings.TrimPrefix(part.Type, "tool-")
+			name, _ := toolPartName(part)
+			if name == "" {
+				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: dynamic tool part requires a toolName")
+			}
+			switch part.State {
+			case "input-streaming", "input-available", "output-available", "output-error", "approval-requested",
+				"approval-responded", "output-denied":
+			default:
+				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: unsupported tool state %q", part.State)
+			}
 			metadata := loadPartMetadata(part.CallProviderMetadata)
 			input := part.Input
 			if len(input) == 0 {
@@ -244,6 +269,25 @@ func assistantMessage(
 	return response, results, nil
 }
 
+func validPartState(state string) bool {
+	return state == "" || state == "streaming" || state == "done"
+}
+
+func isToolPart(part UIMessagePart) bool {
+	_, ok := toolPartName(part)
+	return ok
+}
+
+func toolPartName(part UIMessagePart) (string, bool) {
+	if part.Type == "dynamic-tool" {
+		return part.ToolName, true
+	}
+	if strings.HasPrefix(part.Type, "tool-") {
+		return strings.TrimPrefix(part.Type, "tool-"), true
+	}
+	return "", false
+}
+
 func toolOutput(part UIMessagePart, name string) (any, ai.ToolReturnOutcome, error) {
 	content := any(nil)
 	if len(part.Output) > 0 {
@@ -258,6 +302,9 @@ func toolOutput(part UIMessagePart, name string) (any, ai.ToolReturnOutcome, err
 		content = part.ErrorText
 	case "output-denied":
 		outcome = ai.ToolReturnOutcomeDenied
+		if part.Approval != nil && part.Approval.Reason != "" {
+			content = part.Approval.Reason
+		}
 	}
 	return content, outcome, nil
 }

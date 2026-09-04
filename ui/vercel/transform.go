@@ -36,10 +36,14 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 		if !yield(Chunk{Type: ChunkStart, MessageID: config.ServerMessageID}, nil) {
 			return
 		}
-		state := transformState{sdkVersion: config.SDKVersion, partIDs: map[string]string{}, toolIDs: map[string]string{}}
+		state := transformState{
+			sdkVersion: config.SDKVersion, partIDs: map[string]string{}, toolIDs: map[string]string{},
+			streamedCalls: map[string]ai.ToolCallPart{}, streamedNative: map[string]bool{},
+			invalidatedCalls: map[string]ai.ToolCallPart{},
+		}
 		for event, eventErr := range stream {
 			if eventErr != nil {
-				if !state.finishStep(yield) {
+				if !state.flushToolInputs(yield) || !state.finishStep(yield) {
 					return
 				}
 				if errors.Is(eventErr, ai.ErrRunCancelled) {
@@ -62,9 +66,12 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 		if len(state.externalCallIDs) > 0 {
 			messageMetadata = withExternalCallIDs(messageMetadata, state.externalCallIDs)
 		}
-		if !yield(Chunk{
-			Type: ChunkFinish, FinishReason: state.finishReason, MessageMetadata: messageMetadata,
+		if messageMetadata != nil && !yield(Chunk{
+			Type: ChunkMessageMetadata, MessageMetadata: messageMetadata,
 		}, nil) {
+			return
+		}
+		if !yield(Chunk{Type: ChunkFinish, FinishReason: state.finishReason}, nil) {
 			return
 		}
 		yield(Chunk{Type: ChunkDone}, nil)
@@ -72,13 +79,17 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 }
 
 type transformState struct {
-	sdkVersion      int
-	step            bool
-	finishReason    string
-	messageMetadata map[string]any
-	externalCallIDs []string
-	partIDs         map[string]string
-	toolIDs         map[string]string
+	sdkVersion        int
+	step              bool
+	finishReason      string
+	messageMetadata   map[string]any
+	externalCallIDs   []string
+	partIDs           map[string]string
+	toolIDs           map[string]string
+	streamedCalls     map[string]ai.ToolCallPart
+	streamedCallOrder []string
+	streamedNative    map[string]bool
+	invalidatedCalls  map[string]ai.ToolCallPart
 }
 
 func (state *transformState) transform(yield func(Chunk, error) bool, event ai.StreamEvent) bool {
@@ -120,11 +131,13 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		case ai.CompactionPart:
 			return yield(Chunk{Type: ChunkDataCompaction, Data: compactionData(part)}, nil)
 		case ai.ToolCallPart:
+			state.rememberStreamedCall(part, false)
 			metadata := dumpPartMetadata(part.ID, "", part.ProviderName, part.ProviderDetails, part.ToolKind, nil)
 			if !state.startTool(yield, value.PartID, part.ToolCallID, part.ToolName, string(part.Args), false, metadata) {
 				return false
 			}
 		case ai.NativeToolCallPart:
+			state.rememberStreamedCall(ai.ToolCallPart(part), true)
 			metadata := dumpPartMetadata(part.ID, "", part.ProviderName, part.ProviderDetails, part.ToolKind, nil)
 			if !state.startTool(yield, value.PartID, part.ToolCallID, part.ToolName, string(part.Args), true, metadata) {
 				return false
@@ -171,11 +184,17 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 				part.ID, part.Signature, part.ProviderName, part.ProviderDetails, "", nil,
 			)
 			return yield(Chunk{Type: ChunkReasoningEnd, ID: id, ProviderMetadata: metadata}, nil)
+		case ai.ToolCallPart:
+			state.rememberStreamedCall(part, false)
+		case ai.NativeToolCallPart:
+			delete(state.streamedCalls, part.ToolCallID)
+			delete(state.streamedNative, part.ToolCallID)
+			return state.toolAvailable(yield, ai.ToolCallPart(part), true)
 		}
 	case ai.FunctionToolCallEvent:
-		return state.toolAvailable(yield, value.Part, false)
+		return state.functionToolCall(yield, value.Part, value.ArgsValid)
 	case ai.OutputToolCallEvent:
-		return state.toolAvailable(yield, value.Part, false)
+		return state.functionToolCall(yield, value.Part, value.ArgsValid)
 	case ai.FunctionToolResultEvent:
 		if !state.requestResult(yield, value.Part, false) {
 			return false
@@ -235,6 +254,30 @@ func (state *transformState) resultChunks(yield func(Chunk, error) bool, part ai
 	return true
 }
 
+func (state *transformState) rememberStreamedCall(part ai.ToolCallPart, native bool) {
+	if _, ok := state.streamedCalls[part.ToolCallID]; !ok {
+		state.streamedCallOrder = append(state.streamedCallOrder, part.ToolCallID)
+	}
+	state.streamedCalls[part.ToolCallID] = part
+	state.streamedNative[part.ToolCallID] = native
+}
+
+func (state *transformState) flushToolInputs(yield func(Chunk, error) bool) bool {
+	for _, toolCallID := range state.streamedCallOrder {
+		part, ok := state.streamedCalls[toolCallID]
+		if !ok {
+			continue
+		}
+		delete(state.streamedCalls, toolCallID)
+		native := state.streamedNative[toolCallID]
+		delete(state.streamedNative, toolCallID)
+		if !state.toolAvailable(yield, part, native) {
+			return false
+		}
+	}
+	return true
+}
+
 func (state *transformState) startStep(yield func(Chunk, error) bool) bool {
 	if state.step {
 		return true
@@ -262,9 +305,13 @@ func (state *transformState) startTool(
 ) bool {
 	state.toolIDs[partID] = toolCallID
 	providerExecuted := native
+	startMetadata := providerMetadata
+	if state.sdkVersion < 6 {
+		startMetadata = nil
+	}
 	if !yield(Chunk{
 		Type: ChunkToolInputStart, ToolCallID: toolCallID, ToolName: name, ProviderExecuted: &providerExecuted,
-		ProviderMetadata: providerMetadata,
+		ProviderMetadata: startMetadata,
 	}, nil) {
 		return false
 	}
@@ -286,17 +333,22 @@ func (state *transformState) toolDelta(
 	return yield(Chunk{Type: ChunkToolInputDelta, ToolCallID: toolCallID, InputTextDelta: delta}, nil)
 }
 
+func (state *transformState) functionToolCall(
+	yield func(Chunk, error) bool, part ai.ToolCallPart, argsValid *bool,
+) bool {
+	delete(state.streamedCalls, part.ToolCallID)
+	delete(state.streamedNative, part.ToolCallID)
+	if argsValid != nil && !*argsValid && state.sdkVersion >= 6 {
+		state.invalidatedCalls[part.ToolCallID] = part
+		return true
+	}
+	return state.toolAvailable(yield, part, false)
+}
+
 func (state *transformState) toolAvailable(
 	yield func(Chunk, error) bool, part ai.ToolCallPart, native bool,
 ) bool {
-	var input any
-	if len(part.Args) > 0 {
-		if err := json.Unmarshal(part.Args, &input); err != nil {
-			return yield(Chunk{
-				Type: ChunkError, ErrorText: fmt.Sprintf("vercel: decode tool input: %v", err),
-			}, err)
-		}
-	}
+	input := toolInput(part.Args)
 	providerExecuted := native
 	metadata := dumpPartMetadata(part.ID, "", part.ProviderName, part.ProviderDetails, part.ToolKind, nil)
 	return yield(Chunk{
@@ -306,17 +358,62 @@ func (state *transformState) toolAvailable(
 }
 
 func (state *transformState) requestResult(yield func(Chunk, error) bool, part ai.RequestPart, native bool) bool {
+	toolCallID := ""
 	switch value := part.(type) {
 	case ai.ToolReturnPart:
-		return state.toolOutput(yield, value.ToolCallID, value.Content, value.Outcome, native, nil)
+		toolCallID = value.ToolCallID
 	case ai.RetryPromptPart:
-		return state.toolOutput(
-			yield, value.ToolCallID, value.ModelResponse(), ai.ToolReturnOutcomeFailed, native, nil,
-		)
+		toolCallID = value.ToolCallID
 	default:
 		err := fmt.Errorf("vercel: unsupported tool result part %T", part)
 		return yield(Chunk{Type: ChunkError, ErrorText: err.Error()}, err)
 	}
+	invalidated, invalid := state.invalidatedCalls[toolCallID]
+	delete(state.invalidatedCalls, toolCallID)
+	streamed, pending := state.streamedCalls[toolCallID]
+	delete(state.streamedCalls, toolCallID)
+	delete(state.streamedNative, toolCallID)
+	if pending && !invalid && !state.toolAvailable(yield, streamed, native) {
+		return false
+	}
+	if result, ok := part.(ai.ToolReturnPart); ok && result.Outcome == ai.ToolReturnOutcomeDenied &&
+		state.sdkVersion >= 6 {
+		return yield(Chunk{Type: ChunkToolOutputDenied, ToolCallID: toolCallID}, nil)
+	}
+	if invalid {
+		input := toolInput(invalidated.Args)
+		errorText := ""
+		if result, ok := part.(ai.ToolReturnPart); ok {
+			errorText = fmt.Sprint(result.Content)
+		} else {
+			errorText = part.(ai.RetryPromptPart).ModelResponse()
+		}
+		metadata := dumpPartMetadata(
+			invalidated.ID, "", invalidated.ProviderName, invalidated.ProviderDetails, invalidated.ToolKind, nil,
+		)
+		return yield(Chunk{
+			Type: ChunkToolInputError, ToolCallID: toolCallID, ToolName: invalidated.ToolName,
+			Input: input, ErrorText: errorText, ProviderMetadata: metadata,
+		}, nil)
+	}
+	if value, ok := part.(ai.ToolReturnPart); ok {
+		return state.toolOutput(yield, value.ToolCallID, value.Content, value.Outcome, native, nil)
+	}
+	value := part.(ai.RetryPromptPart)
+	return state.toolOutput(
+		yield, value.ToolCallID, value.ModelResponse(), ai.ToolReturnOutcomeFailed, native, nil,
+	)
+}
+
+func toolInput(args json.RawMessage) any {
+	if len(args) == 0 {
+		return nil
+	}
+	var input any
+	if err := json.Unmarshal(args, &input); err != nil {
+		return map[string]any{"INVALID_JSON": string(args)}
+	}
+	return input
 }
 
 func (state *transformState) toolOutput(
@@ -328,8 +425,16 @@ func (state *transformState) toolOutput(
 	providerMetadata map[string]any,
 ) bool {
 	providerExecuted := native
-	if outcome == ai.ToolReturnOutcomeFailed || outcome == ai.ToolReturnOutcomeDenied ||
-		outcome == ai.ToolReturnOutcomeInterrupted {
+	if outcome == ai.ToolReturnOutcomeDenied {
+		if state.sdkVersion >= 6 {
+			return yield(Chunk{Type: ChunkToolOutputDenied, ToolCallID: toolCallID}, nil)
+		}
+		return yield(Chunk{
+			Type: ChunkToolOutputAvailable, ToolCallID: toolCallID, Output: output,
+			ProviderExecuted: &providerExecuted, ProviderMetadata: providerMetadata,
+		}, nil)
+	}
+	if outcome == ai.ToolReturnOutcomeFailed {
 		return yield(Chunk{
 			Type: ChunkToolOutputError, ToolCallID: toolCallID, ErrorText: fmt.Sprint(output),
 			ProviderExecuted: &providerExecuted, ProviderMetadata: providerMetadata,

@@ -20,6 +20,8 @@ const (
 	ChunkFinishStep ChunkType = "finish-step"
 	// ChunkFinish reports the normalized run finish reason.
 	ChunkFinish ChunkType = "finish"
+	// ChunkMessageMetadata merges final response metadata into the assistant message.
+	ChunkMessageMetadata ChunkType = "message-metadata"
 	// ChunkDone emits the terminal [DONE] SSE record.
 	ChunkDone ChunkType = "done"
 	// ChunkError reports a failed run or transformation.
@@ -44,10 +46,14 @@ const (
 	ChunkToolInputDelta ChunkType = "tool-input-delta"
 	// ChunkToolInputAvailable announces complete validated arguments.
 	ChunkToolInputAvailable ChunkType = "tool-input-available"
+	// ChunkToolInputError reports invalid arguments to an AI SDK v6+ client.
+	ChunkToolInputError ChunkType = "tool-input-error"
 	// ChunkToolOutputAvailable returns a successful tool result.
 	ChunkToolOutputAvailable ChunkType = "tool-output-available"
-	// ChunkToolOutputError returns a failed, denied, or interrupted result.
+	// ChunkToolOutputError returns a failed tool result.
 	ChunkToolOutputError ChunkType = "tool-output-error"
+	// ChunkToolOutputDenied reports a denied tool to an AI SDK v6+ client.
+	ChunkToolOutputDenied ChunkType = "tool-output-denied"
 	// ChunkToolApprovalRequest asks an AI SDK v6+ client to approve a tool.
 	ChunkToolApprovalRequest ChunkType = "tool-approval-request"
 	// ChunkFile carries one model-generated file as a data URL.
@@ -88,6 +94,10 @@ type Chunk struct {
 	FinishReason string `json:"finishReason,omitempty"`
 	// ProviderExecuted marks provider-native tool calls and results.
 	ProviderExecuted *bool `json:"providerExecuted,omitempty"`
+	// Dynamic marks a tool whose schema is not statically known by the client.
+	Dynamic *bool `json:"dynamic,omitempty"`
+	// Preliminary marks an intermediate provider-native result.
+	Preliminary *bool `json:"preliminary,omitempty"`
 	// ApprovalID identifies one tool approval request.
 	ApprovalID string `json:"approvalId,omitempty"`
 	// URL contains a generated file or cited source URL.
@@ -155,12 +165,16 @@ type UIMessagePart struct {
 	Type string `json:"type"`
 	// Text contains text or reasoning content.
 	Text string `json:"text,omitempty"`
+	// ToolName names a dynamic tool part.
+	ToolName string `json:"toolName,omitempty"`
 	// ToolCallID identifies one tool state machine.
 	ToolCallID string `json:"toolCallId,omitempty"`
 	// State identifies input or output availability.
 	State string `json:"state,omitempty"`
 	// Input contains complete JSON tool arguments.
 	Input json.RawMessage `json:"input,omitempty"`
+	// RawInput preserves malformed input on an output-error part.
+	RawInput json.RawMessage `json:"rawInput,omitempty"`
 	// Output contains a complete JSON tool result.
 	Output json.RawMessage `json:"output,omitempty"`
 	// ErrorText describes an output-error tool result.
@@ -185,6 +199,8 @@ type UIMessagePart struct {
 	CallProviderMetadata map[string]any `json:"callProviderMetadata,omitempty"`
 	// ProviderExecuted marks a provider-native tool call.
 	ProviderExecuted *bool `json:"providerExecuted,omitempty"`
+	// Preliminary marks an intermediate provider-native result.
+	Preliminary *bool `json:"preliminary,omitempty"`
 }
 
 // ToolApproval is one Vercel AI tool approval state.

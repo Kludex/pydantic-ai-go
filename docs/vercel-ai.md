@@ -223,12 +223,12 @@ Unrecognized `data-*` parts remain UI-only and are not sent to the model.
 
 The adapter stores part metadata under `providerMetadata.pydantic_ai`. It round-trips provider part IDs, names, details, reasoning signatures, tool kinds, and file metadata.
 
-Message metadata remains application-owned. The adapter reserves `metadata.pydantic_ai.timestamp` for the original message timestamp and `metadata.pydantic_ai.external_tool_call_ids` for deferred external work. Preserve reserved values exactly. It does not trust client-held provider response IDs or provider URLs.
+Message metadata remains application-owned. The stream emits one final `message-metadata` chunk so the AI SDK merges the response timestamp and deferred-call state into the assistant message. The adapter reserves `metadata.pydantic_ai.timestamp` for the original message timestamp and `metadata.pydantic_ai.external_tool_call_ids` for deferred external work. Preserve reserved values exactly. It does not trust client-held provider response IDs or provider URLs.
 
 A canceled run emits an `abort` chunk followed by `[DONE]`. This keeps cancellation distinct from model and adapter errors.
 
 ## Current scope
 
-The adapter supports AI SDK UI versions 5 through 7 for text, files, reasoning, function and provider-native tool inputs and outputs, approval and external-tool resumes, compaction boundaries, tool-availability changes, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
+The adapter supports AI SDK UI versions 5 through 7 for text, files, sources, custom data, reasoning, static and dynamic function tools, provider-native tools, approval and external-tool resumes, compaction boundaries, tool-availability changes, message metadata, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
 
-Remaining version-specific fields remain.
+AI SDK v6 and v7 receive `tool-input-error` for invalid arguments and `tool-output-denied` for denied calls. AI SDK v5 receives its compatible input and output lifecycle instead. Provider metadata on `tool-input-start` is omitted for v5. Open tool inputs are completed before a stream error so the frontend does not remain in `input-streaming` state.

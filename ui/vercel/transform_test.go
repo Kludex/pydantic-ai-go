@@ -13,6 +13,7 @@ import (
 )
 
 func TestTransformStreamVariants(t *testing.T) {
+	valid := true
 	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
 		events := []ai.StreamEvent{
 			ai.PartStartEvent{PartID: "text", Part: ai.TextPart{
@@ -38,12 +39,18 @@ func TestTransformStreamVariants(t *testing.T) {
 			}},
 			ai.PartDeltaEvent{PartID: "call", Delta: ai.ToolCallPartDelta{ArgsDelta: "1}"}},
 			ai.PartDeltaEvent{PartID: "call", Delta: ai.ToolCallPartDelta{ToolCallID: "call-1"}},
-			ai.FunctionToolCallEvent{Part: ai.ToolCallPart{ToolName: "tool", ToolCallID: "call-1", Args: []byte(`{"x":1}`)}},
+			ai.FunctionToolCallEvent{
+				Part:      ai.ToolCallPart{ToolName: "tool", ToolCallID: "call-1", Args: []byte(`{"x":1}`)},
+				ArgsValid: &valid,
+			},
 			ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "call-1", Content: map[string]any{"ok": true}}},
 			ai.OutputToolCallEvent{Part: ai.ToolCallPart{ToolName: "final", ToolCallID: "call-2"}},
 			ai.OutputToolResultEvent{Part: ai.RetryPromptPart{ToolCallID: "call-2", Content: "retry"}},
 			ai.PartStartEvent{PartID: "native", Part: ai.NativeToolCallPart{ToolName: "search", ToolCallID: "native-1"}},
 			ai.PartDeltaEvent{PartID: "native", Delta: ai.NativeToolCallPartDelta(ai.ToolCallPartDelta{ArgsDelta: `{}`})},
+			ai.PartEndEvent{PartID: "native", Part: ai.NativeToolCallPart{
+				ToolName: "search", ToolCallID: "native-1", Args: []byte(`{}`),
+			}},
 			ai.PartStartEvent{PartID: "native-return", Part: ai.NativeToolReturnPart{
 				ToolCallID: "native-1", Content: "found", ProviderName: "openai",
 				ProviderDetails: map[string]any{"status": "complete"}, ToolKind: ai.ToolPartKindWebSearch,
@@ -127,7 +134,7 @@ func TestTransformStreamVariants(t *testing.T) {
 		textMetadata["provider_details"].(map[string]any)["phase"] != "final" {
 		t.Fatalf("unexpected text metadata: %#v", textMetadata)
 	}
-	finishMetadata := chunks[chunkIndex(chunks, vercel.ChunkFinish)].MessageMetadata
+	finishMetadata := chunks[chunkIndex(chunks, vercel.ChunkMessageMetadata)].MessageMetadata
 	if finishMetadata["request"] != "metadata" ||
 		finishMetadata["pydantic_ai"].(map[string]any)["timestamp"] != "2026-09-04T10:00:00Z" {
 		t.Fatalf("unexpected message metadata: %#v", finishMetadata)
@@ -267,7 +274,7 @@ func TestTransformExternalToolMetadata(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if chunk.Type == vercel.ChunkFinish {
+		if chunk.Type == vercel.ChunkMessageMetadata {
 			finish = chunk.MessageMetadata
 		}
 	}
@@ -324,6 +331,152 @@ func TestTransformApprovalVersions(t *testing.T) {
 	}
 }
 
+func TestTransformToolValidationVersions(t *testing.T) {
+	invalid := false
+	for _, version := range []int{5, 6} {
+		stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+			call := ai.ToolCallPart{
+				ToolName: "weather", ToolCallID: "call", Args: []byte(`{"city":1}`), ID: "provider-call",
+				ProviderName: "openai",
+			}
+			yield(ai.PartStartEvent{PartID: "part", Part: call}, nil)
+			yield(ai.FunctionToolCallEvent{Part: call, ArgsValid: &invalid}, nil)
+			yield(ai.FunctionToolResultEvent{Part: ai.RetryPromptPart{
+				ToolName: "weather", ToolCallID: "call", Content: "city must be a string",
+			}}, nil)
+		})
+		var chunks []vercel.Chunk
+		for chunk, err := range vercel.TransformStreamWithConfig(stream, vercel.StreamConfig{SDKVersion: version}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			chunks = append(chunks, chunk)
+		}
+		start := chunks[chunkIndex(chunks, vercel.ChunkToolInputStart)]
+		if (start.ProviderMetadata != nil) != (version >= 6) {
+			t.Fatalf("version=%d start metadata=%#v", version, start.ProviderMetadata)
+		}
+		if version == 5 {
+			if chunkIndex(chunks, vercel.ChunkToolInputAvailable) < 0 ||
+				chunkIndex(chunks, vercel.ChunkToolOutputError) < 0 {
+				t.Fatalf("v5 validation lifecycle: %#v", chunks)
+			}
+		} else {
+			index := chunkIndex(chunks, vercel.ChunkToolInputError)
+			if index < 0 || chunks[index].ToolName != "weather" || chunks[index].ErrorText == "" ||
+				chunkIndex(chunks, vercel.ChunkToolInputAvailable) >= 0 ||
+				chunkIndex(chunks, vercel.ChunkToolOutputError) >= 0 {
+				t.Fatalf("v6 validation lifecycle: %#v", chunks)
+			}
+		}
+	}
+}
+
+func TestTransformInvalidToolResultEdges(t *testing.T) {
+	invalid := false
+	for _, test := range []struct {
+		args   string
+		result ai.RequestPart
+	}{
+		{args: `{`, result: ai.RetryPromptPart{ToolCallID: "call", Content: "invalid"}},
+		{args: `{}`, result: ai.ToolReturnPart{ToolCallID: "call", Content: "invalid"}},
+	} {
+		stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+			call := ai.ToolCallPart{ToolName: "tool", ToolCallID: "call", Args: []byte(test.args)}
+			yield(ai.PartStartEvent{PartID: "call", Part: call}, nil)
+			yield(ai.FunctionToolCallEvent{Part: call, ArgsValid: &invalid}, nil)
+			yield(ai.FunctionToolResultEvent{Part: test.result}, nil)
+		})
+		var inputError vercel.Chunk
+		for chunk, err := range vercel.TransformStreamWithConfig(stream, vercel.StreamConfig{SDKVersion: 6}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if chunk.Type == vercel.ChunkToolInputError {
+				inputError = chunk
+			}
+		}
+		if !strings.Contains(inputError.ErrorText, "invalid") {
+			t.Fatalf("unexpected input error: %#v", inputError)
+		}
+		if test.args == `{` && inputError.Input.(map[string]any)["INVALID_JSON"] != `{` {
+			t.Fatalf("malformed input was not preserved: %#v", inputError.Input)
+		}
+	}
+}
+
+func TestTransformToolLifecycleEdges(t *testing.T) {
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		pending := ai.ToolCallPart{ToolName: "pending", ToolCallID: "pending", Args: []byte(`{}`)}
+		yield(ai.PartStartEvent{PartID: "pending", Part: pending}, nil)
+		yield(ai.FunctionToolCallEvent{Part: pending}, nil)
+		backfill := ai.ToolCallPart{ToolName: "backfill", ToolCallID: "backfill", Args: []byte(`{"x":`)}
+		yield(ai.PartStartEvent{PartID: "backfill", Part: backfill}, nil)
+		backfill.Args = []byte(`{"x":1}`)
+		yield(ai.PartEndEvent{PartID: "backfill", Part: backfill}, nil)
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{
+			ToolName: "backfill", ToolCallID: "backfill", Content: "done",
+		}}, nil)
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{
+			ToolName: "denied", ToolCallID: "denied", Content: "not allowed", Outcome: ai.ToolReturnOutcomeDenied,
+		}}, nil)
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{
+			ToolName: "interrupted", ToolCallID: "interrupted", Content: "stopped",
+			Outcome: ai.ToolReturnOutcomeInterrupted,
+		}}, nil)
+		yield(ai.PartStartEvent{PartID: "native", Part: ai.NativeToolReturnPart{
+			ToolName: "native", ToolCallID: "native", Content: "denied", Outcome: ai.ToolReturnOutcomeDenied,
+		}}, nil)
+	})
+	var chunks []vercel.Chunk
+	for chunk, err := range vercel.TransformStreamWithConfig(stream, vercel.StreamConfig{SDKVersion: 6}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	available := 0
+	denied := 0
+	for _, chunk := range chunks {
+		switch chunk.Type {
+		case vercel.ChunkToolInputAvailable:
+			available++
+		case vercel.ChunkToolOutputDenied:
+			denied++
+		}
+	}
+	if available != 2 || denied != 2 {
+		t.Fatalf("unexpected edge lifecycle: %#v", chunks)
+	}
+	interrupted := false
+	backfilled := false
+	for _, chunk := range chunks {
+		if chunk.Type == vercel.ChunkToolOutputAvailable && chunk.ToolCallID == "interrupted" {
+			interrupted = true
+		}
+		if chunk.Type == vercel.ChunkToolInputAvailable && chunk.ToolCallID == "backfill" &&
+			chunk.Input.(map[string]any)["x"] == float64(1) {
+			backfilled = true
+		}
+	}
+	if !interrupted || !backfilled {
+		t.Fatalf("tool lifecycle was not preserved: %#v", chunks)
+	}
+	v5 := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{
+			ToolCallID: "denied", Content: "not allowed", Outcome: ai.ToolReturnOutcomeDenied,
+		}}, nil)
+	})
+	for chunk, err := range vercel.TransformStreamWithConfig(v5, vercel.StreamConfig{SDKVersion: 5}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunk.ToolCallID == "denied" && chunk.Type != vercel.ChunkToolOutputAvailable {
+			t.Fatalf("v5 denied result was not neutral: %#v", chunk)
+		}
+	}
+}
+
 func TestTransformFinishReasons(t *testing.T) {
 	tests := []struct {
 		reason ai.FinishReason
@@ -363,7 +516,6 @@ func TestTransformErrors(t *testing.T) {
 		match  string
 	}{
 		{name: "stream", events: []ai.StreamEvent{ai.PartStartEvent{Part: ai.TextPart{}}}, err: errors.New("stream failed"), match: "stream failed"},
-		{name: "tool input", events: []ai.StreamEvent{ai.FunctionToolCallEvent{Part: ai.ToolCallPart{Args: []byte("{")}}}, match: "unexpected end"},
 		{name: "result", events: []ai.StreamEvent{ai.FunctionToolResultEvent{Part: ai.UserPromptPart{}}}, match: "unsupported tool result"},
 	}
 	for _, test := range tests {
@@ -389,6 +541,26 @@ func TestTransformErrors(t *testing.T) {
 				t.Fatalf("unexpected error: %v", got)
 			}
 		})
+	}
+
+	openTools := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		ordinary := ai.ToolCallPart{ToolName: "ordinary", ToolCallID: "ordinary", Args: []byte(`{}`)}
+		yield(ai.PartStartEvent{PartID: "ordinary", Part: ordinary}, nil)
+		yield(ai.FunctionToolCallEvent{Part: ordinary}, nil)
+		yield(ai.PartStartEvent{PartID: "native", Part: ai.NativeToolCallPart{
+			ToolName: "native", ToolCallID: "native", Args: []byte(`{}`),
+		}}, nil)
+		yield(nil, errors.New("stream failed"))
+	})
+	flushedNative := false
+	for chunk := range vercel.TransformStream(openTools, "message") {
+		if chunk.Type == vercel.ChunkToolInputAvailable && chunk.ToolCallID == "native" &&
+			chunk.ProviderExecuted != nil && *chunk.ProviderExecuted {
+			flushedNative = true
+		}
+	}
+	if !flushedNative {
+		t.Fatal("open native tool input was not flushed")
 	}
 
 	cancelled := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
@@ -439,6 +611,10 @@ func TestTransformConsumerStops(t *testing.T) {
 		{events: []ai.StreamEvent{ai.PartStartEvent{Part: ai.ToolCallPart{}}}, stopAt: vercel.ChunkToolInputStart},
 		{events: []ai.StreamEvent{ai.PartStartEvent{Part: ai.NativeToolCallPart{}}}, stopAt: vercel.ChunkToolInputStart},
 		{events: []ai.StreamEvent{ai.PartStartEvent{Part: ai.ToolCallPart{Args: []byte(`{}`)}}}, stopAt: vercel.ChunkToolInputDelta},
+		{events: []ai.StreamEvent{
+			ai.PartStartEvent{Part: ai.ToolCallPart{ToolCallID: "call", Args: []byte(`{}`)}},
+			ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "call"}},
+		}, stopAt: vercel.ChunkToolInputAvailable},
 	}
 	for _, test := range stopCases {
 		stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
@@ -469,5 +645,18 @@ func TestTransformConsumerStops(t *testing.T) {
 	})
 	vercel.TransformStream(failed, "message")(func(chunk vercel.Chunk, _ error) bool {
 		return chunk.Type != vercel.ChunkFinishStep
+	})
+	failedTool := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.PartStartEvent{Part: ai.ToolCallPart{ToolCallID: "call", Args: []byte(`{}`)}}, nil)
+		yield(nil, errors.New("failed"))
+	})
+	vercel.TransformStream(failedTool, "message")(func(chunk vercel.Chunk, _ error) bool {
+		return chunk.Type != vercel.ChunkToolInputAvailable
+	})
+	metadata := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.FinishEvent{Metadata: map[string]any{"key": "value"}}, nil)
+	})
+	vercel.TransformStream(metadata, "message")(func(chunk vercel.Chunk, _ error) bool {
+		return chunk.Type != vercel.ChunkMessageMetadata
 	})
 }

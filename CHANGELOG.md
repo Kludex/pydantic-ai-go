@@ -67,6 +67,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Add Hugging Face Inference Providers with routed endpoints, tagged reasoning, images, and function tools.
 - Add Cohere v2 Chat models with thinking, function tools, structured output, and billed usage.
 - Add Crusoe Serverless Inference models with guided output and family-aware reasoning.
+- Complete OpenRouter downstream profile handling with safe non-leading system-prompt fallback.
 - Add native Mistral Chat Completions with streaming, thinking, tools, caching, and multimodal input.
 - Add Snowflake Cortex models with account-scoped endpoints and Claude reasoning.
 - Add Amazon Bedrock Mantle models with endpoint routing, bearer or SigV4 authentication, and response-scoped tool-call IDs.

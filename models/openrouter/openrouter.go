@@ -163,7 +163,7 @@ func (model *Model) Request(
 	if err != nil {
 		return nil, err
 	}
-	return model.model.Request(ctx, messages, prepared)
+	return model.model.Request(ctx, prepareMessages(messages), prepared)
 }
 
 // StreamRequest implements ai.StreamingModel.
@@ -174,7 +174,7 @@ func (model *Model) StreamRequest(
 	if err != nil {
 		return nil, err
 	}
-	return model.model.StreamRequest(ctx, messages, prepared)
+	return model.model.StreamRequest(ctx, prepareMessages(messages), prepared)
 }
 
 func (model *Model) prepareParams(

@@ -39,6 +39,59 @@ func (unsupportedNativeTool) UniqueID() string                    { return "unsu
 func (tool unsupportedNativeTool) IsOptional() bool               { return tool.optional }
 func (tool unsupportedNativeTool) CloneNativeTool() ai.NativeTool { return tool }
 
+func TestInlineSystemPromptsUseUserFallback(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		if request.Header.Get("Accept") == "text/event-stream" {
+			response.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(response, "data: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(response, `{"id":"response","model":"anthropic/claude","choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	model := openrouter.NewModel("anthropic/claude", openrouter.WithBaseURL(server.URL),
+		openrouter.WithAPIKey("token"), openrouter.WithHTTPClient(server.Client()))
+	messages := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.SystemPromptPart{Content: "standing"}, ai.UserPromptPart{Content: "hello"},
+			ai.SystemPromptPart{Content: "inline"},
+		}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "answer"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.SystemPromptPart{Content: "later"}}},
+	}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := model.StreamRequest(t.Context(), messages, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+	}
+	if _, ok := messages[0].(ai.ModelRequest).Parts[2].(ai.SystemPromptPart); !ok {
+		t.Fatal("request preparation mutated caller history")
+	}
+	for _, body := range bodies {
+		wire := body["messages"].([]any)
+		roles := []string{"system", "user", "user", "assistant", "user"}
+		for index, role := range roles {
+			if wire[index].(map[string]any)["role"] != role {
+				t.Fatalf("unexpected messages: %#v", wire)
+			}
+		}
+		if wire[2].(map[string]any)["content"] != "<system>inline</system>" ||
+			wire[4].(map[string]any)["content"] != "<system>later</system>" {
+			t.Fatalf("unexpected system fallback: %#v", wire)
+		}
+	}
+}
+
 func TestOpenRouterRequest(t *testing.T) {
 	t.Setenv("OPENROUTER_APP_URL", "https://environment.example")
 	t.Setenv("OPENROUTER_APP_TITLE", "Environment")

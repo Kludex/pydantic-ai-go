@@ -62,6 +62,108 @@ func TestModelAndSettings(t *testing.T) {
 	}
 }
 
+func TestModelFamilyThinking(t *testing.T) {
+	var bodies []map[string]any
+	var warnings []groq.ReasoningWarning
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		response.Header().Set("Content-Type", "application/json")
+		if body["stream"] == true {
+			_, _ = response.Write([]byte("data: {\"id\":\"completion\",\"model\":\"model\"," +
+				"\"choices\":[{\"index\":0,\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: [DONE]\n\n"))
+			return
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"completion","model":"model",
+			"choices":[{"finish_reason":"stop","message":{"content":"done"}}]
+		}`))
+	}))
+	defer server.Close()
+
+	tests := []struct {
+		name           string
+		model          string
+		level          ai.ThinkingLevel
+		extra          map[string]any
+		expectedFormat any
+		expectedEffort any
+	}{
+		{name: "unsupported", model: "llama-3.3-70b-versatile", level: ai.ThinkingLevelHigh},
+		{name: "qwen disabled", model: "qwen/qwen3-32b", level: ai.ThinkingLevelDisabled,
+			extra: map[string]any{"reasoning_effort": "high"}, expectedEffort: "none"},
+		{name: "qwen enabled", model: "qwen/qwen3-32b", level: ai.ThinkingLevelEnabled,
+			expectedFormat: "parsed"},
+		{name: "gpt enabled", model: "openai/gpt-oss-20b", level: ai.ThinkingLevelEnabled,
+			expectedFormat: "parsed", expectedEffort: "medium"},
+		{name: "gpt minimal", model: "openai/gpt-oss-20b", level: ai.ThinkingLevelMinimal,
+			expectedFormat: "parsed", expectedEffort: "low"},
+		{name: "gpt low", model: "openai/gpt-oss-20b", level: ai.ThinkingLevelLow,
+			expectedFormat: "parsed", expectedEffort: "low"},
+		{name: "gpt medium", model: "openai/gpt-oss-20b", level: ai.ThinkingLevelMedium,
+			expectedFormat: "parsed", expectedEffort: "medium"},
+		{name: "gpt high", model: "openai/gpt-oss-20b", level: ai.ThinkingLevelHigh,
+			expectedFormat: "parsed", expectedEffort: "high"},
+		{name: "gpt xhigh", model: "openai/gpt-oss-20b", level: ai.ThinkingLevelXHigh,
+			expectedFormat: "parsed", expectedEffort: "high"},
+		{name: "gpt disabled", model: "openai/gpt-oss-20b", level: ai.ThinkingLevelDisabled,
+			expectedFormat: "hidden"},
+		{name: "legacy enabled", model: "deepseek-r1-distill-llama-70b", level: ai.ThinkingLevelEnabled,
+			expectedFormat: "parsed"},
+		{name: "legacy disabled", model: "qwen-qwq-32b", level: ai.ThinkingLevelDisabled,
+			expectedFormat: "hidden"},
+		{name: "explicit", model: "openai/gpt-oss-120b", level: ai.ThinkingLevelHigh,
+			extra:          map[string]any{"reasoning_format": "raw", "reasoning_effort": "low"},
+			expectedFormat: "raw", expectedEffort: "low"},
+		{name: "empty", model: "llama-4-maverick-17b", level: ""},
+	}
+	for index, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			model := groq.NewModel(test.model, groq.WithBaseURL(server.URL), groq.WithAPIKey("key"),
+				groq.WithHTTPClient(server.Client()), groq.WithReasoningWarningHandler(func(warning groq.ReasoningWarning) {
+					warnings = append(warnings, warning)
+				}))
+			settings := ai.ModelSettings{
+				Thinking: &ai.ThinkingSettings{Level: test.level}, ExtraBody: test.extra,
+			}
+			if _, err := model.Request(context.Background(), nil, ai.ModelRequestParams{Settings: settings}); err != nil {
+				t.Fatal(err)
+			}
+			body := bodies[index]
+			if body["reasoning_format"] != test.expectedFormat || body["reasoning_effort"] != test.expectedEffort {
+				t.Fatalf("unexpected reasoning request: %#v", body)
+			}
+			if settings.Thinking == nil || settings.Thinking.Level != test.level {
+				t.Fatalf("caller settings were mutated: %#v", settings)
+			}
+		})
+	}
+	if len(warnings) != 1 || warnings[0].ModelName != "qwen/qwen3-32b" || warnings[0].Message == "" {
+		t.Fatalf("unexpected reasoning warnings: %#v", warnings)
+	}
+	model := groq.NewModel("openai/gpt-oss-20b", groq.WithBaseURL(server.URL), groq.WithAPIKey("key"),
+		groq.WithHTTPClient(server.Client()))
+	stream, err := model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+	}
+	body := bodies[len(bodies)-1]
+	if body["reasoning_format"] != "parsed" || body["reasoning_effort"] != "low" {
+		t.Fatalf("unexpected streamed reasoning request: %#v", body)
+	}
+}
+
 func TestCompoundWebSearch(t *testing.T) {
 	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -73,15 +175,23 @@ func TestCompoundWebSearch(t *testing.T) {
 		response.Header().Set("Content-Type", "application/json")
 		if body["stream"] == true {
 			_, _ = response.Write([]byte("data: {\"id\":\"completion\",\"model\":\"groq/compound\"," +
-				"\"choices\":[{\"index\":0,\"delta\":{\"content\":\"found\"}}]}\n\n" +
+				"\"choices\":[{\"index\":0,\"delta\":{\"executed_tools\":[{\"index\":0,\"type\":\"search\"," +
+				"\"arguments\":\"{\\\"query\\\":\\\"Go\\\"}\",\"search_results\":{\"results\":[]}}]}}]}\n\n" +
 				"data: {\"id\":\"completion\",\"model\":\"groq/compound\"," +
-				"\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+				"\"choices\":[{\"index\":0,\"delta\":{\"content\":\"found\",\"executed_tools\":[{" +
+				"\"index\":0,\"type\":\"search\",\"arguments\":\"{\\\"query\\\":\\\"Go\\\"}\"," +
+				"\"output\":\"stream result\"}]},\"finish_reason\":\"stop\"}]}\n\n" +
 				"data: [DONE]\n\n"))
 			return
 		}
 		_, _ = response.Write([]byte(`{
 			"id":"completion","model":"groq/compound",
-			"choices":[{"finish_reason":"stop","message":{"content":"found"}}],
+			"choices":[{"finish_reason":"stop","message":{
+				"content":"found","executed_tools":[{
+					"index":0,"type":"search","arguments":"{\"query\":\"Go\"}",
+					"output":"fallback","search_results":{"results":[{"title":"Go"}]}
+				}]
+			}}],
 			"usage":{"prompt_tokens":1,"completion_tokens":1}
 		}`))
 	}))
@@ -98,16 +208,40 @@ func TestCompoundWebSearch(t *testing.T) {
 	if err != nil || response.Text() != "found" {
 		t.Fatalf("unexpected compound response: %#v %v", response, err)
 	}
+	if len(response.Parts) != 3 {
+		t.Fatalf("unexpected executed search parts: %#v", response.Parts)
+	}
+	call, callOK := response.Parts[0].(ai.NativeToolCallPart)
+	result, resultOK := response.Parts[1].(ai.NativeToolReturnPart)
+	results, resultsOK := result.Content.(map[string]any)
+	if !callOK || !resultOK || !resultsOK || call.ToolKind != ai.ToolPartKindWebSearch ||
+		call.ToolCallID != result.ToolCallID || results["results"].([]any)[0].(map[string]any)["title"] != "Go" {
+		t.Fatalf("unexpected executed search normalization: %#v", response.Parts)
+	}
 	stream, err := model.StreamRequest(context.Background(), nil, ai.ModelRequestParams{
 		NativeTools: []ai.NativeTool{&search},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, eventErr := range stream {
+	var events []ai.ModelStreamEvent
+	for event, eventErr := range stream {
 		if eventErr != nil {
 			t.Fatal(eventErr)
 		}
+		events = append(events, event)
+	}
+	if len(events) != 5 {
+		t.Fatalf("unexpected executed search events: %#v", events)
+	}
+	start, startOK := events[0].(ai.ToolCallStartEvent)
+	delta, deltaOK := events[1].(ai.ToolCallDeltaEvent)
+	streamResult, resultOK := events[2].(ai.NativeToolReturnEvent)
+	text, textOK := events[3].(ai.TextDeltaEvent)
+	if !startOK || !deltaOK || !resultOK || !textOK || !start.Native ||
+		start.ToolKind != ai.ToolPartKindWebSearch || delta.ArgsDelta != `{"query":"Go"}` ||
+		streamResult.Part.Content != "stream result" || text.Delta != "found" {
+		t.Fatalf("unexpected executed search lifecycle: %#v", events)
 	}
 	if len(bodies) != 2 {
 		t.Fatalf("unexpected request count: %d", len(bodies))

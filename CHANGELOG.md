@@ -53,6 +53,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Resume A2A deferred calls and approvals from authoritative stored task state without repeating completed tool side effects.
 - Adapt official A2A clients into blocking static and streamed models with multimodal requests, task continuity, extension and push configuration, artifact metadata, and inspectable failures.
 - Configure implicit native web search on Groq compound models with validated domain filters.
+- Translate portable reasoning by Groq model family and report Qwen 3 effort overrides.
+- Normalize Groq compound search executions into provider-native call and return parts.
 - Align reflected schemas with custom JSON marshalers, `json:",string"`, fixed arrays, JSON-compatible map keys, numeric JSON values, and Go's embedded-field selection rules.
 
 ### Deprecated

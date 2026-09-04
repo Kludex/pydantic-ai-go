@@ -709,7 +709,7 @@ func main() {
 
 Set `GROQ_API_KEY`. `GROQ_BASE_URL` overrides the default `https://api.groq.com/openai/v1` endpoint.
 
-`ReasoningFormatParsed` returns reasoning as separate `ThinkingPart` values. Reasoning effort support depends on the selected Groq model family. `WithProvider` keeps Groq response parsing when you route requests through a gateway.
+`ReasoningFormatParsed` returns reasoning as separate `ThinkingPart` values. `ModelSettings.Thinking` follows Groq's model families: GPT-OSS maps portable effort to `low`, `medium`, or `high`; Qwen 3 can disable reasoning with `none`; and legacy reasoning models map visibility without sending unsupported effort values. `WithReasoningWarningHandler` reports when Qwen 3 disabled thinking overrides an explicit effort setting. `WithProvider` keeps Groq response parsing when you route requests through a gateway.
 
 ### Compound web search
 
@@ -740,4 +740,4 @@ func main() {
 }
 ```
 
-Groq compound models include web search automatically. `WebSearchTool` forwards allowed and blocked domains through `search_settings` without emitting a duplicate tool declaration. Other portable search constraints fail before transport because Groq does not support them on this API.
+Groq compound models include web search automatically. `WebSearchTool` forwards allowed and blocked domains through `search_settings` without emitting a duplicate tool declaration. Static and streamed executions produce typed `NativeToolCallPart` and `NativeToolReturnPart` history. Other portable search constraints fail before transport because Groq does not support them on this API.

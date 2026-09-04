@@ -93,10 +93,14 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 // Model calls models served by Groq.
 type Model struct {
 	*ai.ModelWrapper
-	name string
+	name             string
+	reasoningWarning func(ReasoningWarning)
 }
 
-type config struct{ options []openai.Option }
+type config struct {
+	options          []openai.Option
+	reasoningWarning func(ReasoningWarning)
+}
 
 // Option configures a Groq model.
 type Option func(*config)
@@ -130,6 +134,20 @@ func WithDefaultSettings(settings ai.ModelSettings) Option {
 	}
 }
 
+// ReasoningWarning describes a portable reasoning setting overridden by a model-family requirement.
+type ReasoningWarning struct {
+	// ModelName identifies the selected Groq model.
+	ModelName string
+	// Message explains which setting was overridden.
+	Message string
+}
+
+// WithReasoningWarningHandler receives inspectable reasoning-setting warnings.
+// The handler may be called concurrently when the model is shared by concurrent runs.
+func WithReasoningWarningHandler(handler func(ReasoningWarning)) Option {
+	return func(config *config) { config.reasoningWarning = handler }
+}
+
 // NewProviderConfig returns reusable Groq endpoint and environment configuration.
 func NewProviderConfig() openai.ProviderConfig {
 	baseURL := os.Getenv("GROQ_BASE_URL")
@@ -147,10 +165,13 @@ func NewModel(name string, options ...Option) *Model {
 	}
 	openAIOptions := []openai.Option{
 		openai.WithProvider(NewProviderConfig()),
-		openai.WithChatCompatibility(openai.ChatCompatibility{Reasoning: true}),
+		openai.WithChatCompatibility(openai.ChatCompatibility{Reasoning: true, ExecutedTools: true}),
 	}
 	openAIOptions = append(openAIOptions, configuration.options...)
-	return &Model{ModelWrapper: ai.WrapModel(openai.NewModel(name, openAIOptions...)), name: name}
+	return &Model{
+		ModelWrapper: ai.WrapModel(openai.NewModel(name, openAIOptions...)),
+		name:         name, reasoningWarning: configuration.reasoningWarning,
+	}
 }
 
 // SupportsNativeTool reports support for implicit web search on Groq compound models.
@@ -191,6 +212,7 @@ func (model *Model) StreamRequest(
 }
 
 func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequestParams, error) {
+	params.Settings = model.prepareThinking(params.Settings)
 	if len(params.NativeTools) == 0 {
 		return params, nil
 	}
@@ -238,6 +260,75 @@ func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequest
 	params.Settings = settings
 	params.NativeTools = nil
 	return params, nil
+}
+
+func (model *Model) prepareThinking(settings ai.ModelSettings) ai.ModelSettings {
+	if settings.Thinking == nil {
+		return settings
+	}
+	thinking := *settings.Thinking
+	settings = settings.Clone()
+	settings.Thinking = nil
+	if !isReasoningModel(model.name) {
+		return settings
+	}
+	if settings.ExtraBody == nil {
+		settings.ExtraBody = make(map[string]any)
+	}
+	_, explicitFormat := settings.ExtraBody["reasoning_format"]
+	_, explicitEffort := settings.ExtraBody["reasoning_effort"]
+	if strings.HasPrefix(model.name, "qwen/qwen3") {
+		if thinking.Level == ai.ThinkingLevelDisabled {
+			if explicitEffort && model.reasoningWarning != nil {
+				model.reasoningWarning(ReasoningWarning{
+					ModelName: model.name,
+					Message:   "disabled thinking overrides the configured reasoning effort with none",
+				})
+			}
+			settings.ExtraBody["reasoning_effort"] = "none"
+		} else if thinking.Level != "" && !explicitFormat {
+			settings.ExtraBody["reasoning_format"] = "parsed"
+		}
+		return settings
+	}
+	if thinking.Level == ai.ThinkingLevelDisabled {
+		if !explicitFormat {
+			settings.ExtraBody["reasoning_format"] = "hidden"
+		}
+		return settings
+	}
+	if thinking.Level == "" {
+		return settings
+	}
+	if !explicitFormat {
+		settings.ExtraBody["reasoning_format"] = "parsed"
+	}
+	if strings.HasPrefix(model.name, "openai/gpt-oss") && !explicitEffort {
+		settings.ExtraBody["reasoning_effort"] = groqReasoningEffort(thinking.Level)
+	}
+	return settings
+}
+
+func groqReasoningEffort(level ai.ThinkingLevel) string {
+	switch level {
+	case ai.ThinkingLevelMinimal, ai.ThinkingLevelLow:
+		return "low"
+	case ai.ThinkingLevelHigh, ai.ThinkingLevelXHigh:
+		return "high"
+	default:
+		return "medium"
+	}
+}
+
+func isReasoningModel(name string) bool {
+	for _, prefix := range []string{
+		"openai/gpt-oss", "qwen/qwen3", "qwen-qwq", "deepseek-r1", "llama-4-maverick",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func isCompoundModel(name string) bool {

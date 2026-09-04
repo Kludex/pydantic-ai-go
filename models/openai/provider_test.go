@@ -552,6 +552,125 @@ func TestOpenAIExtendedChatCompatibility(t *testing.T) {
 	}
 }
 
+func TestOpenAIExecutedToolsCompatibility(t *testing.T) {
+	var staticRequests int
+	var streamRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.Header.Get("Accept") == "text/event-stream" {
+			streamRequests++
+			if streamRequests == 2 {
+				_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"executed_tools":[`+
+					`{"index":0,"type":"search","arguments":"not json"}]}}]}`+"\n\n")
+				return
+			}
+			_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"executed_tools":[`+
+				`{"index":9,"type":"other","arguments":"{}"},`+
+				`{"index":0,"type":"search","arguments":"{\"query\":\"Go\"}","search_results":{"results":[]}}]}}]}`+"\n\n")
+			_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"executed_tools":[`+
+				`{"index":0,"type":"search","arguments":"{\"query\":\"Go\"}","output":"found"}]}}]}`+"\n\n")
+			_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"executed_tools":[`+
+				`{"index":0,"type":"search","arguments":"{\"query\":\"Go\"}","output":"duplicate"}]}}]}`+"\n\n")
+			_, _ = io.WriteString(response, "data: [DONE]\n\n")
+			return
+		}
+		staticRequests++
+		if staticRequests == 2 {
+			_, _ = response.Write([]byte(`{"model":"model","choices":[{"message":{"executed_tools":[
+				{"index":0,"type":"search","arguments":"not json"}]},"finish_reason":"stop"}]}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"model":"model","choices":[{"message":{"content":"done","executed_tools":[
+			{"index":9,"type":"other","arguments":"{}"},
+			{"index":0,"type":"search","arguments":"{\"query\":\"images\"}",
+			 "search_results":{"images":[{"url":"https://example.com/image"}]}},
+			{"index":1,"type":"search","arguments":"{\"query\":\"results\"}",
+			 "search_results":{"images":[],"results":[{"title":"result"}]}},
+			{"index":2,"type":"search","arguments":"{\"query\":\"output\"}","output":"fallback"}
+		]},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+
+	model := openai.NewModel("model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+		openai.WithChatCompatibility(openai.ChatCompatibility{ExecutedTools: true}))
+	result, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Parts) != 7 || result.Text() != "done" {
+		t.Fatalf("unexpected executed tool response: %#v", result.Parts)
+	}
+	firstCall := result.Parts[0].(ai.NativeToolCallPart)
+	firstResult := result.Parts[1].(ai.NativeToolReturnPart)
+	secondResult := result.Parts[3].(ai.NativeToolReturnPart)
+	thirdResult := result.Parts[5].(ai.NativeToolReturnPart)
+	if firstCall.ToolKind != ai.ToolPartKindWebSearch || firstCall.ToolCallID != firstResult.ToolCallID ||
+		firstResult.Content.(map[string]any)["images"].([]any)[0].(map[string]any)["url"] == "" ||
+		secondResult.Content.(map[string]any)["results"].([]any)[0].(map[string]any)["title"] != "result" ||
+		thirdResult.Content != "fallback" {
+		t.Fatalf("unexpected executed tool normalization: %#v", result.Parts)
+	}
+	firstCall.ProviderDetails["type"] = "changed"
+	if firstResult.ProviderDetails["type"] != "search" {
+		t.Fatal("executed tool metadata was not detached")
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
+		!strings.Contains(err.Error(), "executed search arguments") {
+		t.Fatalf("unexpected invalid executed tool error: %v", err)
+	}
+
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ai.ModelStreamEvent
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 4 {
+		t.Fatalf("unexpected executed tool stream: %#v", events)
+	}
+	start := events[0].(ai.ToolCallStartEvent)
+	delta := events[1].(ai.ToolCallDeltaEvent)
+	toolResult := events[2].(ai.NativeToolReturnEvent)
+	if !start.Native || start.ToolKind != ai.ToolPartKindWebSearch || delta.ArgsDelta != `{"query":"Go"}` ||
+		toolResult.Part.Content != "found" || start.ToolCallID != toolResult.Part.ToolCallID {
+		t.Fatalf("unexpected executed tool events: %#v", events)
+	}
+
+	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, eventErr := range stream {
+		if eventErr == nil || !strings.Contains(eventErr.Error(), "executed search arguments") {
+			t.Fatalf("unexpected streamed executed tool error: %v", eventErr)
+		}
+		break
+	}
+	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
+	}
+	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for range stream {
+		count++
+		if count == 3 {
+			break
+		}
+	}
+}
+
 func TestOpenAIReasoningDetailsCompatibility(t *testing.T) {
 	var bodies []map[string]any
 	var staticRequests int

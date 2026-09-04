@@ -93,6 +93,8 @@ type ChatCompatibility struct {
 	LegacyMaxTokens bool
 	// ExtendedMetadata preserves routed-provider and server-tool metadata.
 	ExtendedMetadata bool
+	// ExecutedTools enables Groq-style provider-executed search results.
+	ExecutedTools bool
 	// VideoInput enables video_url user content.
 	VideoInput bool
 	// FileURLInput enables remote file user content.
@@ -129,6 +131,7 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 			ReasoningDetails:     compatibility.ReasoningDetails,
 			LegacyMaxTokens:      compatibility.LegacyMaxTokens,
 			ExtendedMetadata:     compatibility.ExtendedMetadata,
+			ExecutedTools:        compatibility.ExecutedTools,
 			VideoInput:           compatibility.VideoInput,
 			FileURLInput:         compatibility.FileURLInput,
 			AudioInputDataURI:    compatibility.AudioInputDataURI,
@@ -447,6 +450,14 @@ type toolCall struct {
 type functionCall struct {
 	Name      string `json:"name"`
 	Arguments string `json:"arguments"`
+}
+
+type chatExecutedTool struct {
+	Index         int            `json:"index"`
+	Type          string         `json:"type"`
+	Arguments     string         `json:"arguments"`
+	Output        any            `json:"output"`
+	SearchResults map[string]any `json:"search_results"`
 }
 
 type chatTool struct {
@@ -824,13 +835,14 @@ type chatResponse struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Message struct {
-			Content          string            `json:"content"`
-			Refusal          string            `json:"refusal"`
-			ReasoningContent string            `json:"reasoning_content"`
-			Reasoning        string            `json:"reasoning"`
-			ReasoningDetails []reasoningDetail `json:"reasoning_details"`
-			Annotations      []map[string]any  `json:"annotations"`
-			ToolCalls        []toolCall        `json:"tool_calls"`
+			Content          string             `json:"content"`
+			Refusal          string             `json:"refusal"`
+			ReasoningContent string             `json:"reasoning_content"`
+			Reasoning        string             `json:"reasoning"`
+			ReasoningDetails []reasoningDetail  `json:"reasoning_details"`
+			Annotations      []map[string]any   `json:"annotations"`
+			ToolCalls        []toolCall         `json:"tool_calls"`
+			ExecutedTools    []chatExecutedTool `json:"executed_tools"`
 		} `json:"message"`
 		FinishReason       string `json:"finish_reason"`
 		NativeFinishReason string `json:"native_finish_reason"`
@@ -1037,6 +1049,17 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 			})
 		}
 	}
+	if model.chatCompatibility.ExecutedTools {
+		for _, tool := range msg.ExecutedTools {
+			call, result, ok, err := model.executedToolParts(tool)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				resp.Parts = append(resp.Parts, call, result)
+			}
+		}
+	}
 	if msg.Content != "" {
 		resp.Parts = append(resp.Parts, ai.TextPart{Content: msg.Content, ProviderName: model.providerName})
 	}
@@ -1049,6 +1072,40 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		})
 	}
 	return resp, nil
+}
+
+func (model *Model) executedToolParts(
+	tool chatExecutedTool,
+) (ai.NativeToolCallPart, ai.NativeToolReturnPart, bool, error) {
+	if tool.Type != "search" {
+		return ai.NativeToolCallPart{}, ai.NativeToolReturnPart{}, false, nil
+	}
+	arguments := json.RawMessage(tool.Arguments)
+	if !json.Valid(arguments) {
+		return ai.NativeToolCallPart{}, ai.NativeToolReturnPart{}, false,
+			fmt.Errorf("openai: parse executed search arguments: invalid JSON")
+	}
+	content, _ := executedToolContent(tool)
+	callID := fmt.Sprintf("groq-search:%d", tool.Index)
+	details := map[string]any{"index": tool.Index, "type": tool.Type}
+	return ai.NativeToolCallPart{
+			ToolName: "web_search", Args: arguments, ToolCallID: callID,
+			ToolKind: ai.ToolPartKindWebSearch, ID: callID, ProviderName: model.providerName,
+			ProviderDetails: details,
+		}, ai.NativeToolReturnPart{
+			ToolName: "web_search", Content: content, ToolCallID: callID,
+			ToolKind: ai.ToolPartKindWebSearch, Outcome: ai.ToolReturnOutcomeSuccess, ProviderName: model.providerName,
+			ProviderDetails: maps.Clone(details),
+		}, true, nil
+}
+
+func executedToolContent(tool chatExecutedTool) (any, bool) {
+	for _, key := range []string{"images", "results"} {
+		if values, ok := tool.SearchResults[key].([]any); ok && len(values) > 0 {
+			return tool.SearchResults, true
+		}
+	}
+	return tool.Output, tool.Output != nil
 }
 
 func (model *Model) chatFinishReason(reason string) ai.FinishReason {

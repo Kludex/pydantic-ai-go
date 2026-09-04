@@ -65,12 +65,13 @@ type chatChunk struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Delta struct {
-			Content          string            `json:"content"`
-			Refusal          string            `json:"refusal"`
-			ReasoningContent string            `json:"reasoning_content"`
-			Reasoning        string            `json:"reasoning"`
-			ReasoningDetails []reasoningDetail `json:"reasoning_details"`
-			Annotations      []map[string]any  `json:"annotations"`
+			Content          string             `json:"content"`
+			Refusal          string             `json:"refusal"`
+			ReasoningContent string             `json:"reasoning_content"`
+			Reasoning        string             `json:"reasoning"`
+			ReasoningDetails []reasoningDetail  `json:"reasoning_details"`
+			Annotations      []map[string]any   `json:"annotations"`
+			ExecutedTools    []chatExecutedTool `json:"executed_tools"`
 			ToolCalls        []struct {
 				Index    int    `json:"index"`
 				ID       string `json:"id"`
@@ -104,6 +105,8 @@ func (m *Model) eventStream(
 		providerDetails := map[string]any{}
 		var annotations []map[string]any
 		startedTools := map[int]bool{}
+		startedExecutedTools := map[int]bool{}
+		returnedExecutedTools := map[int]bool{}
 
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
@@ -244,6 +247,40 @@ func (m *Model) eventStream(
 			if m.chatCompatibility.ExtendedMetadata && len(delta.Annotations) > 0 {
 				annotations = append(annotations, delta.Annotations...)
 				providerDetails["annotations"] = annotations
+			}
+			if m.chatCompatibility.ExecutedTools {
+				for _, tool := range delta.ExecutedTools {
+					call, result, ok, err := m.executedToolParts(tool)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					if !ok {
+						continue
+					}
+					partID := fmt.Sprintf("executed:%d:call", tool.Index)
+					if !startedExecutedTools[tool.Index] {
+						startedExecutedTools[tool.Index] = true
+						if !yield(ai.ToolCallStartEvent{
+							PartID: partID, ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+							ToolKind: call.ToolKind, ID: call.ID, ProviderName: call.ProviderName,
+							ProviderDetails: call.ProviderDetails, Native: true,
+						}, nil) || !yield(ai.ToolCallDeltaEvent{
+							PartID: partID, ArgsDelta: string(call.Args),
+						}, nil) {
+							return
+						}
+					}
+					_, resultAvailable := executedToolContent(tool)
+					if resultAvailable && !returnedExecutedTools[tool.Index] {
+						returnedExecutedTools[tool.Index] = true
+						if !yield(ai.NativeToolReturnEvent{
+							PartID: fmt.Sprintf("executed:%d:return", tool.Index), Part: result,
+						}, nil) {
+							return
+						}
+					}
+				}
 			}
 			if delta.Content != "" {
 				if !yield(ai.TextDeltaEvent{

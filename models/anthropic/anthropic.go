@@ -325,7 +325,17 @@ type messagesRequest struct {
 	MCPServers        []anthropicMCPServer         `json:"mcp_servers,omitempty"`
 	Betas             []string                     `json:"-"`
 	CacheControl      *anthropicPromptCacheControl `json:"cache_control,omitempty"`
+	OutputConfig      *anthropicOutputConfig       `json:"output_config,omitempty"`
 	ExtraBody         map[string]any               `json:"-"`
+}
+
+type anthropicOutputConfig struct {
+	Format anthropicOutputFormat `json:"format"`
+}
+
+type anthropicOutputFormat struct {
+	Type   string         `json:"type"`
+	Schema map[string]any `json:"schema"`
 }
 
 type anthropicMCPServer struct {
@@ -1064,10 +1074,28 @@ func (m *Model) buildPayload(
 		disable := !*params.Settings.ParallelToolCalls
 		req.ToolChoice.DisableParallelToolUse = &disable
 	}
-	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
-		return nil, fmt.Errorf("anthropic: native JSON output mode is not supported; use OutputModeTool")
+	if params.OutputSchema != nil && params.OutputMode == ai.OutputModeNative {
+		if !supportsAnthropicNativeOutput(m.name) {
+			return nil, fmt.Errorf("anthropic: model %q does not support native JSON output", m.name)
+		}
+		req.OutputConfig = &anthropicOutputConfig{Format: anthropicOutputFormat{
+			Type: "json_schema", Schema: params.OutputSchema,
+		}}
 	}
 	return req, limitAnthropicCachePoints(req, cache.Automatic != "")
+}
+
+func supportsAnthropicNativeOutput(modelName string) bool {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-haiku-4-5", "claude-sonnet-4-5",
+		"claude-sonnet-4-6", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
+		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasAnthropicMemoryTool(nativeTools []ai.NativeTool) bool {

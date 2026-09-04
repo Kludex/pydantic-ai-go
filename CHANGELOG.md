@@ -40,6 +40,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Widen AG-UI `Event.Delta` to carry state patch arrays as well as streamed text.
 - Preserve AG-UI developer messages, typed-tool kinds, failed outcomes, and provider-native identities through encrypted metadata and echoed history.
 - Infer embedding models for the audited OpenAI-compatible provider aliases, including environment-configured LiteLLM and Snowflake endpoints.
+- Send native JSON Schema output through Anthropic `output_config.format` on supported Claude model families.
 
 ### Deprecated
 

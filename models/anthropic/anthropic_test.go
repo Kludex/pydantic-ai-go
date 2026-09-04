@@ -1319,15 +1319,36 @@ func TestMultimodalUnknownContent(t *testing.T) {
 	}
 }
 
-func TestNativeJSONOutputModeUnsupported(t *testing.T) {
-	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte(`{}`)) })
-	params := ai.ModelRequestParams{OutputSchema: map[string]any{"type": "object"}}
-	_, err := model.Request(t.Context(), nil, params)
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
+func TestNativeJSONOutputMode(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"{\"value\":1}"}],"usage":{}}`))
+	})
+	params := ai.ModelRequestParams{
+		OutputSchema: map[string]any{
+			"type": "object", "properties": map[string]any{"value": map[string]any{"type": "integer"}},
+		},
+		OutputMode: ai.OutputModeNative,
+	}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	format := body["output_config"].(map[string]any)["format"].(map[string]any)
+	if format["type"] != "json_schema" || format["schema"].(map[string]any)["type"] != "object" {
+		t.Fatalf("unexpected output config: %#v", body)
+	}
+
+	unsupported := newNamedServer(t, "claude-3-haiku", func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	})
+	if _, err := unsupported.Request(t.Context(), nil, params); err == nil || !strings.Contains(err.Error(), "not support") {
 		t.Fatalf("expected unsupported error, got %v", err)
 	}
 	params.OutputMode = ai.OutputModePrompted
-	if _, err := model.Request(t.Context(), nil, params); err != nil {
+	if _, err := unsupported.Request(t.Context(), nil, params); err != nil {
 		t.Fatalf("prompted output should not request native mode: %v", err)
 	}
 }

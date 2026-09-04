@@ -367,6 +367,8 @@ Set `ANTHROPIC_API_KEY`. Use `anthropic.WithBaseURL` and `anthropic.WithHTTPClie
 
 Anthropic accepts image URLs, PDF URLs, inline images, inline PDFs, and plain-text documents. Forced URL downloads use the shared SSRF protections. Anthropic does not accept audio or video input.
 
+Supported Claude 4.1, 4.5, 4.6, 4.7, 4.8, and 5 families accept `OutputModeNative`. The provider sends your output schema through `output_config.format`. Unsupported models fail before transport instead of silently ignoring the schema.
+
 ### Prompt caching
 
 ```go

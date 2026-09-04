@@ -142,7 +142,7 @@ func TestModelRequestAndCountTokens(t *testing.T) {
 				ai.AudioURL{URL: server.URL + "?type=audio%2Fwav", ForceDownload: ai.FileDownloadAllowLocal},
 				ai.VideoURL{URL: server.URL + "?type=video%2Fwebm", ForceDownload: ai.FileDownloadAllowLocal},
 				ai.DocumentURL{URL: server.URL + "?type=text%2Fplain", ForceDownload: ai.FileDownloadAllowLocal},
-				ai.UploadedFile{FileID: "s3://bucket/image", ProviderName: "bedrock", MediaType: "image/webp"},
+				ai.UploadedFile{FileID: "s3://bucket/image.webp", ProviderName: "bedrock"},
 				ai.UploadedFile{FileID: "s3://bucket/audio", ProviderName: "bedrock", MediaType: "audio/flac"},
 				ai.UploadedFile{FileID: "s3://bucket/video", ProviderName: "bedrock", MediaType: "video/quicktime"},
 				ai.UploadedFile{FileID: "s3://bucket/document", ProviderName: "bedrock", MediaType: "text/markdown"},

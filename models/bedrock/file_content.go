@@ -46,7 +46,7 @@ func uploadedFileBlock(file ai.UploadedFile, documentIndex int) (types.ContentBl
 		return nil, fmt.Errorf("bedrock: uploaded file %q must use an s3:// URI", file.FileID)
 	}
 	location := types.S3Location{Uri: aws.String(file.FileID)}
-	mediaType, _, _ := mime.ParseMediaType(strings.ToLower(file.MediaType))
+	mediaType, _, _ := mime.ParseMediaType(strings.ToLower(file.ResolvedMediaType()))
 	switch {
 	case strings.HasPrefix(mediaType, "image/"):
 		format := imageFormat(mediaType)

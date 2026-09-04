@@ -223,7 +223,7 @@ func responsesUserContent(
 			if item.ProviderName != providerName {
 				return nil, fmt.Errorf("openai: uploaded file %q belongs to provider %q", item.FileID, item.ProviderName)
 			}
-			if strings.HasPrefix(item.MediaType, "image/") {
+			if strings.HasPrefix(strings.ToLower(item.ResolvedMediaType()), "image/") {
 				detail, _ := item.VendorMetadata["detail"].(string)
 				if detail == "" {
 					detail = "auto"

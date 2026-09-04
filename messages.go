@@ -3,6 +3,8 @@ package ai
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"path"
 	"strings"
 	"time"
 )
@@ -290,6 +292,25 @@ type UploadedFile struct {
 	Identifier string
 	// VendorMetadata contains detached provider-specific file data.
 	VendorMetadata map[string]any
+}
+
+// ResolvedMediaType returns the explicit media type, an inferred type from FileID, or application/octet-stream.
+func (file UploadedFile) ResolvedMediaType() string {
+	if file.MediaType != "" {
+		return file.MediaType
+	}
+	parsed, err := url.Parse(file.FileID)
+	if err == nil {
+		if mediaType := mediaTypesByExtension[strings.ToLower(path.Ext(parsed.Path))]; mediaType != "" {
+			return mediaType
+		}
+	}
+	return "application/octet-stream"
+}
+
+// ResolvedIdentifier returns the caller-provided identifier or a stable file-ID digest.
+func (file UploadedFile) ResolvedIdentifier() string {
+	return resolveContentIdentifier(file.Identifier, []byte(file.FileID))
 }
 
 func (UploadedFile) userContentKind() string { return "uploaded-file" }

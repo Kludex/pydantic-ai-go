@@ -364,7 +364,7 @@ func (model *Model) convertUserPrompt(ctx context.Context, p ai.UserPromptPart) 
 			if model.transport != TransportVertexAI && !strings.HasPrefix(item.FileID, "https://") {
 				return nil, fmt.Errorf("google: Gemini API uploaded file must use an https:// Files API URI, got %q", item.FileID)
 			}
-			filePart := part{FileData: &fileData{MimeType: item.MediaType, FileURI: item.FileID}}
+			filePart := part{FileData: &fileData{MimeType: item.ResolvedMediaType(), FileURI: item.FileID}}
 			applyGoogleFileMetadata(&filePart, item.VendorMetadata, true)
 			parts = append(parts, filePart)
 		default:

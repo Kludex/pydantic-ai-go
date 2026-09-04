@@ -764,8 +764,7 @@ func TestResponsesMultimodalInput(t *testing.T) {
 		ai.DocumentURL{URL: "https://example.com/document.pdf"},
 		ai.BinaryContent{Data: []byte("document"), MediaType: "application/pdf"},
 		ai.UploadedFile{
-			FileID: "file-image", ProviderName: "openai", MediaType: "image/png",
-			VendorMetadata: map[string]any{"detail": "high"},
+			FileID: "file-image.png", ProviderName: "openai", VendorMetadata: map[string]any{"detail": "high"},
 		},
 		ai.UploadedFile{FileID: "file-document", ProviderName: "openai", MediaType: "application/pdf"},
 		ai.UploadedFile{FileID: "file-image-auto", ProviderName: "openai", MediaType: "image/jpeg"},
@@ -786,7 +785,7 @@ func TestResponsesMultimodalInput(t *testing.T) {
 		content[5].(map[string]any)["file_data"] != "data:application/pdf;base64,ZG9jdW1lbnQ=" ||
 		content[5].(map[string]any)["filename"] != "filename.pdf" ||
 		content[6].(map[string]any)["type"] != "input_image" ||
-		content[6].(map[string]any)["file_id"] != "file-image" ||
+		content[6].(map[string]any)["file_id"] != "file-image.png" ||
 		content[6].(map[string]any)["detail"] != "high" ||
 		content[7].(map[string]any)["type"] != "input_file" ||
 		content[7].(map[string]any)["file_id"] != "file-document" ||

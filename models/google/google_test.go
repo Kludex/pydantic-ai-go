@@ -1190,7 +1190,7 @@ func TestGoogleVertexImageGenerationConfig(t *testing.T) {
 	}
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
 		Contents: []ai.UserContent{ai.UploadedFile{
-			FileID: "gs://bucket/report.pdf", ProviderName: "google-cloud", MediaType: "application/pdf",
+			FileID: "gs://bucket/report.pdf", ProviderName: "google-cloud",
 		}},
 	}}}}
 	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {

@@ -53,6 +53,23 @@ func TestFileContentStandardJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestUploadedFileResolvedMetadata(t *testing.T) {
+	explicit := ai.UploadedFile{FileID: "file", MediaType: "text/custom", Identifier: "report"}
+	if explicit.ResolvedMediaType() != "text/custom" || explicit.ResolvedIdentifier() != "report" {
+		t.Fatalf("explicit metadata was not preserved: %+v", explicit)
+	}
+	inferred := ai.UploadedFile{FileID: "s3://bucket/report.PDF?version=1"}
+	if inferred.ResolvedMediaType() != "application/pdf" || inferred.ResolvedIdentifier() == "" ||
+		inferred.ResolvedIdentifier() != (ai.UploadedFile{FileID: inferred.FileID}).ResolvedIdentifier() {
+		t.Fatalf("metadata was not inferred: type=%q id=%q", inferred.ResolvedMediaType(), inferred.ResolvedIdentifier())
+	}
+	for _, fileID := range []string{"opaque-file-id", "%"} {
+		if mediaType := (ai.UploadedFile{FileID: fileID}).ResolvedMediaType(); mediaType != "application/octet-stream" {
+			t.Fatalf("unexpected fallback media type %q", mediaType)
+		}
+	}
+}
+
 func TestFileContentStandardJSONErrors(t *testing.T) {
 	for name, value := range map[string]any{
 		"image":    ai.ImageURL{URL: "https://example.com/image.png", ForceDownload: "invalid"},

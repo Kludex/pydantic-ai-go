@@ -397,6 +397,71 @@ func TestHandlerValidation(t *testing.T) {
 	}
 }
 
+type forwardedDeps struct {
+	input agui.ForwardedInput
+	err   error
+}
+
+func (deps *forwardedDeps) SetAGUIRunInput(input agui.ForwardedInput) error {
+	deps.input = input
+	return deps.err
+}
+
+func TestForwardedInput(t *testing.T) {
+	state := map[string]any{"count": 1}
+	props := map[string]any{"tenant": "one"}
+	deps := &forwardedDeps{}
+	input := agui.RunAgentInput{
+		State: state, Context: []agui.Context{{Description: "User", Value: "Ada"}}, ForwardedProps: props,
+		Messages: []agui.Message{{ID: "user", Role: "user", Content: "run"}},
+	}
+	adapter := agui.NewAdapter(ai.NewAgent[*forwardedDeps, string](fakes.NewTestModel()), agui.Config{})
+	for _, err := range adapter.RunStream(t.Context(), input, deps) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if deps.input.ThreadID == "" || deps.input.RunID == "" || deps.input.State.(map[string]any)["count"] != float64(1) ||
+		deps.input.Context[0].Value != "Ada" || deps.input.ForwardedProps.(map[string]any)["tenant"] != "one" {
+		t.Fatalf("unexpected forwarded input: %#v", deps.input)
+	}
+	deps.input.State.(map[string]any)["count"] = 2
+	deps.input.Context[0].Value = "changed"
+	deps.input.ForwardedProps.(map[string]any)["tenant"] = "changed"
+	if state["count"] != 1 || input.Context[0].Value != "Ada" || props["tenant"] != "one" {
+		t.Fatal("forwarded input shares client-owned data")
+	}
+
+	deps.err = errors.New("rejected")
+	var got error
+	for _, err := range adapter.RunStream(t.Context(), input, deps) {
+		got = err
+	}
+	if got == nil || !strings.Contains(got.Error(), "apply forwarded input") {
+		t.Fatalf("unexpected receiver error: %v", got)
+	}
+	deps.err = nil
+	cyclic := map[string]any{}
+	cyclic["self"] = cyclic
+	invalidState := input
+	invalidState.State = cyclic
+	for _, err := range adapter.RunStream(t.Context(), invalidState, deps) {
+		got = err
+	}
+	if got == nil || !strings.Contains(got.Error(), "clone state") {
+		t.Fatalf("unexpected state clone error: %v", got)
+	}
+	invalidProps := input
+	invalidProps.State = nil
+	invalidProps.ForwardedProps = make(chan int)
+	for _, err := range adapter.RunStream(t.Context(), invalidProps, deps) {
+		got = err
+	}
+	if got == nil || !strings.Contains(got.Error(), "clone forwarded properties") {
+		t.Fatalf("unexpected props clone error: %v", got)
+	}
+}
+
 func TestFrontendTools(t *testing.T) {
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
 	input := agui.RunAgentInput{

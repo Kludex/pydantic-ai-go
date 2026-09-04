@@ -48,6 +48,18 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		runID = nextID("run")
 	}
 	return func(yield func(Event, error) bool) {
+		if receiver, ok := any(deps).(RunInputReceiver); ok {
+			forwarded, err := detachedForwardedInput(input, threadID, runID)
+			if err != nil {
+				yield(Event{Type: EventRunError, Message: err.Error()}, err)
+				return
+			}
+			if err := receiver.SetAGUIRunInput(forwarded); err != nil {
+				err = fmt.Errorf("agui: apply forwarded input: %w", err)
+				yield(Event{Type: EventRunError, Message: err.Error()}, err)
+				return
+			}
+		}
 		prompt, history, deferred, err := prepareRunInput(
 			input, adapter.config.Sanitization, adapter.config.PreserveFileData,
 		)
@@ -152,6 +164,34 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 		}
 		yield(Event{Type: EventRunFinished, ThreadID: threadID, RunID: runID, Outcome: &transformer.outcome}, nil)
 	}
+}
+
+func detachedForwardedInput(input RunAgentInput, threadID string, runID string) (ForwardedInput, error) {
+	state, err := detachedJSONValue(input.State)
+	if err != nil {
+		return ForwardedInput{}, fmt.Errorf("agui: clone state: %w", err)
+	}
+	props, err := detachedJSONValue(input.ForwardedProps)
+	if err != nil {
+		return ForwardedInput{}, fmt.Errorf("agui: clone forwarded properties: %w", err)
+	}
+	return ForwardedInput{
+		ThreadID: threadID, RunID: runID, State: state,
+		Context: append([]Context(nil), input.Context...), ForwardedProps: props,
+	}, nil
+}
+
+func detachedJSONValue(value any) (any, error) {
+	if value == nil {
+		return nil, nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return nil, err
+	}
+	var detached any
+	_ = json.Unmarshal(encoded, &detached)
+	return detached, nil
 }
 
 func nextID(kind string) string {

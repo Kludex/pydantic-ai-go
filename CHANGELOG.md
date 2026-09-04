@@ -35,6 +35,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Default AG-UI streams to protocol version `0.1.19`; set `Config.Version` or `StreamConfig.Version` for an older frontend.
 - Widen AG-UI `Event.Content` to carry either tool-result text or structured activity snapshots.
 - Add opt-in AG-UI file preservation without weakening the separate uploaded-file trust setting.
+- Forward detached AG-UI state, context, custom properties, and resolved run IDs to dependencies implementing `RunInputReceiver`.
 
 ### Deprecated
 

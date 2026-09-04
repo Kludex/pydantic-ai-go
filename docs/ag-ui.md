@@ -108,6 +108,12 @@ func main() {
 
 `TransformStream` is useful when agent events arrive through a queue or durable workflow instead of an HTTP request.
 
+## Receive state and context
+
+Implement `RunInputReceiver` on your dependency value to receive frontend state, context, and forwarded properties before each run. The adapter supplies generated or client-provided thread and run IDs with the values.
+
+The receiver gets a detached JSON snapshot. Changes cannot mutate the request. Return an error to reject the run before the model is called. Dependencies that do not implement the interface ignore these optional application values.
+
 ## Run frontend tools
 
 Include AG-UI `tools` in the run input to expose functions implemented by the frontend. The adapter registers them as run-scoped external tools. It never executes them on the server.
@@ -181,4 +187,4 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 The adapter supports text and multimodal user messages, assistant reasoning, function calls, structured tool results, secure client-held history, versioned thinking and reasoning streams, normalized text and tool streaming, event timestamps, cancellation, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-State snapshots and deltas, custom events, and forwarded context remain.
+Outbound state snapshots and deltas and custom events remain.

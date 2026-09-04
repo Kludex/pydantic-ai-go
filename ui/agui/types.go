@@ -107,12 +107,45 @@ type RunAgentInput struct {
 	ThreadID string `json:"threadId"`
 	// RunID identifies this frontend run.
 	RunID string `json:"runId"`
+	// State contains frontend-managed application state.
+	State any `json:"state,omitempty"`
 	// Messages is untrusted client-held history.
 	Messages []Message `json:"messages"`
 	// Tools contains client-executed frontend tool definitions.
 	Tools []FrontendTool `json:"tools,omitempty"`
+	// Context contains frontend-provided contextual values.
+	Context []Context `json:"context,omitempty"`
+	// ForwardedProps contains application-specific request data.
+	ForwardedProps any `json:"forwardedProps,omitempty"`
 	// Resume contains approval decisions for prior interrupts.
 	Resume []ResumeEntry `json:"resume,omitempty"`
+}
+
+// RunInputReceiver accepts detached AG-UI state, context, and forwarded properties.
+type RunInputReceiver interface {
+	SetAGUIRunInput(input ForwardedInput) error
+}
+
+// ForwardedInput contains application data supplied with one AG-UI run.
+type ForwardedInput struct {
+	// ThreadID identifies the frontend conversation.
+	ThreadID string
+	// RunID identifies the frontend run.
+	RunID string
+	// State contains frontend-managed application state.
+	State any
+	// Context contains frontend-provided contextual values.
+	Context []Context
+	// ForwardedProps contains application-specific request data.
+	ForwardedProps any
+}
+
+// Context is one frontend-provided description and value pair.
+type Context struct {
+	// Description explains the contextual value to the application.
+	Description string `json:"description"`
+	// Value contains the contextual data.
+	Value string `json:"value"`
 }
 
 // FrontendTool describes one client-executed tool available for this run.

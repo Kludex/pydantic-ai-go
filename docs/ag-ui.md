@@ -127,6 +127,14 @@ Resume the same client-held history with a `resume` entry:
 
 `approved` must be a JSON boolean. Missing or malformed decisions deny by default. `editedArgs` must be an object and fully replaces the original tool arguments. A cancelled entry denies with a cancellation message.
 
+## Select a protocol version
+
+Set `Config.Version` to the AG-UI version used by your frontend. The zero value targets `0.1.19`.
+
+Versions before `0.1.13` receive the legacy `THINKING_*` lifecycle. Version `0.1.13` and later receive `REASONING_*` events. The adapter carries reasoning signatures and provider metadata through `REASONING_ENCRYPTED_VALUE`. Version `0.1.14` and later use the `reasoning` message role.
+
+Every event includes a Unix-millisecond `timestamp`. A canceled agent run closes any open text message and emits `RUN_FINISHED` without a success or interrupt outcome because AG-UI has no cancellation outcome.
+
 ## Event ordering
 
 Each model response owns one assistant message. The adapter emits `TEXT_MESSAGE_START` before text or tool-call events from that response. A tool call uses that message ID as `parentMessageId`, including responses that start with a tool and contain no text.
@@ -135,6 +143,6 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 ## Current scope
 
-The adapter supports text and multimodal user messages, assistant function calls, structured tool results, secure client-held history, normalized text and tool streaming, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
+The adapter supports text and multimodal user messages, assistant reasoning, function calls, structured tool results, secure client-held history, versioned thinking and reasoning streams, normalized text and tool streaming, event timestamps, cancellation, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-Frontend tools, state snapshots and deltas, activities, reasoning events, file preservation, external-execution interrupts, custom events, forwarded context, and protocol-version negotiation remain.
+Frontend tools, state snapshots and deltas, activities, file preservation, external-execution interrupts, custom events, and forwarded context remain.

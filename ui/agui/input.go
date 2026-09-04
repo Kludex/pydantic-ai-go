@@ -113,6 +113,22 @@ func convertMessages(messages []Message) ([]ai.ModelMessage, error) {
 				return nil, err
 			}
 			converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{prompt}})
+		case "reasoning":
+			content, err := textMessageContent(message.Content, "reasoning")
+			if err != nil {
+				return nil, err
+			}
+			metadata := struct {
+				ID              string         `json:"id"`
+				Signature       string         `json:"signature"`
+				ProviderName    string         `json:"provider_name"`
+				ProviderDetails map[string]any `json:"provider_details"`
+			}{}
+			_ = json.Unmarshal([]byte(message.EncryptedValue), &metadata)
+			converted = appendResponse(converted, []ai.ResponsePart{ai.ThinkingPart{
+				Content: content, ID: metadata.ID, Signature: metadata.Signature, ProviderName: metadata.ProviderName,
+				ProviderDetails: cloneMap(metadata.ProviderDetails),
+			}})
 		case "assistant":
 			content, err := textMessageContent(message.Content, "assistant")
 			if err != nil {
@@ -134,7 +150,7 @@ func convertMessages(messages []Message) ([]ai.ModelMessage, error) {
 					ToolName: call.Function.Name, ToolCallID: call.ID, Args: append(json.RawMessage(nil), args...),
 				})
 			}
-			converted = append(converted, ai.ModelResponse{Parts: parts})
+			converted = appendResponse(converted, parts)
 		case "tool":
 			if message.ToolCallID == "" {
 				return nil, fmt.Errorf("agui: tool result requires a toolCallId")
@@ -153,6 +169,17 @@ func convertMessages(messages []Message) ([]ai.ModelMessage, error) {
 		}
 	}
 	return converted, nil
+}
+
+func appendResponse(messages []ai.ModelMessage, parts []ai.ResponsePart) []ai.ModelMessage {
+	if len(messages) > 0 {
+		if response, ok := messages[len(messages)-1].(ai.ModelResponse); ok {
+			response.Parts = append(response.Parts, parts...)
+			messages[len(messages)-1] = response
+			return messages
+		}
+	}
+	return append(messages, ai.ModelResponse{Parts: parts})
 }
 
 func textMessageContent(content any, role string) (string, error) {

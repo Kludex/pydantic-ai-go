@@ -31,12 +31,36 @@ const (
 	EventToolCallEnd EventType = "TOOL_CALL_END"
 	// EventToolCallResult returns one local tool result.
 	EventToolCallResult EventType = "TOOL_CALL_RESULT"
+	// EventThinkingStart begins legacy reasoning output before AG-UI 0.1.13.
+	EventThinkingStart EventType = "THINKING_START"
+	// EventThinkingEnd closes legacy reasoning output.
+	EventThinkingEnd EventType = "THINKING_END"
+	// EventThinkingTextMessageStart begins legacy reasoning text.
+	EventThinkingTextMessageStart EventType = "THINKING_TEXT_MESSAGE_START"
+	// EventThinkingTextMessageContent appends legacy reasoning text.
+	EventThinkingTextMessageContent EventType = "THINKING_TEXT_MESSAGE_CONTENT"
+	// EventThinkingTextMessageEnd closes legacy reasoning text.
+	EventThinkingTextMessageEnd EventType = "THINKING_TEXT_MESSAGE_END"
+	// EventReasoningStart begins AG-UI 0.1.13+ reasoning output.
+	EventReasoningStart EventType = "REASONING_START"
+	// EventReasoningEnd closes AG-UI 0.1.13+ reasoning output.
+	EventReasoningEnd EventType = "REASONING_END"
+	// EventReasoningMessageStart begins AG-UI 0.1.13+ reasoning text.
+	EventReasoningMessageStart EventType = "REASONING_MESSAGE_START"
+	// EventReasoningMessageContent appends AG-UI 0.1.13+ reasoning text.
+	EventReasoningMessageContent EventType = "REASONING_MESSAGE_CONTENT"
+	// EventReasoningMessageEnd closes AG-UI 0.1.13+ reasoning text.
+	EventReasoningMessageEnd EventType = "REASONING_MESSAGE_END"
+	// EventReasoningEncryptedValue preserves opaque reasoning metadata.
+	EventReasoningEncryptedValue EventType = "REASONING_ENCRYPTED_VALUE"
 )
 
 // Event is one JSON-encoded AG-UI event. Fields not used by Type are omitted.
 type Event struct {
 	// Type is the event discriminator.
 	Type EventType `json:"type"`
+	// Timestamp is Unix time in milliseconds.
+	Timestamp int64 `json:"timestamp,omitempty"`
 	// ThreadID is the protocol conversation identity.
 	ThreadID string `json:"threadId,omitempty"`
 	// RunID is the client-provided protocol run identity.
@@ -55,6 +79,12 @@ type Event struct {
 	ParentMessageID string `json:"parentMessageId,omitempty"`
 	// Content is a JSON string containing a tool result.
 	Content string `json:"content,omitempty"`
+	// Subtype identifies a message or tool-call encrypted value.
+	Subtype string `json:"subtype,omitempty"`
+	// EntityID identifies the message or tool call carrying an encrypted value.
+	EntityID string `json:"entityId,omitempty"`
+	// EncryptedValue preserves opaque reasoning or typed-tool metadata.
+	EncryptedValue string `json:"encryptedValue,omitempty"`
 	// Message describes a run error.
 	Message string `json:"message,omitempty"`
 	// Outcome describes a successful or interrupted run.
@@ -121,6 +151,8 @@ type Message struct {
 	ToolCallID string `json:"toolCallId,omitempty"`
 	// Name is the function name for a tool result.
 	Name string `json:"name,omitempty"`
+	// EncryptedValue preserves reasoning or typed-tool metadata.
+	EncryptedValue string `json:"encryptedValue,omitempty"`
 }
 
 // InputContent is one AG-UI text, binary, image, audio, video, or document input.
@@ -171,8 +203,20 @@ type ToolCallFunction struct {
 
 // Config controls inbound trust boundaries.
 type Config struct {
+	// Version selects AG-UI protocol behavior. Zero defaults to 0.1.19.
+	Version string
 	// Sanitization controls untrusted history. The zero value is secure.
 	Sanitization ai.MessageSanitizationOptions
 	// MaxRequestBytes bounds an HTTP request body. Zero defaults to 10 MiB.
 	MaxRequestBytes int64
+}
+
+// StreamConfig controls standalone AG-UI stream transformation.
+type StreamConfig struct {
+	// Version selects AG-UI protocol behavior. Zero defaults to 0.1.19.
+	Version string
+	// ThreadID identifies the frontend conversation.
+	ThreadID string
+	// RunID identifies the frontend run.
+	RunID string
 }

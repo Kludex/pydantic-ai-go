@@ -8,6 +8,7 @@ import (
 	"iter"
 	"strconv"
 	"sync/atomic"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 )
@@ -27,6 +28,9 @@ func NewAdapter[Deps, Output any](agent *ai.Agent[Deps, Output], config Config) 
 	}
 	if config.MaxRequestBytes < 0 {
 		panic("agui: maximum request bytes must not be negative")
+	}
+	if _, err := parseVersion(config.Version); err != nil {
+		panic(err.Error())
 	}
 	return &Adapter[Deps, Output]{agent: agent, config: config}
 }
@@ -60,7 +64,9 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		} else {
 			stream = adapter.agent.RunStream(ctx, prompt.Content, deps, runOptions...)
 		}
-		for event, eventErr := range TransformStream(stream.Events(), threadID, runID) {
+		for event, eventErr := range TransformStreamWithConfig(stream.Events(), StreamConfig{
+			Version: adapter.config.Version, ThreadID: threadID, RunID: runID,
+		}) {
 			if !yield(event, eventErr) || eventErr != nil {
 				return
 			}
@@ -70,22 +76,46 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 
 // TransformStream converts an existing agent event stream to AG-UI events.
 func TransformStream(stream ai.EventStream, threadID string, runID string) iter.Seq2[Event, error] {
+	return TransformStreamWithConfig(stream, StreamConfig{ThreadID: threadID, RunID: runID})
+}
+
+// TransformStreamWithConfig converts an existing agent event stream with version-specific behavior.
+func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.Seq2[Event, error] {
+	threadID := config.ThreadID
 	if threadID == "" {
 		threadID = nextID("thread")
 	}
+	runID := config.RunID
 	if runID == "" {
 		runID = nextID("run")
 	}
+	version, versionErr := parseVersion(config.Version)
 	return func(yield func(Event, error) bool) {
+		downstream := yield
+		yield = func(event Event, err error) bool {
+			if event.Timestamp == 0 {
+				event.Timestamp = time.Now().UnixMilli()
+			}
+			return downstream(event, err)
+		}
+		if versionErr != nil {
+			yield(Event{Type: EventRunError, Message: versionErr.Error()}, versionErr)
+			return
+		}
 		if !yield(Event{Type: EventRunStarted, ThreadID: threadID, RunID: runID}, nil) {
 			return
 		}
 		transformer := eventTransformer{
-			runID: runID, calls: map[string]bool{}, partCalls: map[string]string{}, outcome: RunOutcome{Type: "success"},
+			runID: runID, version: version, calls: map[string]bool{}, partCalls: map[string]string{},
+			outcome: RunOutcome{Type: "success"},
 		}
 		for event, eventErr := range stream {
 			if eventErr != nil {
 				if !transformer.closeMessage(yield) {
+					return
+				}
+				if errors.Is(eventErr, ai.ErrRunCancelled) {
+					yield(Event{Type: EventRunFinished, ThreadID: threadID, RunID: runID}, nil)
 					return
 				}
 				yield(Event{Type: EventRunError, Message: eventErr.Error()}, eventErr)

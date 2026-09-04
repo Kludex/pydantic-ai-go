@@ -2,6 +2,7 @@ package agui_test
 
 import (
 	"errors"
+	"fmt"
 	"iter"
 	"strings"
 	"testing"
@@ -63,13 +64,101 @@ func TestTransformStreamEventVariants(t *testing.T) {
 	if events[0].Type != agui.EventRunStarted || events[len(events)-1].Type != agui.EventRunFinished {
 		t.Fatalf("unexpected lifecycle: %#v", events)
 	}
+	for _, event := range events {
+		if event.Timestamp == 0 {
+			t.Fatalf("event has no timestamp: %#v", event)
+		}
+	}
 	if eventIndex(events, agui.EventToolCallArgs) < 0 || eventIndex(events, agui.EventToolCallResult) < 0 ||
 		eventIndex(events, agui.EventTextMessageEnd) < 0 {
 		t.Fatalf("missing transformed events: %#v", events)
 	}
 }
 
+func TestTransformReasoningVersions(t *testing.T) {
+	for _, test := range []struct {
+		version string
+		start   agui.EventType
+		content agui.EventType
+		end     agui.EventType
+		role    string
+		modern  bool
+	}{
+		{version: "0.1.10", start: agui.EventThinkingStart, content: agui.EventThinkingTextMessageContent, end: agui.EventThinkingEnd},
+		{version: "0.1.13rc1", start: agui.EventReasoningStart, content: agui.EventReasoningMessageContent, end: agui.EventReasoningEnd, role: "assistant", modern: true},
+		{version: "0.1.14", start: agui.EventReasoningStart, content: agui.EventReasoningMessageContent, end: agui.EventReasoningEnd, role: "reasoning", modern: true},
+		{version: "0.2", start: agui.EventReasoningStart, content: agui.EventReasoningMessageContent, end: agui.EventReasoningEnd, role: "reasoning", modern: true},
+		{version: "1", start: agui.EventReasoningStart, content: agui.EventReasoningMessageContent, end: agui.EventReasoningEnd, role: "reasoning", modern: true},
+	} {
+		stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+			yield(ai.PartStartEvent{PartID: "thinking", Part: ai.ThinkingPart{
+				Content: "a", ID: "thinking-id", Signature: "signature", ProviderName: "provider",
+				ProviderDetails: map[string]any{"key": "value"},
+			}}, nil)
+			yield(ai.PartDeltaEvent{PartID: "thinking", Delta: ai.ThinkingPartDelta{ContentDelta: "b"}}, nil)
+			yield(ai.PartEndEvent{PartID: "thinking", Part: ai.ThinkingPart{
+				ID: "thinking-id", Signature: "signature", ProviderName: "provider",
+				ProviderDetails: map[string]any{"key": "value"},
+			}}, nil)
+		})
+		var events []agui.Event
+		for event, err := range agui.TransformStreamWithConfig(stream, agui.StreamConfig{Version: test.version}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			events = append(events, event)
+		}
+		if eventIndex(events, test.start) < 0 || eventIndex(events, test.content) < 0 ||
+			eventIndex(events, test.end) < 0 {
+			t.Fatalf("version=%s: missing reasoning lifecycle: %#v", test.version, events)
+		}
+		if test.modern {
+			start := events[eventIndex(events, agui.EventReasoningMessageStart)]
+			encrypted := events[eventIndex(events, agui.EventReasoningEncryptedValue)]
+			if start.Role != test.role || start.MessageID == "" || encrypted.Subtype != "message" ||
+				encrypted.EntityID != start.MessageID || !strings.Contains(encrypted.EncryptedValue, `"signature":"signature"`) {
+				t.Fatalf("version=%s: unexpected reasoning metadata: %#v", test.version, events)
+			}
+		} else if events[eventIndex(events, test.start)].MessageID != "" {
+			t.Fatalf("legacy reasoning included a message ID: %#v", events)
+		}
+	}
+}
+
+func TestTransformLazyReasoning(t *testing.T) {
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.PartStartEvent{PartID: "first", Part: ai.ThinkingPart{}}, nil)
+		yield(ai.PartEndEvent{PartID: "first", Part: ai.ThinkingPart{}}, nil)
+		yield(ai.PartDeltaEvent{PartID: "second", Delta: ai.ThinkingPartDelta{ContentDelta: "late"}}, nil)
+		yield(ai.PartEndEvent{PartID: "second", Part: ai.ThinkingPart{}}, nil)
+		yield(ai.PartStartEvent{PartID: "metadata", Part: ai.ThinkingPart{}}, nil)
+		yield(ai.PartEndEvent{PartID: "metadata", Part: ai.ThinkingPart{Signature: "opaque"}}, nil)
+	})
+	var starts, encrypted int
+	for event, err := range agui.TransformStreamWithConfig(stream, agui.StreamConfig{Version: "0.1.19"}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == agui.EventReasoningStart {
+			starts++
+		}
+		if event.Type == agui.EventReasoningEncryptedValue {
+			encrypted++
+		}
+	}
+	if starts != 2 || encrypted != 1 {
+		t.Fatalf("unexpected lazy reasoning lifecycles: starts=%d encrypted=%d", starts, encrypted)
+	}
+}
+
 func TestTransformStreamErrors(t *testing.T) {
+	var versionErr error
+	for _, err := range agui.TransformStreamWithConfig(nil, agui.StreamConfig{Version: "0.1.2.3"}) {
+		versionErr = err
+	}
+	if versionErr == nil {
+		t.Fatal("expected invalid version error")
+	}
 	tests := []struct {
 		name   string
 		events []ai.StreamEvent
@@ -115,6 +204,21 @@ func TestTransformStreamErrors(t *testing.T) {
 				t.Fatalf("unexpected error: %v", got)
 			}
 		})
+	}
+	cancelled := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.PartStartEvent{PartID: "text", Part: ai.TextPart{Content: "partial"}}, nil)
+		yield(nil, fmt.Errorf("cancelled: %w", ai.ErrRunCancelled))
+	})
+	var events []agui.Event
+	for event, err := range agui.TransformStream(cancelled, "thread", "run") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	if events[len(events)-1].Type != agui.EventRunFinished || events[len(events)-1].Outcome != nil ||
+		eventIndex(events, agui.EventRunError) >= 0 {
+		t.Fatalf("unexpected cancellation lifecycle: %#v", events)
 	}
 }
 

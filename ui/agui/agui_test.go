@@ -154,6 +154,28 @@ func TestPrepareMultimodalInput(t *testing.T) {
 	}
 }
 
+func TestPrepareReasoningInput(t *testing.T) {
+	encrypted := `{"id":"thinking-id","signature":"signature","provider_name":"anthropic","provider_details":{"redacted":false}}`
+	prompt, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "reasoning", Role: "reasoning", Content: "thought", EncryptedValue: encrypted},
+		{ID: "assistant", Role: "assistant", Content: "answer"},
+		{ID: "user", Role: "user", Content: "continue"},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt.Content != "continue" || len(history) != 1 {
+		t.Fatalf("unexpected reasoning input: prompt=%#v history=%#v", prompt, history)
+	}
+	response := history[0].(ai.ModelResponse)
+	thinking := response.Parts[0].(ai.ThinkingPart)
+	text := response.Parts[1].(ai.TextPart)
+	if thinking.Content != "thought" || thinking.ID != "thinking-id" || thinking.Signature != "signature" ||
+		thinking.ProviderName != "anthropic" || thinking.ProviderDetails["redacted"] != false || text.Content != "answer" {
+		t.Fatalf("unexpected reasoning history: %#v", response)
+	}
+}
+
 func TestInputValidation(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -170,6 +192,7 @@ func TestInputValidation(t *testing.T) {
 		}}}}, match: "not valid JSON"},
 		{name: "system content", messages: []agui.Message{{ID: "one", Role: "system", Content: 1}}, match: "system message content"},
 		{name: "assistant content", messages: []agui.Message{{ID: "one", Role: "assistant", Content: 1}}, match: "assistant message content"},
+		{name: "reasoning content", messages: []agui.Message{{ID: "one", Role: "reasoning", Content: 1}}, match: "reasoning message content"},
 		{name: "user encoding", messages: []agui.Message{{ID: "one", Role: "user", Content: func() {}}}, match: "encode user content"},
 		{name: "user decoding", messages: []agui.Message{{ID: "one", Role: "user", Content: 1}}, match: "decode user content"},
 		{name: "content type", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "future"}}}}, match: "unsupported user content"},
@@ -210,6 +233,9 @@ func TestHandlerValidation(t *testing.T) {
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
 	assertPanic(t, func() { agui.NewAdapter[struct{}, string](nil, agui.Config{}) })
 	assertPanic(t, func() { agui.NewAdapter(agent, agui.Config{MaxRequestBytes: -1}) })
+	for _, version := range []string{"invalid", "0..1", "999999999999999999999999999999999"} {
+		assertPanic(t, func() { agui.NewAdapter(agent, agui.Config{Version: version}) })
+	}
 	adapter := agui.NewAdapter(agent, agui.Config{MaxRequestBytes: 4})
 	handler := adapter.Handler(struct{}{})
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -549,6 +550,129 @@ func TestOpenAIExtendedChatCompatibility(t *testing.T) {
 	_, err = emptyModel.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}})
 	if err == nil || !strings.Contains(err.Error(), "rendered an empty type") {
 		t.Fatalf("unexpected empty native type error: %v", err)
+	}
+}
+
+func TestOpenAITaggedThinkingCompatibility(t *testing.T) {
+	var staticRequests int
+	var streamRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		if request.Header.Get("Accept") == "text/event-stream" {
+			streamRequests++
+			switch streamRequests {
+			case 1:
+				_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"content":"pre<th"}}]}`+"\n\n"+
+					"data: "+`{"model":"model","choices":[{"delta":{"content":"ink>reason</think>post"}}]}`+"\n\n"+
+					"data: [DONE]\n\n")
+			case 2:
+				_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"content":"<think>x"}}]}`+"\n\n"+
+					"data: [DONE]\n\n")
+			case 3, 5:
+				_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"content":"tail<"}}]}`+"\n\n"+
+					"data: invalid\n\n")
+			case 4:
+				_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"tool_calls":[`+
+					`{"index":0,"id":"call","function":{"name":"lookup","arguments":"{}"}}]}}]}`+"\n\n"+
+					"data: [DONE]\n\n")
+			case 6:
+				_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"content":"tail<"}}]}`+"\n\n"+
+					"data: [DONE]\n\n")
+			default:
+				_, _ = io.WriteString(response, "data: "+`{"model":"model","choices":[{"delta":{"content":"text"}}]}`+"\n\n"+
+					"data: [DONE]\n\n")
+			}
+			return
+		}
+		staticRequests++
+		if staticRequests == 3 {
+			_, _ = io.WriteString(response, `{"model":"model","choices":[{"message":{"tool_calls":[`+
+				`{"id":"call","type":"custom","function":{}}]},"finish_reason":"stop"}]}`)
+			return
+		}
+		content := `<think>a</think>b<think>c</think>d`
+		if staticRequests == 2 {
+			content = `before<think>unclosed`
+		}
+		_, _ = io.WriteString(response, `{"model":"model","moderation":{"flagged":true},`+
+			`"choices":[{"message":{"content":`+strconv.Quote(content)+`},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	model := openai.NewModel("model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil || len(response.Parts) != 4 || response.Parts[0].(ai.ThinkingPart).Content != "a" ||
+		response.Parts[1].(ai.TextPart).Content != "b" || response.Parts[2].(ai.ThinkingPart).Content != "c" ||
+		response.Parts[3].(ai.TextPart).Content != "d" || response.Timestamp.IsZero() ||
+		response.ProviderDetails["moderation"].(map[string]any)["flagged"] != true {
+		t.Fatalf("unexpected tagged response: %#v %v", response, err)
+	}
+	response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil || len(response.Parts) != 2 || response.Parts[0].(ai.TextPart).Content != "before" ||
+		response.Parts[1].(ai.TextPart).Content != "unclosed" {
+		t.Fatalf("unexpected unclosed tagged response: %#v %v", response, err)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
+		!strings.Contains(err.Error(), "unsupported chat tool call type") {
+		t.Fatalf("unexpected custom tool call error: %v", err)
+	}
+
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []ai.ModelStreamEvent
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		events = append(events, event)
+	}
+	if len(events) != 4 || events[0].(ai.TextDeltaEvent).Delta != "pre" ||
+		events[1].(ai.ThinkingDeltaEvent).Delta != "reason" || events[2].(ai.TextDeltaEvent).Delta != "post" {
+		t.Fatalf("unexpected tagged stream: %#v", events)
+	}
+	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
+	}
+	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events = nil
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			break
+		}
+		events = append(events, event)
+	}
+	if len(events) != 2 || events[0].(ai.TextDeltaEvent).Delta != "tail" ||
+		events[1].(ai.TextDeltaEvent).Delta != "<" {
+		t.Fatalf("pending tagged stream was lost: %#v", events)
+	}
+	stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
+	}
+	for range 3 {
+		stream, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		count := 0
+		for range stream {
+			count++
+			if count == 2 {
+				break
+			}
+		}
 	}
 }
 

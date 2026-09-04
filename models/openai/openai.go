@@ -580,7 +580,7 @@ func (m *Model) buildPayload(
 			lastStaticInstruction := -1
 			hasDynamicInstructions := false
 			for _, instruction := range params.InstructionParts {
-				req.Messages = append(req.Messages, chatMessage{Role: "system", Content: instruction.Content})
+				req.Messages = append(req.Messages, chatMessage{Role: m.chatSystemPromptRole(), Content: instruction.Content})
 				if instruction.Dynamic {
 					hasDynamicInstructions = true
 				} else {
@@ -599,7 +599,7 @@ func (m *Model) buildPayload(
 				addChatMessageCache(&req.Messages[cacheIndex], cache.InstructionsTTL, cache.IncludeTTL)
 			}
 		} else {
-			req.Messages = append(req.Messages, chatMessage{Role: "system", Content: params.Instructions})
+			req.Messages = append(req.Messages, chatMessage{Role: m.chatSystemPromptRole(), Content: params.Instructions})
 			if cache.InstructionsTTL != "" {
 				addChatMessageCache(&req.Messages[len(req.Messages)-1], cache.InstructionsTTL, cache.IncludeTTL)
 			}
@@ -744,7 +744,7 @@ func (model *Model) convertRequest(
 		case ai.SpeechPart:
 			return nil, ai.ErrUnpreparedSpeech
 		case ai.SystemPromptPart:
-			out = append(out, chatMessage{Role: "system", Content: p.Content})
+			out = append(out, chatMessage{Role: model.chatSystemPromptRole(), Content: p.Content})
 		case ai.UserPromptPart:
 			msg, err := model.convertUserPrompt(ctx, p, cache)
 			if err != nil {
@@ -850,8 +850,9 @@ type chatResponse struct {
 			Content []map[string]any `json:"content"`
 		} `json:"logprobs"`
 	} `json:"choices"`
-	Usage chatUsage  `json:"usage"`
-	Error *chatError `json:"error"`
+	Usage      chatUsage      `json:"usage"`
+	Moderation map[string]any `json:"moderation"`
+	Error      *chatError     `json:"error"`
 }
 
 type chatUsage struct {
@@ -1000,8 +1001,13 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 			providerDetails["annotations"] = cr.Choices[0].Message.Annotations
 		}
 	}
+	timestamp := time.Now().UTC()
 	if cr.Created != 0 {
-		providerDetails["timestamp"] = time.Unix(cr.Created, 0).UTC()
+		timestamp = time.Unix(cr.Created, 0).UTC()
+	}
+	providerDetails["timestamp"] = timestamp
+	if len(cr.Moderation) > 0 {
+		providerDetails["moderation"] = cr.Moderation
 	}
 	if cr.ServiceTier != "" {
 		providerDetails["service_tier"] = cr.ServiceTier
@@ -1016,11 +1022,8 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		delete(providerDetails, "finish_reason")
 		providerDetails["refusal"] = cr.Choices[0].Message.Refusal
 	}
-	if len(providerDetails) == 0 {
-		providerDetails = nil
-	}
 	resp := &ai.ModelResponse{
-		ModelName: cr.Model, Timestamp: time.Unix(cr.Created, 0).UTC(), Usage: cr.Usage.usage(),
+		ModelName: cr.Model, Timestamp: timestamp, Usage: cr.Usage.usage(),
 		ProviderDetails: providerDetails, ProviderResponseID: cr.ID,
 		FinishReason: model.chatFinishReason(cr.Choices[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
@@ -1064,6 +1067,9 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		resp.Parts = append(resp.Parts, ai.TextPart{Content: msg.Content, ProviderName: model.providerName})
 	}
 	for _, call := range msg.ToolCalls {
+		if call.Type != "" && call.Type != "function" {
+			return nil, fmt.Errorf("openai: unsupported chat tool call type %q", call.Type)
+		}
 		resp.Parts = append(resp.Parts, ai.ToolCallPart{
 			ToolName:     call.Function.Name,
 			Args:         json.RawMessage(call.Function.Arguments),
@@ -1071,6 +1077,7 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 			ProviderName: model.providerName,
 		})
 	}
+	splitTaggedThinking(resp)
 	return resp, nil
 }
 
@@ -1108,12 +1115,19 @@ func executedToolContent(tool chatExecutedTool) (any, bool) {
 	return tool.Output, tool.Output != nil
 }
 
+func (model *Model) chatSystemPromptRole() string {
+	if strings.HasPrefix(model.name, "o1-mini") {
+		return "user"
+	}
+	return "system"
+}
+
 func (model *Model) chatFinishReason(reason string) ai.FinishReason {
 	if normalized, exists := model.chatCompatibility.FinishReasons[reason]; exists {
 		return normalized
 	}
 	return map[string]ai.FinishReason{
-		"stop": ai.FinishReasonStop, "length": ai.FinishReasonLength,
+		"": ai.FinishReasonStop, "stop": ai.FinishReasonStop, "length": ai.FinishReasonLength,
 		"content_filter": ai.FinishReasonContentFilter,
 		"tool_calls":     ai.FinishReasonToolCall, "function_call": ai.FinishReasonToolCall,
 	}[reason]

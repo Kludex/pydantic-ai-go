@@ -563,6 +563,22 @@ func TestSystemPromptPartInHistory(t *testing.T) {
 	if gotBody["messages"].([]any)[0].(map[string]any)["role"] != "system" {
 		t.Fatalf("unexpected messages %v", gotBody["messages"])
 	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"o1-mini","choices":[{"message":{"content":"ok"}}]}`))
+	}))
+	defer server.Close()
+	o1 := openai.NewModel("o1-mini", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+	if _, err := o1.Request(t.Context(), msgs, ai.ModelRequestParams{Instructions: "instructions"}); err != nil {
+		t.Fatal(err)
+	}
+	messages := gotBody["messages"].([]any)
+	if messages[0].(map[string]any)["role"] != "user" || messages[1].(map[string]any)["role"] != "user" {
+		t.Fatalf("unexpected o1-mini instruction roles: %#v", messages)
+	}
 }
 
 func TestInvalidBaseURL(t *testing.T) {

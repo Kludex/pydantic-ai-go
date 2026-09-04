@@ -49,7 +49,7 @@ func (m *Model) StreamRequest(ctx context.Context, msgs []ai.ModelMessage, param
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	return m.eventStream(ctx, resp.Body), nil
+	return splitTaggedThinkingEvents(m.eventStream(ctx, resp.Body)), nil
 }
 
 type streamOptions struct {

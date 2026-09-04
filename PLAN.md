@@ -23,6 +23,7 @@ github.com/Kludex/pydantic-ai-go        // package ai: Agent, Model, messages, t
 ├── models/google/
 ├── models/fakes/                        // package fakes: TestModel, FunctionModel for users' tests
 ├── capabilities/mcp/                    // v0.4+
+├── a2a/                                 // official A2A server and client adapters
 └── examples/
 ```
 
@@ -277,7 +278,7 @@ Once the package is up to date with PydanticAI itself, add a [gh-aw](https://git
 
 ### Explicitly out of scope
 
-- Graph layer, durable execution (Temporal etc.), multi-agent handoff protocols
+- Graph layer and general multi-agent orchestration beyond the typed-tool and A2A adapters
 - HTTP-level retry policy (delegate to the injected `http.Client`/transport)
 - On-demand capability loading, self-extension, harness features
 

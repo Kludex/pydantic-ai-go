@@ -72,6 +72,63 @@ A deferred approval or external tool call ends the response in input-required st
 
 The official A2A server owns task storage, event queues, push notifications, retries, and transport cancellation. The executor does not close its queue.
 
+## Use a remote agent as a model
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+
+    protocol "github.com/a2aproject/a2a-go/a2a"
+    "github.com/a2aproject/a2a-go/a2aclient"
+
+    ai "github.com/Kludex/pydantic-ai-go"
+    a2aintegration "github.com/Kludex/pydantic-ai-go/a2a"
+)
+
+func main() {
+    ctx := context.Background()
+    endpoint := "http://localhost:8080/invoke"
+    client, err := a2aclient.NewFromEndpoints(ctx, []protocol.AgentInterface{{
+        URL: endpoint, Transport: protocol.TransportProtocolJSONRPC,
+    }})
+    if err != nil {
+        log.Fatal(err)
+    }
+    defer func() {
+        if err := client.Destroy(); err != nil {
+            log.Print(err)
+        }
+    }()
+
+    model := a2aintegration.NewModel("Assistant", client, a2aintegration.ModelConfig{
+        ProviderURL: endpoint,
+        SendConfig: &protocol.MessageSendConfig{
+            AcceptedOutputModes: []string{"text/plain", "application/json"},
+        },
+    })
+    agent := ai.NewAgent[struct{}, string](model)
+    result, err := agent.Run(ctx, "What is the capital of Brazil?", struct{}{})
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println(result.Output)
+}
+```
+
+`Model` implements `ai.Model` and `ai.StreamingModel`. It forwards text, inline files, and image, audio, video, or document URIs. Remote task and context IDs persist in provider details. A new completed turn starts a new task in the same context. Use `TaskError` IDs with the official client when an input-required or authentication-required task needs protocol-specific continuation.
+
+A remote agent owns its tools and generation settings. The model rejects caller-provided tools, provider-native tools, uploaded provider files, and generation settings instead of silently dropping them. Structured Go outputs use prompted JSON mode because A2A does not define a portable output-schema field.
+
+Remote responses may contain text, structured data, or inline file bytes. Structured data becomes compact JSON text. URI response files fail because `ai.FilePart` represents detached bytes, not a remote reference.
+
+`ModelConfig.Extensions`, `MessageMetadata`, and `RequestMetadata` carry extensions you negotiated from the agent card. `SendConfig` forwards accepted output modes, history length, and push configuration. The official SDK still owns agent-card discovery, extension interceptors, push callback policy, authentication, and transport selection. Do not enable polling on the official client. An `ai.Model` request requires a terminal result.
+
+Remote failed, rejected, canceled, authentication-required, and input-required tasks return an inspectable `TaskError` with task and context IDs. Transport failures return `ai.ModelTransportError`. Context cancellation keeps its original cause.
+
 ## Resume deferred tools
 
 ```go
@@ -116,6 +173,6 @@ Keep the SDK task store authoritative. The executor reads continuation state fro
 
 ## Current scope
 
-The integration provides server-side execution through the official Go SDK, text, data, and file input, sanitized task history, named and annotated streamed artifacts, structured-output fallback, dependency resolution, deferred input-required state, failure state, and cancellation.
+The integration provides server-side execution and client-side model calls through the official Go SDK. It supports text, data, and file content, sanitized task history, named and annotated streamed artifacts, prompted structured output, dependency resolution, deferred input-required state, terminal failure mapping, task continuity, and cancellation.
 
-Client-side A2A model calls, extension negotiation, and push notification policy remain.
+You compose agent-card discovery, extension negotiation, push delivery, authentication, task storage, and JSON-RPC, gRPC, or HTTP+JSON policy with the official SDK. The integration forwards the resulting message and request configuration without duplicating those transport responsibilities.

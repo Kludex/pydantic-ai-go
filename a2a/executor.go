@@ -1,4 +1,4 @@
-// Package a2a adapts typed agents to the official Agent2Agent Go SDK.
+// Package a2a adapts typed agents and remote models to the official Agent2Agent Go SDK.
 package a2a
 
 import (

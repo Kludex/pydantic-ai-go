@@ -75,9 +75,16 @@ func TestExecutorStreamsArtifacts(t *testing.T) {
 		}}, nil
 	})
 	agent := ai.NewAgent[string, string](model)
-	executor := a2aintegration.NewExecutor(agent, a2aintegration.Config[string]{
-		ResolveDeps: func(context.Context, *a2asrv.RequestContext) (string, error) { return "deps", nil },
-	})
+	config := a2aintegration.Config[string]{
+		ResolveDeps:         func(context.Context, *a2asrv.RequestContext) (string, error) { return "deps", nil },
+		ArtifactName:        "answer",
+		ArtifactDescription: "Generated answer",
+		ArtifactExtensions:  []string{"urn:example:answer"},
+		ArtifactMetadata:    map[string]any{"nested": map[string]any{"stable": true}},
+	}
+	executor := a2aintegration.NewExecutor(agent, config)
+	config.ArtifactExtensions[0] = "changed"
+	config.ArtifactMetadata["nested"].(map[string]any)["stable"] = false
 	requestMessage := protocol.NewMessage(protocol.MessageRoleUser,
 		protocol.TextPart{Text: "say hello"},
 		protocol.DataPart{Data: map[string]any{"language": "en"}},
@@ -117,6 +124,12 @@ func TestExecutorStreamsArtifacts(t *testing.T) {
 	secondArtifact := queue.events[2].(*protocol.TaskArtifactUpdateEvent)
 	if secondArtifact.Artifact.ID != firstArtifact.Artifact.ID || !secondArtifact.Append {
 		t.Fatalf("artifact updates did not share identity: %#v %#v", firstArtifact, secondArtifact)
+	}
+	if firstArtifact.Artifact.Name != "answer" || firstArtifact.Artifact.Description != "Generated answer" ||
+		firstArtifact.Artifact.Extensions[0] != "urn:example:answer" ||
+		!firstArtifact.Artifact.Metadata["nested"].(map[string]any)["stable"].(bool) ||
+		secondArtifact.Artifact.Name != "" || secondArtifact.Artifact.Metadata != nil {
+		t.Fatalf("unexpected artifact presentation: %#v %#v", firstArtifact, secondArtifact)
 	}
 	if status := queue.events[len(queue.events)-1].(*protocol.TaskStatusUpdateEvent); status.Status.State != protocol.TaskStateCompleted || !status.Final {
 		t.Fatalf("unexpected completion: %#v", status)
@@ -406,6 +419,11 @@ func TestExecutorFailures(t *testing.T) {
 	) (*ai.ModelResponse, error) {
 		return nil, errors.New("model failed")
 	}))
+	assertPanic(t, func() {
+		a2aintegration.NewExecutor(agent, a2aintegration.Config[struct{}]{
+			ArtifactMetadata: map[string]any{"invalid": make(chan int)},
+		})
+	})
 	executor := a2aintegration.NewExecutor(agent, a2aintegration.Config[struct{}]{})
 	valid := &a2asrv.RequestContext{
 		Message: protocol.NewMessage(protocol.MessageRoleUser, protocol.TextPart{Text: "run"}),

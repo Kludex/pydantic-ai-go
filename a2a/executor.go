@@ -28,6 +28,14 @@ type Config[Deps any] struct {
 	Sanitization ai.MessageSanitizationOptions
 	// RunOptions are reused across executions and must be concurrency-safe.
 	RunOptions []ai.RunOption
+	// ArtifactName names the streamed output artifact.
+	ArtifactName string
+	// ArtifactDescription describes the streamed output artifact.
+	ArtifactDescription string
+	// ArtifactExtensions lists extension URIs associated with the output artifact.
+	ArtifactExtensions []string
+	// ArtifactMetadata contains detached extension metadata for the output artifact.
+	ArtifactMetadata map[string]any
 }
 
 // Executor implements the official SDK's a2asrv.AgentExecutor.
@@ -42,6 +50,8 @@ func NewExecutor[Deps, Output any](agent *ai.Agent[Deps, Output], config Config[
 		panic("ai/a2a: agent must not be nil")
 	}
 	config.RunOptions = append([]ai.RunOption(nil), config.RunOptions...)
+	config.ArtifactExtensions = append([]string(nil), config.ArtifactExtensions...)
+	config.ArtifactMetadata = cloneJSONMap(config.ArtifactMetadata)
 	return &Executor[Deps, Output]{agent: agent, config: config}
 }
 
@@ -92,7 +102,7 @@ func (executor *Executor[Deps, Output]) Execute(
 			parts := responseParts(value.Part)
 			if len(parts) > 0 {
 				var err error
-				artifactID, err = publishArtifact(ctx, request, queue, artifactID, parts)
+				artifactID, err = executor.publishArtifact(ctx, request, queue, artifactID, parts)
 				if err != nil {
 					return err
 				}
@@ -102,7 +112,7 @@ func (executor *Executor[Deps, Output]) Execute(
 			parts := deltaParts(value.Delta)
 			if len(parts) > 0 {
 				var err error
-				artifactID, err = publishArtifact(ctx, request, queue, artifactID, parts)
+				artifactID, err = executor.publishArtifact(ctx, request, queue, artifactID, parts)
 				if err != nil {
 					return err
 				}
@@ -122,7 +132,7 @@ func (executor *Executor[Deps, Output]) Execute(
 			if err != nil {
 				return executor.fail(ctx, request, queue, fmt.Errorf("ai/a2a: encode output: %w", err))
 			}
-			if _, err := publishArtifact(ctx, request, queue, artifactID, []protocol.Part{
+			if _, err := executor.publishArtifact(ctx, request, queue, artifactID, []protocol.Part{
 				protocol.TextPart{Text: string(encoded)},
 			}); err != nil {
 				return err
@@ -169,13 +179,17 @@ func (*Executor[Deps, Output]) finish(
 	return nil
 }
 
-func publishArtifact(
+func (executor *Executor[Deps, Output]) publishArtifact(
 	ctx context.Context, request *a2asrv.RequestContext, queue eventqueue.Queue,
 	artifactID protocol.ArtifactID, parts []protocol.Part,
 ) (protocol.ArtifactID, error) {
 	var event *protocol.TaskArtifactUpdateEvent
 	if artifactID == "" {
 		event = protocol.NewArtifactEvent(request, parts...)
+		event.Artifact.Name = executor.config.ArtifactName
+		event.Artifact.Description = executor.config.ArtifactDescription
+		event.Artifact.Extensions = append([]string(nil), executor.config.ArtifactExtensions...)
+		event.Artifact.Metadata = cloneJSONMap(executor.config.ArtifactMetadata)
 		artifactID = event.Artifact.ID
 	} else {
 		event = protocol.NewArtifactUpdateEvent(request, artifactID, parts...)
@@ -184,6 +198,20 @@ func publishArtifact(
 		return artifactID, fmt.Errorf("ai/a2a: publish artifact: %w", err)
 	}
 	return artifactID, nil
+}
+
+func cloneJSONMap(value map[string]any) map[string]any {
+	if value == nil {
+		return nil
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		panic(fmt.Sprintf("ai/a2a: artifact metadata must be JSON-compatible: %v", err))
+	}
+	var cloned map[string]any
+	// Marshal output is always valid JSON.
+	_ = json.Unmarshal(encoded, &cloned)
+	return cloned
 }
 
 func responseParts(part ai.ResponsePart) []protocol.Part {

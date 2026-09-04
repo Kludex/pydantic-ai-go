@@ -18,17 +18,24 @@ type RequestPreparationFunc func(*http.Request) error
 
 // ProviderConfig configures an Ollama endpoint. Headers are copied.
 type ProviderConfig struct {
-	BaseURL        string
-	HTTPClient     *http.Client
-	Headers        http.Header
+	// BaseURL is the Ollama server endpoint.
+	BaseURL string
+	// HTTPClient performs requests. Nil uses the shared default client.
+	HTTPClient *http.Client
+	// Headers contains detached provider-wide request headers.
+	Headers http.Header
+	// PrepareRequest adds dynamic authentication or routing data.
 	PrepareRequest RequestPreparationFunc
 }
 
 // APIError reports a non-successful Ollama HTTP response.
 type APIError struct {
+	// StatusCode is the HTTP response status.
 	StatusCode int
-	Body       string
-	Headers    http.Header
+	// Body is the provider response body.
+	Body string
+	// Headers contains a detached response-header snapshot.
+	Headers http.Header
 }
 
 // Error implements error.

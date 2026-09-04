@@ -61,15 +61,24 @@ const (
 
 // Settings builds Bedrock-specific values into portable embedding settings.
 type Settings struct {
-	Common           embeddings.Settings
-	TitanNormalize   *bool
-	CohereMaxTokens  *int
-	CohereInputType  CohereInputType
-	CohereTruncate   Truncation
-	NovaTruncate     Truncation
-	NovaPurpose      NovaPurpose
+	// Common contains portable embedding settings.
+	Common embeddings.Settings
+	// TitanNormalize controls unit-length Titan vectors.
+	TitanNormalize *bool
+	// CohereMaxTokens limits input length for Cohere models.
+	CohereMaxTokens *int
+	// CohereInputType selects Cohere query or document behavior.
+	CohereInputType CohereInputType
+	// CohereTruncate controls Cohere over-limit input handling.
+	CohereTruncate Truncation
+	// NovaTruncate controls Nova over-limit input handling.
+	NovaTruncate Truncation
+	// NovaPurpose selects the Nova multimodal embedding purpose.
+	NovaPurpose NovaPurpose
+	// InferenceProfile overrides the invoked Bedrock model identifier.
 	InferenceProfile string
-	MaxConcurrency   *int
+	// MaxConcurrency bounds ordered per-input InvokeModel operations.
+	MaxConcurrency *int
 }
 
 // Build validates and returns detached portable settings.

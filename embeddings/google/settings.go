@@ -37,10 +37,14 @@ const (
 
 // Settings combines portable settings with Google embedding controls.
 type Settings struct {
-	Common   embeddings.Settings
-	Task     Task
+	// Common contains portable embedding settings.
+	Common embeddings.Settings
+	// Task selects gemini-embedding-2 task-prefix behavior.
+	Task Task
+	// TaskType sends a provider task type for older embedding models.
 	TaskType string
-	Title    string
+	// Title identifies a retrieval document when the model supports it.
+	Title string
 }
 
 // Build returns detached settings accepted by embeddings.Embedder and Model.Embed.

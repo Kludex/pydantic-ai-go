@@ -22,7 +22,9 @@ const (
 
 // Settings builds VoyageAI-specific values into portable embedding settings.
 type Settings struct {
-	Common    embeddings.Settings
+	// Common contains portable embedding settings.
+	Common embeddings.Settings
+	// InputType selects query, document, or unprefixed embedding behavior.
 	InputType InputType
 }
 

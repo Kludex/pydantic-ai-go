@@ -7,9 +7,12 @@ import (
 
 // APIError describes a failed Bedrock Runtime HTTP response.
 type APIError struct {
+	// StatusCode is the Bedrock Runtime HTTP status.
 	StatusCode int
-	Headers    http.Header
-	Err        error
+	// Headers contains a detached response-header snapshot.
+	Headers http.Header
+	// Err is the underlying AWS SDK failure.
+	Err error
 }
 
 // Error returns the Bedrock HTTP failure.

@@ -14,14 +14,19 @@ import (
 
 // Request describes one Bedrock InvokeModel operation.
 type Request struct {
+	// ModelID is the Bedrock model or inference-profile identifier.
 	ModelID string
-	Body    []byte
+	// Body is the detached InvokeModel JSON payload.
+	Body []byte
+	// Headers contains detached provider-specific request headers.
 	Headers map[string]string
 }
 
 // Response contains one Bedrock InvokeModel response.
 type Response struct {
-	Body        []byte
+	// Body is the detached InvokeModel response payload.
+	Body []byte
+	// InputTokens is the provider-reported input usage.
 	InputTokens int
 }
 

@@ -42,10 +42,14 @@ const (
 
 // Settings builds Cohere-specific values into portable embedding settings.
 type Settings struct {
-	Common    embeddings.Settings
+	// Common contains portable embedding settings.
+	Common embeddings.Settings
+	// InputType overrides query or document inference.
 	InputType InputType
+	// MaxTokens limits input tokens through Cohere's tokenizer endpoint.
 	MaxTokens *int
-	Truncate  Truncation
+	// Truncate controls how over-limit input is shortened.
+	Truncate Truncation
 }
 
 // Build validates and returns detached portable settings.

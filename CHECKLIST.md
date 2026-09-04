@@ -258,7 +258,7 @@ Status:
 - [x] Use the tagged `genai-prices` Go `v0.1.5` module release instead of a commit pseudo-version.
 - [x] Audited and mapped upstream runtime changes through `3a3e5612786c64e19312f20e3c998553edf1353b` without treating unimplemented changes as complete; the advance from the prior baseline changed only CI coverage collection.
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
-- [ ] After parity, add the daily `gh-aw` upstream-sync workflow described in `PLAN.md`.
+- [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 
 ## Next work
 

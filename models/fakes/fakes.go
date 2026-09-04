@@ -19,6 +19,7 @@ func NewFunctionModel(fn func(ctx context.Context, msgs []ai.ModelMessage, param
 	return &FunctionModel{fn: fn}
 }
 
+// Name returns the stable fake model name.
 func (m *FunctionModel) Name() string { return "function-model" }
 
 // SupportsNativeTool lets FunctionModel inspect every provider-neutral native tool.
@@ -26,6 +27,7 @@ func (*FunctionModel) SupportsNativeTool(tool ai.NativeTool) bool {
 	return ai.ValidateNativeTools([]ai.NativeTool{tool}) == nil
 }
 
+// Request delegates one detached request to the configured function.
 func (m *FunctionModel) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 	resp, err := m.fn(ctx, msgs, params)
 	if err != nil {
@@ -50,8 +52,10 @@ type TestModel struct {
 // NewTestModel creates a TestModel with default behavior.
 func NewTestModel() *TestModel { return &TestModel{} }
 
+// Name returns the stable test model name.
 func (m *TestModel) Name() string { return "test-model" }
 
+// Request calls the next uncalled function tool or returns generated output.
 func (m *TestModel) Request(_ context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
 	called := calledTools(msgs)
 	for _, tool := range params.Tools {

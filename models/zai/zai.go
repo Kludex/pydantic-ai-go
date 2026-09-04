@@ -60,7 +60,9 @@ func WithDefaultSettings(settings ai.ModelSettings) Option {
 
 // Settings combines portable settings with Z.AI-specific settings.
 type Settings struct {
-	Common        ai.ModelSettings
+	// Common contains portable generation settings.
+	Common ai.ModelSettings
+	// ClearThinking controls whether GLM clears retained reasoning before generation.
 	ClearThinking *bool
 }
 

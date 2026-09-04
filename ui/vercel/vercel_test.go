@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/models/fakes"
@@ -117,6 +118,101 @@ func TestPrepareInputFiles(t *testing.T) {
 	file := response.Parts[0].(ai.FilePart)
 	if string(file.Content.Data) != "old" || file.Content.MediaType != "image/png" {
 		t.Fatalf("unexpected assistant file: %#v", file)
+	}
+}
+
+func TestPrepareInputMetadata(t *testing.T) {
+	providerMetadata := func(values map[string]any) map[string]any {
+		return map[string]any{"pydantic_ai": values}
+	}
+	providerExecuted := true
+	input := vercel.RequestData{
+		Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+			{ID: "files", Role: "user", Metadata: map[string]any{
+				"application": map[string]any{"nested": "value"},
+				"pydantic_ai": map[string]any{"timestamp": "2026-09-04T10:00:00Z"},
+			}, Parts: []vercel.UIMessagePart{
+				{Type: "file", URL: "provider-file", MediaType: "application/pdf", ProviderMetadata: providerMetadata(map[string]any{
+					"file_id": "provider-file", "provider_name": "openai", "identifier": "uploaded-id",
+					"vendor_metadata": map[string]any{"purpose": "assistants"},
+				})},
+				{Type: "file", URL: "https://example.com/image.png", MediaType: "image/png", ProviderMetadata: providerMetadata(map[string]any{
+					"identifier": "image-id", "force_download": "safe",
+					"vendor_metadata": map[string]any{"detail": "high"},
+				})},
+				{Type: "file", URL: "data:text/plain;base64,aGVsbG8=", ProviderMetadata: providerMetadata(map[string]any{
+					"identifier": "binary-id", "vendor_metadata": map[string]any{"source": "inline"},
+				})},
+			}},
+			{ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"response": true, "pydantic_ai": map[string]any{"timestamp": "2026-09-04T10:01:00Z"},
+			}, Parts: []vercel.UIMessagePart{
+				{Type: "text", Text: "answer", ProviderMetadata: providerMetadata(map[string]any{
+					"id": "text-id", "provider_name": "openai", "provider_details": map[string]any{"phase": "final"},
+				})},
+				{Type: "reasoning", Text: "thought", ProviderMetadata: providerMetadata(map[string]any{
+					"id": "thinking-id", "signature": "signature", "provider_name": "openai",
+				})},
+				{Type: "file", URL: "data:image/png;base64,aW1hZ2U=", ProviderMetadata: providerMetadata(map[string]any{
+					"id": "file-id", "provider_name": "openai", "provider_details": map[string]any{"kind": "image"},
+					"vendor_metadata": map[string]any{"quality": "high"},
+				})},
+				{Type: "tool-search", ToolCallID: "native", State: "output-available", Input: []byte(`{"query":"go"}`),
+					Output: []byte(`{"result":"found"}`), ProviderExecuted: &providerExecuted,
+					CallProviderMetadata: providerMetadata(map[string]any{
+						"id": "call-id", "provider_name": "openai", "tool_kind": "web-search",
+						"provider_details": map[string]any{"status": "complete"},
+					}),
+				},
+				{Type: "tool-future", ToolCallID: "future", Input: []byte(`{}`), ProviderExecuted: &providerExecuted,
+					CallProviderMetadata: providerMetadata(map[string]any{"tool_kind": "future"})},
+			}},
+			{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "continue"}}},
+		},
+	}
+	prompt, history, _, err := vercel.PrepareInput(input, ai.MessageSanitizationOptions{
+		AllowUploadedFiles: true, AllowedFileDownloadModes: []ai.FileDownloadMode{ai.FileDownloadSafe},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if prompt.Content != "continue" || len(history) != 2 {
+		t.Fatalf("unexpected metadata history: prompt=%#v history=%#v", prompt, history)
+	}
+	request := history[0].(ai.ModelRequest)
+	if request.Timestamp.Format(time.RFC3339) != "2026-09-04T10:00:00Z" ||
+		request.Metadata["application"].(map[string]any)["nested"] != "value" {
+		t.Fatalf("unexpected request metadata: %#v", request)
+	}
+	contents := request.Parts[0].(ai.UserPromptPart).Contents
+	uploaded := contents[0].(ai.UploadedFile)
+	image := contents[1].(ai.ImageURL)
+	binary := contents[2].(ai.BinaryContent)
+	if uploaded.FileID != "provider-file" || uploaded.Identifier != "uploaded-id" ||
+		uploaded.VendorMetadata["purpose"] != "assistants" || image.Identifier != "image-id" ||
+		image.ForceDownload != ai.FileDownloadSafe || image.VendorMetadata["detail"] != "high" ||
+		binary.Identifier != "binary-id" || binary.VendorMetadata["source"] != "inline" {
+		t.Fatalf("unexpected file metadata: %#v", contents)
+	}
+	response := history[1].(ai.ModelResponse)
+	if response.Timestamp.Format(time.RFC3339) != "2026-09-04T10:01:00Z" || response.Metadata["response"] != true {
+		t.Fatalf("unexpected response metadata: %#v", response)
+	}
+	text := response.Parts[0].(ai.TextPart)
+	thinking := response.Parts[1].(ai.ThinkingPart)
+	file := response.Parts[2].(ai.FilePart)
+	call := response.Parts[3].(ai.NativeToolCallPart)
+	returned := response.Parts[4].(ai.NativeToolReturnPart)
+	future := response.Parts[5].(ai.NativeToolCallPart)
+	if text.ID != "text-id" || text.ProviderDetails["phase"] != "final" ||
+		thinking.Signature != "signature" || file.Content.VendorMetadata["quality"] != "high" ||
+		call.ToolKind != ai.ToolPartKindWebSearch || returned.Outcome != ai.ToolReturnOutcomeSuccess ||
+		returned.Content.(map[string]any)["result"] != "found" || future.ToolKind != "" {
+		t.Fatalf("unexpected response parts: %#v", response.Parts)
+	}
+	input.Messages[0].Metadata["application"].(map[string]any)["nested"] = "changed"
+	if request.Metadata["application"].(map[string]any)["nested"] != "value" {
+		t.Fatal("message metadata was not detached")
 	}
 }
 

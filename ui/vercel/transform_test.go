@@ -2,8 +2,10 @@ package vercel_test
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go"
 	"github.com/Kludex/pydantic-ai-go/ui/vercel"
@@ -12,13 +14,27 @@ import (
 func TestTransformStreamVariants(t *testing.T) {
 	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
 		events := []ai.StreamEvent{
-			ai.PartStartEvent{PartID: "text", Part: ai.TextPart{Content: "a"}},
-			ai.PartDeltaEvent{PartID: "text", Delta: ai.TextPartDelta{ContentDelta: "b"}},
-			ai.PartEndEvent{PartID: "text", Part: ai.TextPart{}},
-			ai.PartStartEvent{PartID: "thinking", Part: ai.ThinkingPart{Content: "c"}},
-			ai.PartDeltaEvent{PartID: "thinking", Delta: ai.ThinkingPartDelta{ContentDelta: "d"}},
-			ai.PartEndEvent{PartID: "thinking", Part: ai.ThinkingPart{}},
-			ai.PartStartEvent{PartID: "call", Part: ai.ToolCallPart{ToolName: "tool", ToolCallID: "call-1", Args: []byte(`{"x":`)}},
+			ai.PartStartEvent{PartID: "text", Part: ai.TextPart{
+				Content: "a", ID: "text-id", ProviderName: "openai", ProviderDetails: map[string]any{"phase": "final"},
+			}},
+			ai.PartDeltaEvent{PartID: "text", Delta: ai.TextPartDelta{
+				ContentDelta: "b", ProviderName: "openai", ProviderDetails: map[string]any{"index": 1},
+			}},
+			ai.PartEndEvent{PartID: "text", Part: ai.TextPart{ID: "text-id", ProviderName: "openai"}},
+			ai.PartStartEvent{PartID: "thinking", Part: ai.ThinkingPart{
+				Content: "c", ID: "thinking-id", Signature: "signature", ProviderName: "anthropic",
+			}},
+			ai.PartDeltaEvent{PartID: "thinking", Delta: ai.ThinkingPartDelta{
+				ContentDelta: "d", SignatureDelta: "next-signature", ProviderName: "anthropic",
+				ProviderDetails: map[string]any{"redacted": false},
+			}},
+			ai.PartEndEvent{PartID: "thinking", Part: ai.ThinkingPart{
+				ID: "thinking-id", Signature: "signature", ProviderName: "anthropic",
+			}},
+			ai.PartStartEvent{PartID: "call", Part: ai.ToolCallPart{
+				ToolName: "tool", ToolCallID: "call-1", Args: []byte(`{"x":`), ID: "call-id",
+				ProviderName: "openai", ToolKind: ai.ToolPartKindWebSearch,
+			}},
 			ai.PartDeltaEvent{PartID: "call", Delta: ai.ToolCallPartDelta{ArgsDelta: "1}"}},
 			ai.PartDeltaEvent{PartID: "call", Delta: ai.ToolCallPartDelta{ToolCallID: "call-1"}},
 			ai.FunctionToolCallEvent{Part: ai.ToolCallPart{ToolName: "tool", ToolCallID: "call-1", Args: []byte(`{"x":1}`)}},
@@ -27,10 +43,16 @@ func TestTransformStreamVariants(t *testing.T) {
 			ai.OutputToolResultEvent{Part: ai.RetryPromptPart{ToolCallID: "call-2", Content: "retry"}},
 			ai.PartStartEvent{PartID: "native", Part: ai.NativeToolCallPart{ToolName: "search", ToolCallID: "native-1"}},
 			ai.PartDeltaEvent{PartID: "native", Delta: ai.NativeToolCallPartDelta(ai.ToolCallPartDelta{ArgsDelta: `{}`})},
-			ai.PartStartEvent{PartID: "native-return", Part: ai.NativeToolReturnPart{ToolCallID: "native-1", Content: "found"}},
-			ai.PartStartEvent{PartID: "file", Part: ai.FilePart{Content: ai.BinaryContent{
-				Data: []byte("first"), MediaType: "image/png",
-			}}},
+			ai.PartStartEvent{PartID: "native-return", Part: ai.NativeToolReturnPart{
+				ToolCallID: "native-1", Content: "found", ProviderName: "openai",
+				ProviderDetails: map[string]any{"status": "complete"}, ToolKind: ai.ToolPartKindWebSearch,
+			}},
+			ai.PartStartEvent{PartID: "file", Part: ai.FilePart{
+				Content: ai.BinaryContent{
+					Data: []byte("first"), MediaType: "image/png", VendorMetadata: map[string]any{"quality": "high"},
+				},
+				ID: "file-id", ProviderName: "openai", ProviderDetails: map[string]any{"kind": "image"},
+			}},
 			ai.PartDeltaEvent{PartID: "file", Delta: ai.FilePartDelta{Part: ai.FilePart{Content: ai.BinaryContent{
 				Data: []byte("second"), MediaType: "image/png",
 			}}}},
@@ -42,7 +64,10 @@ func TestTransformStreamVariants(t *testing.T) {
 			ai.ToolAvailabilityDeltaEvent{Part: ai.ToolAvailabilityDeltaPart{
 				ToolsAdded: []string{"search"}, ToolCallID: "reveal-1",
 			}},
-			ai.FinishEvent{FinishReason: ai.FinishReasonToolCall},
+			ai.FinishEvent{
+				FinishReason: ai.FinishReasonToolCall, Timestamp: time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC),
+				Metadata: map[string]any{"request": "metadata"},
+			},
 		}
 		for _, event := range events {
 			if !yield(event, nil) {
@@ -95,6 +120,16 @@ func TestTransformStreamVariants(t *testing.T) {
 	availability := chunks[chunkIndex(chunks, vercel.ChunkDataToolAvailability)].Data
 	if availability["tool_call_id"] != "reveal-1" || availability["added"].([]string)[0] != "search" {
 		t.Fatalf("unexpected tool availability data: %#v", availability)
+	}
+	textMetadata := chunks[chunkIndex(chunks, vercel.ChunkTextStart)].ProviderMetadata["pydantic_ai"].(map[string]any)
+	if textMetadata["id"] != "text-id" || textMetadata["provider_name"] != "openai" ||
+		textMetadata["provider_details"].(map[string]any)["phase"] != "final" {
+		t.Fatalf("unexpected text metadata: %#v", textMetadata)
+	}
+	finishMetadata := chunks[chunkIndex(chunks, vercel.ChunkFinish)].MessageMetadata
+	if finishMetadata["request"] != "metadata" ||
+		finishMetadata["pydantic_ai"].(map[string]any)["timestamp"] != "2026-09-04T10:00:00Z" {
+		t.Fatalf("unexpected message metadata: %#v", finishMetadata)
 	}
 }
 
@@ -203,6 +238,22 @@ func TestTransformErrors(t *testing.T) {
 				t.Fatalf("unexpected error: %v", got)
 			}
 		})
+	}
+
+	cancelled := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.PartStartEvent{Part: ai.TextPart{}}, nil)
+		yield(nil, fmt.Errorf("cancelled: %w", ai.ErrRunCancelled))
+	})
+	var chunks []vercel.Chunk
+	for chunk, err := range vercel.TransformStream(cancelled, "message") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		chunks = append(chunks, chunk)
+	}
+	if chunks[len(chunks)-2].Type != vercel.ChunkAbort ||
+		chunks[len(chunks)-2].Reason != "The agent run was cancelled." || chunks[len(chunks)-1].Type != vercel.ChunkDone {
+		t.Fatalf("unexpected cancellation chunks: %#v", chunks)
 	}
 }
 

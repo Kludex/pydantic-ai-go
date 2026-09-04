@@ -99,26 +99,29 @@ func convertMessages(messages []UIMessage) ([]ai.ModelMessage, error) {
 		if message.ID == "" {
 			return nil, fmt.Errorf("vercel: message ID must not be empty")
 		}
+		metadata, timestamp := loadMessageMetadata(message.Metadata)
 		switch message.Role {
 		case "system":
 			text, err := messageText(message.Parts)
 			if err != nil {
 				return nil, err
 			}
-			converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{
-				ai.SystemPromptPart{Content: text},
-			}})
+			converted = append(converted, ai.ModelRequest{
+				Parts: []ai.RequestPart{ai.SystemPromptPart{Content: text}}, Metadata: metadata, Timestamp: timestamp,
+			})
 		case "user":
 			parts, err := userMessage(message.Parts)
 			if err != nil {
 				return nil, err
 			}
-			converted = append(converted, ai.ModelRequest{Parts: parts})
+			converted = append(converted, ai.ModelRequest{Parts: parts, Metadata: metadata, Timestamp: timestamp})
 		case "assistant":
 			response, results, err := assistantMessage(message.Parts)
 			if err != nil {
 				return nil, err
 			}
+			response.Metadata = metadata
+			response.Timestamp = timestamp
 			converted = append(converted, response)
 			converted = append(converted, results...)
 		default:
@@ -185,15 +188,28 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 	for _, part := range parts {
 		switch {
 		case part.Type == "text":
-			response.Parts = append(response.Parts, ai.TextPart{Content: part.Text})
+			metadata := loadPartMetadata(part.ProviderMetadata)
+			response.Parts = append(response.Parts, ai.TextPart{
+				Content: part.Text, ID: metadata.id, ProviderName: metadata.providerName,
+				ProviderDetails: cloneMap(metadata.providerDetails),
+			})
 		case part.Type == "reasoning":
-			response.Parts = append(response.Parts, ai.ThinkingPart{Content: part.Text})
+			metadata := loadPartMetadata(part.ProviderMetadata)
+			response.Parts = append(response.Parts, ai.ThinkingPart{
+				Content: part.Text, ID: metadata.id, Signature: metadata.signature,
+				ProviderName: metadata.providerName, ProviderDetails: cloneMap(metadata.providerDetails),
+			})
 		case part.Type == "file":
 			file, err := binaryFile(part.URL)
 			if err != nil {
 				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: decode assistant file: %w", err)
 			}
-			response.Parts = append(response.Parts, ai.FilePart{Content: file})
+			metadata := loadPartMetadata(part.ProviderMetadata)
+			file.VendorMetadata = cloneMap(metadata.vendorMetadata)
+			response.Parts = append(response.Parts, ai.FilePart{
+				Content: file, ID: metadata.id, ProviderName: metadata.providerName,
+				ProviderDetails: cloneMap(metadata.providerDetails),
+			})
 		case part.Type == string(ChunkDataCompaction):
 			if compaction, ok := compactionPart(part.Data); ok {
 				response.Parts = append(response.Parts, compaction)
@@ -204,6 +220,7 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: tool part requires a toolCallId")
 			}
 			name := strings.TrimPrefix(part.Type, "tool-")
+			metadata := loadPartMetadata(part.CallProviderMetadata)
 			input := part.Input
 			if len(input) == 0 {
 				input = json.RawMessage(`{}`)
@@ -211,9 +228,20 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 			if !json.Valid(input) {
 				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: tool %q input is not valid JSON", name)
 			}
-			response.Parts = append(response.Parts, ai.ToolCallPart{
-				ToolName: name, ToolCallID: part.ToolCallID, Args: append(json.RawMessage(nil), input...),
-			})
+			providerExecuted := part.ProviderExecuted != nil && *part.ProviderExecuted
+			if providerExecuted {
+				response.Parts = append(response.Parts, ai.NativeToolCallPart{
+					ToolName: name, ToolCallID: part.ToolCallID, Args: append(json.RawMessage(nil), input...),
+					ToolKind: metadata.toolKind, ID: metadata.id, ProviderName: metadata.providerName,
+					ProviderDetails: cloneMap(metadata.providerDetails),
+				})
+			} else {
+				response.Parts = append(response.Parts, ai.ToolCallPart{
+					ToolName: name, ToolCallID: part.ToolCallID, Args: append(json.RawMessage(nil), input...),
+					ToolKind: metadata.toolKind, ID: metadata.id, ProviderName: metadata.providerName,
+					ProviderDetails: cloneMap(metadata.providerDetails),
+				})
+			}
 			if part.State == "output-available" || part.State == "output-error" || part.State == "output-denied" {
 				content := any(nil)
 				if len(part.Output) > 0 {
@@ -229,9 +257,18 @@ func assistantMessage(parts []UIMessagePart) (ai.ModelResponse, []ai.ModelMessag
 				case "output-denied":
 					outcome = ai.ToolReturnOutcomeDenied
 				}
-				results = append(results, ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{
-					ToolName: name, ToolCallID: part.ToolCallID, Content: content, Outcome: outcome,
-				}}})
+				if providerExecuted {
+					response.Parts = append(response.Parts, ai.NativeToolReturnPart{
+						ToolName: name, ToolCallID: part.ToolCallID, Content: content, Outcome: outcome,
+						ToolKind: metadata.toolKind, ProviderName: metadata.providerName,
+						ProviderDetails: cloneMap(metadata.providerDetails),
+					})
+				} else {
+					results = append(results, ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{
+						ToolName: name, ToolCallID: part.ToolCallID, Content: content, Outcome: outcome,
+						ToolKind: metadata.toolKind,
+					}}})
+				}
 			}
 		default:
 			return ai.ModelResponse{}, nil, fmt.Errorf("vercel: unsupported assistant part %q", part.Type)

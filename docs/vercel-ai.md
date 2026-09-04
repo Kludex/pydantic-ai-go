@@ -132,8 +132,16 @@ The adapter uses `data-compaction` parts for provider compaction boundaries. It 
 
 Unrecognized `data-*` parts remain UI-only and are not sent to the model.
 
+## Preserve metadata
+
+The adapter stores part metadata under `providerMetadata.pydantic_ai`. It round-trips provider part IDs, names, details, reasoning signatures, tool kinds, and file metadata.
+
+Message metadata remains application-owned. The adapter reserves `metadata.pydantic_ai.timestamp` for the original message timestamp. It does not trust client-held provider response IDs or provider URLs.
+
+A canceled run emits an `abort` chunk followed by `[DONE]`. This keeps cancellation distinct from model and adapter errors.
+
 ## Current scope
 
 The adapter supports AI SDK UI versions 5 through 7 for text, files, reasoning, function and provider-native tool inputs and outputs, compaction boundaries, tool-availability changes, step boundaries, finish reasons, secure client-held history, standalone transformation, and bounded SSE HTTP serving.
 
-Vercel AI source and custom data parts, provider metadata, message metadata, external deferred resumes, cancellation chunks, and remaining version-specific fields remain.
+Vercel AI source and custom data parts, external deferred resumes, and remaining version-specific fields remain.

@@ -2,6 +2,7 @@ package vercel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"iter"
 	"strconv"
@@ -40,6 +41,12 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 				if !state.finishStep(yield) {
 					return
 				}
+				if errors.Is(eventErr, ai.ErrRunCancelled) {
+					if yield(Chunk{Type: ChunkAbort, Reason: "The agent run was cancelled."}, nil) {
+						yield(Chunk{Type: ChunkDone}, nil)
+					}
+					return
+				}
 				yield(Chunk{Type: ChunkError, ErrorText: eventErr.Error()}, eventErr)
 				return
 			}
@@ -50,7 +57,9 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 		if !state.finishStep(yield) {
 			return
 		}
-		if !yield(Chunk{Type: ChunkFinish, FinishReason: state.finishReason}, nil) {
+		if !yield(Chunk{
+			Type: ChunkFinish, FinishReason: state.finishReason, MessageMetadata: state.messageMetadata,
+		}, nil) {
 			return
 		}
 		yield(Chunk{Type: ChunkDone}, nil)
@@ -58,11 +67,12 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 }
 
 type transformState struct {
-	sdkVersion   int
-	step         bool
-	finishReason string
-	partIDs      map[string]string
-	toolIDs      map[string]string
+	sdkVersion      int
+	step            bool
+	finishReason    string
+	messageMetadata map[string]any
+	partIDs         map[string]string
+	toolIDs         map[string]string
 }
 
 func (state *transformState) transform(yield func(Chunk, error) bool, event ai.StreamEvent) bool {
@@ -78,17 +88,25 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		state.partIDs[value.PartID] = id
 		switch part := value.Part.(type) {
 		case ai.TextPart:
-			if !yield(Chunk{Type: ChunkTextStart, ID: id}, nil) {
+			metadata := dumpPartMetadata(part.ID, "", part.ProviderName, part.ProviderDetails, "", nil)
+			if !yield(Chunk{Type: ChunkTextStart, ID: id, ProviderMetadata: metadata}, nil) {
 				return false
 			}
-			if part.Content != "" && !yield(Chunk{Type: ChunkTextDelta, ID: id, Delta: part.Content}, nil) {
+			if part.Content != "" && !yield(Chunk{
+				Type: ChunkTextDelta, ID: id, Delta: part.Content, ProviderMetadata: metadata,
+			}, nil) {
 				return false
 			}
 		case ai.ThinkingPart:
-			if !yield(Chunk{Type: ChunkReasoningStart, ID: id}, nil) {
+			metadata := dumpPartMetadata(
+				part.ID, part.Signature, part.ProviderName, part.ProviderDetails, "", nil,
+			)
+			if !yield(Chunk{Type: ChunkReasoningStart, ID: id, ProviderMetadata: metadata}, nil) {
 				return false
 			}
-			if part.Content != "" && !yield(Chunk{Type: ChunkReasoningDelta, ID: id, Delta: part.Content}, nil) {
+			if part.Content != "" && !yield(Chunk{
+				Type: ChunkReasoningDelta, ID: id, Delta: part.Content, ProviderMetadata: metadata,
+			}, nil) {
 				return false
 			}
 		case ai.FilePart:
@@ -96,26 +114,37 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		case ai.CompactionPart:
 			return yield(Chunk{Type: ChunkDataCompaction, Data: compactionData(part)}, nil)
 		case ai.ToolCallPart:
-			if !state.startTool(yield, value.PartID, part.ToolCallID, part.ToolName, string(part.Args), false) {
+			metadata := dumpPartMetadata(part.ID, "", part.ProviderName, part.ProviderDetails, part.ToolKind, nil)
+			if !state.startTool(yield, value.PartID, part.ToolCallID, part.ToolName, string(part.Args), false, metadata) {
 				return false
 			}
 		case ai.NativeToolCallPart:
-			if !state.startTool(yield, value.PartID, part.ToolCallID, part.ToolName, string(part.Args), true) {
+			metadata := dumpPartMetadata(part.ID, "", part.ProviderName, part.ProviderDetails, part.ToolKind, nil)
+			if !state.startTool(yield, value.PartID, part.ToolCallID, part.ToolName, string(part.Args), true, metadata) {
 				return false
 			}
 		case ai.NativeToolReturnPart:
-			return state.toolOutput(yield, part.ToolCallID, part.Content, part.Outcome, true)
+			metadata := dumpPartMetadata("", "", part.ProviderName, part.ProviderDetails, part.ToolKind, nil)
+			return state.toolOutput(yield, part.ToolCallID, part.Content, part.Outcome, true, metadata)
 		}
 	case ai.PartDeltaEvent:
 		id := state.partIDs[value.PartID]
 		switch delta := value.Delta.(type) {
 		case ai.TextPartDelta:
 			if delta.ContentDelta != "" {
-				return yield(Chunk{Type: ChunkTextDelta, ID: id, Delta: delta.ContentDelta}, nil)
+				metadata := dumpPartMetadata("", "", delta.ProviderName, delta.ProviderDetails, "", nil)
+				return yield(Chunk{
+					Type: ChunkTextDelta, ID: id, Delta: delta.ContentDelta, ProviderMetadata: metadata,
+				}, nil)
 			}
 		case ai.ThinkingPartDelta:
 			if delta.ContentDelta != "" {
-				return yield(Chunk{Type: ChunkReasoningDelta, ID: id, Delta: delta.ContentDelta}, nil)
+				metadata := dumpPartMetadata(
+					"", delta.SignatureDelta, delta.ProviderName, delta.ProviderDetails, "", nil,
+				)
+				return yield(Chunk{
+					Type: ChunkReasoningDelta, ID: id, Delta: delta.ContentDelta, ProviderMetadata: metadata,
+				}, nil)
 			}
 		case ai.ToolCallPartDelta:
 			return state.toolDelta(yield, value.PartID, delta.ToolCallID, delta.ArgsDelta)
@@ -127,11 +156,15 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		}
 	case ai.PartEndEvent:
 		id := state.partIDs[value.PartID]
-		switch value.Part.(type) {
+		switch part := value.Part.(type) {
 		case ai.TextPart:
-			return yield(Chunk{Type: ChunkTextEnd, ID: id}, nil)
+			metadata := dumpPartMetadata(part.ID, "", part.ProviderName, part.ProviderDetails, "", nil)
+			return yield(Chunk{Type: ChunkTextEnd, ID: id, ProviderMetadata: metadata}, nil)
 		case ai.ThinkingPart:
-			return yield(Chunk{Type: ChunkReasoningEnd, ID: id}, nil)
+			metadata := dumpPartMetadata(
+				part.ID, part.Signature, part.ProviderName, part.ProviderDetails, "", nil,
+			)
+			return yield(Chunk{Type: ChunkReasoningEnd, ID: id, ProviderMetadata: metadata}, nil)
 		}
 	case ai.FunctionToolCallEvent:
 		return state.toolAvailable(yield, value.Part, false)
@@ -155,6 +188,7 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		}
 	case ai.FinishEvent:
 		state.finishReason = vercelFinishReason(value.FinishReason)
+		state.messageMetadata = dumpMessageMetadata(value.Metadata, value.Timestamp)
 		return state.finishStep(yield)
 	}
 	return true
@@ -177,12 +211,19 @@ func (state *transformState) finishStep(yield func(Chunk, error) bool) bool {
 }
 
 func (state *transformState) startTool(
-	yield func(Chunk, error) bool, partID string, toolCallID string, name string, args string, native bool,
+	yield func(Chunk, error) bool,
+	partID string,
+	toolCallID string,
+	name string,
+	args string,
+	native bool,
+	providerMetadata map[string]any,
 ) bool {
 	state.toolIDs[partID] = toolCallID
 	providerExecuted := native
 	if !yield(Chunk{
 		Type: ChunkToolInputStart, ToolCallID: toolCallID, ToolName: name, ProviderExecuted: &providerExecuted,
+		ProviderMetadata: providerMetadata,
 	}, nil) {
 		return false
 	}
@@ -216,18 +257,21 @@ func (state *transformState) toolAvailable(
 		}
 	}
 	providerExecuted := native
+	metadata := dumpPartMetadata(part.ID, "", part.ProviderName, part.ProviderDetails, part.ToolKind, nil)
 	return yield(Chunk{
 		Type: ChunkToolInputAvailable, ToolCallID: part.ToolCallID, ToolName: part.ToolName,
-		Input: input, ProviderExecuted: &providerExecuted,
+		Input: input, ProviderExecuted: &providerExecuted, ProviderMetadata: metadata,
 	}, nil)
 }
 
 func (state *transformState) requestResult(yield func(Chunk, error) bool, part ai.RequestPart, native bool) bool {
 	switch value := part.(type) {
 	case ai.ToolReturnPart:
-		return state.toolOutput(yield, value.ToolCallID, value.Content, value.Outcome, native)
+		return state.toolOutput(yield, value.ToolCallID, value.Content, value.Outcome, native, nil)
 	case ai.RetryPromptPart:
-		return state.toolOutput(yield, value.ToolCallID, value.ModelResponse(), ai.ToolReturnOutcomeFailed, native)
+		return state.toolOutput(
+			yield, value.ToolCallID, value.ModelResponse(), ai.ToolReturnOutcomeFailed, native, nil,
+		)
 	default:
 		err := fmt.Errorf("vercel: unsupported tool result part %T", part)
 		return yield(Chunk{Type: ChunkError, ErrorText: err.Error()}, err)
@@ -235,19 +279,24 @@ func (state *transformState) requestResult(yield func(Chunk, error) bool, part a
 }
 
 func (state *transformState) toolOutput(
-	yield func(Chunk, error) bool, toolCallID string, output any, outcome ai.ToolReturnOutcome, native bool,
+	yield func(Chunk, error) bool,
+	toolCallID string,
+	output any,
+	outcome ai.ToolReturnOutcome,
+	native bool,
+	providerMetadata map[string]any,
 ) bool {
 	providerExecuted := native
 	if outcome == ai.ToolReturnOutcomeFailed || outcome == ai.ToolReturnOutcomeDenied ||
 		outcome == ai.ToolReturnOutcomeInterrupted {
 		return yield(Chunk{
 			Type: ChunkToolOutputError, ToolCallID: toolCallID, ErrorText: fmt.Sprint(output),
-			ProviderExecuted: &providerExecuted,
+			ProviderExecuted: &providerExecuted, ProviderMetadata: providerMetadata,
 		}, nil)
 	}
 	return yield(Chunk{
 		Type: ChunkToolOutputAvailable, ToolCallID: toolCallID, Output: output,
-		ProviderExecuted: &providerExecuted,
+		ProviderExecuted: &providerExecuted, ProviderMetadata: providerMetadata,
 	}, nil)
 }
 

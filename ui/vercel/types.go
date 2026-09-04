@@ -23,6 +23,8 @@ const (
 	ChunkDone ChunkType = "done"
 	// ChunkError reports a failed run or transformation.
 	ChunkError ChunkType = "error"
+	// ChunkAbort reports a canceled run.
+	ChunkAbort ChunkType = "abort"
 	// ChunkTextStart begins one text part.
 	ChunkTextStart ChunkType = "text-start"
 	// ChunkTextDelta appends text content.
@@ -89,6 +91,12 @@ type Chunk struct {
 	MediaType string `json:"mediaType,omitempty"`
 	// Data contains a protocol-specific data-part payload.
 	Data map[string]any `json:"data,omitempty"`
+	// ProviderMetadata preserves provider-specific part state.
+	ProviderMetadata map[string]any `json:"providerMetadata,omitempty"`
+	// MessageMetadata preserves application metadata and the response timestamp.
+	MessageMetadata map[string]any `json:"messageMetadata,omitempty"`
+	// Reason explains why a run was aborted.
+	Reason string `json:"reason,omitempty"`
 }
 
 // RequestData is a Vercel AI submit-message or regenerate-message request.
@@ -111,6 +119,8 @@ type UIMessage struct {
 	Role string `json:"role"`
 	// Parts contains text, file, reasoning, or tool state.
 	Parts []UIMessagePart `json:"parts"`
+	// Metadata contains application data and framework-owned timestamp state.
+	Metadata map[string]any `json:"metadata,omitempty"`
 }
 
 // UIMessagePart is the supported subset of a Vercel AI message part.
@@ -139,6 +149,12 @@ type UIMessagePart struct {
 	Filename string `json:"filename,omitempty"`
 	// Data contains a data-name-prefixed part payload.
 	Data map[string]any `json:"data,omitempty"`
+	// ProviderMetadata preserves provider-specific text, reasoning, or file state.
+	ProviderMetadata map[string]any `json:"providerMetadata,omitempty"`
+	// CallProviderMetadata preserves provider-specific tool-call state.
+	CallProviderMetadata map[string]any `json:"callProviderMetadata,omitempty"`
+	// ProviderExecuted marks a provider-native tool call.
+	ProviderExecuted *bool `json:"providerExecuted,omitempty"`
 }
 
 // ToolApproval is one Vercel AI tool approval state.

@@ -55,6 +55,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Configure implicit native web search on Groq compound models with validated domain filters.
 - Translate portable reasoning by Groq model family and report Qwen 3 effort overrides.
 - Normalize Groq compound search executions into provider-native call and return parts.
+- Restrict Groq multimodal prompts to supported URL and inline images before transport.
 - Align reflected schemas with custom JSON marshalers, `json:",string"`, fixed arrays, JSON-compatible map keys, numeric JSON values, and Go's embedded-field selection rules.
 
 ### Deprecated

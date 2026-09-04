@@ -197,6 +197,9 @@ func (model *Model) Request(
 	if err != nil {
 		return nil, err
 	}
+	if err := validateMessages(messages); err != nil {
+		return nil, err
+	}
 	return model.ModelWrapper.Request(ctx, messages, prepared)
 }
 
@@ -208,7 +211,37 @@ func (model *Model) StreamRequest(
 	if err != nil {
 		return nil, err
 	}
+	if err := validateMessages(messages); err != nil {
+		return nil, err
+	}
 	return model.ModelWrapper.StreamRequest(ctx, messages, prepared)
+}
+
+func validateMessages(messages []ai.ModelMessage) error {
+	for _, message := range messages {
+		request, ok := message.(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		for _, part := range request.Parts {
+			prompt, ok := part.(ai.UserPromptPart)
+			if !ok {
+				continue
+			}
+			for _, content := range prompt.Contents {
+				switch value := content.(type) {
+				case ai.TextContent, ai.ImageURL, ai.CachePoint:
+				case ai.BinaryContent:
+					if !strings.HasPrefix(strings.ToLower(value.MediaType), "image/") {
+						return fmt.Errorf("groq: binary user content must be an image, got %q", value.MediaType)
+					}
+				default:
+					return fmt.Errorf("groq: user content %T is not supported", content)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequestParams, error) {

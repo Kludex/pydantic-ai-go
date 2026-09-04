@@ -62,6 +62,73 @@ func TestModelAndSettings(t *testing.T) {
 	}
 }
 
+func TestGroqUserContent(t *testing.T) {
+	var requests int
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		requests++
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		response.Header().Set("Content-Type", "application/json")
+		_, _ = response.Write([]byte(`{
+			"id":"completion","model":"model",
+			"choices":[{"finish_reason":"stop","message":{"content":"done"}}]
+		}`))
+	}))
+	defer server.Close()
+	model := groq.NewModel("model", groq.WithBaseURL(server.URL), groq.WithAPIKey("key"),
+		groq.WithHTTPClient(server.Client()))
+	messages := []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "history"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.SystemPromptPart{Content: "system"},
+			ai.UserPromptPart{Contents: []ai.UserContent{
+				ai.TextContent{Text: "describe"},
+				ai.ImageURL{URL: "https://example.com/image.png"},
+				ai.BinaryContent{Data: []byte("image"), MediaType: "IMAGE/PNG"},
+				ai.CachePoint{},
+			}},
+		}},
+	}
+	result, err := model.Request(context.Background(), messages, ai.ModelRequestParams{})
+	if err != nil || result.Text() != "done" {
+		t.Fatalf("unexpected multimodal response: %#v %v", result, err)
+	}
+	wireMessages := body["messages"].([]any)
+	content := wireMessages[2].(map[string]any)["content"].([]any)
+	if len(content) != 3 || content[0].(map[string]any)["text"] != "describe" ||
+		content[1].(map[string]any)["image_url"].(map[string]any)["url"] != "https://example.com/image.png" ||
+		!strings.HasPrefix(content[2].(map[string]any)["image_url"].(map[string]any)["url"].(string),
+			"data:IMAGE/PNG;base64,") {
+		t.Fatalf("unexpected Groq user content: %#v", body)
+	}
+
+	invalid := []ai.UserContent{
+		ai.BinaryContent{MediaType: "audio/wav"},
+		ai.DocumentURL{URL: "https://example.com/file.pdf"},
+		ai.AudioURL{URL: "https://example.com/audio.wav"},
+		ai.VideoURL{URL: "https://example.com/video.mp4"},
+		ai.UploadedFile{ProviderName: "groq", FileID: "file"},
+	}
+	for _, content := range invalid {
+		request := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Contents: []ai.UserContent{content}},
+		}}}
+		if _, err := model.Request(context.Background(), request, ai.ModelRequestParams{}); err == nil ||
+			!strings.Contains(err.Error(), "groq:") {
+			t.Fatalf("unexpected unsupported content error for %T: %v", content, err)
+		}
+		stream, err := model.StreamRequest(context.Background(), request, ai.ModelRequestParams{})
+		if err == nil || stream != nil || !strings.Contains(err.Error(), "groq:") {
+			t.Fatalf("unexpected streamed content error for %T: %v", content, err)
+		}
+	}
+	if requests != 1 {
+		t.Fatalf("unsupported content reached transport: %d requests", requests)
+	}
+}
+
 func TestModelFamilyThinking(t *testing.T) {
 	var bodies []map[string]any
 	var warnings []groq.ReasoningWarning

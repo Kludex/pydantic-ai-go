@@ -709,6 +709,8 @@ func main() {
 
 Set `GROQ_API_KEY`. `GROQ_BASE_URL` overrides the default `https://api.groq.com/openai/v1` endpoint.
 
+Groq accepts `ImageURL` and image `BinaryContent` prompt items. Unsupported audio, video, document, and uploaded-file items fail before transport.
+
 `ReasoningFormatParsed` returns reasoning as separate `ThinkingPart` values. `ModelSettings.Thinking` follows Groq's model families: GPT-OSS maps portable effort to `low`, `medium`, or `high`; Qwen 3 can disable reasoning with `none`; and legacy reasoning models map visibility without sending unsupported effort values. `WithReasoningWarningHandler` reports when Qwen 3 disabled thinking overrides an explicit effort setting. `WithProvider` keeps Groq response parsing when you route requests through a gateway.
 
 ### Compound web search

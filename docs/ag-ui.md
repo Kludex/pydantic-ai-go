@@ -40,6 +40,36 @@ Pass `Config.Sanitization` only when your authenticated application deliberately
 
 The input's `threadId` becomes the agent conversation ID. Its `runId` remains the AG-UI protocol identity and is not forced onto the agent's run ID.
 
+## Send multimodal input
+
+```json
+{
+  "threadId": "thread-1",
+  "runId": "run-1",
+  "messages": [
+    {
+      "id": "user-1",
+      "role": "user",
+      "content": [
+        {"type": "text", "text": "Describe this image."},
+        {
+          "type": "image",
+          "source": {
+            "type": "url",
+            "value": "https://example.com/image.png",
+            "mimeType": "image/png"
+          }
+        }
+      ]
+    }
+  ]
+}
+```
+
+User content accepts AG-UI text, legacy binary, image, audio, video, and document parts. A source can contain a URL or base64 data. Inline binary data is decoded before the model request.
+
+Set `metadata.vendor_metadata` to preserve provider-specific file data. Set `metadata.force_download` to `safe` or `allow-local` only when the matching mode is allowed by `Config.Sanitization`. The secure default removes download authority from client-held history.
+
 ## Transform an existing event stream
 
 ```go
@@ -105,6 +135,6 @@ Function and output tools emit start, argument, end, and result events. Provider
 
 ## Current scope
 
-The adapter supports text messages, assistant function calls, tool results, secure client-held history, normalized text and tool streaming, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
+The adapter supports text and multimodal user messages, assistant function calls, structured tool results, secure client-held history, normalized text and tool streaming, standalone event transformation, generated protocol IDs, and SSE HTTP responses.
 
-AG-UI multimodal messages, frontend tools, state snapshots and deltas, activities, reasoning events, file preservation, external-execution interrupts, custom events, forwarded context, and protocol-version negotiation remain.
+Frontend tools, state snapshots and deltas, activities, reasoning events, file preservation, external-execution interrupts, custom events, forwarded context, and protocol-version negotiation remain.

@@ -54,7 +54,12 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		if deferred != nil {
 			runOptions = append(runOptions, ai.WithDeferredToolResults(*deferred))
 		}
-		stream := adapter.agent.RunStream(ctx, prompt.Content, deps, runOptions...)
+		var stream *ai.StreamedRun[Output]
+		if len(prompt.Contents) > 0 {
+			stream = adapter.agent.RunStreamParts(ctx, prompt.Contents, deps, runOptions...)
+		} else {
+			stream = adapter.agent.RunStream(ctx, prompt.Content, deps, runOptions...)
+		}
 		for event, eventErr := range TransformStream(stream.Events(), threadID, runID) {
 			if !yield(event, eventErr) || eventErr != nil {
 				return

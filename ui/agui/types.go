@@ -113,14 +113,42 @@ type Message struct {
 	ID string `json:"id"`
 	// Role is system, user, assistant, or tool.
 	Role string `json:"role"`
-	// Content is plain text for system, user, assistant, and tool messages.
-	Content string `json:"content,omitempty"`
+	// Content is text or typed multimodal user content.
+	Content any `json:"content,omitempty"`
 	// ToolCalls contains assistant function calls.
 	ToolCalls []ToolCall `json:"toolCalls,omitempty"`
 	// ToolCallID associates a tool result with its call.
 	ToolCallID string `json:"toolCallId,omitempty"`
 	// Name is the function name for a tool result.
 	Name string `json:"name,omitempty"`
+}
+
+// InputContent is one AG-UI text, binary, image, audio, video, or document input.
+type InputContent struct {
+	// Type identifies text, binary, image, audio, video, or document content.
+	Type string `json:"type"`
+	// Text contains text input.
+	Text string `json:"text,omitempty"`
+	// URL contains legacy binary input by URL.
+	URL string `json:"url,omitempty"`
+	// Data contains legacy binary input as base64.
+	Data string `json:"data,omitempty"`
+	// MimeType identifies legacy binary input.
+	MimeType string `json:"mimeType,omitempty"`
+	// Source contains typed multimodal URL or base64 data.
+	Source *InputContentSource `json:"source,omitempty"`
+	// Metadata carries application data plus reserved file options.
+	Metadata any `json:"metadata,omitempty"`
+}
+
+// InputContentSource identifies typed multimodal URL or base64 data.
+type InputContentSource struct {
+	// Type is url or data.
+	Type string `json:"type"`
+	// Value is a URL or base64 data.
+	Value string `json:"value"`
+	// MimeType identifies the content.
+	MimeType string `json:"mimeType"`
 }
 
 // ToolCall is one OpenAI-shaped AG-UI assistant tool call.

@@ -88,6 +88,72 @@ func TestPrepareInputSanitizesHistory(t *testing.T) {
 	}
 }
 
+func TestPrepareMultimodalInput(t *testing.T) {
+	metadata := map[string]any{
+		"vendor_metadata": map[string]any{"source": "client"}, "force_download": "safe",
+	}
+	prompt, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{{
+		ID: "user", Role: "user", Content: []agui.InputContent{
+			{Type: "text", Text: "inspect"},
+			{Type: "binary", Data: "YmluYXJ5", MimeType: "application/pdf"},
+			{Type: "binary", URL: "data:text/plain;base64,aW5saW5l"},
+			{Type: "binary", URL: "https://example.com/legacy.png", MimeType: "image/png"},
+			{Type: "image", Source: &agui.InputContentSource{
+				Type: "url", Value: "https://example.com/image.png", MimeType: "image/png",
+			}, Metadata: metadata},
+			{Type: "audio", Source: &agui.InputContentSource{
+				Type: "url", Value: "https://example.com/audio.mp3", MimeType: "audio/mpeg",
+			}},
+			{Type: "video", Source: &agui.InputContentSource{
+				Type: "url", Value: "https://example.com/video.mp4", MimeType: "video/mp4",
+			}},
+			{Type: "document", Source: &agui.InputContentSource{
+				Type: "url", Value: "https://example.com/document.pdf", MimeType: "application/pdf",
+			}},
+			{Type: "image", Source: &agui.InputContentSource{Type: "data", Value: "aW1hZ2U=", MimeType: "image/png"}},
+		},
+	}}}, ai.MessageSanitizationOptions{AllowedFileDownloadModes: []ai.FileDownloadMode{ai.FileDownloadSafe}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 0 || len(prompt.Contents) != 9 || prompt.Contents[0].(ai.TextContent).Text != "inspect" ||
+		string(prompt.Contents[1].(ai.BinaryContent).Data) != "binary" ||
+		string(prompt.Contents[2].(ai.BinaryContent).Data) != "inline" ||
+		prompt.Contents[3].(ai.ImageURL).URL != "https://example.com/legacy.png" ||
+		prompt.Contents[4].(ai.ImageURL).ForceDownload != ai.FileDownloadSafe ||
+		prompt.Contents[4].(ai.ImageURL).VendorMetadata["source"] != "client" ||
+		prompt.Contents[5].(ai.AudioURL).URL != "https://example.com/audio.mp3" ||
+		prompt.Contents[6].(ai.VideoURL).URL != "https://example.com/video.mp4" ||
+		prompt.Contents[7].(ai.DocumentURL).URL != "https://example.com/document.pdf" ||
+		string(prompt.Contents[8].(ai.BinaryContent).Data) != "image" {
+		t.Fatalf("unexpected multimodal prompt: %#v", prompt)
+	}
+	metadata["vendor_metadata"].(map[string]any)["source"] = "changed"
+	if prompt.Contents[4].(ai.ImageURL).VendorMetadata["source"] != "client" {
+		t.Fatal("multimodal metadata shares client input")
+	}
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	streamInput := agui.RunAgentInput{Messages: []agui.Message{{
+		ID: "user", Role: "user", Content: []agui.InputContent{{Type: "text", Text: "hello"}},
+	}}}
+	finished := false
+	for event, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(t.Context(), streamInput, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		finished = finished || event.Type == agui.EventRunFinished
+	}
+	if !finished {
+		t.Fatal("multimodal run did not finish")
+	}
+	empty, _, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{{
+		ID: "empty", Role: "user",
+	}}}, ai.MessageSanitizationOptions{})
+	if err != nil || empty.Content != "" || len(empty.Contents) != 0 {
+		t.Fatalf("unexpected empty prompt: %#v %v", empty, err)
+	}
+}
+
 func TestInputValidation(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -102,6 +168,22 @@ func TestInputValidation(t *testing.T) {
 		{name: "tool call JSON", messages: []agui.Message{{ID: "one", Role: "assistant", ToolCalls: []agui.ToolCall{{
 			ID: "call", Function: agui.ToolCallFunction{Name: "tool", Arguments: "{"},
 		}}}}, match: "not valid JSON"},
+		{name: "system content", messages: []agui.Message{{ID: "one", Role: "system", Content: 1}}, match: "system message content"},
+		{name: "assistant content", messages: []agui.Message{{ID: "one", Role: "assistant", Content: 1}}, match: "assistant message content"},
+		{name: "user encoding", messages: []agui.Message{{ID: "one", Role: "user", Content: func() {}}}, match: "encode user content"},
+		{name: "user decoding", messages: []agui.Message{{ID: "one", Role: "user", Content: 1}}, match: "decode user content"},
+		{name: "content type", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "future"}}}}, match: "unsupported user content"},
+		{name: "binary source", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "binary"}}}}, match: "requires url or data"},
+		{name: "binary data", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "binary", Data: "!"}}}}, match: "decode binary input"},
+		{name: "data URL", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "binary", URL: "data:text/plain,hi"}}}}, match: "must contain base64"},
+		{name: "data URL base64", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "binary", URL: "data:text/plain;base64,!"}}}}, match: "decode binary data URL"},
+		{name: "typed source", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "image"}}}}, match: "requires a url or data source"},
+		{name: "typed data", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{Type: "image", Source: &agui.InputContentSource{Type: "data", Value: "!"}}}}}, match: "decode image input"},
+		{name: "force download", messages: []agui.Message{{ID: "one", Role: "user", Content: []agui.InputContent{{
+			Type: "image", Source: &agui.InputContentSource{Type: "url", Value: "https://example.com", MimeType: "image/png"},
+			Metadata: map[string]any{"force_download": "always"},
+		}}}}, match: "multimodal force download"},
+		{name: "tool encoding", messages: []agui.Message{{ID: "one", Role: "tool", ToolCallID: "call", Content: func() {}}}, match: "encode tool result"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

@@ -14,7 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Capability middleware for runs, model requests, tool validation and execution, output validation and processing, instructions, history processing, event streams, and deferred calls.
 - MCP clients and toolsets for Streamable HTTP, SSE, stdio, shared sessions, OAuth, sampling, elicitation, prompts, resources, and configuration files.
 - MCP server guidance and a client-sampling model with basic, multimodal, tool-enabled, and structured-output requests.
-- AG-UI and Vercel AI adapters with secure client-history sanitization, text, reasoning, and tool streaming, standalone transformation, and SSE HTTP serving. Both protocols also support approval requests, strict resume decisions, and replacement arguments. Vercel AI accepts file input, streams generated files, emits custom data and source chunks from tool metadata, round-trips compaction, tool-availability, provider, and message metadata, supports dynamic tool history, resumes external deferred tools, emits version-correct invalid-input and denied-output lifecycles, closes open tool inputs before errors, and emits cancellation chunks.
+- AG-UI and Vercel AI adapters with secure client-history sanitization, multimodal input, text, reasoning, and tool streaming, standalone transformation, and SSE HTTP serving. Both protocols also support approval requests, strict resume decisions, and replacement arguments. Vercel AI accepts file input, streams generated files, emits custom data and source chunks from tool metadata, round-trips compaction, tool-availability, provider, and message metadata, supports dynamic tool history, resumes external deferred tools, emits version-correct invalid-input and denied-output lifecycles, closes open tool inputs before errors, and emits cancellation chunks.
 - An official A2A Go SDK executor with sanitized task history, streamed artifacts, dependency resolution, and task lifecycle states.
 - Terminal and browser chat entry points with provider-prefixed model inference, MCP configuration, streamed tool status, and session history.
 - Durable operation backend contracts with stable naming, codecs, cache identity, explicit model ownership, and Temporal, DBOS, and Prefect registration policies.
@@ -31,6 +31,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 - Widen Vercel AI `Chunk.Data` and `UIMessagePart.Data` from object-only maps to arbitrary JSON values. Existing map values remain valid.
 - Emit Vercel AI response metadata through the protocol's final `message-metadata` chunk instead of attaching it to `finish`.
+- Widen AG-UI `Message.Content` from text to arbitrary protocol content so typed multimodal input and structured tool results can round-trip.
 
 ### Deprecated
 

@@ -407,6 +407,45 @@ func main() {
 
 `Cache` lets Anthropic move one automatic breakpoint forward as the conversation grows. `CacheInstructions`, `CacheMessages`, and `CacheToolDefinitions` place explicit boundaries. Static instructions are cached before dynamic instructions. Automatic and explicit message caching are mutually exclusive. Anthropic keeps at most four cache points and removes the oldest message boundaries after reserving instruction, tool, and automatic slots.
 
+### Code execution containers
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go"
+	"github.com/Kludex/pydantic-ai-go/models/anthropic"
+)
+
+func main() {
+	settings, err := (anthropic.Settings{
+		Container: &anthropic.Container{Skills: []anthropic.ContainerSkill{{
+			Type: "anthropic", SkillID: "xlsx", Version: "latest",
+		}},
+		CodeExecutionToolVersion: anthropic.CodeExecutionToolVersionAuto,
+	}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-6"),
+		ai.WithModelSettings(settings),
+		ai.WithNativeTools(ai.CodeExecutionTool{}),
+	)
+	result, err := agent.Run(context.Background(), "Create a spreadsheet summary.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Use `Container.ID` to select an existing container. Set `FreshContainer` to ignore container IDs in message history. The automatic code execution version chooses `20260120` only for supported models and otherwise uses `20250825`; forcing an unsupported version fails before transport.
+
 ## Google Gemini
 
 ```go

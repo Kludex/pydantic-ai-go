@@ -1627,6 +1627,142 @@ func TestAnthropicWebSearchResponseAndReplay(t *testing.T) {
 	}
 }
 
+func TestAnthropicContainerAndCodeExecutionSettings(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		body = nil
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+	})
+	history := []ai.ModelMessage{ai.ModelResponse{
+		ProviderName: "anthropic", ProviderDetails: map[string]any{"container_id": "container-history"},
+	}}
+
+	container := &anthropic.Container{Skills: []anthropic.ContainerSkill{{
+		Type: "anthropic", SkillID: "xlsx", Version: "latest",
+	}}}
+	settings, err := (anthropic.Settings{
+		Container: container, CodeExecutionToolVersion: anthropic.CodeExecutionToolVersion20250825,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	container.Skills[0].SkillID = "changed"
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{
+		Settings: settings, NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	wireContainer := body["container"].(map[string]any)
+	skill := wireContainer["skills"].([]any)[0].(map[string]any)
+	tool := body["tools"].([]any)[0].(map[string]any)
+	if wireContainer["id"] != nil || skill["skill_id"] != "xlsx" || tool["type"] != "code_execution_20250825" {
+		t.Fatalf("unexpected provider settings request: %#v", body)
+	}
+
+	settings, err = (anthropic.Settings{Container: &anthropic.Container{ID: "container-explicit"}}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{Settings: settings}); err != nil {
+		t.Fatal(err)
+	}
+	if body["container"] != "container-explicit" {
+		t.Fatalf("ID-only container was not unwrapped: %#v", body["container"])
+	}
+
+	settings, err = (anthropic.Settings{FreshContainer: true}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{Settings: settings}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := body["container"]; exists {
+		t.Fatalf("fresh request reused a container: %#v", body)
+	}
+
+	legacy := newNamedServer(t, "claude-haiku-4-5", func(http.ResponseWriter, *http.Request) {})
+	latest, err := (anthropic.Settings{
+		CodeExecutionToolVersion: anthropic.CodeExecutionToolVersion20260120,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Request(t.Context(), nil, ai.ModelRequestParams{
+		Settings: latest, NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+	}); err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("unexpected unsupported code execution version error: %v", err)
+	}
+
+	invalid := []anthropic.Settings{
+		{Container: &anthropic.Container{}, FreshContainer: true},
+		{Container: &anthropic.Container{}},
+		{Container: &anthropic.Container{Skills: []anthropic.ContainerSkill{{Type: "custom"}}}},
+		{CodeExecutionToolVersion: "future"},
+	}
+	for index, value := range invalid {
+		if _, err := value.Build(); err == nil {
+			t.Fatalf("invalid typed settings %d were accepted", index)
+		}
+	}
+	for name, value := range map[string]any{
+		"true container":  true,
+		"empty ID":        "",
+		"nil container":   (*anthropic.Container)(nil),
+		"wrong container": 1,
+	} {
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"anthropic_container": value},
+		}}); err == nil {
+			t.Fatalf("invalid %s was accepted", name)
+		}
+	}
+	for name, value := range map[string]any{
+		"empty value":   anthropic.Container{},
+		"string ID":     "container-string",
+		"value ID":      anthropic.Container{ID: "container-value"},
+		"value skills":  anthropic.Container{Skills: []anthropic.ContainerSkill{{Type: "anthropic", SkillID: "xlsx", Version: "latest"}}},
+		"empty pointer": &anthropic.Container{},
+		"pointer ID":    &anthropic.Container{ID: "container-pointer"},
+		"pointer skills": &anthropic.Container{Skills: []anthropic.ContainerSkill{{
+			Type: "anthropic", SkillID: "xlsx", Version: "latest",
+		}}},
+	} {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"anthropic_container": value},
+		}})
+		wantError := strings.HasPrefix(name, "empty")
+		if (err != nil) != wantError {
+			t.Fatalf("unexpected direct %s container result: %v", name, err)
+		}
+	}
+	for name, value := range map[string]any{
+		"untyped": "20250825",
+		"invalid": anthropic.CodeExecutionToolVersion("future"),
+	} {
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"anthropic_code_execution_tool_version": value},
+		}}); err == nil {
+			t.Fatalf("%s code execution version was accepted", name)
+		}
+	}
+	if _, err := (anthropic.Settings{
+		Common:         ai.ModelSettings{ExtraBody: map[string]any{"anthropic_container": false}},
+		FreshContainer: true,
+	}).Build(); err == nil {
+		t.Fatal("conflicting container setting was accepted")
+	}
+	if _, err := (anthropic.Settings{
+		Common:                   ai.ModelSettings{ExtraBody: map[string]any{"anthropic_code_execution_tool_version": "auto"}},
+		CodeExecutionToolVersion: anthropic.CodeExecutionToolVersionAuto,
+	}).Build(); err == nil {
+		t.Fatal("conflicting code execution version was accepted")
+	}
+}
+
 func TestAnthropicLegacyCodeExecutionRequest(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

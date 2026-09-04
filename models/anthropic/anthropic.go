@@ -671,7 +671,9 @@ func limitAnthropicCachePoints(request *messagesRequest, automatic bool) error {
 	return nil
 }
 
-func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]toolParam, error) {
+func anthropicNativeTools(
+	modelName string, nativeTools []ai.NativeTool, codeExecutionVersion CodeExecutionToolVersion,
+) ([]toolParam, error) {
 	var tools []toolParam
 	for _, nativeTool := range nativeTools {
 		switch nativeTool := nativeTool.(type) {
@@ -684,11 +686,11 @@ func anthropicNativeTools(modelName string, nativeTools []ai.NativeTool) ([]tool
 		case *ai.WebFetchTool:
 			tools = append(tools, anthropicWebFetchTool(modelName, *nativeTool))
 		case ai.CodeExecutionTool, *ai.CodeExecutionTool:
-			version := "code_execution_20250825"
-			if anthropicSupportsLatestCodeExecution(modelName) {
-				version = "code_execution_20260120"
+			version, err := anthropicCodeExecutionToolVersion(modelName, codeExecutionVersion)
+			if err != nil {
+				return nil, err
 			}
-			tools = append(tools, toolParam{Type: version, Name: "code_execution"})
+			tools = append(tools, toolParam{Type: "code_execution_" + string(version), Name: "code_execution"})
 		case ai.MemoryTool, *ai.MemoryTool:
 			tools = append(tools, toolParam{Type: "memory_20250818", Name: "memory"})
 		case ai.AdvisorTool:
@@ -787,9 +789,26 @@ func anthropicSupportsAdvisor(modelName string) bool {
 	return false
 }
 
+func anthropicCodeExecutionToolVersion(
+	modelName string, configured CodeExecutionToolVersion,
+) (CodeExecutionToolVersion, error) {
+	if configured == "" || configured == CodeExecutionToolVersionAuto {
+		if anthropicSupportsLatestCodeExecution(modelName) {
+			return CodeExecutionToolVersion20260120, nil
+		}
+		return CodeExecutionToolVersion20250825, nil
+	}
+	if configured == CodeExecutionToolVersion20260120 && !anthropicSupportsLatestCodeExecution(modelName) {
+		return "", fmt.Errorf(
+			"anthropic: code execution tool version %q is not supported by model %q", configured, modelName,
+		)
+	}
+	return configured, nil
+}
+
 func anthropicSupportsLatestCodeExecution(modelName string) bool {
 	for _, prefix := range []string{
-		"claude-fable-5", "claude-mythos-5", "claude-mythos-preview", "claude-sonnet-4-5",
+		"claude-fable-5", "claude-mythos-5", "claude-sonnet-4-5",
 		"claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-4-5", "claude-opus-4-6",
 		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
 	} {
@@ -823,6 +842,10 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
+	settings, providerSettings, err := extractProviderSettings(settings)
+	if err != nil {
+		return nil, err
+	}
 	params.Settings = settings
 	memoryEnabled := hasAnthropicMemoryTool(params.NativeTools)
 	if memoryEnabled {
@@ -837,7 +860,9 @@ func (m *Model) buildPayload(
 			return nil, fmt.Errorf("anthropic: native memory requires a function tool named %q", "memory")
 		}
 	}
-	nativeTools, err := anthropicNativeTools(m.name, params.NativeTools)
+	nativeTools, err := anthropicNativeTools(
+		m.name, params.NativeTools, providerSettings.CodeExecutionToolVersion,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -907,6 +932,10 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
+	container := anthropicContainerFromHistory(msgs)
+	if providerSettings.ContainerSet {
+		container = providerSettings.Container
+	}
 	req := &messagesRequest{
 		Model:        m.name,
 		Tools:        nativeTools,
@@ -918,7 +947,7 @@ func (m *Model) buildPayload(
 		Stop:         params.Settings.StopSequences,
 		Thinking:     thinking,
 		ServiceTier:  serviceTier,
-		Container:    anthropicContainerFromHistory(msgs),
+		Container:    container,
 		CacheControl: promptCacheControl(cache.Automatic),
 		ExtraBody:    params.Settings.ExtraBody,
 	}

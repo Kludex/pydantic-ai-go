@@ -44,6 +44,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Extend reflected JSON Schema with embedded structs, nullable pointers, JSON/time/text/base64 representations, and common validation annotations.
 - Add typed Gemini and Vertex cached-content references with API-required system and tool omission.
 - Add typed Vertex Model Armor prompt and response screening configuration for non-streaming requests.
+- Add typed Anthropic container reuse, managed skills, fresh-container requests, and model-gated code execution versions.
 
 ### Deprecated
 

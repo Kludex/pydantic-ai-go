@@ -15,6 +15,11 @@ type ModelProfile struct {
 	// SupportsAudioInput allows retained SpeechPart audio to replace its transcript
 	// when realtime history is prepared for a standard model.
 	SupportsAudioInput bool
+	// ContextWindow is the model's advertised context-window size in tokens.
+	// Zero means the window size is unknown; consumers should leave tooling
+	// thresholds alone rather than compute against zero. A FallbackModel
+	// reports the smallest window among its candidates.
+	ContextWindow int
 }
 
 // ModelProfiler is implemented by models that expose output and message-preparation defaults.

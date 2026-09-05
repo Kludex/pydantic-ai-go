@@ -76,6 +76,28 @@ func (rc *RunContext[Deps]) Usage() Usage {
 	return usage
 }
 
+// ContextWindowUsed returns the fraction of the selected model's context window
+// consumed by the accumulated input and output tokens, or nil when the model,
+// its ContextWindow, or the accumulated token usage are unknown. Callers should
+// treat nil as "no signal yet" and leave history trimming or summarization
+// thresholds alone.
+func (rc *RunContext[Deps]) ContextWindowUsed() *float64 {
+	if rc.Model == nil {
+		return nil
+	}
+	profile := modelProfile(rc.Model)
+	if profile.ContextWindow <= 0 {
+		return nil
+	}
+	usage := rc.Usage()
+	total := usage.InputTokens + usage.OutputTokens
+	if total == 0 {
+		return nil
+	}
+	fraction := float64(total) / float64(profile.ContextWindow)
+	return &fraction
+}
+
 // Messages returns the conversation so far in this run.
 func (rc *RunContext[Deps]) Messages() []ModelMessage { return cloneModelMessages(*rc.messages) }
 

@@ -872,6 +872,9 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 				rp.ProviderName, rp.ProviderDetails,
 			)})
 		case ai.ThinkingPart:
+			if rp.ProviderName != "" && rp.ProviderName != model.providerName {
+				continue
+			}
 			parts = append(parts, part{
 				Text: rp.Content, Thought: true,
 				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),

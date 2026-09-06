@@ -1696,6 +1696,13 @@ func TestAnthropicContainerAndCodeExecutionSettings(t *testing.T) {
 		t.Fatalf("fresh request reused a container: %#v", body)
 	}
 
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := body["container"]; exists {
+		t.Fatalf("a request without the code execution tool reused a container: %#v", body)
+	}
+
 	legacy := newNamedServer(t, "claude-haiku-4-5", func(http.ResponseWriter, *http.Request) {})
 	latest, err := (anthropic.Settings{
 		CodeExecutionToolVersion: anthropic.CodeExecutionToolVersion20260120,

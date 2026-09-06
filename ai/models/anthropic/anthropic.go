@@ -1001,6 +1001,9 @@ func (m *Model) buildPayload(
 		return nil, err
 	}
 	container := anthropicContainerFromHistory(msgs)
+	if container != nil && !hasAnthropicCodeExecutionTool(params.NativeTools) {
+		container = nil
+	}
 	if providerSettings.ContainerSet {
 		container = providerSettings.Container
 	}
@@ -1215,6 +1218,16 @@ func hasAnthropicMemoryTool(nativeTools []ai.NativeTool) bool {
 	for _, nativeTool := range nativeTools {
 		switch nativeTool.(type) {
 		case ai.MemoryTool, *ai.MemoryTool:
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnthropicCodeExecutionTool(nativeTools []ai.NativeTool) bool {
+	for _, nativeTool := range nativeTools {
+		switch nativeTool.(type) {
+		case ai.CodeExecutionTool, *ai.CodeExecutionTool:
 			return true
 		}
 	}

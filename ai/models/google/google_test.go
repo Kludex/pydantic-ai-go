@@ -1057,6 +1057,32 @@ func TestGoogleNativeToolPartErrors(t *testing.T) {
 	}
 }
 
+func TestGoogleSkipsForeignThinkingPart(t *testing.T) {
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		contents := body["contents"].([]any)
+		for _, c := range contents {
+			for _, p := range c.(map[string]any)["parts"].([]any) {
+				if _, thought := p.(map[string]any)["thought"]; thought {
+					t.Errorf("a foreign-provider thinking part reached the request: %+v", p)
+				}
+			}
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`))
+	})
+
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "reasoning from claude", ProviderName: "anthropic"},
+		ai.TextPart{Content: "the answer"},
+	}}}
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestGoogleCodeExecutionResponse(t *testing.T) {
 	responses := []string{
 		`{"responseId":"response","candidates":[{"content":{"parts":[

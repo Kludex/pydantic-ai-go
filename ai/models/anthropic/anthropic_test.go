@@ -1007,6 +1007,31 @@ func TestAssistantHistoryWithMixedParts(t *testing.T) {
 	}
 }
 
+func TestReplayedThinkingBlockWithEmptyContentKeepsThinkingField(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "", Signature: "sig"},
+		ai.ToolCallPart{ToolName: "t", Args: json.RawMessage(`{}`), ToolCallID: "tu1"},
+	}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	blocks := gotBody["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	block := blocks[0].(map[string]any)
+	if block["type"] != "thinking" {
+		t.Fatalf("expected a thinking block first, got %v", blocks)
+	}
+	if thinking, ok := block["thinking"]; !ok || thinking != "" {
+		t.Fatalf(`expected "thinking":"" to be present (not omitted), got %v`, block)
+	}
+}
+
 func TestMultimodalUserPrompt(t *testing.T) {
 	var gotBody map[string]any
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {

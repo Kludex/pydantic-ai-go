@@ -370,9 +370,9 @@ type messageParam struct {
 type contentBlock struct {
 	Type string `json:"type"`
 	// text and thinking
-	Text      string `json:"text,omitempty"`
-	Thinking  string `json:"thinking,omitempty"`
-	Signature string `json:"signature,omitempty"`
+	Text      string  `json:"text,omitempty"`
+	Thinking  *string `json:"thinking,omitempty"`
+	Signature string  `json:"signature,omitempty"`
 	// image
 	Source *imageSource `json:"source,omitempty"`
 	// tool_use
@@ -1506,7 +1506,7 @@ func convertResponse(
 			}
 		case ai.ThinkingPart:
 			if p.Signature != "" && (p.ProviderName == "" || p.ProviderName == "anthropic") {
-				blocks = append(blocks, contentBlock{Type: "thinking", Thinking: p.Content, Signature: p.Signature})
+				blocks = append(blocks, contentBlock{Type: "thinking", Thinking: &p.Content, Signature: p.Signature})
 			}
 		case ai.ToolCallPart:
 			blocks = append(blocks, contentBlock{Type: "tool_use", ID: p.ToolCallID, Name: p.ToolName, Input: p.Args})

@@ -957,6 +957,7 @@ func TestResponsesPhaseReplayUsesModelProfileAndOverride(t *testing.T) {
 		{name: "gpt 5.4", modelName: "gpt-5.4", phase: "final_answer", wantPhase: true},
 		{name: "gpt 5.5", modelName: "gpt-5.5-mini", phase: "commentary", wantPhase: true},
 		{name: "gpt 5.6", modelName: "gpt-5.6-terra", phase: "final_answer", wantPhase: true},
+		{name: "gpt 6 astra", modelName: "gpt-6-astra", phase: "final_answer", wantPhase: true},
 		{name: "Bedrock model ID", modelName: "openai.gpt-5.6-luna", phase: "final_answer", wantPhase: true},
 		{name: "unsupported", modelName: "gpt-5", phase: "commentary"},
 		{name: "enabled override", modelName: "gpt-5", options: []openai.Option{
@@ -1187,6 +1188,10 @@ func TestResponsesPendingStateMetadata(t *testing.T) {
 		"background": {status: "queued", background: true, want: ai.ModelResponseStateSuspended},
 		"incomplete reason": {
 			status: "incomplete", reason: "max_output_tokens",
+			want: ai.ModelResponseStateComplete, wantFinish: ai.FinishReasonLength,
+		},
+		"max messages reason": {
+			status: "incomplete", reason: "max_messages",
 			want: ai.ModelResponseStateComplete, wantFinish: ai.FinishReasonLength,
 		},
 	} {

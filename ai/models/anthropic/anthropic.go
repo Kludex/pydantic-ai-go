@@ -825,7 +825,9 @@ func anthropicDisallowsSamplingSettings(modelName string) bool {
 }
 
 func anthropicSupportsForcedToolChoice(modelName string) bool {
-	for _, prefix := range []string{"claude-fable-5", "claude-mythos-5", "claude-mythos-preview"} {
+	// Only the 5.1 generation rejects a forced `tool_choice` (`any`/`tool`) outright. Claude Fable 5
+	// accepts both forcing shapes live, so Anthropic's earlier disallow list no longer applies.
+	for _, prefix := range []string{"claude-fable-5-1", "claude-mythos-5-1"} {
 		if strings.HasPrefix(modelName, prefix) {
 			return false
 		}

@@ -2,9 +2,9 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@3a3e5612786c64e19312f20e3c998553edf1353b`.
+Audited upstream baseline: `pydantic/pydantic-ai@0ec8a5dcc9c30e82e91d63af20e5d92f1456fac5`.
 
-The seven commits after `8c5838dd3` add durable-operation model ownership and cleanup, Temporal/DBOS per-run capability rejection, Prefect task-journaled dynamic tool discovery, and inactive-hook traceback elision. The durable requirements are recorded below. Go's optional hook interfaces already omit unimplemented wrappers and error hooks rather than adding no-op stack frames. The remaining changes remove an expired Anthropic dependency pin and clarify that `EqualsExpected` cannot fail when a case has no expected output; neither requires a Go runtime change.
+The 65 commits after `3a3e5612786c64e19312f20e3c998553edf1353b` add new providers (`github_copilot`, `openai_codex`, `vllm`), an entirely new direct image generation API and `images/` module with provider-native and local geometry, `RunContext.emit` plus `CapabilityEvent`/`CustomEvent` and `@agent.on_event`, large-scale `@agent.iter` lifecycle rewiring, RealtimeSession barge-in/`close()`/`enqueue()`, Bedrock Mantle raw tool-call ID replay, Anthropic stale thinking-block recovery across turns, Azure content-filter detection on `AsyncAzureOpenAI` clients, the `gpt-6-astra`/`claude-fable-5-1`/`claude-mythos-5-1`/`gemini-3.8-flash` model introductions, image-generation fallback subagent and `ImageGenerator` direct API, several DeepSeek/Together/XAI bug fixes, and capability ordering restructuring. Each new provider package, the images module, and the event-stream architecture add thousands of upstream lines and warrant dedicated follow-up PRs in the Go port; this sync lands the mechanical model-name and prefix-list changes plus the Anthropic forced-tool-choice update verified by upstream's live testing.
 
 Status:
 
@@ -257,7 +257,7 @@ Status:
 - [x] Compatibility and semantic-versioning policy for public Go APIs, supported Go versions, persisted messages, providers, deprecations, and inspectable errors, plus an unreleased changelog.
 - [x] Public-API benchmarks cover loop overhead, streaming consumption, schema reflection, and eight-way parallel tool execution, with a reproducible `benchstat` comparison guide.
 - [x] Use the tagged `genai-prices` Go `v0.1.5` module release instead of a commit pseudo-version.
-- [x] Audited and mapped upstream runtime changes through `3a3e5612786c64e19312f20e3c998553edf1353b` without treating unimplemented changes as complete; the advance from the prior baseline changed only CI coverage collection.
+- [x] Audited and mapped upstream runtime changes through `0ec8a5dcc9c30e82e91d63af20e5d92f1456fac5` without treating unimplemented changes as complete; the advance from the prior baseline ports the mechanical model-name additions (`gpt-6-astra`, `claude-fable-5-1`, `claude-mythos-5-1`, `gemini-3.8-flash`) and updates the Anthropic forced-tool choice rejection list to match upstream's live-verified behavior.
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 

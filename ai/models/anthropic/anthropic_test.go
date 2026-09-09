@@ -1881,7 +1881,7 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 		"disabled maximum": {model: "claude-opus-5", settings: mustAnthropicSettings(t, anthropic.Settings{
 			Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}, Effort: anthropic.EffortMax,
 		})},
-		"forced fable output": {model: "claude-fable-5", settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{
+		"forced fable output": {model: "claude-fable-5-1", settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{
 			Level: ai.ThinkingLevelEnabled,
 		}}, params: ai.ModelRequestParams{OutputTool: outputTool}},
 	} {

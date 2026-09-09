@@ -1000,7 +1000,8 @@ func responsesPhaseSupported(modelName string, override *bool) bool {
 	}
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
 	return strings.HasPrefix(modelName, "gpt-5.3-codex") || strings.HasPrefix(modelName, "gpt-5.4") ||
-		strings.HasPrefix(modelName, "gpt-5.5") || strings.HasPrefix(modelName, "gpt-5.6")
+		strings.HasPrefix(modelName, "gpt-5.5") || strings.HasPrefix(modelName, "gpt-5.6") ||
+		strings.HasPrefix(modelName, "gpt-6-astra")
 }
 
 func openAIResponsesFinishReason(reason string) ai.FinishReason {

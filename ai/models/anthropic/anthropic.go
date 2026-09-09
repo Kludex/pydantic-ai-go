@@ -825,7 +825,7 @@ func anthropicDisallowsSamplingSettings(modelName string) bool {
 }
 
 func anthropicSupportsForcedToolChoice(modelName string) bool {
-	for _, prefix := range []string{"claude-fable-5", "claude-mythos-5", "claude-mythos-preview"} {
+	for _, prefix := range []string{"claude-fable-5-1", "claude-mythos-5-1"} {
 		if strings.HasPrefix(modelName, prefix) {
 			return false
 		}

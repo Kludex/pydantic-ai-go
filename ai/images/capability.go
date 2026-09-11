@@ -45,24 +45,26 @@ func NewImageGenerationCapability[Deps any](config CapabilityConfig[Deps]) *ai.N
 	if !modelIsNil(config.FallbackModel) {
 		generator = New(config.FallbackModel)
 	}
-	resolve := config.ResolveNative
-	if resolve == nil {
-		native := config.Native.CloneNativeTool().(ai.ImageGenerationTool)
-		resolve = func(context.Context, *ai.RunContext[Deps]) (ai.ImageGenerationTool, error) {
-			return native.CloneNativeTool().(ai.ImageGenerationTool), nil
-		}
-	}
-	resolved := func(ctx context.Context, rc *ai.RunContext[Deps]) (ai.ImageGenerationTool, error) {
-		native, err := resolve(ctx, rc)
-		if err != nil {
-			return ai.ImageGenerationTool{}, err
-		}
+	capability := ai.ImageGenerationCapabilityConfig[Deps]{Local: config.Local}
+	if config.ResolveNative == nil {
+		capability.Native = config.Native.CloneNativeTool().(ai.ImageGenerationTool)
 		if ratio, ok := nativeAspectRatio(config.Settings.AspectRatio); ok {
-			native.AspectRatio = ratio
+			capability.Native.AspectRatio = ratio
 		}
-		return native, nil
+	} else {
+		capability.ResolveNative = func(
+			ctx context.Context, rc *ai.RunContext[Deps],
+		) (ai.ImageGenerationTool, error) {
+			native, err := config.ResolveNative(ctx, rc)
+			if err != nil {
+				return ai.ImageGenerationTool{}, err
+			}
+			if ratio, ok := nativeAspectRatio(config.Settings.AspectRatio); ok {
+				native.AspectRatio = ratio
+			}
+			return native, nil
+		}
 	}
-	capability := ai.ImageGenerationCapabilityConfig[Deps]{ResolveNative: resolved, Local: config.Local}
 	if generator != nil {
 		settings := config.Settings.Clone()
 		capability.LocalForNative = func(native ai.ImageGenerationTool) ai.Tool[Deps] {

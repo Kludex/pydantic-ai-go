@@ -370,9 +370,7 @@ func capabilityRunIDs(capabilities []Capability) []string {
 	ids := make([]string, len(capabilities))
 	taken := make(map[string]struct{}, len(capabilities))
 	for index, capability := range capabilities {
-		if provider, ok := capability.(CapabilityIDProvider); ok {
-			ids[index] = provider.CapabilityID()
-		}
+		ids[index] = capabilityIdentity(capability)
 		if ids[index] == "" {
 			name := strings.TrimPrefix(fmt.Sprintf("%T", capability), "*")
 			if separator := strings.LastIndexByte(name, '.'); separator >= 0 {

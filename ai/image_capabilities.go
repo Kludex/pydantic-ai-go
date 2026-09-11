@@ -28,17 +28,7 @@ func NewImageGenerationCapability[Deps any](
 	}
 	var options []NativeOrLocalOption
 	if toolsetIsNil(config.Local) && config.LocalForNative == nil {
-		options = nativeRequirementOption("no local image-generation fallback was configured")
-	}
-	if config.ResolveNative == nil && config.LocalForNative == nil {
-		return NewNativeOrLocalToolset(config.Native, config.Local, options...)
-	}
-	resolve := config.ResolveNative
-	if resolve == nil {
-		native := cloneNativeTool(config.Native).(ImageGenerationTool)
-		resolve = func(context.Context, *RunContext[Deps]) (ImageGenerationTool, error) {
-			return cloneNativeTool(native).(ImageGenerationTool), nil
-		}
+		options = nativeFallbackRequirementOption("no local image-generation fallback was configured")
 	}
 	var factory func(NativeTool) Toolset[Deps]
 	if config.LocalForNative != nil {
@@ -46,9 +36,16 @@ func NewImageGenerationCapability[Deps any](
 			return NewFunctionToolset(config.LocalForNative(tool.(ImageGenerationTool)))
 		}
 	}
+	if config.ResolveNative == nil {
+		capability := NewNativeOrLocalToolset(config.Native, config.Local, options...)
+		capability.registration.localFactory = factory
+		return capability
+	}
 	return newDynamicNativeOrLocalToolset(
 		"image_generation",
-		func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error) { return resolve(ctx, rc) },
+		func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error) {
+			return config.ResolveNative(ctx, rc)
+		},
 		config.Local,
 		factory,
 		options...,

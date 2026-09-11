@@ -82,6 +82,69 @@ func (*emittingCapability) BeforeModelRequest(
 	return request, info.Emit(ai.NewCapabilityEvent("indexer", "started", progressPayload{Done: 2}))
 }
 
+type wrappedEventIdentity struct{ id string }
+
+func (capability wrappedEventIdentity) CapabilityID() string    { return capability.id }
+func (wrappedEventIdentity) Setup(*ai.CapabilityRegistry) error { return nil }
+
+type wrappedEventEmitter struct {
+	ai.WrappedCapability
+	id   string
+	done int
+}
+
+func (capability wrappedEventEmitter) CapabilityID() string { return capability.id }
+
+func (capability wrappedEventEmitter) BeforeModelRequest(
+	_ context.Context, info *ai.RunInfo, request ai.ModelRequestContext,
+) (ai.ModelRequestContext, error) {
+	err := info.Emit(ai.NewCapabilityEvent("wrapper", "started", progressPayload{Done: capability.done}))
+	return request, err
+}
+
+func TestWrappedCapabilityEventsUseLogicalIdentity(t *testing.T) {
+	t.Run("transparent run replacement", func(t *testing.T) {
+		leaf := wrappedEventIdentity{id: "logical"}
+		agentWrapper := wrappedEventEmitter{WrappedCapability: ai.WrapCapability(leaf), done: 1}
+		runWrapper := wrappedEventEmitter{WrappedCapability: ai.WrapCapability(leaf), done: 2}
+		agent := ai.NewAgent[deps, string](fakes.NewTestModel(), ai.WithCapabilities(agentWrapper))
+		stream := agent.RunStream(t.Context(), "go", deps{}, ai.WithRunCapabilities(runWrapper))
+		var emitted []*ai.CapabilityEvent[progressPayload]
+		for event, err := range stream.Events() {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event, ok := event.(*ai.CapabilityEvent[progressPayload]); ok && event.Kind == "wrapper.started" {
+				emitted = append(emitted, event)
+			}
+		}
+		if len(emitted) != 1 || emitted[0].CapabilityID != "logical" || emitted[0].Data.Done != 2 {
+			t.Fatalf("transparent wrapper event used the wrong identity: %+v", emitted)
+		}
+	})
+
+	t.Run("explicit decorator identity", func(t *testing.T) {
+		wrapper := wrappedEventEmitter{
+			WrappedCapability: ai.WrapCapability(wrappedEventIdentity{id: "leaf"}), id: "decorator", done: 1,
+		}
+		stream := ai.NewAgent[deps, string](
+			fakes.NewTestModel(), ai.WithCapabilities(wrapper),
+		).RunStream(t.Context(), "go", deps{})
+		var emitted *ai.CapabilityEvent[progressPayload]
+		for event, err := range stream.Events() {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event, ok := event.(*ai.CapabilityEvent[progressPayload]); ok && event.Kind == "wrapper.started" {
+				emitted = event
+			}
+		}
+		if emitted == nil || emitted.CapabilityID != "decorator" {
+			t.Fatalf("explicit wrapper identity was not preserved: %+v", emitted)
+		}
+	})
+}
+
 func TestCapabilityEventsUseExplicitAndSyntheticRunIDs(t *testing.T) {
 	for _, test := range []struct {
 		name string

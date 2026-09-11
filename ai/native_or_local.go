@@ -9,7 +9,8 @@ import (
 type NativeOrLocalOption func(*nativeOrLocalConfig)
 
 type nativeOrLocalConfig struct {
-	requiredReason string
+	requiredReason          string
+	requiredWithoutFallback bool
 }
 
 // WithNativeRequired suppresses the local fallback because the named constraint
@@ -29,13 +30,14 @@ type NativeOrLocalTool[Deps any] struct {
 }
 
 type nativeOrLocalRegistration[Deps any] struct {
-	native         NativeTool
-	resolve        NativeToolFunc[Deps]
-	nativeID       string
-	local          Toolset[Deps]
-	rebuildLocal   func(NativeTool) Toolset[Deps]
-	localFactory   func(NativeTool) Toolset[Deps]
-	requiredReason string
+	native                  NativeTool
+	resolve                 NativeToolFunc[Deps]
+	nativeID                string
+	local                   Toolset[Deps]
+	rebuildLocal            func(NativeTool) Toolset[Deps]
+	localFactory            func(NativeTool) Toolset[Deps]
+	requiredReason          string
+	requiredWithoutFallback bool
 }
 
 // NewNativeOrLocalTool pairs a static native tool with one local function tool.
@@ -53,7 +55,8 @@ func NewNativeOrLocalToolset[Deps any](
 ) *NativeOrLocalTool[Deps] {
 	config := applyNativeOrLocalOptions(options)
 	return &NativeOrLocalTool[Deps]{registration: nativeOrLocalRegistration[Deps]{
-		native: cloneNativeTool(native), local: local, requiredReason: config.requiredReason,
+		native: cloneNativeTool(native), local: local,
+		requiredReason: config.requiredReason, requiredWithoutFallback: config.requiredWithoutFallback,
 	}}
 }
 
@@ -97,7 +100,7 @@ func newDynamicNativeOrLocalToolset[Deps any](
 	config := applyNativeOrLocalOptions(options)
 	return &NativeOrLocalTool[Deps]{registration: nativeOrLocalRegistration[Deps]{
 		resolve: resolve, nativeID: nativeID, local: local, localFactory: localFactory,
-		requiredReason: config.requiredReason,
+		requiredReason: config.requiredReason, requiredWithoutFallback: config.requiredWithoutFallback,
 	}}
 }
 
@@ -155,14 +158,6 @@ func (tool *NativeOrLocalTool[Deps]) CombineCapabilities(capabilities []Capabili
 			}
 		}
 	}
-	if registration.requiredReason == "" {
-		for index := len(values) - 2; index >= 0; index-- {
-			if values[index].registration.requiredReason != "" {
-				registration.requiredReason = values[index].registration.requiredReason
-				break
-			}
-		}
-	}
 	if registration.rebuildLocal == nil {
 		for index := len(values) - 2; index >= 0; index-- {
 			if values[index].registration.rebuildLocal != nil {
@@ -181,6 +176,18 @@ func (tool *NativeOrLocalTool[Deps]) CombineCapabilities(capabilities []Capabili
 	}
 	if registration.rebuildLocal != nil && allStatic {
 		registration.local = registration.rebuildLocal(registration.native)
+	}
+	registration.requiredReason = ""
+	registration.requiredWithoutFallback = false
+	hasFallback := !toolsetIsNil(registration.local) || registration.localFactory != nil
+	for index := len(values) - 1; index >= 0; index-- {
+		candidate := values[index].registration
+		if candidate.requiredReason == "" || candidate.requiredWithoutFallback && hasFallback {
+			continue
+		}
+		registration.requiredReason = candidate.requiredReason
+		registration.requiredWithoutFallback = candidate.requiredWithoutFallback
+		break
 	}
 	return &NativeOrLocalTool[Deps]{registration: registration}, nil
 }

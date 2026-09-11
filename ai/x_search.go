@@ -17,10 +17,11 @@ type XSearchCapabilityConfig[Deps any] struct {
 // Handle filters require native support because an arbitrary local toolset cannot enforce them.
 func NewXSearchCapability[Deps any](config XSearchCapabilityConfig[Deps]) *NativeOrLocalTool[Deps] {
 	reason := xSearchNativeRequirement(config.Native)
+	options := nativeRequirementOption(reason)
 	if toolsetIsNil(config.Local) {
-		reason = "no local X-search fallback was configured"
+		options = nativeFallbackRequirementOption("no local X-search fallback was configured")
 	}
-	return NewNativeOrLocalToolset(config.Native, config.Local, nativeRequirementOption(reason)...)
+	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
 }
 
 // XSearchFunc resolves native X-search settings before a model request.

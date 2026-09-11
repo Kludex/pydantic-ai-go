@@ -332,9 +332,10 @@ func TestImageGenerationCapabilityDirectFallback(t *testing.T) {
 			return ai.ImageGenerationTool{AspectRatio: ai.ImageAspectRatio3x2}, nil
 		},
 		Generator: generator,
+		Settings:  images.Settings{AspectRatio: images.AspectRatio16To9},
 	})
 	result, err := ai.NewAgent[struct{}, string](outer, ai.WithCapabilities(capability)).Run(t.Context(), "draw", struct{}{})
-	if err != nil || result.Output != "done" || resolverCalls != 2 || direct.settings.AspectRatio != images.AspectRatio3To2 {
+	if err != nil || result.Output != "done" || resolverCalls != 2 || direct.settings.AspectRatio != images.AspectRatio16To9 {
 		t.Fatalf("unexpected direct fallback: result=%#v resolves=%d settings=%#v err=%v",
 			result, resolverCalls, direct.settings, err)
 	}
@@ -369,6 +370,69 @@ func (model *selectiveImageModel) Request(
 
 func (*selectiveImageModel) Name() string                                { return "selective" }
 func (model *selectiveImageModel) SupportsNativeTool(ai.NativeTool) bool { return model.supported }
+
+func TestRepeatedDirectImageCapabilitiesMergeSettingsAndFallback(t *testing.T) {
+	for _, settingsFirst := range []bool{false, true} {
+		name := "generator first"
+		if settingsFirst {
+			name = "settings first"
+		}
+		t.Run(name, func(t *testing.T) {
+			direct := &model{name: "image", provider: "test", result: &images.Result{
+				Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("generated"), MediaType: "image/png"}}},
+			}}
+			generatorCapability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Native:    ai.ImageGenerationTool{Quality: ai.ImageGenerationQualityHigh},
+				Generator: images.New(direct),
+			})
+			settingsCapability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Native:   ai.ImageGenerationTool{Size: ai.ImageGenerationSize2K},
+				Settings: images.Settings{AspectRatio: images.AspectRatio16To9},
+			})
+			capabilities := []ai.Capability{generatorCapability, settingsCapability}
+			if settingsFirst {
+				capabilities[0], capabilities[1] = capabilities[1], capabilities[0]
+			}
+
+			nativeModel := &selectiveImageModel{supported: true}
+			if _, err := ai.NewAgent[struct{}, string](
+				nativeModel, ai.WithCapabilities(capabilities...),
+			).Run(t.Context(), "draw", struct{}{}); err != nil {
+				t.Fatal(err)
+			}
+			native := nativeModel.params.NativeTools[0].(ai.ImageGenerationTool)
+			if native.Quality != ai.ImageGenerationQualityHigh || native.Size != ai.ImageGenerationSize2K ||
+				native.AspectRatio != ai.ImageAspectRatio16x9 {
+				t.Fatalf("static native image settings were not merged: %#v", native)
+			}
+
+			requests := 0
+			outer := &noNativeModel{modelfakes.NewFunctionModel(func(
+				_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				requests++
+				if requests == 1 {
+					if len(params.NativeTools) != 0 || len(params.Tools) != 1 ||
+						params.Tools[0].NativeFallbackFor != "image_generation" {
+						t.Fatalf("inherited direct fallback was not selected: %#v", params)
+					}
+					return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+						ToolName: params.Tools[0].Name, ToolCallID: "image", Args: []byte(`{"prompt":"A gopher"}`),
+					}}}, nil
+				}
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+			})}
+			result, err := ai.NewAgent[struct{}, string](
+				outer, ai.WithCapabilities(capabilities...),
+			).Run(t.Context(), "draw", struct{}{})
+			if err != nil || result.Output != "done" || requests != 2 ||
+				direct.settings.AspectRatio != images.AspectRatio16To9 {
+				t.Fatalf("inherited direct fallback failed: result=%#v requests=%d settings=%#v err=%v",
+					result, requests, direct.settings, err)
+			}
+		})
+	}
+}
 
 func TestImageGenerationCapabilityRejectsUnsupportedEdit(t *testing.T) {
 	direct := &model{name: "image", provider: "test", result: &images.Result{

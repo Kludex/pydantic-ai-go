@@ -105,7 +105,7 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 	settingsLayers := make([]capabilitySettingsLayer, len(agent.capSettings))
 	for index, layer := range agent.capSettings {
 		settingsLayers[index] = capabilitySettingsLayer{
-			static: cloneModelSettingsSlice(layer.static), provider: layer.provider,
+			static: cloneModelSettingsSlice(layer.static), provider: layer.provider, capabilityID: layer.capabilityID,
 		}
 	}
 	usageLimits := agent.usageLimits
@@ -142,6 +142,7 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 		capInstructions:    cloneInstructionParts(agent.capInstructions),
 		capSettings:        settingsLayers,
 		capInstructionIDs:  maps.Clone(agent.capInstructionIDs),
+		eventListeners:     slices.Clone(agent.eventListeners),
 		tools:              tools,
 		toolsets:           slices.Clone(agent.toolsets),
 	}

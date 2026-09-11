@@ -53,6 +53,7 @@ type Agent[Deps, Output any] struct {
 	capSettings        []capabilitySettingsLayer
 	capInstructionIDs  map[string]struct{}
 	outputValidators   []func(ctx context.Context, rc *RunContext[Deps], out Output) error
+	eventListeners     []EventListenerFunc[Deps]
 
 	tools             []toolEntry[Deps]
 	nativeToolEntries []nativeToolEntry[Deps]

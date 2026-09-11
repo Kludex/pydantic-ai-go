@@ -201,18 +201,18 @@ func TestLocalWebFetchBinaryAndRetry(t *testing.T) {
 	t.Cleanup(server.Close)
 	result, _ := runLocalWebFetch(t, server.URL, ai.LocalWebFetchConfig{AllowLocalURLs: true})
 	value, content := localWebFetchParts(t, result)
-	if value != "Fetched binary content from "+server.URL || len(content) != 1 {
+	if value != "Fetched binary content from "+server.URL || len(content) != 3 {
 		t.Fatalf("unexpected binary result: value=%#v content=%#v", value, content)
 	}
-	binary, ok := content[0].(ai.BinaryContent)
+	binary, ok := content[1].(ai.BinaryContent)
 	if !ok || binary.MediaType != "image/png" || string(binary.Data) != "png" {
-		t.Fatalf("unexpected binary content: %#v", content[0])
+		t.Fatalf("unexpected binary content: %#v", content[1])
 	}
 	result, _ = runLocalWebFetch(t, server.URL+"/octet", ai.LocalWebFetchConfig{AllowLocalURLs: true})
 	_, content = localWebFetchParts(t, result)
-	binary, ok = content[0].(ai.BinaryContent)
+	binary, ok = content[1].(ai.BinaryContent)
 	if !ok || binary.MediaType != "application/octet-stream" || string(binary.Data) != "bytes" {
-		t.Fatalf("unexpected octet-stream content: %#v", content[0])
+		t.Fatalf("unexpected octet-stream content: %#v", content[1])
 	}
 
 	result, model := runLocalWebFetch(t, server.URL, ai.LocalWebFetchConfig{})

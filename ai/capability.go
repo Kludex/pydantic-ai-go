@@ -3,7 +3,9 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -104,6 +106,8 @@ type RunInfo struct {
 	metadata         *runMetadataState
 	model            func() Model
 	systemPrompts    func(context.Context) ([]SystemPromptPart, error)
+	capabilityID     string
+	emitEvent        func(StreamEvent, string, string, string) error
 }
 
 // AgentName returns the configured application agent name.
@@ -145,6 +149,28 @@ func (ri *RunInfo) Model() Model {
 		return nil
 	}
 	return ri.model()
+}
+
+// ContextWindowUsed returns the fraction of the active model's context window
+// occupied by the latest model response. The boolean is false when unknown.
+func (ri *RunInfo) ContextWindowUsed() (float64, bool) {
+	var messages []ModelMessage
+	if ri.messages != nil {
+		messages = *ri.messages
+	}
+	return contextWindowUsed(ri.Model(), messages)
+}
+
+// CapabilityID returns the run-local identity of the capability receiving a callback.
+// It is empty outside a capability-specific callback.
+func (ri *RunInfo) CapabilityID() string { return ri.capabilityID }
+
+// Emit adds an event from a capability callback to this run's event stream.
+func (ri *RunInfo) Emit(event StreamEvent) error {
+	if ri.emitEvent == nil {
+		return fmt.Errorf("ai: event emission is only available during an agent run")
+	}
+	return ri.emitEvent(event, ri.capabilityID, "", "")
 }
 
 // ModelRequestFunc continues the model-request chain.
@@ -222,8 +248,9 @@ type ModelIDResolver interface {
 }
 
 type capabilitySettingsLayer struct {
-	static   []ModelSettings
-	provider ModelSettingsProvider
+	static       []ModelSettings
+	provider     ModelSettingsProvider
+	capabilityID string
 }
 
 func capabilityModelSettingsProvider(capability Capability) ModelSettingsProvider {
@@ -301,6 +328,30 @@ func flattenCapabilities(capabilities []Capability) []Capability {
 		}
 	}
 	return flattened
+}
+
+func capabilityRunIDs(capabilities []Capability) []string {
+	ids := make([]string, len(capabilities))
+	taken := make(map[string]struct{}, len(capabilities))
+	for index, capability := range capabilities {
+		if provider, ok := capability.(CapabilityIDProvider); ok {
+			ids[index] = provider.CapabilityID()
+		}
+		if ids[index] == "" {
+			name := strings.TrimPrefix(fmt.Sprintf("%T", capability), "*")
+			if separator := strings.LastIndexByte(name, '.'); separator >= 0 {
+				name = name[separator+1:]
+			}
+			for {
+				ids[index] = fmt.Sprintf("<%s:%s>", name, newRunID()[:6])
+				if _, exists := taken[ids[index]]; !exists {
+					break
+				}
+			}
+		}
+		taken[ids[index]] = struct{}{}
+	}
+	return ids
 }
 
 // WithCapabilities registers capabilities on the agent. Slice order is

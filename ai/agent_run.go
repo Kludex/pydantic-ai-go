@@ -83,20 +83,26 @@ func (a *Agent[Deps, Output]) iterPrompt(
 		var runErr error
 		stopped := false
 		core := EventStream(func(yield func(StreamEvent, error) bool) {
-			r.emit = func(event StreamEvent) bool {
+			if !r.setEventEmitter(func(event StreamEvent) bool {
 				if !yield(event, nil) {
 					stopped = true
 					r.cancellation.stopStream()
 					return false
 				}
 				return true
+			}) {
+				runErr = r.streamEventError()
+				if runErr != nil {
+					yield(nil, runErr)
+				}
+				return
 			}
 			result, runErr = r.wrappedLoop(r.ctx)
 			if !stopped && runErr != nil {
 				yield(nil, runErr)
 			}
 		})
-		stream := wrapEventStream(r.ctx, r.info, core, r.capabilities)
+		stream := wrapEventStream(r.ctx, r.info, core, r.capabilities, r.capabilityIDs)
 		for event, eventErr := range stream {
 			if eventErr != nil {
 				runErr = eventErr
@@ -198,6 +204,18 @@ func (r *AgentRun[Deps, Output]) EnqueueWithPriority(
 		return "", fmt.Errorf("ai: agent run has ended")
 	}
 	return enqueuePendingMessage(r.run.pendingMessages, priority, items)
+}
+
+// Emit adds a custom event before the run's next generated event. It may be
+// called before the first call to Next.
+func (r *AgentRun[Deps, Output]) Emit(event StreamEvent) error {
+	r.stateMu.RLock()
+	ended := r.ended
+	r.stateMu.RUnlock()
+	if ended {
+		return fmt.Errorf("ai: agent run has ended")
+	}
+	return r.run.emitEvent(event, "", "", "")
 }
 
 // Cancel requests terminal run cancellation. The next progression observes

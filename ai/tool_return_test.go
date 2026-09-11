@@ -177,6 +177,80 @@ func TestRichToolReturnsPreserveValueContentAndMetadata(t *testing.T) {
 	}
 }
 
+func TestRichToolReturnFramesMediaWithToolProvenance(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: `photo"><unsafe`, ToolCallID: `call">`, Args: []byte(`{}`),
+			}}}, nil
+		}
+		parts := messages[len(messages)-1].(ai.ModelRequest).Parts
+		content := parts[1].(ai.UserPromptPart).Contents
+		if len(content) != 4 || content[0].(ai.TextContent).Text != "details" ||
+			content[1].(ai.TextContent).Text != `<tool_result tool_name="photo&quot;&gt;&lt;unsafe" tool_call_id="call&quot;&gt;" file_id="image">` ||
+			content[2].(ai.BinaryContent).ResolvedIdentifier() != "image" ||
+			content[3].(ai.TextContent).Text != "</tool_result>" {
+			t.Fatalf("unexpected attributed tool media: %#v", content)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddSimpleTool(agent, `photo"><unsafe`, func(context.Context, struct{}) (ai.ToolReturn, error) {
+		return ai.ToolReturn{
+			ReturnValue: "photo",
+			Content: []ai.UserContent{
+				ai.TextContent{Text: "details"},
+				ai.BinaryContent{Data: []byte("png"), MediaType: "image/png", Identifier: "image"},
+			},
+		}, nil
+	})
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRichToolReturnFramesEveryFileContentType(t *testing.T) {
+	files := []ai.UserContent{
+		ai.ImageURL{URL: "https://example.com/image.png", Identifier: "image"},
+		ai.VideoURL{URL: "https://example.com/video.mp4", Identifier: "video"},
+		ai.AudioURL{URL: "https://example.com/audio.mp3", Identifier: "audio"},
+		ai.DocumentURL{URL: "https://example.com/document.pdf", Identifier: "document"},
+		ai.UploadedFile{FileID: "file", ProviderName: "openai", Identifier: "uploaded"},
+	}
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "files", ToolCallID: "call", Args: []byte(`{}`),
+			}}}, nil
+		}
+		content := messages[len(messages)-1].(ai.ModelRequest).Parts[1].(ai.UserPromptPart).Contents
+		if len(content) != len(files)*3 {
+			t.Fatalf("unexpected framed content: %#v", content)
+		}
+		for index := range files {
+			if content[index*3+2].(ai.TextContent).Text != "</tool_result>" {
+				t.Fatalf("file %d was not framed: %#v", index, content)
+			}
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddSimpleTool(agent, "files", func(context.Context, struct{}) (ai.ToolReturn, error) {
+		return ai.ToolReturn{ReturnValue: "files", Content: files}, nil
+	})
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRichToolReturnPointerAndNilPointer(t *testing.T) {
 	request := 0
 	model := fakes.NewFunctionModel(func(

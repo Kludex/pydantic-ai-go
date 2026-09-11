@@ -23,6 +23,12 @@ type Model interface {
 	Name() string
 }
 
+// ModelContextWindow is implemented by models that expose their maximum
+// combined input and output token count. A non-positive value means unknown.
+type ModelContextWindow interface {
+	ContextWindow() int
+}
+
 // TokenCountingModel is implemented by models that can count request tokens
 // before generation. The returned usage describes the prospective request and
 // is not added to run usage.

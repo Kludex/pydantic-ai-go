@@ -58,8 +58,12 @@ func TestImageGenerationSubagentFallback(t *testing.T) {
 		}
 		toolReturn := request.Parts[0].(ai.ToolReturnPart)
 		image := toolReturn.Content.(ai.BinaryContent)
-		extra := request.Parts[1].(ai.UserPromptPart).Contents[0].(ai.BinaryContent)
-		if string(image.Data) != "generated" || string(extra.Data) != "generated" {
+		extra := request.Parts[1].(ai.UserPromptPart).Contents
+		if len(extra) != 3 {
+			t.Fatalf("unexpected generated image framing: %#v", request)
+		}
+		imageContent := extra[1].(ai.BinaryContent)
+		if string(image.Data) != "generated" || string(imageContent.Data) != "generated" {
 			t.Fatalf("unexpected generated image return: %#v", request)
 		}
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil

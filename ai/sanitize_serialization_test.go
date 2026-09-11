@@ -77,6 +77,23 @@ func TestUnmarshalMessagesNarrowsNestedFileContentForSanitization(t *testing.T) 
 	}
 }
 
+func TestToolReturnURLWithoutMediaTypeRemainsApplicationData(t *testing.T) {
+	serialized := []byte(`[{"kind":"request","parts":[{"part_kind":"tool-return","content":{
+		"kind":"image-url","url":"https://example.com/report","force_download":"invalid"
+	}}]}]`)
+	messages, err := ai.UnmarshalMessages(serialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := messages[0].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart).Content
+	if _, ok := content.(map[string]any); !ok {
+		t.Fatalf("URL-shaped application data was narrowed without a media type: %T", content)
+	}
+	if _, err := ai.MarshalMessages(messages); err != nil {
+		t.Fatalf("application data no longer round trips: %v", err)
+	}
+}
+
 func TestTextContentMetadataRoundTripsWithoutBecomingModelText(t *testing.T) {
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
 		Contents: []ai.UserContent{ai.TextContent{
@@ -107,10 +124,10 @@ func TestUnmarshalMessagesRejectsInvalidMultimodalScalar(t *testing.T) {
 func TestUnmarshalMessagesRejectsInvalidNestedFileContent(t *testing.T) {
 	serializedValues := [][]byte{
 		[]byte(`[{"kind":"request","parts":[{"part_kind":"tool-return","content":[{
-			"nested":{"kind":"image-url","url":"https://example.com/image.png","force_download":"invalid"}
+			"nested":{"kind":"image-url","url":"https://example.com/image.png","media_type":"image/png","force_download":"invalid"}
 		}]}]}]`),
 		[]byte(`[{"kind":"response","parts":[{"part_kind":"builtin-tool-return","content":{
-			"kind":"audio-url","url":"https://example.com/audio.mp3","force_download":"invalid"
+			"kind":"audio-url","url":"https://example.com/audio.mp3","media_type":"audio/mpeg","force_download":"invalid"
 		}}]}]`),
 	}
 	for _, serialized := range serializedValues {

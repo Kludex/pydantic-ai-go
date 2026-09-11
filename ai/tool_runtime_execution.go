@@ -62,8 +62,9 @@ func (r *run[Deps, Output]) callTool(
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(ToolCallWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(index)
 			next = func(ctx context.Context, call ToolCallPart) (any, error) {
-				return wrapper.WrapToolCall(ctx, r.info, call, innerNext)
+				return wrapper.WrapToolCall(ctx, info, call, innerNext)
 			}
 		}
 	}
@@ -78,13 +79,13 @@ func (r *run[Deps, Output]) executeTool(
 		CallMetadata: cloneSchemaMap(rc.ToolCallMetadata),
 	}.Clone()
 	var err error
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		hook, ok := capability.(BeforeToolExecutionHook)
 		if !ok {
 			continue
 		}
 		previous := args
-		args, err = hook.BeforeToolExecution(ctx, r.info, hookContext.Clone(), args)
+		args, err = hook.BeforeToolExecution(ctx, r.capabilityInfo(index), hookContext.Clone(), args)
 		if err != nil {
 			return nil, err
 		}
@@ -98,8 +99,9 @@ func (r *run[Deps, Output]) executeTool(
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(ToolExecutionWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(index)
 			next = func(ctx context.Context, args any) (any, error) {
-				return wrapper.WrapToolExecution(ctx, r.info, hookContext.Clone(), args, innerNext)
+				return wrapper.WrapToolExecution(ctx, info, hookContext.Clone(), args, innerNext)
 			}
 		}
 	}
@@ -113,7 +115,7 @@ func (r *run[Deps, Output]) executeTool(
 			if !ok {
 				continue
 			}
-			result, err = hook.OnToolExecutionError(ctx, r.info, hookContext.Clone(), args, err)
+			result, err = hook.OnToolExecutionError(ctx, r.capabilityInfo(index), hookContext.Clone(), args, err)
 			if err == nil {
 				break
 			}
@@ -127,7 +129,7 @@ func (r *run[Deps, Output]) executeTool(
 		if !ok {
 			continue
 		}
-		result, err = hook.AfterToolExecution(ctx, r.info, hookContext.Clone(), args, result)
+		result, err = hook.AfterToolExecution(ctx, r.capabilityInfo(index), hookContext.Clone(), args, result)
 		if err != nil {
 			return result, err
 		}

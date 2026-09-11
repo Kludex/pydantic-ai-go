@@ -42,8 +42,9 @@ func narrowToolReturnContent(content any) (any, error) {
 func isNestedFileContent(kind string, content map[string]any) bool {
 	switch kind {
 	case "image-url", "video-url", "audio-url", "document-url":
-		_, ok := content["url"]
-		return ok
+		_, hasURL := content["url"]
+		mediaType, hasMediaType := content["media_type"].(string)
+		return hasURL && hasMediaType && mediaType != ""
 	case "binary":
 		_, ok := content["media_type"]
 		return ok

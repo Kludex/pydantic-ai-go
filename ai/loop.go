@@ -66,7 +66,7 @@ func suspendedRunOptions(history []ModelMessage, opts []RunOption) []RunOption {
 func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (result *RunResult[Output], err error) {
 	cfg := buildRunConfig(opts)
 	capabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
-	if hasEventStreamCapability(capabilities) {
+	if hasEventStreamCapability(capabilities) || len(a.eventListeners) > 0 {
 		stream := a.runStreamPrompt(ctx, prompt, deps, opts, false)
 		for _, streamErr := range stream.Events() {
 			if streamErr != nil {
@@ -369,6 +369,16 @@ func (a *Agent[Deps, Output]) newRun(
 			return r.configuredSystemPromptParts(ctx, r.rc)
 		},
 	}
+	r.capabilityIDs = capabilityRunIDs(r.capabilities)
+	capabilityOffset := 0
+	if limits != (UsageLimits{}) {
+		capabilityOffset = 1
+	}
+	for index := range r.capSettings {
+		r.capSettings[index].capabilityID = r.capabilityIDs[index+capabilityOffset]
+	}
+	r.rc.emitEvent = r.emitEvent
+	r.info.emitEvent = r.emitEvent
 	if err := r.resolveMetadata(runCtx); err != nil {
 		cancellation.finish()
 		return nil, err
@@ -693,7 +703,11 @@ type run[Deps, Output any] struct {
 	runStep                    int
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
-	emitMu               sync.Mutex
+	eventMu              sync.Mutex
+	eventQueue           []StreamEvent
+	eventDispatching     bool
+	eventErr             error
+	capabilityIDs        []string
 	commitStreamedOutput bool
 	recordSelectedModel  func(string)
 	observeUsage         func(Usage)
@@ -820,12 +834,12 @@ func (r *run[Deps, Output]) selectModel(ctx context.Context) error {
 			return err
 		}
 	}
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		provider, ok := capability.(ModelSelectionProvider)
 		if !ok {
 			continue
 		}
-		selection, err := provider.SelectModel(ctx, r.info, r.modelSelectionInfo())
+		selection, err := provider.SelectModel(ctx, r.capabilityInfo(index), r.modelSelectionInfo())
 		if err != nil {
 			return fmt.Errorf("ai: select model: %w", err)
 		}
@@ -1001,12 +1015,12 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 			return model, nil
 		}
 	}
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		resolver, ok := capability.(ModelIDResolver)
 		if !ok {
 			continue
 		}
-		model, err := resolver.ResolveModelID(ctx, r.info, modelID)
+		model, err := resolver.ResolveModelID(ctx, r.capabilityInfo(index), modelID)
 		if err != nil {
 			return nil, fmt.Errorf("ai: resolve model ID %q: %w", modelID, err)
 		}
@@ -1075,8 +1089,9 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	for i := len(r.capabilities) - 1; i >= 0; i-- {
 		if wrapper, ok := r.capabilities[i].(ModelRequestWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(i)
 			next = func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
-				return wrapper.WrapModelRequest(ctx, r.info, msgs, params, innerNext)
+				return wrapper.WrapModelRequest(ctx, info, msgs, params, innerNext)
 			}
 		}
 	}
@@ -1117,14 +1132,14 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	request := ModelRequestContext{
 		Model: r.model, ModelID: r.rc.ModelID, Messages: requestMessages, Params: params, Streaming: r.emit != nil,
 	}.Clone()
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		hook, ok := capability.(BeforeModelRequestHook)
 		if !ok {
 			continue
 		}
 		previousInstructions := request.Params.Instructions
 		previousParts := cloneInstructionParts(request.Params.InstructionParts)
-		request, err = hook.BeforeModelRequest(ctx, r.info, request)
+		request, err = hook.BeforeModelRequest(ctx, r.capabilityInfo(index), request)
 		if err != nil {
 			return nil, err
 		}
@@ -1206,7 +1221,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			if !ok {
 				continue
 			}
-			response, err = hook.OnModelRequestError(ctx, r.info, request, err)
+			response, err = hook.OnModelRequestError(ctx, r.capabilityInfo(index), request, err)
 			if err == nil {
 				if response == nil {
 					return nil, &UnexpectedModelBehaviorError{Message: "model request error hook returned no response"}
@@ -1227,7 +1242,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		if !ok {
 			continue
 		}
-		response, err = hook.AfterModelRequest(ctx, r.info, request, response)
+		response, err = hook.AfterModelRequest(ctx, r.capabilityInfo(index), request, response)
 		if err != nil {
 			return response, err
 		}
@@ -1473,12 +1488,12 @@ func (r *run[Deps, Output]) handleDeferredToolCalls(
 ) ([]RequestPart, *DeferredToolRequests, error) {
 	remaining := requests.Clone()
 	var parts []RequestPart
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		handler, ok := capability.(DeferredToolCallHandler)
 		if !ok {
 			continue
 		}
-		results, err := handler.HandleDeferredToolCalls(ctx, r.info, remaining.Clone())
+		results, err := handler.HandleDeferredToolCalls(ctx, r.capabilityInfo(index), remaining.Clone())
 		if err != nil {
 			return nil, nil, fmt.Errorf("ai: handle deferred tool calls: %w", err)
 		}
@@ -2419,7 +2434,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			if committed {
 				parts, err := r.executeCallsWithCommittedOutput(ctx, calls, winningCall)
 				if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
-					if len(parts) > 0 {
+					if len(calls) > 0 {
 						r.appendRequest(parts, RequestStateInterrupted)
 					}
 					return nil, ErrRunCancelled
@@ -2483,9 +2498,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 
 		parts, final, err := r.executeCalls(ctx, calls)
 		if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
-			if len(parts) > 0 {
-				r.appendRequest(parts, RequestStateInterrupted)
-			}
+			r.appendRequest(parts, RequestStateInterrupted)
 			return nil, ErrRunCancelled
 		}
 		if err != nil {
@@ -2602,12 +2615,123 @@ const (
 
 func (r *run[Deps, Output]) emitStreamEvent(event StreamEvent) bool {
 	_ = event.streamEventKind()
-	if r.emit == nil {
+	r.eventMu.Lock()
+	if r.eventErr != nil {
+		r.eventMu.Unlock()
+		return false
+	}
+	r.eventQueue = append(r.eventQueue, event)
+	if r.eventDispatching || r.emit == nil {
+		r.eventMu.Unlock()
 		return true
 	}
-	r.emitMu.Lock()
-	defer r.emitMu.Unlock()
-	return r.emit(event)
+	r.eventDispatching = true
+	r.eventMu.Unlock()
+	return r.drainStreamEvents()
+}
+
+func (r *run[Deps, Output]) setEventEmitter(emit func(StreamEvent) bool) bool {
+	r.eventMu.Lock()
+	r.emit = emit
+	if r.eventDispatching || len(r.eventQueue) == 0 {
+		r.eventMu.Unlock()
+		return true
+	}
+	r.eventDispatching = true
+	r.eventMu.Unlock()
+	return r.drainStreamEvents()
+}
+
+func (r *run[Deps, Output]) drainStreamEvents() bool {
+	for {
+		r.eventMu.Lock()
+		if len(r.eventQueue) == 0 || r.emit == nil {
+			r.eventDispatching = false
+			r.eventMu.Unlock()
+			return true
+		}
+		event := r.eventQueue[0]
+		r.eventQueue = r.eventQueue[1:]
+		emit := r.emit
+		r.eventMu.Unlock()
+
+		if err := r.dispatchStreamEvent(event); err != nil {
+			r.eventMu.Lock()
+			r.eventErr = err
+			r.eventQueue = nil
+			r.eventDispatching = false
+			r.eventMu.Unlock()
+			return false
+		}
+		if !emit(event) {
+			r.eventMu.Lock()
+			r.eventQueue = nil
+			r.eventDispatching = false
+			r.eventMu.Unlock()
+			return false
+		}
+	}
+}
+
+func (r *run[Deps, Output]) capabilityInfo(index int) *RunInfo {
+	info := *r.info
+	info.capabilityID = r.capabilityIDs[index]
+	return &info
+}
+
+func (r *run[Deps, Output]) dispatchStreamEvent(event StreamEvent) error {
+	for index, capability := range r.capabilities {
+		listener, ok := capability.(EventListener)
+		if !ok {
+			continue
+		}
+		if err := listener.OnEvent(r.ctx, r.capabilityInfo(index), event); err != nil {
+			return fmt.Errorf("ai: capability event listener: %w", err)
+		}
+	}
+	for _, listener := range r.agent.eventListeners {
+		if err := listener(r.ctx, r.rc.clone(), event); err != nil {
+			return fmt.Errorf("ai: agent event listener: %w", err)
+		}
+	}
+	return nil
+}
+
+func (r *run[Deps, Output]) emitEvent(
+	event StreamEvent, capabilityID, toolName, toolCallID string,
+) error {
+	if !r.cancellation.isActive() {
+		return fmt.Errorf("ai: agent run has ended")
+	}
+	if err := validateEmittedEvent(event); err != nil {
+		return err
+	}
+	switch event := event.(type) {
+	case customStreamEvent:
+		if capabilityID != "" {
+			return fmt.Errorf("ai: capabilities must emit capability events")
+		}
+		event.stampTool(toolName, toolCallID)
+	case capabilityStreamEvent:
+		if capabilityID == "" {
+			return fmt.Errorf("ai: capability events may only be emitted by capabilities")
+		}
+		event.stampCapability(capabilityID)
+		event.stampTool(toolName, toolCallID)
+	}
+	if r.emitStreamEvent(event) {
+		return nil
+	}
+	if err := r.streamEventError(); err != nil {
+		return err
+	}
+	return context.Cause(r.ctx)
+}
+
+func (r *run[Deps, Output]) streamEventError() error {
+	r.eventMu.Lock()
+	defer r.eventMu.Unlock()
+	return r.eventErr
 }
 
 func (r *run[Deps, Output]) emitToolCallEvents(calls []ToolCallPart) bool {
@@ -3318,18 +3442,25 @@ func (r *run[Deps, Output]) normalizeSuccessfulToolReturn(
 			})
 		}
 		if len(rich.Content) > 0 {
-			extraParts = append(extraParts, UserPromptPart{Contents: cloneUserContents(rich.Content)})
+			contents := cloneUserContents(rich.Content)
+			extraParts = append(extraParts, UserPromptPart{
+				Contents: frameToolReturnContent(call.ToolName, call.ToolCallID, contents),
+			})
 		}
 	} else if _, ok := content.(*ToolReturn); ok {
 		returnValue = nil
 	} else if binary, ok := content.(BinaryContent); ok {
 		binary = cloneBinaryContent(binary)
 		returnValue = binary
-		extraParts = append(extraParts, UserPromptPart{Contents: []UserContent{cloneBinaryContent(binary)}})
+		extraParts = append(extraParts, UserPromptPart{
+			Contents: frameToolReturnContent(call.ToolName, call.ToolCallID, []UserContent{cloneBinaryContent(binary)}),
+		})
 	} else if binary, ok := content.(*BinaryContent); ok && binary != nil {
 		cloned := cloneBinaryContent(*binary)
 		returnValue = cloned
-		extraParts = append(extraParts, UserPromptPart{Contents: []UserContent{cloneBinaryContent(cloned)}})
+		extraParts = append(extraParts, UserPromptPart{
+			Contents: frameToolReturnContent(call.ToolName, call.ToolCallID, []UserContent{cloneBinaryContent(cloned)}),
+		})
 	}
 	return ToolReturnPart{
 		ToolName: call.ToolName, Content: returnValue, ToolCallID: call.ToolCallID, ToolKind: call.ToolKind,
@@ -3743,7 +3874,9 @@ func (r *run[Deps, Output]) prepareModelSettings(
 			settings = mergeModelSettings(settings, &layer.static[index])
 		}
 		if layer.provider != nil {
-			resolved, err := layer.provider.ModelSettings(ctx, r.info, settings)
+			info := *r.info
+			info.capabilityID = layer.capabilityID
+			resolved, err := layer.provider.ModelSettings(ctx, &info, settings)
 			if err != nil {
 				return ModelSettings{}, fmt.Errorf("ai: model settings: %w", err)
 			}
@@ -3882,13 +4015,13 @@ func (r *run[Deps, Output]) prepareInstructions(
 			parts = append(parts, part)
 		}
 	}
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		source, err := capabilityInstructionSource(capability)
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
 		if provider, ok := capability.(InstructionPartsProvider); ok {
-			provided, err := provider.InstructionParts(ctx, r.info)
+			provided, err := provider.InstructionParts(ctx, r.capabilityInfo(index))
 			if err != nil {
 				return nil, fmt.Errorf("ai: instructions: %w", err)
 			}
@@ -3903,7 +4036,7 @@ func (r *run[Deps, Output]) prepareInstructions(
 		if !ok {
 			continue
 		}
-		instructions, err := provider.Instructions(ctx, r.info)
+		instructions, err := provider.Instructions(ctx, r.capabilityInfo(index))
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
@@ -3973,9 +4106,9 @@ func newRunID() string {
 // first, before hooks run in order, and after and error hooks run in reverse.
 func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output], error) {
 	next := RunFunc(func(ctx context.Context) (RunOutcome, error) {
-		for _, capability := range r.capabilities {
+		for index, capability := range r.capabilities {
 			if hook, ok := capability.(BeforeRunHook); ok {
-				if err := hook.BeforeRun(ctx, r.info); err != nil {
+				if err := hook.BeforeRun(ctx, r.capabilityInfo(index)); err != nil {
 					return RunOutcome{}, err
 				}
 			}
@@ -3993,12 +4126,16 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(RunWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(index)
 			next = func(ctx context.Context) (RunOutcome, error) {
-				return wrapper.WrapRun(ctx, r.info, innerNext)
+				return wrapper.WrapRun(ctx, info, innerNext)
 			}
 		}
 	}
 	outcome, err := next(ctx)
+	if eventErr := r.streamEventError(); eventErr != nil {
+		err = eventErr
+	}
 	detached := errors.Is(context.Cause(r.ctx), errStreamDetached)
 	if err != nil && !detached {
 		for index := len(r.capabilities) - 1; index >= 0; index-- {
@@ -4006,7 +4143,7 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 			if !ok {
 				continue
 			}
-			outcome, err = hook.OnRunError(ctx, r.info, err)
+			outcome, err = hook.OnRunError(ctx, r.capabilityInfo(index), err)
 			if err == nil {
 				break
 			}
@@ -4018,7 +4155,7 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 			if !ok {
 				continue
 			}
-			outcome, err = hook.AfterRun(ctx, r.info, outcome.Clone())
+			outcome, err = hook.AfterRun(ctx, r.capabilityInfo(index), outcome.Clone())
 			if err != nil {
 				break
 			}

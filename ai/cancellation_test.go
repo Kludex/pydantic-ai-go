@@ -114,6 +114,55 @@ func TestRunContextCancelDrainsConcurrentTools(t *testing.T) {
 	}
 }
 
+func TestCancellationDuringOnlyToolCallIsResumable(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "cancel", ToolCallID: "only", Args: json.RawMessage(`{}`),
+			}}}, nil
+		}
+		latest := messages[len(messages)-2].(ai.ModelRequest)
+		if len(latest.Parts) != 1 {
+			t.Fatalf("unexpected repaired request: %+v", latest)
+		}
+		interrupted := latest.Parts[0].(ai.ToolReturnPart)
+		if interrupted.ToolCallID != "only" || interrupted.Outcome != ai.ToolReturnOutcomeInterrupted ||
+			interrupted.Metadata[ai.SynthesizedToolReturnMetadataKey] != true {
+			t.Fatalf("unexpected synthesized return: %+v", interrupted)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	ai.AddTool(agent, "cancel", func(
+		_ context.Context, rc *ai.RunContext[deps], _ struct{},
+	) (string, error) {
+		rc.Cancel()
+		return "discarded", nil
+	})
+
+	_, err := agent.Run(t.Context(), "go", deps{})
+	var cancelled *ai.RunCancelledError
+	if !errors.As(err, &cancelled) {
+		t.Fatalf("expected cancellation, got %v", err)
+	}
+	messages := cancelled.Messages()
+	if len(messages) != 3 {
+		t.Fatalf("unexpected cancellation history: %+v", messages)
+	}
+	interrupted := messages[2].(ai.ModelRequest)
+	if interrupted.State != ai.RequestStateInterrupted || len(interrupted.Parts) != 0 {
+		t.Fatalf("missing empty interrupted request: %+v", interrupted)
+	}
+	result, err := agent.Run(t.Context(), "continue", deps{}, ai.WithMessageHistory(messages))
+	if err != nil || result.Output != "done" {
+		t.Fatalf("cancellation history did not resume: result=%+v err=%v", result, err)
+	}
+}
+
 func TestMessageHistoryRepairRecognizesExistingResults(t *testing.T) {
 	history := []ai.ModelMessage{
 		ai.ModelResponse{Parts: []ai.ResponsePart{

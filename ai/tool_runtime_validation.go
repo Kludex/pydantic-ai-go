@@ -19,13 +19,13 @@ func (r *run[Deps, Output]) validateToolCall(
 		CallMetadata: cloneSchemaMap(rc.ToolCallMetadata),
 	}.Clone()
 	rawArgs := slices.Clone(call.Args)
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		hook, ok := capability.(BeforeToolValidationHook)
 		if !ok {
 			continue
 		}
 		var err error
-		rawArgs, err = hook.BeforeToolValidation(ctx, r.info, hookContext.Clone(), slices.Clone(rawArgs))
+		rawArgs, err = hook.BeforeToolValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), slices.Clone(rawArgs))
 		if err != nil {
 			call.Args = slices.Clone(rawArgs)
 			return call, nil, err
@@ -43,9 +43,10 @@ func (r *run[Deps, Output]) validateToolCall(
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(ToolValidationWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(index)
 			next = func(ctx context.Context, rawArgs json.RawMessage) (any, error) {
 				return wrapper.WrapToolValidation(
-					ctx, r.info, hookContext.Clone(), slices.Clone(rawArgs), innerNext,
+					ctx, info, hookContext.Clone(), slices.Clone(rawArgs), innerNext,
 				)
 			}
 		}
@@ -58,7 +59,7 @@ func (r *run[Deps, Output]) validateToolCall(
 				continue
 			}
 			validated, err = hook.OnToolValidationError(
-				ctx, r.info, hookContext.Clone(), slices.Clone(rawArgs), err,
+				ctx, r.capabilityInfo(index), hookContext.Clone(), slices.Clone(rawArgs), err,
 			)
 			if err == nil {
 				break
@@ -77,7 +78,7 @@ func (r *run[Deps, Output]) validateToolCall(
 			continue
 		}
 		previous := validated
-		validated, err = hook.AfterToolValidation(ctx, r.info, hookContext.Clone(), validated)
+		validated, err = hook.AfterToolValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), validated)
 		if err != nil {
 			return call, nil, err
 		}

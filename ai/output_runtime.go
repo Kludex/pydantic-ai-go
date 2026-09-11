@@ -108,14 +108,14 @@ func (r *run[Deps, Output]) validateOutputWithHooks(
 ) (decodedOutput, error) {
 	var zero decodedOutput
 	rawOutput = cloneRawOutput(rawOutput)
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		hook, ok := capability.(BeforeOutputValidationHook)
 		if !ok {
 			continue
 		}
 		var err error
 		rawOutput, err = hook.BeforeOutputValidation(
-			ctx, r.info, hookContext.Clone(), cloneRawOutput(rawOutput),
+			ctx, r.capabilityInfo(index), hookContext.Clone(), cloneRawOutput(rawOutput),
 		)
 		rawOutput = cloneRawOutput(rawOutput)
 		if err != nil {
@@ -134,9 +134,10 @@ func (r *run[Deps, Output]) validateOutputWithHooks(
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(OutputValidationWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(index)
 			next = func(ctx context.Context, rawOutput any) (any, error) {
 				return wrapper.WrapOutputValidation(
-					ctx, r.info, hookContext.Clone(), cloneRawOutput(rawOutput), innerNext,
+					ctx, info, hookContext.Clone(), cloneRawOutput(rawOutput), innerNext,
 				)
 			}
 		}
@@ -149,7 +150,7 @@ func (r *run[Deps, Output]) validateOutputWithHooks(
 				continue
 			}
 			validated, err = hook.OnOutputValidationError(
-				ctx, r.info, hookContext.Clone(), cloneRawOutput(rawOutput), err,
+				ctx, r.capabilityInfo(index), hookContext.Clone(), cloneRawOutput(rawOutput), err,
 			)
 			if err == nil {
 				break
@@ -164,7 +165,7 @@ func (r *run[Deps, Output]) validateOutputWithHooks(
 		if !ok {
 			continue
 		}
-		validated, err = hook.AfterOutputValidation(ctx, r.info, hookContext.Clone(), validated)
+		validated, err = hook.AfterOutputValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), validated)
 		if err != nil {
 			return zero, err
 		}
@@ -186,12 +187,12 @@ func (r *run[Deps, Output]) processOutputWithHooks(
 	var zero Output
 	processed := candidate.value
 	var err error
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		hook, ok := capability.(BeforeOutputProcessingHook)
 		if !ok {
 			continue
 		}
-		processed, err = hook.BeforeOutputProcessing(ctx, r.info, hookContext.Clone(), processed)
+		processed, err = hook.BeforeOutputProcessing(ctx, r.capabilityInfo(index), hookContext.Clone(), processed)
 		if err != nil {
 			return zero, err
 		}
@@ -223,8 +224,9 @@ func (r *run[Deps, Output]) processOutputWithHooks(
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(OutputProcessingWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(index)
 			next = func(ctx context.Context, output any) (any, error) {
-				return wrapper.WrapOutputProcessing(ctx, r.info, hookContext.Clone(), output, innerNext)
+				return wrapper.WrapOutputProcessing(ctx, info, hookContext.Clone(), output, innerNext)
 			}
 		}
 	}
@@ -237,7 +239,7 @@ func (r *run[Deps, Output]) processOutputWithHooks(
 				continue
 			}
 			processed, err = hook.OnOutputProcessingError(
-				ctx, r.info, hookContext.Clone(), processed, err,
+				ctx, r.capabilityInfo(index), hookContext.Clone(), processed, err,
 			)
 			if err == nil {
 				break
@@ -252,7 +254,7 @@ func (r *run[Deps, Output]) processOutputWithHooks(
 		if !ok {
 			continue
 		}
-		processed, err = hook.AfterOutputProcessing(ctx, r.info, hookContext.Clone(), processed)
+		processed, err = hook.AfterOutputProcessing(ctx, r.capabilityInfo(index), hookContext.Clone(), processed)
 		if err != nil {
 			return zero, err
 		}

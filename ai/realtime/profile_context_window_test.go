@@ -27,7 +27,7 @@ func TestBundledRealtimeContextWindows(t *testing.T) {
 		{model: openairt.NewModel("gpt-realtime-mini"), want: 0},
 		{model: googlert.NewModel("gemini-2.5-flash-native-audio-latest"), want: 0},
 		{model: xairt.NewModel("grok-voice-latest"), want: 0},
-		{model: azure, want: 0},
+		{model: azure, want: 32_000},
 	}
 	for _, test := range models {
 		if got := test.model.Profile().ContextWindow; got != test.want {

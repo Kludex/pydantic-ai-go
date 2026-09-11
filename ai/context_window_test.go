@@ -6,9 +6,21 @@ import (
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
+	"github.com/Kludex/pydantic-ai-go/ai/models/azure"
+	"github.com/Kludex/pydantic-ai-go/ai/models/bedrock"
+	"github.com/Kludex/pydantic-ai-go/ai/models/bedrockmantle"
+	"github.com/Kludex/pydantic-ai-go/ai/models/cerebras"
+	"github.com/Kludex/pydantic-ai-go/ai/models/cohere"
+	"github.com/Kludex/pydantic-ai-go/ai/models/deepseek"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 	"github.com/Kludex/pydantic-ai-go/ai/models/google"
+	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
+	"github.com/Kludex/pydantic-ai-go/ai/models/mistral"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
+	"github.com/Kludex/pydantic-ai-go/ai/models/together"
+	"github.com/Kludex/pydantic-ai-go/ai/models/xai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/zai"
 )
 
 func TestRunContextReportsLatestContextWindowUsage(t *testing.T) {
@@ -180,6 +192,17 @@ func TestRunInfoReportsContextWindowUsage(t *testing.T) {
 }
 
 func TestBundledModelContextWindows(t *testing.T) {
+	azureConfig := azure.Config{
+		Endpoint: "https://example.openai.azure.com", APIKey: "key", APIVersion: "2024-10-21",
+	}
+	azureModel, err := azure.NewModel("phi-4", azureConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	azureFallbackModel, err := azure.NewModel("gpt-5", azureConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
 	models := []struct {
 		model ai.Model
 		want  int
@@ -187,14 +210,26 @@ func TestBundledModelContextWindows(t *testing.T) {
 		{model: openai.NewModel("gpt-5"), want: 400_000},
 		{model: openai.NewResponsesModel("gpt-5.4"), want: 1_050_000},
 		{model: anthropic.NewModel("claude-sonnet-4-5"), want: 200_000},
+		{model: azureModel, want: 16_384},
+		{model: azureFallbackModel, want: 400_000},
+		{model: bedrock.NewModel("amazon.nova-micro-v1:0"), want: 128_000},
+		{model: bedrockmantle.NewModel("openai.gpt-5.6-luna", bedrockmantle.WithRegion("us-east-1")), want: 1_000_000},
+		{model: cerebras.NewModel("gpt-oss-120b"), want: 131_072},
+		{model: cohere.NewModel("command-light"), want: 4_096},
+		{model: deepseek.NewModel("deepseek-chat"), want: 64_000},
 		{model: google.NewModel("gemini-2.5-flash"), want: 1_048_576},
+		{model: groq.NewModel("openai/gpt-oss-120b"), want: 131_072},
+		{model: mistral.NewModel("codestral-latest"), want: 256_000},
+		{model: openrouter.NewModel("openai/gpt-5"), want: 400_000},
+		{model: xai.NewModel("grok-4-0709"), want: 256_000},
+		{model: zai.NewModel("GLM-5.3"), want: 1_000_000},
 	}
 	for _, test := range models {
-		profile := test.model.(ai.ModelProfiler).ModelProfile()
+		profile := ai.WrapModel(test.model).ModelProfile()
 		if profile.ContextWindow != test.want {
 			t.Fatalf("unexpected %s context window: got %d want %d", test.model.Name(), profile.ContextWindow, test.want)
 		}
-		if window := test.model.(ai.ModelContextWindow).ContextWindow(); window != test.want {
+		if window := ai.WrapModel(test.model).ContextWindow(); window != test.want {
 			t.Fatalf("unexpected %s direct context window: got %d want %d", test.model.Name(), window, test.want)
 		}
 	}
@@ -207,9 +242,38 @@ func TestBundledModelContextWindows(t *testing.T) {
 	if profile := unknown.ModelProfile(); profile.ContextWindow != 0 {
 		t.Fatalf("unknown model reported context window %d", profile.ContextWindow)
 	}
+	gateway := openai.NewModel("gpt-5", openai.WithProvider(openai.ProviderConfig{
+		Name: "gateway", BaseURL: "https://gateway.example/v1",
+	}))
+	if profile := gateway.ModelProfile(); profile.ContextWindow != 0 {
+		t.Fatalf("unknown gateway reported context window %d", profile.ContextWindow)
+	}
+	if profile := together.NewModel("openai/gpt-oss-120b").ModelProfile(); profile.ContextWindow != 0 {
+		t.Fatalf("provider metadata without a context window reported %d", profile.ContextWindow)
+	}
 	fallback := ai.NewFallbackModel(models[0].model, ai.WithFallbackModels(models[2].model, unknown))
 	if fallback.ContextWindow() != 200_000 {
 		t.Fatalf("unexpected bundled fallback context window %d", fallback.ContextWindow())
+	}
+}
+
+func TestExplicitContextWindowOverridesDiscovery(t *testing.T) {
+	for _, test := range []struct {
+		window int
+	}{
+		{window: 777},
+		{window: 0},
+	} {
+		model := ai.NewProfiledModel(openai.NewModel("gpt-5"), ai.ModelProfile{
+			DefaultOutputMode: ai.OutputModeTool,
+			ContextWindow:     test.window,
+		})
+		if got := ai.WrapModel(model).ModelProfile().ContextWindow; got != test.window {
+			t.Fatalf("profile context window: got %d want %d", got, test.window)
+		}
+		if got := ai.WrapModel(model).ContextWindow(); got != test.window {
+			t.Fatalf("model context window: got %d want %d", got, test.window)
+		}
 	}
 }
 
@@ -217,7 +281,12 @@ func TestBundledContextWindowUsage(t *testing.T) {
 	for _, model := range []ai.Model{
 		openai.NewModel("gpt-5"),
 		anthropic.NewModel("claude-sonnet-4-5"),
+		deepseek.NewModel("deepseek-chat"),
 		google.NewModel("gemini-2.5-flash"),
+		groq.NewModel("openai/gpt-oss-120b"),
+		mistral.NewModel("codestral-latest"),
+		xai.NewModel("grok-4-0709"),
+		zai.NewModel("GLM-5.3"),
 	} {
 		scripted := &profileResponseModel{Model: model}
 		agent := ai.NewAgent[deps, string](scripted)
@@ -232,7 +301,7 @@ func TestBundledContextWindowUsage(t *testing.T) {
 		if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
 			t.Fatal(err)
 		}
-		want := 200.0 / float64(model.(ai.ModelProfiler).ModelProfile().ContextWindow)
+		want := 200.0 / float64(ai.WrapModel(model).ModelProfile().ContextWindow)
 		if !known || used != want {
 			t.Fatalf("unexpected %s context-window usage: got %v, %v want %v", model.Name(), used, known, want)
 		}
@@ -245,7 +314,7 @@ type profileResponseModel struct {
 }
 
 func (model *profileResponseModel) ModelProfile() ai.ModelProfile {
-	return model.Model.(ai.ModelProfiler).ModelProfile()
+	return ai.WrapModel(model.Model).ModelProfile()
 }
 
 func (model *profileResponseModel) Request(

@@ -76,12 +76,7 @@ func (*ProfiledModel) DispatchesOutputProfile() bool { return false }
 func (*ProfiledModel) DispatchesMessageProfile() bool { return false }
 
 // ModelProfile delegates profile discovery to the wrapped model.
-func (wrapper *ModelWrapper) ModelProfile() ModelProfile {
-	if model, ok := wrapper.wrapped.(ModelProfiler); ok {
-		return model.ModelProfile()
-	}
-	return ModelProfile{DefaultOutputMode: OutputModeTool}
-}
+func (wrapper *ModelWrapper) ModelProfile() ModelProfile { return modelProfile(wrapper.wrapped) }
 
 // ContextWindow delegates context-window discovery to the wrapped model.
 func (wrapper *ModelWrapper) ContextWindow() int { return modelContextWindow(wrapper.wrapped) }
@@ -107,10 +102,14 @@ func (wrapper *ModelWrapper) DispatchesMessageProfile() bool {
 }
 
 func modelProfile(model Model) ModelProfile {
+	profile := ModelProfile{DefaultOutputMode: OutputModeTool}
 	if profiled, ok := model.(ModelProfiler); ok {
-		return profiled.ModelProfile()
+		profile = profiled.ModelProfile()
 	}
-	return ModelProfile{DefaultOutputMode: OutputModeTool}
+	if profile.ContextWindow == 0 {
+		profile.ContextWindow = modelContextWindow(model)
+	}
+	return profile
 }
 
 func modelContextWindow(model Model) int {
@@ -121,7 +120,9 @@ func modelContextWindow(model Model) int {
 		return windowed.ContextWindow()
 	}
 	if profiled, ok := model.(ModelProfiler); ok {
-		return profiled.ModelProfile().ContextWindow
+		if window := profiled.ModelProfile().ContextWindow; window != 0 {
+			return window
+		}
 	}
 	if identified, ok := model.(ModelProviderIdentity); ok {
 		return contextwindow.Lookup(model.Name(), identified.ProviderName(), identified.ProviderURL())

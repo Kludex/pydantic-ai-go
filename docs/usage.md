@@ -119,7 +119,7 @@ func main() {
 }
 ```
 
-Bundled OpenAI, Anthropic, and Google models resolve `ModelProfile.ContextWindow` from the `genai-prices` v0.1.6 snapshot. A zero value means the model is unknown or its metadata does not specify a limit. An explicit `ai.NewProfiledModel` profile always wins.
+Bundled provider models resolve `ModelProfile.ContextWindow` from the `genai-prices` v0.1.6 snapshot. The lookup uses the model's provider identity, so a model name from another provider does not supply a limit. A zero value means the provider or model is unknown, or its metadata does not specify a limit. An explicit `ai.NewProfiledModel` profile always wins, including an explicit zero.
 
 `RunContext.ContextWindowUsed` and `RunInfo.ContextWindowUsed` divide the latest response token count by this window. A fallback model uses the smallest known candidate window. Both methods return `known=false` when either value is unavailable.
 

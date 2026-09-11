@@ -130,8 +130,8 @@ func (model *Model) DefaultModelSettings() ai.ModelSettings {
 }
 
 // ModelProfile reports xAI structured-output support.
-func (*Model) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool}
+func (model *Model) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, ContextWindow: model.model.ContextWindow()}
 }
 
 // SupportsNativeTool reports native tools available to the selected Grok model.

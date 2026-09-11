@@ -76,8 +76,8 @@ func NewModel(name string, options ...Option) *Model {
 }
 
 // ModelProfile selects tool output because DeepSeek Chat does not accept JSON Schema output.
-func (*Model) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool}
+func (model *Model) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, ContextWindow: model.model.ContextWindow()}
 }
 
 // Request sends one DeepSeek Chat Completions request.
@@ -133,8 +133,8 @@ func NewResponsesModel(name string, options ...Option) *ResponsesModel {
 }
 
 // ModelProfile reports native JSON Schema output without OpenAI image output.
-func (*ResponsesModel) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool}
+func (model *ResponsesModel) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, ContextWindow: model.model.ContextWindow()}
 }
 
 // SupportsNativeTool reports that DeepSeek Responses has no portable hosted tools.

@@ -73,15 +73,16 @@ func prepareResponsesFunctionTool(definition ai.ToolDefinition, strictSupport bo
 }
 
 type responsesMessageConverter struct {
-	ctx                    context.Context
-	providerName           string
-	clientToolSearch       bool
-	serverToolSearch       bool
-	deferred               map[string]ai.ToolDefinition
-	rendered               map[string]struct{}
-	strictSupport          bool
-	phaseSupport           bool
-	promptCacheBreakpoints bool
+	ctx                       context.Context
+	providerName              string
+	clientToolSearch          bool
+	serverToolSearch          bool
+	deferred                  map[string]ai.ToolDefinition
+	rendered                  map[string]struct{}
+	strictSupport             bool
+	phaseSupport              bool
+	promptCacheBreakpoints    bool
+	responsesReasoningContent bool
 }
 
 func (c *responsesMessageConverter) convert(msg ai.ModelMessage) ([]responsesInput, error) {
@@ -309,9 +310,11 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				continue
 			}
 			if part.ID != "" || part.Signature != "" {
-				out = append(out, responsesInput{
-					Type: "reasoning", ID: part.ID, EncryptedContent: part.Signature,
-				})
+				input := responsesInput{Type: "reasoning", ID: part.ID, EncryptedContent: part.Signature}
+				if c.responsesReasoningContent && part.ID != "" && part.Content != "" {
+					input.Content = []map[string]string{{"type": "reasoning_text", "text": part.Content}}
+				}
+				out = append(out, input)
 			}
 		case ai.ToolCallPart:
 			id := ""

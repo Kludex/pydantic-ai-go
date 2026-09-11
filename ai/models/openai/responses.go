@@ -36,6 +36,7 @@ type ResponsesModel struct {
 	phaseSupport           *bool
 	codeExecutionOutputs   bool
 	fileSearchResults      bool
+	chatCompatibility      ChatCompatibility
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
@@ -57,6 +58,7 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 		phaseSupport:         phaseSupport,
 		codeExecutionOutputs: m.responsesCodeExecutionOutputs,
 		fileSearchResults:    m.responsesFileSearchResults,
+		chatCompatibility:    m.chatCompatibility,
 	}
 }
 
@@ -789,7 +791,10 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if reasoningEffort != "" {
 		req.Reasoning = &responsesReasoning{Effort: reasoningEffort}
 	}
-	if openAIModelReasoningActive(m.name, reasoningEffort) {
+	reasoningActive := reasoningEffort != "none" &&
+		(reasoningEffort != "" || m.chatCompatibility.ReasoningEnabledByDefault ||
+			openAIModelReasoningActive(m.name, reasoningEffort))
+	if reasoningActive {
 		req.Temperature = nil
 		req.TopP = nil
 	}
@@ -839,15 +844,16 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 	}
 	converter := responsesMessageConverter{
-		ctx:                    ctx,
-		providerName:           m.providerName,
-		clientToolSearch:       activeToolSearch,
-		serverToolSearch:       serverToolSearch,
-		deferred:               deferred,
-		rendered:               make(map[string]struct{}),
-		strictSupport:          m.strictToolSupport,
-		phaseSupport:           responsesPhaseSupported(m.name, m.phaseSupport),
-		promptCacheBreakpoints: supportsOpenAIPromptCache(m.name),
+		ctx:                       ctx,
+		providerName:              m.providerName,
+		clientToolSearch:          activeToolSearch,
+		serverToolSearch:          serverToolSearch,
+		deferred:                  deferred,
+		rendered:                  make(map[string]struct{}),
+		strictSupport:             m.strictToolSupport,
+		phaseSupport:              responsesPhaseSupported(m.name, m.phaseSupport),
+		promptCacheBreakpoints:    supportsOpenAIPromptCache(m.name),
+		responsesReasoningContent: m.chatCompatibility.ResponsesReasoningContent,
 	}
 	for _, msg := range trimOpenAICompactionMessages(msgs, m.providerName) {
 		items, err := converter.convert(msg)
@@ -883,7 +889,12 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 		req.Tools = append(req.Tools, converted)
 		if !params.AllowText {
-			req.ToolChoice = "required"
+			if m.chatCompatibility.DisableRequiredToolChoice ||
+				(m.chatCompatibility.DisableForcedToolChoiceWithThinking && reasoningActive) {
+				req.ToolChoice = "auto"
+			} else {
+				req.ToolChoice = "required"
+			}
 		}
 	}
 	if clientToolSearch {

@@ -21,7 +21,9 @@ func (valueModel) Request(context.Context, []ai.ModelMessage, ai.ModelRequestPar
 
 func TestModels(t *testing.T) {
 	t.Setenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+	t.Setenv("DEEPSEEK_API_KEY", "token")
 	t.Setenv("GITHUB_COPILOT_API_KEY", "token")
+	t.Setenv("TOGETHER_API_KEY", "token")
 	codexHome := t.TempDir()
 	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(
 		`{"tokens":{"access_token":"access","refresh_token":"refresh","account_id":"account"}}`,
@@ -44,12 +46,15 @@ func TestModels(t *testing.T) {
 		{"cerebras:gpt-oss-120b", "cerebras"},
 		{"cohere:command-r7b-12-2024", "cohere"},
 		{"crusoe:openai/gpt-oss-120b", "crusoe"},
+		{"deepseek:deepseek-chat", "deepseek"},
+		{"deepseek-responses:deepseek-v4-flash", "deepseek"},
 		{"groq:openai/gpt-oss-20b", "groq"},
 		{"huggingface:Qwen/Qwen3-32B", "huggingface"},
 		{"mistral:mistral-large-latest", "mistral"},
 		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},
 		{"snowflake:claude-sonnet-4-6", "snowflake"},
+		{"together:Qwen/Qwen3-32B", "together"},
 		{"vllm:Qwen/Qwen3-32B", "vllm"},
 		{"xai:grok-4.3", "xai"},
 		{"zai:glm-5.3-flash", "zai"},

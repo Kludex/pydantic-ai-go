@@ -82,15 +82,11 @@ func NewModel(name string, options ...Option) (*Model, error) {
 		return nil, fmt.Errorf("vllm: set VLLM_BASE_URL or use WithBaseURL")
 	}
 	lowerName := strings.ToLower(name)
-	bareName := lowerName
-	if index := strings.LastIndexByte(bareName, '/'); index >= 0 {
-		bareName = bareName[index+1:]
-	}
+	profile := vllmFamilyProfile(lowerName)
 	compatibility := openai.ChatCompatibility{
 		ReasoningFallback: true, DisableDocumentInput: true,
-		DisableRequiredToolChoice:           strings.HasPrefix(bareName, "gpt-oss"),
-		DisableForcedToolChoiceWithThinking: strings.HasPrefix(bareName, "deepseek-v4-"),
-		ReasoningEnabledByDefault:           strings.HasPrefix(bareName, "deepseek-v4-"),
+		DisableRequiredToolChoice: profile.disableRequiredToolChoice,
+		ReasoningEnabledByDefault: profile.thinkingAlwaysEnabled,
 	}
 	delegate := openai.NewModel(name,
 		openai.WithProvider(provider),
@@ -123,10 +119,13 @@ func (model *Model) StreamRequest(
 }
 
 func (model *Model) prepare(messages []ai.ModelMessage, params ai.ModelRequestParams) ([]ai.ModelMessage, ai.ModelRequestParams) {
-	if !vllmSupportsThinking(model.name) {
+	profile := vllmFamilyProfile(model.name)
+	if !profile.supportsThinking || profile.thinkingAlwaysEnabled && params.Settings.Thinking != nil &&
+		params.Settings.Thinking.Level == ai.ThinkingLevelDisabled {
 		params.Settings = params.Settings.Clone()
 		params.Settings.Thinking = nil
 	}
+	params = transformSchemas(params, profile.schema)
 	messages = slices.Clone(messages)
 	instructions := params.Instructions
 	for index, message := range messages {
@@ -152,14 +151,48 @@ func (model *Model) prepare(messages []ai.ModelMessage, params ai.ModelRequestPa
 	return messages, params
 }
 
-func vllmSupportsThinking(name string) bool {
+type schemaProfile uint8
+
+const (
+	schemaOpenAI schemaProfile = iota
+	schemaInline
+	schemaGoogle
+)
+
+type familyProfile struct {
+	schema                    schemaProfile
+	supportsThinking          bool
+	thinkingAlwaysEnabled     bool
+	disableRequiredToolChoice bool
+}
+
+func vllmFamilyProfile(name string) familyProfile {
 	bare := name
 	if index := strings.LastIndexByte(bare, '/'); index >= 0 {
 		bare = bare[index+1:]
 	}
+	profile := familyProfile{}
+	switch {
+	case strings.HasPrefix(name, "meta-") || strings.HasPrefix(bare, "llama"):
+		profile.schema = schemaInline
+	case strings.HasPrefix(bare, "gemma"):
+		profile.schema = schemaGoogle
+	case strings.HasPrefix(bare, "qwen"), strings.HasPrefix(bare, "qwq"):
+		profile.schema = schemaInline
+	}
 	qwen3 := strings.HasPrefix(bare, "qwen3") && !strings.HasPrefix(bare, "qwen3-coder") &&
 		!strings.HasPrefix(bare, "qwen3.8") && !strings.Contains(bare, "-instruct")
-	return qwen3 || strings.HasPrefix(bare, "gemma-4") || strings.HasPrefix(bare, "deepseek-r1") ||
-		strings.HasPrefix(bare, "deepseek-v4-") || strings.HasPrefix(bare, "magistral") ||
-		strings.Contains(bare, "command-a-reasoning") || strings.HasPrefix(bare, "glm-4.7")
+	profile.supportsThinking = qwen3 || strings.HasPrefix(bare, "gemma-4") ||
+		strings.HasPrefix(bare, "deepseek-r1") || strings.HasPrefix(bare, "deepseek-v4-") ||
+		strings.HasPrefix(bare, "magistral") || strings.Contains(bare, "command-a-reasoning") ||
+		strings.HasPrefix(bare, "gpt-oss") || strings.HasPrefix(bare, "glm-5") ||
+		strings.HasPrefix(bare, "glm-4.7") || strings.HasPrefix(bare, "glm-4.6") ||
+		strings.HasPrefix(bare, "glm-4.5")
+	profile.thinkingAlwaysEnabled = strings.HasPrefix(bare, "deepseek-r1") ||
+		strings.HasPrefix(bare, "magistral") || strings.Contains(bare, "command-a-reasoning") ||
+		strings.HasPrefix(bare, "gpt-oss") || strings.HasPrefix(bare, "glm-5.3") ||
+		(qwen3 && strings.Contains(bare, "-thinking")) ||
+		(strings.HasPrefix(bare, "gemma-4") && strings.Contains(bare, "pro"))
+	profile.disableRequiredToolChoice = strings.HasPrefix(bare, "gpt-oss")
+	return profile
 }

@@ -80,7 +80,12 @@ func TestChatThinkingSettings(t *testing.T) {
 	t.Run("GPT-6 Astra", func(t *testing.T) {
 		var body map[string]any
 		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			body = nil
 			_ = json.NewDecoder(request.Body).Decode(&body)
+			if request.URL.Path == "/responses" {
+				_, _ = response.Write([]byte(`{"id":"response","model":"gpt-6-astra","status":"completed","output":[],"usage":{}}`))
+				return
+			}
 			_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
 		}))
 		defer server.Close()
@@ -95,6 +100,21 @@ func TestChatThinkingSettings(t *testing.T) {
 		_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Temperature: &temperature}})
 		if err != nil || body["temperature"] != nil {
 			t.Fatalf("GPT-6 default reasoning retained temperature: body=%#v err=%v", body, err)
+		}
+		_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, Temperature: &temperature,
+		}})
+		if err != nil || body["reasoning_effort"] != nil || body["temperature"] != nil {
+			t.Fatalf("GPT-6 sent unsupported disabled thinking: body=%#v err=%v", body, err)
+		}
+		responses := openai.NewResponsesModel(
+			"gpt-6-astra", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+		)
+		_, err = responses.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, Temperature: &temperature,
+		}})
+		if err != nil || body["reasoning"] != nil || body["temperature"] != nil {
+			t.Fatalf("GPT-6 Responses sent unsupported disabled thinking: body=%#v err=%v", body, err)
 		}
 	})
 
@@ -320,6 +340,39 @@ func TestRequestToolCallRoundTrip(t *testing.T) {
 	}
 	if resp.Text() != "Sunny." {
 		t.Fatalf("unexpected text %q", resp.Text())
+	}
+}
+
+func TestOutputToolDowngradesUnsupportedRequiredChoice(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		if request.URL.Path == "/responses" {
+			_, _ = response.Write([]byte(`{"id":"response","model":"model","status":"completed","output":[],"usage":{}}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
+	}))
+	defer server.Close()
+	options := []openai.Option{
+		openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+		openai.WithChatCompatibility(openai.ChatCompatibility{DisableRequiredToolChoice: true}),
+	}
+	models := []ai.Model{openai.NewModel("model", options...), openai.NewResponsesModel("model", options...)}
+	for _, model := range models {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			OutputTool: &ai.ToolDefinition{Name: "final", Schema: map[string]any{"type": "object"}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(bodies) != 2 || bodies[0]["tool_choice"] != "auto" || bodies[1]["tool_choice"] != "auto" {
+		t.Fatalf("unsupported required choices were not downgraded: %#v", bodies)
 	}
 }
 

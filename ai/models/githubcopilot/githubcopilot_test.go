@@ -121,6 +121,108 @@ func TestGitHubCopilotProviderConfig(t *testing.T) {
 	}
 }
 
+func TestGitHubCopilotFamilyMatrix(t *testing.T) {
+	for name, test := range map[string]struct {
+		model             string
+		thinking          *ai.ThinkingSettings
+		wantReasoning     string
+		wantTemperature   bool
+		wantReasoningText bool
+	}{
+		"Claude": {
+			model: "claude-haiku-4.5", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			wantReasoning: "high", wantReasoningText: true,
+		},
+		"restricted Claude": {
+			model: "claude-opus-4.8", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			wantReasoning: "high", wantReasoningText: true,
+		},
+		"OpenAI opt-in": {
+			model: "gpt-5.4", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, wantReasoning: "high",
+		},
+		"OpenAI always-on":          {model: "o3-mini"},
+		"OpenAI specific always-on": {model: "gpt-5.3-chat-latest"},
+		"OpenAI default-on":         {model: "gpt-5.6-luna"},
+		"OpenAI no reasoning": {
+			model: "gpt-5-chat-latest", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			wantTemperature: true,
+		},
+		"Gemini": {
+			model: "gemini-3.8-flash", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			wantReasoning: "high", wantReasoningText: true,
+		},
+		"Gemini Pro disabled is omitted": {
+			model: "gemini-3.0-pro", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+		},
+		"Grok 4.3": {
+			model: "grok-4.3", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			wantReasoning: "none", wantTemperature: true,
+		},
+		"Grok 4.5 disabled is omitted": {
+			model: "grok-4.5", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+		},
+		"Grok unknown strips reasoning": {
+			model: "grok-future", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			wantTemperature: true,
+		},
+		"Kimi": {
+			model: "kimi-k3", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			wantReasoning: "high",
+		},
+		"GitHub family": {
+			model: "mai-1", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, wantTemperature: true,
+		},
+		"unknown strips reasoning": {
+			model: "some-future-copilot-model", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			wantTemperature: true,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				reasoning := ""
+				if test.wantReasoningText {
+					reasoning = `,"reasoning_text":"think"`
+				}
+				_, _ = io.WriteString(response, `{"model":"`+test.model+`","choices":[{"message":{"content":"done"`+reasoning+`},"finish_reason":"stop"}],"usage":{}}`)
+			}))
+			defer server.Close()
+			temperature := 0.2
+			model, err := githubcopilot.NewModel(test.model, githubcopilot.WithAPIKey("token"),
+				githubcopilot.WithBaseURL(server.URL), githubcopilot.WithHTTPClient(server.Client()))
+			if err != nil {
+				t.Fatal(err)
+			}
+			response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: test.thinking, Temperature: &temperature,
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if body["reasoning_effort"] != stringOrNil(test.wantReasoning) {
+				t.Fatalf("unexpected reasoning setting: %#v", body)
+			}
+			_, hasTemperature := body["temperature"]
+			if hasTemperature != test.wantTemperature {
+				t.Fatalf("unexpected sampling setting: %#v", body)
+			}
+			if test.wantReasoningText && response.Parts[0].(ai.ThinkingPart).Content != "think" {
+				t.Fatalf("reasoning text was not normalized: %#v", response)
+			}
+		})
+	}
+}
+
+func stringOrNil(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
 func TestGitHubCopilotEnvironmentAndInference(t *testing.T) {
 	t.Setenv("GITHUB_COPILOT_API_KEY", "")
 	t.Setenv("GITHUB_COPILOT_API_TOKEN", "")

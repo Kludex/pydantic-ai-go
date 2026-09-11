@@ -207,6 +207,66 @@ func main() {
 
 The compatibility layer sends OpenAI wire formats. It cannot make an endpoint support OpenAI features that the endpoint does not implement.
 
+## DeepSeek
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/deepseek"
+)
+
+func main() {
+	model := deepseek.NewModel("deepseek-v4-flash")
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Explain structured concurrency.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `DEEPSEEK_API_KEY`. Use `deepseek.NewResponsesModel` when you need DeepSeek's Responses API or native JSON Schema output.
+
+DeepSeek V4 rejects forced tools while thinking is active. The adapter sends `tool_choice: "auto"` in that case. It restores `tool_choice: "required"` when you disable thinking. `deepseek-reasoner` always reasons, so its disabled-thinking request is omitted and its tool choice remains automatic.
+
+Reasoning from Chat Completions becomes a `ThinkingPart` and returns through `reasoning_content` on later turns. A caller-provided HTTP client remains caller-owned.
+
+## Together AI
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/together"
+)
+
+func main() {
+	model := together.NewModel("Qwen/Qwen3-32B")
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "What is the capital of France?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `TOGETHER_API_KEY`. Together uses Chat Completions and keeps vendor-qualified model IDs unchanged. DeepSeek V4 routes use automatic tool choice because Together has not verified a request-time thinking toggle that makes forced tools safe.
+
+Use `together.WithBaseURL` for a compatible gateway. A caller-provided HTTP client remains caller-owned.
+
 ## vLLM
 
 ```go
@@ -237,9 +297,9 @@ func main() {
 
 Set `VLLM_BASE_URL` to the OpenAI-compatible API root, such as `http://localhost:8000/v1`. Set `VLLM_API_KEY` only when your server requires authentication. The model keeps your HTTP client caller-owned.
 
-vLLM can return reasoning through either `reasoning` or `reasoning_content`. The adapter normalizes both without duplicating content and sends each value back through its original field. It enables portable thinking only for model families whose vLLM contract supports the standard effort values.
+vLLM can return reasoning through either `reasoning` or `reasoning_content`. The adapter normalizes both without duplicating content and sends each value back through its original field. It recognizes Llama, Gemma, Qwen, QwQ, DeepSeek, Mistral, Cohere Command, GPT-OSS, and GLM model families. Unsupported thinking settings are omitted. Disabled thinking is also omitted for always-on reasoning models.
 
-Native structured output includes the schema in the instructions because vLLM guided decoding masks tokens but does not show the schema to the model. Leading system messages are merged for chat templates that accept only one. Start vLLM with its model-specific tool parser when you need automatic tool calls.
+Native structured output includes the schema in the instructions because vLLM guided decoding masks tokens but does not show the schema to the model. The adapter applies Google-compatible schemas to Gemma and inline-definition schemas to Llama, Qwen, and QwQ. Leading system messages are merged for chat templates that accept only one. vLLM supports strict and required function tools except that GPT-OSS downgrades required choice to automatic. Start vLLM with its model-specific tool parser when you need automatic tool calls.
 
 ## GitHub Copilot
 
@@ -271,7 +331,7 @@ func main() {
 
 Set `GITHUB_COPILOT_API_KEY`. `GITHUB_COPILOT_API_TOKEN` and `COPILOT_GITHUB_TOKEN` are fallback names. The provider deliberately ignores `GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_API_KEY` so it cannot send a general GitHub credential to the Copilot inference service.
 
-Copilot model availability depends on your subscription. The adapter sends model IDs unchanged and uses the Chat Completions endpoint. It normalizes `reasoning_text` for Claude and Gemini models and drops sampling settings rejected by the affected Claude families. Responses-only models, realtime, and embeddings are not supported by the service. The embedding inference prefix remains available for upstream compatibility, but Copilot currently rejects `/embeddings` requests.
+Copilot model availability depends on your subscription. The adapter sends model IDs unchanged and uses the Chat Completions endpoint. It resolves Claude, GPT, o-series, Gemini, Grok, Kimi, MAI, OSWE, Raptor, and exec-agent model families. It normalizes `reasoning_text` for Claude and Gemini models, drops sampling settings rejected by the affected Claude families, and removes thinking settings from unknown or known non-reasoning models. Responses-only models, realtime, and embeddings are not supported by the service. The embedding inference prefix remains available for upstream compatibility, but Copilot currently rejects `/embeddings` requests.
 
 Use `githubcopilot.WithBaseURL` for an enterprise host or local proxy. The default integration headers match GitHub's Copilot clients. A caller-provided HTTP client remains caller-owned.
 

@@ -13,6 +13,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/cerebras"
 	"github.com/Kludex/pydantic-ai-go/ai/models/cohere"
 	"github.com/Kludex/pydantic-ai-go/ai/models/crusoe"
+	"github.com/Kludex/pydantic-ai-go/ai/models/deepseek"
 	"github.com/Kludex/pydantic-ai-go/ai/models/githubcopilot"
 	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
@@ -23,6 +24,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/openaicodex"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
 	"github.com/Kludex/pydantic-ai-go/ai/models/snowflake"
+	"github.com/Kludex/pydantic-ai-go/ai/models/together"
 	"github.com/Kludex/pydantic-ai-go/ai/models/vllm"
 	"github.com/Kludex/pydantic-ai-go/ai/models/xai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/zai"
@@ -68,15 +70,20 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"cerebras":         func(name string) (ai.Model, error) { return cerebras.NewModel(name), nil },
 		"cohere":           func(name string) (ai.Model, error) { return cohere.NewModel(name), nil },
 		"crusoe":           func(name string) (ai.Model, error) { return crusoe.NewModel(name), nil },
-		"groq":             func(name string) (ai.Model, error) { return groq.NewModel(name), nil },
-		"huggingface":      func(name string) (ai.Model, error) { return huggingface.NewModel(name), nil },
-		"mistral":          func(name string) (ai.Model, error) { return mistral.NewModel(name), nil },
-		"ollama":           func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
-		"openrouter":       func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
-		"snowflake":        func(name string) (ai.Model, error) { return snowflake.NewModel(name), nil },
-		"vllm":             func(name string) (ai.Model, error) { return vllm.NewModel(name) },
-		"xai":              func(name string) (ai.Model, error) { return xai.NewModel(name), nil },
-		"zai":              func(name string) (ai.Model, error) { return zai.NewModel(name), nil },
+		"deepseek":         func(name string) (ai.Model, error) { return deepseek.NewModel(name), nil },
+		"deepseek-responses": func(name string) (ai.Model, error) {
+			return deepseek.NewResponsesModel(name), nil
+		},
+		"groq":        func(name string) (ai.Model, error) { return groq.NewModel(name), nil },
+		"huggingface": func(name string) (ai.Model, error) { return huggingface.NewModel(name), nil },
+		"mistral":     func(name string) (ai.Model, error) { return mistral.NewModel(name), nil },
+		"ollama":      func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
+		"openrouter":  func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
+		"snowflake":   func(name string) (ai.Model, error) { return snowflake.NewModel(name), nil },
+		"together":    func(name string) (ai.Model, error) { return together.NewModel(name), nil },
+		"vllm":        func(name string) (ai.Model, error) { return vllm.NewModel(name) },
+		"xai":         func(name string) (ai.Model, error) { return xai.NewModel(name), nil },
+		"zai":         func(name string) (ai.Model, error) { return zai.NewModel(name), nil },
 	}}
 	for _, option := range options {
 		option(&configuration)

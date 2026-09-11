@@ -1895,6 +1895,26 @@ func TestRecordedResponsesToolRun(t *testing.T) {
 	}
 }
 
+func TestResponsesCompatibleReasoningContentHistory(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = response.Write([]byte(`{"id":"response","model":"compatible","status":"completed","output":[],"usage":{}}`))
+	}, openai.WithChatCompatibility(openai.ChatCompatibility{ResponsesReasoningContent: true}))
+	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "private", ID: "rs_1", ProviderName: "openai"},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := body["input"].([]any)[0].(map[string]any)
+	if item["content"].([]any)[0].(map[string]any)["text"] != "private" {
+		t.Fatalf("reasoning content was not replayed: %#v", body)
+	}
+}
+
 func TestResponsesAssistantHistoryWithThinking(t *testing.T) {
 	var gotBody map[string]any
 	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {

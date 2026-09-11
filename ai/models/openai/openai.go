@@ -119,6 +119,8 @@ type ChatCompatibility struct {
 	DisableForcedToolChoiceWithThinking bool
 	// ReasoningEnabledByDefault marks models that reason without an explicit effort.
 	ReasoningEnabledByDefault bool
+	// ResponsesReasoningContent replays visible reasoning content in Responses history.
+	ResponsesReasoningContent bool
 }
 
 // WithChatCompatibility configures OpenAI-compatible response and history
@@ -156,6 +158,7 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 			DisableRequiredToolChoice:           compatibility.DisableRequiredToolChoice,
 			DisableForcedToolChoiceWithThinking: compatibility.DisableForcedToolChoiceWithThinking,
 			ReasoningEnabledByDefault:           compatibility.ReasoningEnabledByDefault,
+			ResponsesReasoningContent:           compatibility.ResponsesReasoningContent,
 		}
 	}
 }
@@ -685,9 +688,13 @@ func (m *Model) buildPayload(
 		req.Tools = append(req.Tools, converted)
 		reasoningActive := reasoningEffort != "none" &&
 			(reasoningEffort != "" || m.chatCompatibility.ReasoningEnabledByDefault)
-		if !params.AllowText && !m.chatCompatibility.DisableRequiredToolChoice &&
-			(!m.chatCompatibility.DisableForcedToolChoiceWithThinking || !reasoningActive) {
-			req.ToolChoice = "required"
+		if !params.AllowText {
+			if m.chatCompatibility.DisableRequiredToolChoice ||
+				(m.chatCompatibility.DisableForcedToolChoiceWithThinking && reasoningActive) {
+				req.ToolChoice = "auto"
+			} else {
+				req.ToolChoice = "required"
+			}
 		}
 	}
 	if cache.ToolsTTL != "" && len(req.Tools) > 0 {
@@ -765,6 +772,9 @@ func openAIThinkingEffortForModel(modelName string, settings *ai.ThinkingSetting
 		return "", err
 	}
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
+	if strings.HasPrefix(modelName, "gpt-6-astra") && effort == "none" {
+		return "", nil
+	}
 	if effort == "minimal" && (strings.HasPrefix(modelName, "gpt-5.6") || strings.HasPrefix(modelName, "gpt-6-astra")) {
 		return "low", nil
 	}
@@ -1126,12 +1136,12 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 	} else {
 		if model.chatCompatibility.ReasoningContent && msg.ReasoningContent != "" {
 			resp.Parts = append(resp.Parts, ai.ThinkingPart{
-				Content: msg.ReasoningContent, ProviderName: model.providerName,
+				Content: msg.ReasoningContent, ID: "reasoning_content", ProviderName: model.providerName,
 			})
 		}
 		if model.chatCompatibility.Reasoning && msg.Reasoning != "" {
 			resp.Parts = append(resp.Parts, ai.ThinkingPart{
-				Content: msg.Reasoning, ProviderName: model.providerName,
+				Content: msg.Reasoning, ID: "reasoning", ProviderName: model.providerName,
 			})
 		}
 		if model.chatCompatibility.ReasoningText && msg.ReasoningText != "" {

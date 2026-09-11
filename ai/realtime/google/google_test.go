@@ -84,6 +84,23 @@ func (session *fakeSession) Close() error {
 	return session.err
 }
 
+func TestThinkingProfileExcludesHalfCascadeLiveModel(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		want bool
+	}{
+		{name: "gemini-2.5-flash-native-audio-latest", want: true},
+		{name: "gemini-3.1-flash-live-preview", want: true},
+		{name: "gemini-live-2.5-flash"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := googlert.NewModel(test.name).Profile().SupportsThinking; got != test.want {
+				t.Fatalf("SupportsThinking = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestGoogleRealtimeSession(t *testing.T) {
 	live := newFakeSession()
 	connector := &fakeConnector{session: live}

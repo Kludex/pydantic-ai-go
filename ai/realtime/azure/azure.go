@@ -125,7 +125,7 @@ func NewModel(name string, config Config, options ...Option) (*Model, error) {
 	profile.SupportsSeedingAudio = true
 	profile.SupportsAsyncToolCalls = true
 	profile.EmitsInputSpeechEvents = true
-	profile.SupportsThinking = strings.HasPrefix(name, "gpt-realtime-2")
+	profile.SupportsThinking = supportsThinking(name)
 	if modelAPIs(name) == voiceLiveOnly {
 		profile.SupportsWebRTC = false
 	}
@@ -164,11 +164,15 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 	if err != nil {
 		return nil, err
 	}
+	config, _ := sessionConfig(params.Request, params.Settings, settings, voiceLive, model.profile, model.name)
 	return openaiprotocol.New(openaiprotocol.Config{
 		Provider: "Azure Realtime", Model: model.name, Socket: socket, ServerModel: serverModel,
 		Dial: dial, Mapper: openairt.MapEvent, Reconnect: params.Settings.Reconnect,
-		InputTranscriptionEnabled: transcriptionEnabled(params.Settings), RestoresInFlightState: false,
-		SupportsImages: true, OutputSampleRate: model.profile.AudioOutputSampleRate,
+		InputTranscriptionEnabled:  transcriptionEnabled(params.Settings),
+		RestoresInFlightState:      false,
+		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
+		SupportsImages:             true,
+		OutputSampleRate:           model.profile.AudioOutputSampleRate,
 	})
 }
 
@@ -532,7 +536,10 @@ func modelAPIs(name string) servingAPIs {
 			return azureOpenAIOnly
 		}
 	}
-	for _, base := range []string{"phi4-mm-realtime", "azure-realtime", "gpt-4o", "gpt-4.1", "gpt-5", "phi4-mini"} {
+	for _, base := range []string{
+		"phi4-mm-realtime", "azure-realtime", "gpt-realtime-datazone", "gpt-realtime-1.5-datazone",
+		"gpt-4o", "gpt-4.1", "gpt-5", "phi4-mini",
+	} {
 		if nameMatches(name, base) {
 			return voiceLiveOnly
 		}
@@ -705,6 +712,12 @@ func writeJSON(ctx context.Context, socket *websocket.Conn, value any) error {
 		return err
 	}
 	return socket.Write(ctx, websocket.MessageText, data)
+}
+
+func supportsThinking(name string) bool {
+	const prefix = "gpt-realtime-2"
+	return strings.HasPrefix(name, prefix) &&
+		(len(name) == len(prefix) || name[len(prefix)] == '.' || name[len(prefix)] == '-')
 }
 
 func transcriptionEnabled(settings realtime.Settings) bool {

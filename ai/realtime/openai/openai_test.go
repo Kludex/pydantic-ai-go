@@ -17,6 +17,25 @@ import (
 	"github.com/coder/websocket"
 )
 
+func TestThinkingProfileUsesModelFamilyBoundary(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		want bool
+	}{
+		{name: "gpt-realtime-2", want: true},
+		{name: "gpt-realtime-2.1", want: true},
+		{name: "gpt-realtime-2-mini", want: true},
+		{name: "gpt-realtime-2025-08-28"},
+		{name: "gpt-realtime-mini-2025-10-06"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := openairt.NewModel(test.name).Profile().SupportsThinking; got != test.want {
+				t.Fatalf("SupportsThinking = %v, want %v", got, test.want)
+			}
+		})
+	}
+}
+
 func TestOpenAIRealtimeSession(t *testing.T) {
 	var mutex sync.Mutex
 	var received []map[string]any

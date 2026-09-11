@@ -14,7 +14,7 @@ type Input interface {
 	RealtimeInputKind() string
 }
 
-// TextInput sends one complete text turn.
+// TextInput sends one complete text turn and asks the model to respond.
 type TextInput struct {
 	// Text is the complete user turn.
 	Text string
@@ -22,6 +22,15 @@ type TextInput struct {
 
 // RealtimeInputKind identifies text input.
 func (TextInput) RealtimeInputKind() string { return "text" }
+
+// TextContext adds text to the conversation without asking the model to respond.
+type TextContext struct {
+	// Text is context for a later turn.
+	Text string
+}
+
+// RealtimeInputKind identifies passive text context.
+func (TextContext) RealtimeInputKind() string { return "text-context" }
 
 // AudioInput sends raw mono PCM16 audio at the model's input sample rate.
 type AudioInput struct {
@@ -36,6 +45,8 @@ func (AudioInput) RealtimeInputKind() string { return "audio" }
 type ImageInput struct {
 	// Content contains one encoded image or video frame.
 	Content ai.BinaryContent
+	// Respond asks the model to respond after accepting the image.
+	Respond bool
 }
 
 // RealtimeInputKind identifies image input.
@@ -318,6 +329,12 @@ type ConnectionInfo interface {
 	InputTranscriptionEnabled() bool
 	// ReconnectRestoresInFlightState reports whether reconnect preserves unfinished work.
 	ReconnectRestoresInFlightState() bool
+}
+
+// SpeechInterruptionConnection reports server-side voice activity behavior.
+type SpeechInterruptionConnection interface {
+	// InterruptsResponseOnSpeech reports whether speech onset cancels the active response.
+	InterruptsResponseOnSpeech() bool
 }
 
 // HistoryAwareConnection receives a live history reader for reconnect replay.

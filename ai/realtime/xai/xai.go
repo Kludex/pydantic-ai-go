@@ -121,12 +121,15 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 	if err != nil {
 		return nil, err
 	}
+	config := sessionConfig(params.Request, params.Settings, settings, model.profile)
 	return openaiprotocol.New(openaiprotocol.Config{
 		Provider: "xAI Grok Voice", Model: model.name, Socket: socket, ServerModel: serverModel,
 		Dial: dial, Mapper: MapEvent, Reconnect: params.Settings.Reconnect,
-		InputTranscriptionEnabled: transcriptionEnabled(params.Settings),
-		RestoresInFlightState:     true, SupportsImages: false,
-		OutputSampleRate: model.profile.AudioOutputSampleRate,
+		InputTranscriptionEnabled:  transcriptionEnabled(params.Settings),
+		RestoresInFlightState:      true,
+		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
+		SupportsImages:             false,
+		OutputSampleRate:           model.profile.AudioOutputSampleRate,
 	})
 }
 

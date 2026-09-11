@@ -104,6 +104,8 @@ func main() {
 
 `TransformStream` supports event delivery through queues and durable workflows without an HTTP request.
 
+Cancel the context passed to `RunStream` to stop the agent run. The HTTP handler uses the request context, so a disconnected client cancels generation without a separate adapter token.
+
 ## Approve deferred tools
 
 Set `SDKVersion` to 6 or 7 to emit `tool-approval-request` chunks for tools registered with `WithApprovalRequired`. Return the original assistant tool part with an approval response:

@@ -26,17 +26,18 @@ type Mapper func(data []byte) ([]realtime.CodecEvent, error)
 
 // Config defines one OpenAI-protocol connection.
 type Config struct {
-	Provider                  string
-	Model                     string
-	Socket                    *websocket.Conn
-	ServerModel               string
-	Dial                      Dial
-	Mapper                    Mapper
-	Reconnect                 *realtime.ReconnectPolicy
-	InputTranscriptionEnabled bool
-	RestoresInFlightState     bool
-	SupportsImages            bool
-	OutputSampleRate          int
+	Provider                   string
+	Model                      string
+	Socket                     *websocket.Conn
+	ServerModel                string
+	Dial                       Dial
+	Mapper                     Mapper
+	Reconnect                  *realtime.ReconnectPolicy
+	InputTranscriptionEnabled  bool
+	RestoresInFlightState      bool
+	InterruptsResponseOnSpeech bool
+	SupportsImages             bool
+	OutputSampleRate           int
 }
 
 // Connection implements the common OpenAI realtime websocket protocol.
@@ -89,6 +90,11 @@ func (connection *Connection) ReconnectRestoresInFlightState() bool {
 	return connection.config.RestoresInFlightState
 }
 
+// InterruptsResponseOnSpeech reports whether server VAD cancels active output.
+func (connection *Connection) InterruptsResponseOnSpeech() bool {
+	return connection.config.InterruptsResponseOnSpeech
+}
+
 // SetMessageHistory installs the live history callback used by reconnect replay.
 func (connection *Connection) SetMessageHistory(history func() []ai.ModelMessage) {
 	connection.mu.Lock()
@@ -110,21 +116,14 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 			"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(input.Data),
 		})
 	case realtime.TextInput:
-		if err := connection.writeJSON(ctx, map[string]any{
-			"type": "conversation.item.create",
-			"item": map[string]any{
-				"type": "message", "role": "user",
-				"content": []any{map[string]any{"type": "input_text", "text": input.Text}},
-			},
-		}); err != nil {
-			return err
-		}
-		return connection.requestResponse(ctx)
+		return connection.sendText(ctx, input.Text, true)
+	case realtime.TextContext:
+		return connection.sendText(ctx, input.Text, false)
 	case realtime.ImageInput:
 		if !connection.config.SupportsImages {
 			return fmt.Errorf("realtime: %s does not support image input", connection.config.Provider)
 		}
-		return connection.writeJSON(ctx, map[string]any{
+		if err := connection.writeJSON(ctx, map[string]any{
 			"type": "conversation.item.create",
 			"item": map[string]any{
 				"type": "message", "role": "user",
@@ -132,7 +131,10 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 					"type": "input_image", "image_url": dataURL(input.Content),
 				}},
 			},
-		})
+		}); err != nil || !input.Respond {
+			return err
+		}
+		return connection.requestResponse(ctx)
 	case realtime.ToolResult:
 		parts, err := userContent(input.Content, connection.config.SupportsImages)
 		if err != nil {
@@ -188,6 +190,19 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 	default:
 		return fmt.Errorf("realtime: %s does not support %T input", connection.config.Provider, input)
 	}
+}
+
+func (connection *Connection) sendText(ctx context.Context, text string, respond bool) error {
+	if err := connection.writeJSON(ctx, map[string]any{
+		"type": "conversation.item.create",
+		"item": map[string]any{
+			"type": "message", "role": "user",
+			"content": []any{map[string]any{"type": "input_text", "text": text}},
+		},
+	}); err != nil || !respond {
+		return err
+	}
+	return connection.requestResponse(ctx)
 }
 
 func (connection *Connection) requestResponse(ctx context.Context) error {

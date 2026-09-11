@@ -42,6 +42,8 @@ func main() {
 
 `realtime.Open` owns the connection pump and background tool calls. Close the session when you stop consuming events. The session retains portable `ai.ModelMessage` history through `Messages` and `NewMessages`.
 
+A string passed to `Send` asks the model to respond. Do not call `CreateResponse` after sending text. That asks for two responses. Pass `realtime.WithResponse(false)` to add passive text context. Images are passive by default. Pass `realtime.WithResponse(true)` with an image to ask for a response in the same operation.
+
 OpenAI reads `OPENAI_API_KEY`. Use `openai.WithAPIKey`, `openai.WithBaseURL`, `openai.WithHTTPClient`, and `openai.WithHeaders` when you need explicit transport configuration.
 
 ## Use Azure OpenAI or Voice Live
@@ -134,7 +136,15 @@ func main() {
 
 Raw audio is mono PCM16. Read the input and output rates from the model or session. OpenAI and xAI use 24 kHz input. Gemini Live uses 16 kHz input and 24 kHz output.
 
+Call `StreamAudio` or `StreamTranscripts` before starting the goroutine that consumes it. The subscription starts at the method call, so scheduler delay does not lose the first chunk. Each view uses a bounded buffer and drops its oldest item when a slow consumer falls behind.
+
 Set `WithAudioRetention` when you need raw audio in portable history. Retained audio is stored as WAV. Live audio events remain raw PCM.
+
+## Handle barge-in
+
+Pass `realtime.WithBargeIn(true)` to `Open` when one device-paced `StreamAudio` consumer plays the output. The session tracks completed chunks, flushes unheard audio when user speech starts, and truncates provider history when supported.
+
+For an application-owned trigger, read `PlayedAudioBytes` and pass the result to `InterruptAtAudio`. Keep your own playback counter when your audio layer buffers ahead of the device. You can pass an exact millisecond position to `Interrupt` instead.
 
 ## Execute tools
 
@@ -198,6 +208,10 @@ func main() {
 ```
 
 Tool calls execute concurrently with media streaming. A `RetryError` becomes model-visible corrective feedback. A `ToolFailedError` becomes a failed result without consuming a retry budget. Rich `ToolReturn` values preserve additional user content and metadata in history.
+
+A tool can call `session.Close(ctx)` to end the conversation. Closing from the running tool does not wait on itself. Its late result is not sent to the closed provider.
+
+Use `session.Enqueue(ctx, ...)` to add an out-of-band prompt after the current response. Use `EnqueueWhenIdle` to place work after queued ASAP prompts. Realtime enqueue accepts strings, `ai.TextContent`, `ai.UserPromptPart`, `ai.SystemPromptPart`, and matching `ai.ModelRequest` values. System prompt parts are wrapped in `<system>` tags because the live channel accepts only a user turn.
 
 ## Use Gemini Live
 
@@ -265,6 +279,10 @@ func main() {
 ```
 
 xAI reads `XAI_API_KEY`. Grok Voice always produces speech. It supports interruption but not output truncation. Reconnects use xAI conversation IDs so the provider restores the session without replaying local history.
+
+## Resolve application providers
+
+Pass `infer.WithProvider` to `infer.Model` when credentials or endpoints come from application state instead of environment variables. The resolver receives the provider-local model name and returns a configured `realtime.Model`. This matches the resolver pattern used by standard and embedding model inference.
 
 ## Reconnect
 

@@ -86,6 +86,7 @@ func TestTransformReasoningVersions(t *testing.T) {
 		modern  bool
 	}{
 		{version: "0.1.10", start: agui.EventThinkingStart, content: agui.EventThinkingTextMessageContent, end: agui.EventThinkingEnd},
+		{version: "0.1.11", start: agui.EventReasoningStart, content: agui.EventReasoningMessageContent, end: agui.EventReasoningEnd, role: "assistant", modern: true},
 		{version: "0.1.13rc1", start: agui.EventReasoningStart, content: agui.EventReasoningMessageContent, end: agui.EventReasoningEnd, role: "assistant", modern: true},
 		{version: "0.1.14", start: agui.EventReasoningStart, content: agui.EventReasoningMessageContent, end: agui.EventReasoningEnd, role: "reasoning", modern: true},
 		{version: "0.2", start: agui.EventReasoningStart, content: agui.EventReasoningMessageContent, end: agui.EventReasoningEnd, role: "reasoning", modern: true},

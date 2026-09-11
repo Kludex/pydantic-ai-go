@@ -104,6 +104,7 @@ type sessionConfig struct {
 	toolExecutor      ToolExecutor
 	retainImagesEvery int
 	retainImagesMax   int
+	handleBargeIn     bool
 }
 
 // WithAudioRetention controls which raw audio streams are retained in history.
@@ -125,6 +126,21 @@ func WithImageRetention(every, maximum int) SessionOption {
 	}
 }
 
+// WithBargeIn makes the session flush unheard audio and interrupt output when user speech starts.
+func WithBargeIn(enabled bool) SessionOption {
+	return func(config *sessionConfig) { config.handleBargeIn = enabled }
+}
+
+// SendOption configures one Session.Send call.
+type SendOption func(*sendConfig)
+
+type sendConfig struct{ respond *bool }
+
+// WithResponse controls whether text or image input asks the model to respond.
+func WithResponse(respond bool) SendOption {
+	return func(config *sendConfig) { config.respond = &respond }
+}
+
 // Session owns one live connection, event pump, tool tasks, and portable history.
 type Session struct {
 	model      Model
@@ -132,10 +148,11 @@ type Session struct {
 	profile    Profile
 	config     sessionConfig
 
-	ctx    context.Context
-	cancel context.CancelCauseFunc
-	done   chan struct{}
-	events chan eventResult
+	ctx      context.Context
+	cancel   context.CancelCauseFunc
+	done     chan struct{}
+	events   chan eventResult
+	eventsMu sync.RWMutex
 
 	sendMu sync.Mutex
 	mu     sync.RWMutex
@@ -159,14 +176,41 @@ type Session struct {
 	pendingFinish       ai.FinishReason
 	pendingToolResults  map[string]ai.ModelRequest
 	providerPartIndexes map[string]int
+	responseActive      bool
+	serverCancelling    bool
 
-	toolMu      sync.Mutex
-	toolCancels map[string]context.CancelFunc
-	toolWG      sync.WaitGroup
+	toolMu          sync.Mutex
+	toolCancels     map[string]context.CancelFunc
+	toolWG          sync.WaitGroup
+	closingFromTool bool
 
-	tapMu          sync.Mutex
-	audioTaps      map[chan []byte]struct{}
-	transcriptTaps map[chan TranscriptUpdate]struct{}
+	tapMu                     sync.Mutex
+	audioTaps                 map[*audioTap]struct{}
+	transcriptTaps            map[chan TranscriptUpdate]struct{}
+	emittedAudioBytes         int
+	turnAudioStartBytes       int
+	audioPartIndex            int
+	hasAudioPart              bool
+	interruptedAudioPartIndex int
+	hasInterruptedAudioPart   bool
+
+	enqueueMu  sync.Mutex
+	deliveryMu sync.Mutex
+	enqueued   []queuedPrompt
+}
+
+type audioTap struct {
+	queue               chan []byte
+	subscribedAtBytes   int
+	droppedBytes        int
+	pendingDroppedBytes int
+	playedBytes         int
+}
+
+type queuedPrompt struct {
+	id       string
+	priority ai.PendingMessagePriority
+	text     string
 }
 
 type activeSpeech struct {
@@ -182,6 +226,13 @@ type activeSpeech struct {
 type eventResult struct {
 	event Event
 	err   error
+}
+
+type toolContextKey struct{}
+
+type toolContextValue struct {
+	session *Session
+	callID  string
 }
 
 // Open validates settings, opens a provider connection, and starts its receive pump.
@@ -214,7 +265,7 @@ func Open(ctx context.Context, model Model, params ConnectParams, options ...Ses
 		ctx: runCtx, cancel: cancel, done: make(chan struct{}), events: make(chan eventResult, 128),
 		seeded: params.Messages, userTurns: map[string]*activeSpeech{},
 		pendingToolResults: map[string]ai.ModelRequest{}, providerPartIndexes: map[string]int{},
-		toolCancels: map[string]context.CancelFunc{}, audioTaps: map[chan []byte]struct{}{},
+		toolCancels: map[string]context.CancelFunc{}, audioTaps: map[*audioTap]struct{}{},
 		transcriptTaps: map[chan TranscriptUpdate]struct{}{},
 	}
 	if historyAware, ok := connection.(HistoryAwareConnection); ok {
@@ -313,6 +364,9 @@ func (session *Session) Events(ctx context.Context) iter.Seq2[Event, error] {
 				return
 			case result, ok := <-session.events:
 				if !ok {
+					if err := session.Err(); err != nil {
+						yield(nil, err)
+					}
 					return
 				}
 				if !yield(result.event, result.err) || result.err != nil {
@@ -324,13 +378,29 @@ func (session *Session) Events(ctx context.Context) iter.Seq2[Event, error] {
 }
 
 // Send writes one text turn, image frame, or audio value.
-func (session *Session) Send(ctx context.Context, content any) error {
+// Text asks for a response by default. Images and audio do not.
+func (session *Session) Send(ctx context.Context, content any, options ...SendOption) error {
+	config := sendConfig{}
+	for _, option := range options {
+		option(&config)
+	}
 	switch value := any(content).(type) {
 	case string:
 		if value == "" {
 			return nil
 		}
-		if err := session.send(ctx, TextInput{Text: value}); err != nil {
+		respond := config.respond == nil || *config.respond
+		var input Input = TextInput{Text: value}
+		if !respond {
+			input = TextContext{Text: value}
+		}
+		if respond {
+			session.setResponseActive(true)
+		}
+		if err := session.send(ctx, input); err != nil {
+			if respond {
+				session.setResponseActive(false)
+			}
 			return err
 		}
 		session.mu.Lock()
@@ -342,9 +412,12 @@ func (session *Session) Send(ctx context.Context, content any) error {
 			return fmt.Errorf("realtime: binary input must not be empty")
 		}
 		if len(value.MediaType) >= 6 && value.MediaType[:6] == "image/" {
-			return session.sendImage(ctx, value)
+			return session.sendImage(ctx, value, config.respond != nil && *config.respond)
 		}
 		if len(value.MediaType) >= 6 && value.MediaType[:6] == "audio/" {
+			if config.respond != nil && *config.respond {
+				return fmt.Errorf("realtime: WithResponse(true) cannot be used with audio")
+			}
 			return session.SendAudio(ctx, value.Data, value.MediaType)
 		}
 		return fmt.Errorf("realtime: unsupported binary input media type %q", value.MediaType)
@@ -411,11 +484,23 @@ func (session *Session) SendAudioStream(ctx context.Context, chunks iter.Seq2[[]
 	return nil
 }
 
-func (session *Session) sendImage(ctx context.Context, content ai.BinaryContent) error {
+func (session *Session) sendImage(ctx context.Context, content ai.BinaryContent, respond bool) error {
 	if !session.profile.SupportsImageInput {
 		return fmt.Errorf("realtime: model %q does not support image input", session.model.Name())
 	}
-	if err := session.send(ctx, ImageInput{Content: content}); err != nil {
+	if respond && !session.profile.SupportsManualTurnControl {
+		return fmt.Errorf(
+			"realtime: cannot ask for an image response: model %q does not support manual turn control",
+			session.model.Name(),
+		)
+	}
+	if respond {
+		session.setResponseActive(true)
+	}
+	if err := session.send(ctx, ImageInput{Content: content, Respond: respond}); err != nil {
+		if respond {
+			session.setResponseActive(false)
+		}
 		return err
 	}
 	session.mu.Lock()
@@ -467,7 +552,12 @@ func (session *Session) CreateResponse(ctx context.Context) error {
 	if err := session.require(session.profile.SupportsManualTurnControl, "create response", "manual turn control"); err != nil {
 		return err
 	}
-	return session.send(ctx, CreateResponse{})
+	session.setResponseActive(true)
+	if err := session.send(ctx, CreateResponse{}); err != nil {
+		session.setResponseActive(false)
+		return err
+	}
+	return nil
 }
 
 // Interrupt cancels output and optionally truncates provider history to heard audio.
@@ -483,11 +573,18 @@ func (session *Session) Interrupt(ctx context.Context, playedMilliseconds *int) 
 			return fmt.Errorf("realtime: model %q does not support output truncation", session.model.Name())
 		}
 	}
-	if err := session.send(ctx, CancelResponse{}); err != nil {
-		return err
-	}
+	inputs := make([]Input, 0, 2)
 	if playedMilliseconds != nil {
-		if err := session.send(ctx, TruncateOutput{AudioEndMilliseconds: *playedMilliseconds}); err != nil {
+		inputs = append(inputs, TruncateOutput{AudioEndMilliseconds: *playedMilliseconds})
+	}
+	session.mu.RLock()
+	serverCancelling := session.serverCancelling
+	session.mu.RUnlock()
+	if !serverCancelling {
+		inputs = append(inputs, CancelResponse{})
+	}
+	if len(inputs) > 0 {
+		if err := session.sendInputs(ctx, inputs...); err != nil {
 			return err
 		}
 	}
@@ -506,8 +603,17 @@ func (session *Session) require(supported bool, method, feature string) error {
 	return nil
 }
 
+func (session *Session) setResponseActive(active bool) {
+	session.mu.Lock()
+	session.responseActive = active
+	session.mu.Unlock()
+}
+
 func (session *Session) send(ctx context.Context, input Input) error {
-	_ = input.RealtimeInputKind()
+	return session.sendInputs(ctx, input)
+}
+
+func (session *Session) sendInputs(ctx context.Context, inputs ...Input) error {
 	session.mu.RLock()
 	closed := session.closed
 	session.mu.RUnlock()
@@ -516,45 +622,70 @@ func (session *Session) send(ctx context.Context, input Input) error {
 	}
 	session.sendMu.Lock()
 	defer session.sendMu.Unlock()
-	if err := session.connection.Send(ctx, input); err != nil {
-		return &Error{Provider: session.model.ProviderName(), Model: session.model.Name(), Message: "send", Err: err}
+	for _, input := range inputs {
+		_ = input.RealtimeInputKind()
+		if err := session.connection.Send(ctx, input); err != nil {
+			return &Error{Provider: session.model.ProviderName(), Model: session.model.Name(), Message: "send", Err: err}
+		}
 	}
 	return nil
 }
 
-// StreamAudio yields model PCM chunks. Each subscriber has an independent bounded queue.
+// StreamAudio yields model PCM chunks. The bounded subscription starts when this method is called.
 func (session *Session) StreamAudio(ctx context.Context) iter.Seq2[[]byte, error] {
+	tap := &audioTap{queue: make(chan []byte, 32)}
+	session.tapMu.Lock()
+	tap.subscribedAtBytes = session.emittedAudioBytes
+	session.mu.RLock()
+	closed := session.closed
+	session.mu.RUnlock()
+	if closed {
+		close(tap.queue)
+	} else {
+		session.audioTaps[tap] = struct{}{}
+	}
+	session.tapMu.Unlock()
 	return func(yield func([]byte, error) bool) {
-		queue := make(chan []byte, 32)
-		session.tapMu.Lock()
-		session.audioTaps[queue] = struct{}{}
-		session.tapMu.Unlock()
-		defer func() {
-			session.tapMu.Lock()
-			delete(session.audioTaps, queue)
-			session.tapMu.Unlock()
-		}()
+		defer session.removeAudioTap(tap)
 		for {
 			select {
 			case <-ctx.Done():
 				yield(nil, context.Cause(ctx))
 				return
-			case chunk, ok := <-queue:
-				if !ok || !yield(slices.Clone(chunk), nil) {
+			case chunk, ok := <-tap.queue:
+				if !ok {
 					return
 				}
+				session.tapMu.Lock()
+				tap.droppedBytes += tap.pendingDroppedBytes
+				tap.pendingDroppedBytes = 0
+				session.tapMu.Unlock()
+				if !yield(slices.Clone(chunk), nil) {
+					return
+				}
+				session.tapMu.Lock()
+				tap.playedBytes += len(chunk)
+				session.tapMu.Unlock()
 			}
 		}
 	}
 }
 
 // StreamTranscripts yields render-ready transcript updates.
+// The bounded subscription starts when this method is called.
 func (session *Session) StreamTranscripts(ctx context.Context) iter.Seq2[TranscriptUpdate, error] {
-	return func(yield func(TranscriptUpdate, error) bool) {
-		queue := make(chan TranscriptUpdate, 512)
-		session.tapMu.Lock()
+	queue := make(chan TranscriptUpdate, 512)
+	session.tapMu.Lock()
+	session.mu.RLock()
+	closed := session.closed
+	session.mu.RUnlock()
+	if closed {
+		close(queue)
+	} else {
 		session.transcriptTaps[queue] = struct{}{}
-		session.tapMu.Unlock()
+	}
+	session.tapMu.Unlock()
+	return func(yield func(TranscriptUpdate, error) bool) {
 		defer func() {
 			session.tapMu.Lock()
 			delete(session.transcriptTaps, queue)
@@ -575,19 +706,36 @@ func (session *Session) StreamTranscripts(ctx context.Context) iter.Seq2[Transcr
 	}
 }
 
+func (session *Session) removeAudioTap(tap *audioTap) {
+	session.tapMu.Lock()
+	delete(session.audioTaps, tap)
+	session.tapMu.Unlock()
+}
+
 // Close stops the pump, cancels tools, closes the transport, and waits for cleanup.
 func (session *Session) Close(ctx context.Context) error {
+	current, fromTool := ctx.Value(toolContextKey{}).(toolContextValue)
+	fromOwnTool := fromTool && current.session == session
+	waitCtx := ctx
+	if fromOwnTool {
+		waitCtx = context.WithoutCancel(ctx)
+	}
 	session.cancel(context.Canceled)
 	session.toolMu.Lock()
-	for _, cancel := range session.toolCancels {
-		cancel()
+	if fromOwnTool {
+		session.closingFromTool = true
+	}
+	for callID, cancel := range session.toolCancels {
+		if !fromOwnTool || callID != current.callID {
+			cancel()
+		}
 	}
 	session.toolMu.Unlock()
-	closeErr := session.connection.Close(ctx)
+	closeErr := session.connection.Close(waitCtx)
 	select {
 	case <-session.done:
-	case <-ctx.Done():
-		return errors.Join(closeErr, context.Cause(ctx))
+	case <-waitCtx.Done():
+		return errors.Join(closeErr, context.Cause(waitCtx))
 	}
 	return errors.Join(closeErr, session.Err())
 }
@@ -596,21 +744,34 @@ func (session *Session) pump() {
 	defer func() {
 		session.cancel(nil)
 		_ = session.connection.Close(context.Background())
-		session.toolWG.Wait()
+		session.toolMu.Lock()
+		closingFromTool := session.closingFromTool
+		session.toolMu.Unlock()
+		if !closingFromTool {
+			session.toolWG.Wait()
+		}
 		session.mu.Lock()
 		session.closed = true
 		session.mu.Unlock()
 		session.tapMu.Lock()
 		for tap := range session.audioTaps {
-			close(tap)
+			for len(tap.queue) > 0 {
+				<-tap.queue
+			}
+			close(tap.queue)
 		}
 		for tap := range session.transcriptTaps {
+			for len(tap) > 0 {
+				<-tap
+			}
 			close(tap)
 		}
-		session.audioTaps = map[chan []byte]struct{}{}
+		session.audioTaps = map[*audioTap]struct{}{}
 		session.transcriptTaps = map[chan TranscriptUpdate]struct{}{}
 		session.tapMu.Unlock()
+		session.eventsMu.Lock()
 		close(session.events)
+		session.eventsMu.Unlock()
 		close(session.done)
 	}()
 	for event, err := range session.connection.Events(session.ctx) {
@@ -642,6 +803,18 @@ func (session *Session) handle(event CodecEvent) bool {
 	case ResponseDone:
 		session.finishResponse(event)
 	case InputSpeechStarted:
+		session.mu.Lock()
+		interrupts, ok := session.connection.(SpeechInterruptionConnection)
+		session.serverCancelling = ok && interrupts.InterruptsResponseOnSpeech()
+		session.mu.Unlock()
+		if session.config.handleBargeIn {
+			if played, err := session.PlayedAudioBytes(); err == nil {
+				if _, err := session.InterruptAtAudio(session.ctx, played); err != nil {
+					session.fail(err)
+					return false
+				}
+			}
+		}
 		session.publish(InputSpeechStartEvent(event))
 	case InputSpeechEnded:
 		session.publish(InputSpeechEndEvent(event))
@@ -652,6 +825,9 @@ func (session *Session) handle(event CodecEvent) bool {
 	case InputTranscriptionError:
 		session.publish(InputTranscriptionErrorEvent(event))
 	case SessionReconnected:
+		session.mu.Lock()
+		session.serverCancelling = false
+		session.mu.Unlock()
 		session.publish(SessionReconnectEvent(event))
 	case PartStarted:
 		session.mu.Lock()
@@ -672,6 +848,8 @@ func (session *Session) handle(event CodecEvent) bool {
 	case ResponseStarted:
 		session.mu.Lock()
 		session.pendingResponseID = event.ResponseID
+		session.responseActive = true
+		session.serverCancelling = false
 		session.mu.Unlock()
 	case ConversationCreated, ConversationItemCreated:
 	case SessionError:
@@ -690,6 +868,7 @@ func (session *Session) handle(event CodecEvent) bool {
 
 func (session *Session) handleAudio(event AudioDelta) {
 	session.mu.Lock()
+	session.responseActive = true
 	active := session.ensureAssistantLocked(false, event.ItemID)
 	active.audio = append(active.audio, event.Data...)
 	if session.config.audioRetention == AudioRetentionOutput || session.config.audioRetention == AudioRetentionAll {
@@ -700,11 +879,12 @@ func (session *Session) handleAudio(event AudioDelta) {
 	session.publish(ai.PartDeltaEvent{Index: index, PartID: partID, Delta: ai.SpeechPartDelta{
 		Speaker: ai.SpeechSpeakerAssistant, AudioChunk: slices.Clone(event.Data),
 	}})
-	session.publishAudio(event.Data)
+	session.publishAudio(index, event.Data)
 }
 
 func (session *Session) handleOutputTranscript(event OutputTranscript) {
 	session.mu.Lock()
+	session.responseActive = true
 	active := session.ensureAssistantLocked(event.OutputText, event.ItemID)
 	previous := active.transcript
 	transcript, delta := accumulateTranscript(previous, event.Text, event.Final)
@@ -870,6 +1050,9 @@ func (session *Session) handleUsage(event SessionUsage) {
 }
 
 func (session *Session) finishResponse(event ResponseDone) {
+	if event.Interrupted && session.config.handleBargeIn {
+		session.flushAudioTaps()
+	}
 	session.mu.Lock()
 	session.finishAssistantPartLocked()
 	responseID := event.ProviderResponseID
@@ -911,11 +1094,15 @@ func (session *Session) finishResponse(event ResponseDone) {
 	session.pendingUsage = ai.Usage{}
 	session.pendingResponseID = ""
 	session.pendingFinish = ""
+	session.responseActive = false
+	session.serverCancelling = false
 	session.mu.Unlock()
 	session.publish(TurnCompleteEvent{Response: *cloneResponse(&response)})
+	go session.deliverEnqueued()
 }
 
 func (session *Session) handleToolCall(event ToolCall) {
+	session.setResponseActive(true)
 	call := ai.ToolCallPart{
 		ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: json.RawMessage(event.Arguments),
 	}
@@ -940,7 +1127,9 @@ func (session *Session) handleToolCall(event ToolCall) {
 		session.completeTool(call, result, nil)
 		return
 	}
-	toolCtx, cancel := context.WithCancel(session.ctx)
+	toolCtx, cancel := context.WithCancel(context.WithValue(
+		session.ctx, toolContextKey{}, toolContextValue{session: session, callID: call.ToolCallID},
+	))
 	session.toolMu.Lock()
 	session.toolCancels[call.ToolCallID] = cancel
 	session.toolMu.Unlock()
@@ -994,10 +1183,19 @@ func (session *Session) completeTool(call ai.ToolCallPart, part ai.RequestPart, 
 	if err := session.send(session.ctx, ToolResult{
 		ToolCallID: call.ToolCallID, Output: output, Content: slices.Clone(extra),
 	}); err != nil && !errors.Is(err, context.Canceled) {
-		session.fail(err)
+		session.mu.RLock()
+		closed := session.closed
+		session.mu.RUnlock()
+		if !closed {
+			session.fail(err)
+		}
 		return
 	}
 	session.mu.Lock()
+	if session.closed {
+		session.mu.Unlock()
+		return
+	}
 	requestParts := []ai.RequestPart{part}
 	if len(extra) > 0 {
 		requestParts = append(requestParts, ai.UserPromptPart{Contents: slices.Clone(extra)})
@@ -1073,6 +1271,8 @@ func (session *Session) cancelTools(ids []string) {
 }
 
 func (session *Session) publish(event Event) {
+	session.eventsMu.RLock()
+	defer session.eventsMu.RUnlock()
 	select {
 	case session.events <- eventResult{event: event}:
 	case <-session.ctx.Done():
@@ -1089,26 +1289,38 @@ func (session *Session) fail(err error) {
 		session.err = err
 	}
 	session.mu.Unlock()
+	session.eventsMu.RLock()
 	select {
 	case session.events <- eventResult{err: err}:
-	case <-session.ctx.Done():
+	default:
 	}
+	session.eventsMu.RUnlock()
 	session.cancel(err)
 }
 
-func (session *Session) publishAudio(data []byte) {
+func (session *Session) publishAudio(partIndex int, data []byte) {
 	session.tapMu.Lock()
 	defer session.tapMu.Unlock()
+	if session.hasInterruptedAudioPart && partIndex == session.interruptedAudioPartIndex {
+		return
+	}
+	if !session.hasAudioPart || partIndex != session.audioPartIndex {
+		session.audioPartIndex = partIndex
+		session.hasAudioPart = true
+		session.turnAudioStartBytes = session.emittedAudioBytes
+	}
+	session.emittedAudioBytes += len(data)
 	for tap := range session.audioTaps {
 		chunk := slices.Clone(data)
 		select {
-		case tap <- chunk:
+		case tap.queue <- chunk:
 		default:
 			select {
-			case <-tap:
+			case dropped := <-tap.queue:
+				tap.pendingDroppedBytes += len(dropped)
 			default:
 			}
-			tap <- chunk
+			tap.queue <- chunk
 		}
 	}
 }

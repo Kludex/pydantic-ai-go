@@ -92,7 +92,7 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsSeedingAudio = true
 	profile.SupportsAsyncToolCalls = true
 	profile.EmitsInputSpeechEvents = true
-	profile.SupportsThinking = strings.HasPrefix(name, "gpt-realtime-2")
+	profile.SupportsThinking = supportsThinking(name)
 	model := &Model{
 		name: name, apiKey: getenv("OPENAI_API_KEY"), baseURL: defaultBaseURL,
 		client: http.DefaultClient, headers: http.Header{}, profile: profile,
@@ -130,12 +130,15 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 	if err != nil {
 		return nil, err
 	}
+	config, _ := sessionConfig(params.Request, params.Settings, settings, model.profile)
 	return openaiprotocol.New(openaiprotocol.Config{
 		Provider: "OpenAI Realtime", Model: model.name, Socket: socket, ServerModel: serverModel,
 		Dial: dial, Mapper: MapEvent, Reconnect: params.Settings.Reconnect,
-		InputTranscriptionEnabled: transcriptionEnabled(params.Settings),
-		RestoresInFlightState:     false, SupportsImages: true,
-		OutputSampleRate: model.profile.AudioOutputSampleRate,
+		InputTranscriptionEnabled:  transcriptionEnabled(params.Settings),
+		RestoresInFlightState:      false,
+		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
+		SupportsImages:             true,
+		OutputSampleRate:           model.profile.AudioOutputSampleRate,
 	})
 }
 
@@ -694,6 +697,12 @@ func cloneMap(value map[string]any) map[string]any {
 		cloned[key] = item
 	}
 	return cloned
+}
+
+func supportsThinking(name string) bool {
+	const prefix = "gpt-realtime-2"
+	return strings.HasPrefix(name, prefix) &&
+		(len(name) == len(prefix) || name[len(prefix)] == '.' || name[len(prefix)] == '-')
 }
 
 var getenv = func(key string) string { return strings.TrimSpace(os.Getenv(key)) }

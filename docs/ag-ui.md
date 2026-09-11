@@ -108,6 +108,8 @@ func main() {
 
 `TransformStream` is useful when agent events arrive through a queue or durable workflow instead of an HTTP request.
 
+Cancel the context passed to `RunStream` to stop the agent run. The HTTP handler uses the request context, so a disconnected client cancels generation without a separate adapter token.
+
 ## Receive state and context
 
 Implement `RunInputReceiver` on your dependency value to receive frontend state, context, and forwarded properties before each run. The adapter supplies generated or client-provided thread and run IDs with the values.
@@ -161,7 +163,7 @@ Resume the same client-held history with a `resume` entry:
 
 Set `Config.Version` to the AG-UI version used by your frontend. The zero value targets `0.1.19`.
 
-Versions before `0.1.13` receive the legacy `THINKING_*` lifecycle. Version `0.1.13` and later receive `REASONING_*` events. The adapter carries reasoning signatures and provider metadata through `REASONING_ENCRYPTED_VALUE`. Version `0.1.14` and later use the `reasoning` message role.
+Versions before `0.1.11` receive the legacy `THINKING_*` lifecycle. Version `0.1.11` and later receive `REASONING_*` events. The adapter carries reasoning signatures and provider metadata through `REASONING_ENCRYPTED_VALUE`. Version `0.1.14` and later use the `reasoning` message role.
 
 Every event includes a Unix-millisecond `timestamp`. A canceled agent run closes any open text message and emits `RUN_FINISHED` without a success or interrupt outcome because AG-UI has no cancellation outcome.
 
@@ -181,7 +183,7 @@ Keep those activity messages in client-held history. The adapter reconstructs `C
 
 ## Preserve typed tools
 
-AG-UI `0.1.13` and later receives namespaced `REASONING_ENCRYPTED_VALUE` events for typed tool calls and non-successful results. Echo those encrypted values on `ToolCall.encryptedValue` and tool-message `encryptedValue` fields. The adapter accepts only known tool kinds and failed, denied, or interrupted outcomes. Invalid client claims degrade to ordinary tool history.
+AG-UI `0.1.11` and later receives namespaced `REASONING_ENCRYPTED_VALUE` events for typed tool calls and non-successful results. Echo those encrypted values on `ToolCall.encryptedValue` and tool-message `encryptedValue` fields. The adapter accepts only known tool kinds and failed, denied, or interrupted outcomes. Invalid client claims degrade to ordinary tool history.
 
 Provider-native calls use `pyd_ai_builtin|<provider>|<call-id>` protocol IDs. The adapter restores the original provider and call ID when history returns.
 

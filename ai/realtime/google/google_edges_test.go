@@ -179,6 +179,7 @@ func TestGoogleConnectionEventsAndSendErrors(t *testing.T) {
 func TestGoogleSendFailures(t *testing.T) {
 	for _, input := range []realtime.Input{
 		realtime.AudioInput{Data: []byte{1, 0}}, realtime.ImageInput{}, realtime.TextInput{Text: "text"},
+		realtime.TextContext{Text: "context"},
 		realtime.ToolResult{ToolCallID: "call", Output: "result"},
 	} {
 		live := newFakeSession()

@@ -21,6 +21,20 @@ type providerSession struct{ provider, id string }
 func (session providerSession) ProviderName() string { return session.provider }
 func (session providerSession) SessionID() string    { return session.id }
 
+func TestDatazoneModelsUseVoiceLive(t *testing.T) {
+	for _, name := range []string{"gpt-realtime-datazone", "gpt-realtime-1.5-datazone"} {
+		model, err := azurert.NewModel(name, azurert.Config{
+			Endpoint: "https://example.openai.azure.com", APIKey: "key",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if model.Profile().SupportsWebRTC {
+			t.Fatalf("%s unexpectedly supports WebRTC", name)
+		}
+	}
+}
+
 func TestAzureGARealtimeSession(t *testing.T) {
 	var mutex sync.Mutex
 	var update map[string]any

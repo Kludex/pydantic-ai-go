@@ -23,11 +23,18 @@ type Capability interface {
 	Setup(reg *CapabilityRegistry) error
 }
 
-// CapabilityIDProvider optionally gives instruction contributions a stable
-// application source ID.
+// CapabilityIDProvider gives a capability a stable identity. The ID qualifies
+// instruction names and lets a run replace the matching agent capability.
 type CapabilityIDProvider interface {
-	// CapabilityID returns the stable source ID used to qualify instruction names.
+	// CapabilityID returns the stable identity of this capability.
 	CapabilityID() string
+}
+
+// CapabilityCombiner resolves repeated capabilities with the same ID in one
+// registration layer. Implementations must not mutate the supplied values.
+type CapabilityCombiner interface {
+	// CombineCapabilities combines same-type capabilities in registration order.
+	CombineCapabilities(capabilities []Capability) (Capability, error)
 }
 
 // CapabilityRegistry collects what a capability contributes at setup.
@@ -42,6 +49,15 @@ type CapabilityRegistry struct {
 type capabilityTool struct {
 	def  ToolDefinition
 	call func(ctx context.Context, rawArgs json.RawMessage) (any, error)
+}
+
+type capabilitySetup struct {
+	instructionSourceID string
+	instructions        []InstructionPart
+	tools               []capabilityTool
+	nativeTools         []NativeTool
+	nativeOrLocal       []any
+	settings            []ModelSettings
 }
 
 // AddTool registers a tool from an explicit definition, like Agent.AddRawTool.
@@ -315,10 +331,6 @@ func CombineCapabilities(capabilities ...Capability) Capability {
 func flattenCapabilities(capabilities []Capability) []Capability {
 	var flattened []Capability
 	for _, capability := range capabilities {
-		if combined, ok := capability.(combinedCapability); ok {
-			flattened = append(flattened, flattenCapabilities(combined.capabilities)...)
-			continue
-		}
 		flattened = append(flattened, capability)
 		if wrapper, ok := capability.(interface{ wrappedCapability() Capability }); ok {
 			wrapped := wrapper.wrappedCapability()
@@ -357,7 +369,7 @@ func capabilityRunIDs(capabilities []Capability) []string {
 // WithCapabilities registers capabilities on the agent. Slice order is
 // middleware order: the first capability is outermost.
 func WithCapabilities(capabilities ...Capability) Option {
-	capabilities = flattenCapabilities(capabilities)
+	capabilities = slices.Clone(capabilities)
 	return func(config *config) {
 		config.capabilities = append(config.capabilities, capabilities...)
 	}

@@ -16,6 +16,9 @@ type ModelProfile struct {
 	// SupportsAudioInput allows retained SpeechPart audio to replace its transcript
 	// when realtime history is prepared for a standard model.
 	SupportsAudioInput bool
+	// SupportsToolAvailabilityDelta lets the provider render tool reveals directly.
+	// Other models receive a provider-neutral tool-search call and result.
+	SupportsToolAvailabilityDelta bool
 	// ContextWindow is the maximum combined input and output token count.
 	// Zero means the limit is unknown.
 	ContextWindow int
@@ -80,6 +83,14 @@ func (wrapper *ModelWrapper) ModelProfile() ModelProfile {
 
 // ContextWindow delegates context-window discovery to the wrapped model.
 func (wrapper *ModelWrapper) ContextWindow() int { return modelContextWindow(wrapper.wrapped) }
+
+// SupportsToolAvailabilityDelta delegates request-specific reveal support.
+func (wrapper *ModelWrapper) SupportsToolAvailabilityDelta(params ModelRequestParams) bool {
+	if model, ok := wrapper.wrapped.(ToolAvailabilityDeltaModel); ok {
+		return model.SupportsToolAvailabilityDelta(params)
+	}
+	return modelProfile(wrapper.wrapped).SupportsToolAvailabilityDelta
+}
 
 // DispatchesOutputProfile reports whether the wrapped composite resolves profiles per child model.
 func (wrapper *ModelWrapper) DispatchesOutputProfile() bool {

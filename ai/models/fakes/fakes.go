@@ -22,6 +22,11 @@ func NewFunctionModel(fn func(ctx context.Context, msgs []ai.ModelMessage, param
 // Name returns the stable fake model name.
 func (m *FunctionModel) Name() string { return "function-model" }
 
+// ModelProfile keeps provider-neutral tool availability parts visible to tests.
+func (*FunctionModel) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, SupportsToolAvailabilityDelta: true}
+}
+
 // SupportsNativeTool lets FunctionModel inspect every provider-neutral native tool.
 func (*FunctionModel) SupportsNativeTool(tool ai.NativeTool) bool {
 	return ai.ValidateNativeTools([]ai.NativeTool{tool}) == nil
@@ -54,6 +59,11 @@ func NewTestModel() *TestModel { return &TestModel{} }
 
 // Name returns the stable test model name.
 func (m *TestModel) Name() string { return "test-model" }
+
+// ModelProfile keeps provider-neutral tool availability parts visible to tests.
+func (*TestModel) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, SupportsToolAvailabilityDelta: true}
+}
 
 // Request calls the next uncalled function tool or returns generated output.
 func (m *TestModel) Request(_ context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {

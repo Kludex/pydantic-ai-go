@@ -3,6 +3,7 @@ package ai_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -19,6 +20,108 @@ type namedModel struct{ name string }
 func (model namedModel) Name() string { return model.name }
 func (namedModel) Request(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
 	return nil, errors.New("unexpected request")
+}
+
+func TestRepeatedImageCapabilitiesRebuildFallbackFromMergedConfig(t *testing.T) {
+	inner := imageOutputModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		tool := params.NativeTools[0].(ai.ImageGenerationTool)
+		if tool.Quality != ai.ImageGenerationQualityHigh || tool.Size != ai.ImageGenerationSize2K {
+			t.Fatalf("merged image settings did not reach rebuilt fallback: %#v", tool)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.FilePart{Content: ai.BinaryContent{
+			Data: []byte("image"), MediaType: "image/png",
+		}}}}, nil
+	})
+	outerCalls := 0
+	outer := &noNativeFunctionModel{fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		outerCalls++
+		if outerCalls == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: params.Tools[0].Name, ToolCallID: "image", Args: []byte(`{"prompt":"draw"}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})}
+	agent := ai.NewAgent[struct{}, string](outer, ai.WithCapabilities(
+		ai.NewImageGenerationCapabilityWithFallback(ai.ImageGenerationSubagentConfig[struct{}]{
+			Model: inner, Native: ai.ImageGenerationTool{Quality: ai.ImageGenerationQualityHigh},
+		}),
+		ai.NewImageGenerationCapabilityWithFallback(ai.ImageGenerationSubagentConfig[struct{}]{
+			Model: inner, Native: ai.ImageGenerationTool{Size: ai.ImageGenerationSize2K},
+		}),
+	))
+	if result, err := agent.Run(t.Context(), "draw", struct{}{}); err != nil || result.Output != "done" {
+		t.Fatalf("merged image fallback failed: result=%+v err=%v", result, err)
+	}
+}
+
+func TestDynamicImageGenerationFallbackValidation(t *testing.T) {
+	defer func() {
+		if recovered := fmt.Sprint(recover()); !strings.Contains(recovered, "resolver must not be nil") {
+			t.Fatalf("unexpected panic: %s", recovered)
+		}
+	}()
+	ai.NewDynamicImageGenerationCapabilityWithFallback[struct{}](nil, ai.ImageGenerationSubagentConfig[struct{}]{
+		Model: imageOutputModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+			return nil, errors.New("unused")
+		}),
+	})
+}
+
+func TestImageGenerationSubagentNativeResolverError(t *testing.T) {
+	sentinel := errors.New("native settings")
+	tool := ai.NewImageGenerationSubagentTool(ai.ImageGenerationSubagentConfig[struct{}]{
+		Model: imageOutputModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+			return nil, errors.New("unused")
+		}),
+		ResolveNative: func(context.Context, *ai.RunContext[struct{}]) (ai.ImageGenerationTool, error) {
+			return ai.ImageGenerationTool{}, sentinel
+		},
+	})
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	agent.AddTool(tool)
+	if _, err := agent.Run(t.Context(), "draw", struct{}{}); !errors.Is(err, sentinel) {
+		t.Fatalf("unexpected native resolver error: %v", err)
+	}
+}
+
+func TestDynamicImageGenerationFallbackPreservesNativeConfig(t *testing.T) {
+	inner := imageOutputModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		tool := params.NativeTools[0].(ai.ImageGenerationTool)
+		if tool.Quality != ai.ImageGenerationQualityHigh || tool.Size != ai.ImageGenerationSize2K {
+			t.Fatalf("dynamic image settings did not reach fallback: %#v", tool)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.FilePart{Content: ai.BinaryContent{
+			Data: []byte("image"), MediaType: "image/png",
+		}}}}, nil
+	})
+	outerCalls := 0
+	outer := &noNativeFunctionModel{fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		outerCalls++
+		if outerCalls == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: params.Tools[0].Name, ToolCallID: "image", Args: []byte(`{"prompt":"draw"}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})}
+	resolve := func(context.Context, *ai.RunContext[string]) (ai.ImageGenerationTool, error) {
+		return ai.ImageGenerationTool{Quality: ai.ImageGenerationQualityHigh, Size: ai.ImageGenerationSize2K}, nil
+	}
+	agent := ai.NewAgent[string, string](outer, ai.WithCapabilities(
+		ai.NewDynamicImageGenerationCapabilityWithFallback(resolve, ai.ImageGenerationSubagentConfig[string]{Model: inner}),
+	))
+	if result, err := agent.Run(t.Context(), "draw", "tenant"); err != nil || result.Output != "done" {
+		t.Fatalf("dynamic image fallback failed: result=%+v err=%v", result, err)
+	}
 }
 
 func TestImageGenerationSubagentFallback(t *testing.T) {

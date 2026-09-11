@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- Capabilities with stable IDs now combine within one registration layer and are replaced as complete wrapper subtrees by matching run capabilities. Invalid collisions and unsafe default merges fail before execution.
+- Dynamic image-generation and X-search fallback subagents now resolve the same native configuration as the outer path. Models without native tool-availability deltas receive provider-neutral synthetic search exchanges without splitting parallel result batches.
 - All library packages now live under `ai/`. The core package uses `github.com/Kludex/pydantic-ai-go/ai`, and subpackages use paths such as `github.com/Kludex/pydantic-ai-go/ai/models/openai`.
 - Browser chat now serves PydanticAI's official `@pydantic/ai-chat-ui` with cached remote or local HTML, model and native-tool selectors, approval continuation, and configuration and health endpoints. `webchat.Config.AllowedHosts` now permits only IP addresses and localhost by default; set it to `[]string{"*"}` only to restore unrestricted host access behind an authentication boundary.
 

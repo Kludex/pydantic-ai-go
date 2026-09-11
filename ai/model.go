@@ -69,7 +69,7 @@ func CountModelTokens(
 	if err := validateModelSettings(request.Params.Settings); err != nil {
 		return Usage{}, err
 	}
-	preparedMessages, err := PrepareModelMessages(model, request.Messages)
+	preparedMessages, err := prepareModelMessages(model, request.Messages, &request.Params)
 	if err != nil {
 		return Usage{}, err
 	}
@@ -99,7 +99,7 @@ func CompactModelMessages(
 	if err := validateModelSettings(request.Params.Settings); err != nil {
 		return nil, err
 	}
-	preparedMessages, err := PrepareModelMessages(model, request.Messages)
+	preparedMessages, err := prepareModelMessages(model, request.Messages, &request.Params)
 	if err != nil {
 		return nil, err
 	}
@@ -139,6 +139,13 @@ type ToolSearchStrategyModel interface {
 type NativeToolSupportModel interface {
 	// SupportsNativeTool reports whether the selected model and transport support tool.
 	SupportsNativeTool(tool NativeTool) bool
+}
+
+// ToolAvailabilityDeltaModel is implemented by models that can render tool
+// availability deltas for the current request without synthetic tool-search turns.
+type ToolAvailabilityDeltaModel interface {
+	// SupportsToolAvailabilityDelta reports whether params enable native reveal rendering.
+	SupportsToolAvailabilityDelta(params ModelRequestParams) bool
 }
 
 // NativeToolSearchHistoryModel is implemented by models that can replay

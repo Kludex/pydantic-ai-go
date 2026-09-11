@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -49,9 +48,9 @@ type Agent[Deps, Output any] struct {
 	endStrategy        EndStrategy
 	sequentialTools    bool
 	capabilities       []Capability
-	capInstructions    []InstructionPart
-	capSettings        []capabilitySettingsLayer
-	capInstructionIDs  map[string]struct{}
+	capabilityRoots    []Capability
+	capabilityRootIDs  []string
+	capabilitySetups   []capabilitySetup
 	outputValidators   []func(ctx context.Context, rc *RunContext[Deps], out Output) error
 	eventListeners     []EventListenerFunc[Deps]
 
@@ -84,7 +83,7 @@ type systemPromptRunner[Deps any] struct {
 func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output] {
 	a := &Agent[Deps, Output]{
 		model: model, retryLimits: RetryLimits{Tools: 1, Output: 1}, outputMode: OutputModeAuto,
-		endStrategy: EndStrategyGraceful, capInstructionIDs: make(map[string]struct{}),
+		endStrategy: EndStrategyGraceful,
 	}
 	var cfg config
 	for _, opt := range opts {
@@ -129,7 +128,13 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		panic(err.Error())
 	}
 	var err error
-	a.capabilities, err = sortCapabilities(cfg.capabilities, cfg.capabilities)
+	a.capabilityRoots, err = combineCapabilityLayer(cfg.capabilities)
+	if err != nil {
+		panic(fmt.Sprintf("ai: capability composition: %v", err))
+	}
+	entries, err := sortCapabilityEntries(
+		capabilityEntriesForRoots(a.capabilityRoots), flattenCapabilities(a.capabilityRoots),
+	)
 	if err != nil {
 		panic(fmt.Sprintf("ai: capability ordering: %v", err))
 	}
@@ -137,62 +142,54 @@ func NewAgent[Deps, Output any](model Model, opts ...Option) *Agent[Deps, Output
 		validateRetryLimits(*cfg.retryLimits)
 		a.retryLimits = *cfg.retryLimits
 	}
-	for _, capability := range a.capabilities {
+	candidateNativeEntries := cloneNativeToolEntries(a.nativeToolEntries)
+	capInstructionIDs := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		capability := entry.capability
+		a.capabilities = append(a.capabilities, capability)
+		a.capabilityRootIDs = append(a.capabilityRootIDs, entry.rootID)
 		reg := &CapabilityRegistry{}
 		if err := capability.Setup(reg); err != nil {
 			panic(fmt.Sprintf("ai: capability setup: %v", err))
 		}
-		source, err := capabilityInstructionSource(capability)
-		if err != nil {
-			panic(fmt.Sprintf("ai: capability instructions: %v", err))
+		var source *InstructionSource
+		if capabilityContributesInstructions(capability, reg.instructions) {
+			source, err = capabilityInstructionSource(capability)
+			if err != nil {
+				panic(fmt.Sprintf("ai: capability instructions: %v", err))
+			}
 		}
 		instructions, err := qualifyInstructionParts(reg.instructions, source)
 		if err != nil {
 			panic(fmt.Sprintf("ai: capability instructions: %v", err))
 		}
 		if source != nil && capabilityContributesInstructions(capability, instructions) {
-			if _, duplicate := a.capInstructionIDs[source.ID]; duplicate {
+			if _, duplicate := capInstructionIDs[source.ID]; duplicate {
 				panic(fmt.Sprintf(
 					"ai: capability ID %q is used by multiple capabilities that contribute instructions", source.ID,
 				))
 			}
-			a.capInstructionIDs[source.ID] = struct{}{}
+			capInstructionIDs[source.ID] = struct{}{}
 		}
-		a.capInstructions = append(a.capInstructions, instructions...)
-		for _, tool := range reg.tools {
-			fn := tool.call
-			a.tools = append(a.tools, toolEntry[Deps]{
-				def: cloneToolDefinition(tool.def),
-				validate: func(_ context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
-					return slices.Clone(rawArgs), nil
-				},
-				execute: func(ctx context.Context, _ *RunContext[Deps], validated any) (any, error) {
-					rawArgs, ok := validated.(json.RawMessage)
-					if !ok {
-						return nil, fmt.Errorf(
-							"validated arguments for tool %q have type %T, expected json.RawMessage", tool.def.Name, validated,
-						)
-					}
-					return fn(ctx, rawArgs)
-				},
-			})
+		setup := capabilitySetup{
+			instructions: instructions, tools: slices.Clone(reg.tools), nativeTools: CloneNativeTools(reg.nativeTools),
+			nativeOrLocal: slices.Clone(reg.nativeOrLocal), settings: cloneModelSettingsSlice(reg.modelSettings),
 		}
+		if source != nil && capabilityContributesInstructions(capability, instructions) {
+			setup.instructionSourceID = source.ID
+		}
+		a.capabilitySetups = append(a.capabilitySetups, setup)
 		for _, tool := range reg.nativeTools {
-			a.nativeToolEntries = append(a.nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
+			candidateNativeEntries = append(candidateNativeEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
 		}
 		if len(reg.nativeOrLocal) > 0 {
-			entries, toolsets, err := registerNativeOrLocal(a.nativeToolEntries, a.toolsets, reg.nativeOrLocal)
+			candidateNativeEntries, _, err = registerNativeOrLocal(candidateNativeEntries, nil, reg.nativeOrLocal)
 			if err != nil {
 				panic(fmt.Sprintf("ai: capability native-or-local setup: %v", err))
 			}
-			a.nativeToolEntries = entries
-			a.toolsets = toolsets
 		}
-		a.capSettings = append(a.capSettings, capabilitySettingsLayer{
-			static: reg.modelSettings, provider: capabilityModelSettingsProvider(capability),
-		})
 	}
-	if err := ValidateNativeTools(staticNativeTools(a.nativeToolEntries)); err != nil {
+	if err := ValidateNativeTools(staticNativeTools(candidateNativeEntries)); err != nil {
 		panic(err.Error())
 	}
 	return a
@@ -705,7 +702,7 @@ func WithRunToolsets[Deps any](toolsets ...Toolset[Deps]) RunOption {
 // WithRunCapabilities adds capabilities for one run without modifying the
 // agent. Agent capabilities remain outermost in middleware order.
 func WithRunCapabilities(capabilities ...Capability) RunOption {
-	capabilities = flattenCapabilities(capabilities)
+	capabilities = slices.Clone(capabilities)
 	return func(config *runConfig) {
 		config.capabilities = append(config.capabilities, capabilities...)
 	}

@@ -215,7 +215,8 @@ type InstructionsProvider interface {
 ```
 
 - Untyped boundary (`RunContextAny`): capabilities are reusable across agents with different `Deps`/`Output`.
-- Ordering: slice order, first is outermost. PydanticAI's tier/edge ordering system is deferred until an ecosystem demands it.
+- Ordering: slice order is the stable tiebreaker, first is outermost. Fixed tiers and relative constraints can place capabilities around one another without changing registration order.
+- Stable capability IDs combine repeated declarations within one agent or run layer. A run declaration replaces the complete matching agent wrapper subtree. Cross-type IDs and repeated IDs without an explicit combine policy are rejected.
 - No graph nodes leak into hooks - the loop has exactly three interception points: run, model request, tool call.
 - Out of scope permanently: on-demand capability loading, self-extension. Harness territory.
 

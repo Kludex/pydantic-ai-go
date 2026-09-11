@@ -27,6 +27,8 @@ type XSearchSubagentConfig[Deps any] struct {
 	ResolveModel XSearchFallbackModelFunc[Deps]
 	// Native configures the subagent's provider-hosted X-search tool.
 	Native XSearchTool
+	// ResolveNative resolves X-search settings from the outer tool-call context.
+	ResolveNative XSearchFunc[Deps]
 	// Instructions overrides the default X-search prompt.
 	Instructions string
 }
@@ -55,10 +57,18 @@ func NewXSearchSubagentTool[Deps any](config XSearchSubagentConfig[Deps]) Tool[D
 				return "", errors.New("ai: X-search model resolver returned nil")
 			}
 		}
+		resolvedNative := native
+		if config.ResolveNative != nil {
+			var err error
+			resolvedNative, err = config.ResolveNative(ctx, rc.clone())
+			if err != nil {
+				return "", err
+			}
+		}
 		agent := NewAgent[struct{}, string](
 			model,
 			WithInstructions(instructions),
-			WithCapabilities(NewXSearchCapability(XSearchCapabilityConfig[struct{}]{Native: native})),
+			WithCapabilities(NewXSearchCapability(XSearchCapabilityConfig[struct{}]{Native: resolvedNative})),
 		)
 		result, err := agent.Run(ctx, args.Query, struct{}{})
 		if err != nil {
@@ -79,8 +89,31 @@ func NewXSearchSubagentTool[Deps any](config XSearchSubagentConfig[Deps]) Tool[D
 // The fallback subagent enforces the same handle, date, media-understanding, and output settings.
 func NewXSearchCapabilityWithFallback[Deps any](config XSearchSubagentConfig[Deps]) *NativeOrLocalTool[Deps] {
 	native := cloneNativeTool(config.Native).(XSearchTool)
-	return NewNativeOrLocalTool(
+	capability := NewNativeOrLocalTool(
 		native,
 		NewXSearchSubagentTool(config),
+	)
+	capability.registration.rebuildLocal = func(native NativeTool) Toolset[Deps] {
+		updated := config
+		updated.Native = native.(XSearchTool)
+		return NewFunctionToolset(NewXSearchSubagentTool(updated))
+	}
+	return capability
+}
+
+// NewDynamicXSearchCapabilityWithFallback creates dynamic native-first X search
+// with a subagent that resolves the same settings when used.
+func NewDynamicXSearchCapabilityWithFallback[Deps any](
+	resolve XSearchFunc[Deps], config XSearchSubagentConfig[Deps], options ...NativeOrLocalOption,
+) *NativeOrLocalTool[Deps] {
+	if resolve == nil {
+		panic("ai: dynamic X-search resolver must not be nil")
+	}
+	config.ResolveNative = resolve
+	return NewDynamicNativeOrLocalToolset(
+		"x_search",
+		func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error) { return resolve(ctx, rc) },
+		NewFunctionToolset(NewXSearchSubagentTool(config)),
+		options...,
 	)
 }

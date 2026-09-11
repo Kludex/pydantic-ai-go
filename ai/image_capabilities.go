@@ -27,10 +27,16 @@ func NewImageGenerationCapability[Deps any](
 func NewImageGenerationCapabilityWithFallback[Deps any](
 	config ImageGenerationSubagentConfig[Deps],
 ) *NativeOrLocalTool[Deps] {
-	return NewImageGenerationCapability(ImageGenerationCapabilityConfig[Deps]{
+	capability := NewImageGenerationCapability(ImageGenerationCapabilityConfig[Deps]{
 		Native: config.Native,
 		Local:  NewFunctionToolset(NewImageGenerationSubagentTool(config)),
 	})
+	capability.registration.rebuildLocal = func(native NativeTool) Toolset[Deps] {
+		updated := config
+		updated.Native = native.(ImageGenerationTool)
+		return NewFunctionToolset(NewImageGenerationSubagentTool(updated))
+	}
+	return capability
 }
 
 // ImageGenerationFunc resolves native image-generation settings before a model request.
@@ -54,5 +60,19 @@ func NewDynamicImageGenerationCapability[Deps any](
 		},
 		local,
 		options...,
+	)
+}
+
+// NewDynamicImageGenerationCapabilityWithFallback creates dynamic native-first
+// image generation with a subagent that resolves the same settings when used.
+func NewDynamicImageGenerationCapabilityWithFallback[Deps any](
+	resolve ImageGenerationFunc[Deps], config ImageGenerationSubagentConfig[Deps], options ...NativeOrLocalOption,
+) *NativeOrLocalTool[Deps] {
+	if resolve == nil {
+		panic("ai: dynamic image-generation resolver must not be nil")
+	}
+	config.ResolveNative = resolve
+	return NewDynamicImageGenerationCapability(
+		resolve, NewFunctionToolset(NewImageGenerationSubagentTool(config)), options...,
 	)
 }

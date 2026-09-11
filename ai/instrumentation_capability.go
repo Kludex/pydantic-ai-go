@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 	"sync"
 
 	"go.opentelemetry.io/otel/attribute"
@@ -20,12 +21,34 @@ type Instrumentation struct {
 	runtime      *InstrumentedModel
 	agentName    string
 	agentNameSet bool
+	options      []InstrumentationOption
 }
 
 // NewInstrumentation creates an outermost instrumentation capability.
 func NewInstrumentation(options ...InstrumentationOption) *Instrumentation {
 	runtime, agentName, agentNameSet := newInstrumentationRuntime(options)
-	return &Instrumentation{runtime: runtime, agentName: agentName, agentNameSet: agentNameSet}
+	return &Instrumentation{
+		runtime: runtime, agentName: agentName, agentNameSet: agentNameSet, options: slices.Clone(options),
+	}
+}
+
+// CapabilityID identifies the single instrumentation policy for a run.
+func (*Instrumentation) CapabilityID() string { return "instrumentation" }
+
+// CombineCapabilities lets the latest instrumentation policy replace earlier declarations.
+func (*Instrumentation) CombineCapabilities(capabilities []Capability) (Capability, error) {
+	if len(capabilities) == 0 {
+		return nil, fmt.Errorf("ai: cannot combine an empty instrumentation capability collection")
+	}
+	var options []InstrumentationOption
+	for _, capability := range capabilities {
+		instrumentation, ok := capability.(*Instrumentation)
+		if !ok {
+			return nil, fmt.Errorf("ai: instrumentation capability has incompatible type %T", capability)
+		}
+		options = append(options, instrumentation.options...)
+	}
+	return NewInstrumentation(options...), nil
 }
 
 // Setup implements Capability.

@@ -34,6 +34,18 @@ type Model struct {
 	legacyBedrockClient LegacyBedrockClient
 }
 
+// ModelProfile reports native tool-availability support for compatible Anthropic models.
+func (m *Model) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{
+		DefaultOutputMode: ai.OutputModeTool, SupportsToolAvailabilityDelta: m.deferredToolSupport,
+	}
+}
+
+// SupportsToolAvailabilityDelta reports whether this request can render native tool additions.
+func (m *Model) SupportsToolAvailabilityDelta(params ai.ModelRequestParams) bool {
+	return m.deferredToolSupport && len(params.DeferredTools) > 0 && hasStableAnthropicTool(params)
+}
+
 // Option configures a Model.
 type Option func(*Model)
 

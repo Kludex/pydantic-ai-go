@@ -468,8 +468,8 @@ func TestInstructionContributionErrors(t *testing.T) {
 	base := ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithCapabilities(duplicate))
 	if _, err := base.Run(
 		t.Context(), "hello", struct{}{}, ai.WithRunCapabilities(duplicate),
-	); err == nil || !strings.Contains(err.Error(), "multiple capabilities") {
-		t.Fatalf("duplicate run capability instruction ID was accepted: %v", err)
+	); err != nil {
+		t.Fatalf("run capability did not replace the matching agent capability: %v", err)
 	}
 
 	toolsetOne := identifiedInstructionToolset{

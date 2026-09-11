@@ -3,6 +3,8 @@ package ai_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,81 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
+
+func TestRepeatedXSearchCapabilitiesRebuildFallback(t *testing.T) {
+	inner := fakes.NewTestModel()
+	first := ai.NewXSearchCapabilityWithFallback(ai.XSearchSubagentConfig[struct{}]{
+		Model: inner, Native: ai.XSearchTool{EnableImageUnderstanding: true},
+	})
+	second := ai.NewXSearchCapabilityWithFallback(ai.XSearchSubagentConfig[struct{}]{
+		Model: inner, Native: ai.XSearchTool{IncludeOutput: true},
+	})
+	if _, err := second.CombineCapabilities([]ai.Capability{first, second}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDynamicXSearchFallbackValidation(t *testing.T) {
+	defer func() {
+		if recovered := fmt.Sprint(recover()); !strings.Contains(recovered, "resolver must not be nil") {
+			t.Fatalf("unexpected panic: %s", recovered)
+		}
+	}()
+	ai.NewDynamicXSearchCapabilityWithFallback[struct{}](nil, ai.XSearchSubagentConfig[struct{}]{
+		Model: fakes.NewTestModel(),
+	})
+}
+
+func TestXSearchSubagentNativeResolverError(t *testing.T) {
+	sentinel := errors.New("native settings")
+	tool := ai.NewXSearchSubagentTool(ai.XSearchSubagentConfig[struct{}]{
+		Model: fakes.NewTestModel(),
+		ResolveNative: func(context.Context, *ai.RunContext[struct{}]) (ai.XSearchTool, error) {
+			return ai.XSearchTool{}, sentinel
+		},
+	})
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	agent.AddTool(tool)
+	if _, err := agent.Run(t.Context(), "search", struct{}{}); !errors.Is(err, sentinel) {
+		t.Fatalf("unexpected native resolver error: %v", err)
+	}
+}
+
+func TestDynamicXSearchFallbackPreservesNativeConfig(t *testing.T) {
+	inner := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		tool := params.NativeTools[0].(ai.XSearchTool)
+		if !tool.IncludeOutput || !tool.EnableImageUnderstanding ||
+			!slices.Equal(tool.AllowedXHandles, []string{"pydantic"}) {
+			t.Fatalf("dynamic X-search settings did not reach fallback: %#v", tool)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "results"}}}, nil
+	})
+	outerCalls := 0
+	outer := &noNativeFunctionModel{fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		outerCalls++
+		if outerCalls == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: params.Tools[0].Name, ToolCallID: "search", Args: []byte(`{"query":"Go"}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})}
+	resolve := func(context.Context, *ai.RunContext[string]) (ai.XSearchTool, error) {
+		return ai.XSearchTool{
+			AllowedXHandles: []string{"pydantic"}, IncludeOutput: true, EnableImageUnderstanding: true,
+		}, nil
+	}
+	agent := ai.NewAgent[string, string](outer, ai.WithCapabilities(
+		ai.NewDynamicXSearchCapabilityWithFallback(resolve, ai.XSearchSubagentConfig[string]{Model: inner}),
+	))
+	if result, err := agent.Run(t.Context(), "search", "tenant"); err != nil || result.Output != "done" {
+		t.Fatalf("dynamic X-search fallback failed: result=%+v err=%v", result, err)
+	}
+}
 
 func TestXSearchToolValidationAndDetachment(t *testing.T) {
 	from := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.UTC)

@@ -80,9 +80,25 @@ func (m *ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
 	}
 }
 
-// ModelProfile reports support for provider-generated image output.
-func (*ResponsesModel) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, SupportsImageOutput: true}
+// ModelProfile reports support for generated images and native tool reveals.
+func (m *ResponsesModel) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{
+		DefaultOutputMode: ai.OutputModeTool, SupportsImageOutput: true,
+		SupportsToolAvailabilityDelta: m.deferredToolSupport,
+	}
+}
+
+// SupportsToolAvailabilityDelta reports whether this request enables hosted tool search.
+func (m *ResponsesModel) SupportsToolAvailabilityDelta(params ai.ModelRequestParams) bool {
+	if !m.deferredToolSupport || len(params.DeferredTools) == 0 {
+		return false
+	}
+	for _, tool := range params.Tools {
+		if tool.Name == ai.ToolSearchName && tool.ToolKind == ai.ToolPartKindToolSearch {
+			return true
+		}
+	}
+	return false
 }
 
 // ProviderName returns the durable provider identity.

@@ -138,21 +138,62 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, fmt.Errorf("ai: run model, model ID, and model selector are mutually exclusive")
 	}
-	availableCapabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
-	runCapabilities, err := sortCapabilities(cfg.capabilities, availableCapabilities)
+	runRoots, err := combineCapabilityLayer(cfg.capabilities)
+	if err != nil {
+		cancellation.finish()
+		return nil, fmt.Errorf("ai: run capability composition: %w", err)
+	}
+	if err := validateCapabilityLayers(a.capabilityRoots, runRoots); err != nil {
+		cancellation.finish()
+		return nil, fmt.Errorf("ai: run capability composition: %w", err)
+	}
+	overridden := make(map[string]struct{}, len(runRoots))
+	for _, capability := range runRoots {
+		if id := capabilityIdentity(capability); id != "" {
+			overridden[id] = struct{}{}
+		}
+	}
+	var agentCapabilities []Capability
+	var setups []capabilitySetup
+	for index, capability := range a.capabilities {
+		if _, replaced := overridden[a.capabilityRootIDs[index]]; replaced && a.capabilityRootIDs[index] != "" {
+			continue
+		}
+		agentCapabilities = append(agentCapabilities, capability)
+		setups = append(setups, a.capabilitySetups[index])
+	}
+	runEntries, err := sortCapabilityEntries(
+		capabilityEntriesForRoots(runRoots), append(slices.Clone(agentCapabilities), flattenCapabilities(runRoots)...),
+	)
 	if err != nil {
 		cancellation.finish()
 		return nil, fmt.Errorf("ai: run capability ordering: %w", err)
 	}
-	capabilities := append(slices.Clone(a.capabilities), runCapabilities...)
-	runCapabilityInstructions := []InstructionPart(nil)
-	capSettings := slices.Clone(a.capSettings)
-	var runCapabilityTools []capabilityTool
-	var runCapabilityNativeTools []NativeTool
-	var runNativeOrLocal []any
-	capInstructionIDs := make(map[string]struct{}, len(a.capInstructionIDs)+len(runCapabilities))
-	for id := range a.capInstructionIDs {
-		capInstructionIDs[id] = struct{}{}
+	runCapabilities := make([]Capability, len(runEntries))
+	for index, entry := range runEntries {
+		runCapabilities[index] = entry.capability
+	}
+	capabilities := append(slices.Clone(agentCapabilities), runCapabilities...)
+	var capabilityInstructions []InstructionPart
+	var capSettings []capabilitySettingsLayer
+	var capabilityTools []capabilityTool
+	var capabilityNativeTools []NativeTool
+	var nativeOrLocal []any
+	capInstructionIDs := make(map[string]struct{}, len(capabilities))
+	appendSetup := func(capability Capability, setup capabilitySetup) {
+		capabilityInstructions = append(capabilityInstructions, cloneInstructionParts(setup.instructions)...)
+		capabilityTools = append(capabilityTools, setup.tools...)
+		capabilityNativeTools = append(capabilityNativeTools, CloneNativeTools(setup.nativeTools)...)
+		nativeOrLocal = append(nativeOrLocal, setup.nativeOrLocal...)
+		capSettings = append(capSettings, capabilitySettingsLayer{
+			static: cloneModelSettingsSlice(setup.settings), provider: capabilityModelSettingsProvider(capability),
+		})
+	}
+	for index, capability := range agentCapabilities {
+		if sourceID := setups[index].instructionSourceID; sourceID != "" {
+			capInstructionIDs[sourceID] = struct{}{}
+		}
+		appendSetup(capability, setups[index])
 	}
 	for _, capability := range runCapabilities {
 		registry := &CapabilityRegistry{}
@@ -160,31 +201,35 @@ func (a *Agent[Deps, Output]) newRun(
 			cancellation.finish()
 			return nil, fmt.Errorf("ai: run capability setup: %w", err)
 		}
-		source, err := capabilityInstructionSource(capability)
-		if err != nil {
-			cancellation.finish()
-			return nil, fmt.Errorf("ai: run capability instructions: %w", err)
+		var source *InstructionSource
+		if capabilityContributesInstructions(capability, registry.instructions) {
+			source, err = capabilityInstructionSource(capability)
+			if err != nil {
+				cancellation.finish()
+				return nil, fmt.Errorf("ai: run capability instructions: %w", err)
+			}
 		}
 		instructions, err := qualifyInstructionParts(registry.instructions, source)
 		if err != nil {
 			cancellation.finish()
 			return nil, fmt.Errorf("ai: run capability instructions: %w", err)
 		}
+		instructionSourceID := ""
 		if source != nil && capabilityContributesInstructions(capability, instructions) {
-			if _, duplicate := capInstructionIDs[source.ID]; duplicate {
+			instructionSourceID = source.ID
+			if _, duplicate := capInstructionIDs[instructionSourceID]; duplicate {
 				cancellation.finish()
 				return nil, fmt.Errorf(
-					"ai: capability ID %q is used by multiple capabilities that contribute instructions", source.ID,
+					"ai: run capability instructions: capability ID %q is used by multiple capabilities that contribute instructions",
+					instructionSourceID,
 				)
 			}
-			capInstructionIDs[source.ID] = struct{}{}
+			capInstructionIDs[instructionSourceID] = struct{}{}
 		}
-		runCapabilityInstructions = append(runCapabilityInstructions, instructions...)
-		runCapabilityTools = append(runCapabilityTools, registry.tools...)
-		runCapabilityNativeTools = append(runCapabilityNativeTools, CloneNativeTools(registry.nativeTools)...)
-		runNativeOrLocal = append(runNativeOrLocal, registry.nativeOrLocal...)
-		capSettings = append(capSettings, capabilitySettingsLayer{
-			static: registry.modelSettings, provider: capabilityModelSettingsProvider(capability),
+		appendSetup(capability, capabilitySetup{
+			instructionSourceID: instructionSourceID,
+			instructions:        instructions, tools: registry.tools, nativeTools: registry.nativeTools,
+			nativeOrLocal: registry.nativeOrLocal, settings: registry.modelSettings,
 		})
 	}
 	limits := a.usageLimits
@@ -204,11 +249,11 @@ func (a *Agent[Deps, Output]) newRun(
 			return fn(ctx, rc)
 		}})
 	}
-	for _, tool := range runCapabilityNativeTools {
+	for _, tool := range capabilityNativeTools {
 		nativeToolEntries = append(nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
 	}
 	nativeToolEntries, runNativeOrLocalToolsets, err := registerNativeOrLocal(
-		nativeToolEntries, nil, runNativeOrLocal,
+		nativeToolEntries, nil, nativeOrLocal,
 	)
 	if err != nil {
 		cancellation.finish()
@@ -277,7 +322,7 @@ func (a *Agent[Deps, Output]) newRun(
 		r.tools = append(r.tools, entry)
 		toolNames[entry.def.Name] = struct{}{}
 	}
-	for _, tool := range runCapabilityTools {
+	for _, tool := range capabilityTools {
 		if _, exists := toolNames[tool.def.Name]; exists {
 			cancellation.finish()
 			return nil, fmt.Errorf("ai: duplicate run capability tool name %q", tool.def.Name)
@@ -384,7 +429,7 @@ func (a *Agent[Deps, Output]) newRun(
 		return nil, err
 	}
 	r.staticInstructions = a.staticInstructions(
-		cfg.instructions, cfg.instructionParts, runCapabilityInstructions,
+		cfg.instructions, cfg.instructionParts, capabilityInstructions,
 	)
 	outputMode := a.outputMode
 	if cfg.outputMode != nil {
@@ -1055,7 +1100,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	}
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 		var err error
-		msgs, err = PrepareModelMessages(r.model, msgs)
+		msgs, err = prepareModelMessages(r.model, msgs, &params)
 		if err != nil {
 			return nil, err
 		}
@@ -3834,17 +3879,16 @@ func (r *run[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
 func (a *Agent[Deps, Output]) staticInstructions(
 	additional string,
 	additionalParts []InstructionPart,
-	runCapabilityInstructions []InstructionPart,
+	capabilityInstructions []InstructionPart,
 ) []InstructionPart {
 	parts := make([]InstructionPart, 0,
-		len(a.instructionParts)+len(a.capInstructions)+len(runCapabilityInstructions)+len(additionalParts)+2,
+		len(a.instructionParts)+len(capabilityInstructions)+len(additionalParts)+2,
 	)
 	if content := strings.TrimSpace(a.instructions); content != "" {
 		parts = append(parts, InstructionPart{Content: content, ID: AgentInstructionID()})
 	}
 	parts = append(parts, cloneInstructionParts(a.instructionParts)...)
-	parts = append(parts, cloneInstructionParts(a.capInstructions)...)
-	parts = append(parts, cloneInstructionParts(runCapabilityInstructions)...)
+	parts = append(parts, cloneInstructionParts(capabilityInstructions)...)
 	if content := strings.TrimSpace(additional); content != "" {
 		parts = append(parts, InstructionPart{Content: content})
 	}
@@ -4016,11 +4060,17 @@ func (r *run[Deps, Output]) prepareInstructions(
 		}
 	}
 	for index, capability := range r.capabilities {
+		partsProvider, providesParts := capability.(InstructionPartsProvider)
+		textProvider, providesText := capability.(InstructionsProvider)
+		if !providesParts && !providesText {
+			continue
+		}
 		source, err := capabilityInstructionSource(capability)
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
-		if provider, ok := capability.(InstructionPartsProvider); ok {
+		if providesParts {
+			provider := partsProvider
 			provided, err := provider.InstructionParts(ctx, r.capabilityInfo(index))
 			if err != nil {
 				return nil, fmt.Errorf("ai: instructions: %w", err)
@@ -4032,11 +4082,7 @@ func (r *run[Deps, Output]) prepareInstructions(
 			parts = append(parts, qualified...)
 			continue
 		}
-		provider, ok := capability.(InstructionsProvider)
-		if !ok {
-			continue
-		}
-		instructions, err := provider.Instructions(ctx, r.capabilityInfo(index))
+		instructions, err := textProvider.Instructions(ctx, r.capabilityInfo(index))
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}

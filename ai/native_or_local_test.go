@@ -8,7 +8,150 @@ import (
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
+
+type scalarNativeTool string
+
+func (scalarNativeTool) Kind() string                        { return "scalar" }
+func (scalarNativeTool) UniqueID() string                    { return "image_generation" }
+func (scalarNativeTool) IsOptional() bool                    { return false }
+func (tool scalarNativeTool) CloneNativeTool() ai.NativeTool { return tool }
+
+type pointerNativeTool struct {
+	Setting string
+}
+
+func (*pointerNativeTool) Kind() string                        { return "pointer" }
+func (*pointerNativeTool) UniqueID() string                    { return "image_generation" }
+func (*pointerNativeTool) IsOptional() bool                    { return false }
+func (tool *pointerNativeTool) CloneNativeTool() ai.NativeTool { clone := *tool; return &clone }
+
+type privateNativeTool struct {
+	setting string
+}
+
+func (privateNativeTool) Kind() string                        { return "private" }
+func (privateNativeTool) UniqueID() string                    { return "image_generation" }
+func (privateNativeTool) IsOptional() bool                    { return false }
+func (tool privateNativeTool) CloneNativeTool() ai.NativeTool { return tool }
+
+type configurableNativeTool struct {
+	Value any
+}
+
+func (configurableNativeTool) Kind() string                        { return "configurable" }
+func (configurableNativeTool) UniqueID() string                    { return "image_generation" }
+func (configurableNativeTool) IsOptional() bool                    { return false }
+func (tool configurableNativeTool) CloneNativeTool() ai.NativeTool { return tool }
+
+type alternateImageTool struct{}
+
+func (alternateImageTool) Kind() string                        { return "alternate_image" }
+func (alternateImageTool) UniqueID() string                    { return "image_generation" }
+func (alternateImageTool) IsOptional() bool                    { return false }
+func (tool alternateImageTool) CloneNativeTool() ai.NativeTool { return tool }
+
+func TestNativeOrLocalCapabilityCombinationEdges(t *testing.T) {
+	image := ai.NewImageGenerationCapability(ai.ImageGenerationCapabilityConfig[struct{}]{
+		Native: ai.ImageGenerationTool{},
+	})
+	alternate := ai.NewNativeOrLocalToolset[struct{}](
+		alternateImageTool{}, nil, ai.WithNativeRequired("no fallback"),
+	)
+	deferred := func() (recovered any) {
+		defer func() { recovered = recover() }()
+		ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithCapabilities(image, alternate))
+		return nil
+	}()
+	if !strings.Contains(fmt.Sprint(deferred), "same type") {
+		t.Fatalf("unexpected native type collision: %v", deferred)
+	}
+	firstScalar := ai.NewNativeOrLocalToolset[struct{}](
+		scalarNativeTool("first"), nil, ai.WithNativeRequired("no fallback"),
+	)
+	secondScalar := ai.NewNativeOrLocalToolset[struct{}](
+		scalarNativeTool("second"), nil, ai.WithNativeRequired("no fallback"),
+	)
+	if _, err := secondScalar.CombineCapabilities([]ai.Capability{firstScalar, secondScalar}); err != nil {
+		t.Fatalf("scalar native definitions did not use the later value: %v", err)
+	}
+	firstPointer := ai.NewNativeOrLocalToolset[struct{}](
+		&pointerNativeTool{Setting: "first"}, nil, ai.WithNativeRequired("no fallback"),
+	)
+	secondPointer := ai.NewNativeOrLocalToolset[struct{}](
+		&pointerNativeTool{Setting: "second"}, nil, ai.WithNativeRequired("no fallback"),
+	)
+	if _, err := secondPointer.CombineCapabilities([]ai.Capability{firstPointer, secondPointer}); err != nil {
+		t.Fatalf("pointer native definitions did not merge: %v", err)
+	}
+	firstPrivate := ai.NewNativeOrLocalToolset[struct{}](
+		privateNativeTool{setting: "first"}, nil, ai.WithNativeRequired("no fallback"),
+	)
+	secondPrivate := ai.NewNativeOrLocalToolset[struct{}](
+		privateNativeTool{setting: "second"}, nil, ai.WithNativeRequired("no fallback"),
+	)
+	if _, err := secondPrivate.CombineCapabilities([]ai.Capability{firstPrivate, secondPrivate}); err == nil ||
+		!strings.Contains(err.Error(), "unexported field") {
+		t.Fatalf("unexpected private native state error: %v", err)
+	}
+	firstCollection := ai.NewNativeOrLocalToolset[struct{}](
+		configurableNativeTool{Value: []string{"a"}}, nil, ai.WithNativeRequired("no fallback"),
+	)
+	secondCollection := ai.NewNativeOrLocalToolset[struct{}](
+		configurableNativeTool{Value: alternateNames{"b"}}, nil, ai.WithNativeRequired("no fallback"),
+	)
+	if _, err := secondCollection.CombineCapabilities([]ai.Capability{firstCollection, secondCollection}); err == nil ||
+		!strings.Contains(err.Error(), "cannot be rebuilt") {
+		t.Fatalf("unexpected native collection error: %v", err)
+	}
+
+	resolved := ""
+	first := ai.NewDynamicNativeOrLocalToolset(
+		"image_generation",
+		func(context.Context, *ai.RunContext[struct{}]) (ai.NativeTool, error) {
+			resolved = "first"
+			return ai.ImageGenerationTool{}, nil
+		},
+		nil,
+		ai.WithNativeRequired("no fallback"),
+	)
+	second := ai.NewDynamicNativeOrLocalToolset(
+		"image_generation",
+		func(context.Context, *ai.RunContext[struct{}]) (ai.NativeTool, error) {
+			resolved = "second"
+			return ai.ImageGenerationTool{}, nil
+		},
+		nil,
+		ai.WithNativeRequired("no fallback"),
+	)
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithCapabilities(first, second))
+	if _, err := agent.Run(t.Context(), "go", struct{}{}); err != nil || resolved != "second" {
+		t.Fatalf("dynamic native merge failed: resolved=%q err=%v", resolved, err)
+	}
+
+	local := ai.NewFunctionToolset(ai.NewSimpleTool[struct{}](
+		"local_image", func(context.Context, struct{}) (string, error) { return "ok", nil },
+	))
+	withLocal := ai.NewNativeOrLocalToolset(ai.ImageGenerationTool{}, local)
+	required := ai.NewNativeOrLocalToolset[struct{}](
+		ai.ImageGenerationTool{}, nil, ai.WithNativeRequired("no fallback"),
+	)
+	if _, err := required.CombineCapabilities([]ai.Capability{withLocal, required}); err != nil {
+		t.Fatalf("earlier local fallback was not retained: %v", err)
+	}
+	if _, err := withLocal.CombineCapabilities([]ai.Capability{required, withLocal}); err != nil {
+		t.Fatalf("earlier native requirement was not retained: %v", err)
+	}
+	fallback := ai.NewImageGenerationCapabilityWithFallback(ai.ImageGenerationSubagentConfig[struct{}]{
+		Model: imageOutputModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+			return nil, errors.New("unused")
+		}),
+	})
+	if _, err := required.CombineCapabilities([]ai.Capability{fallback, required}); err != nil {
+		t.Fatalf("fallback rebuild function was not retained: %v", err)
+	}
+}
 
 type nativeOrLocalDeps struct {
 	Location string

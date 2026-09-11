@@ -2,7 +2,6 @@ package ai
 
 import (
 	"context"
-	"maps"
 	"slices"
 )
 
@@ -102,12 +101,6 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 		tool.def = cloneToolDefinition(tool.def)
 		tools[index] = tool
 	}
-	settingsLayers := make([]capabilitySettingsLayer, len(agent.capSettings))
-	for index, layer := range agent.capSettings {
-		settingsLayers[index] = capabilitySettingsLayer{
-			static: cloneModelSettingsSlice(layer.static), provider: layer.provider, capabilityID: layer.capabilityID,
-		}
-	}
 	usageLimits := agent.usageLimits
 	usageLimits.ToolCallLimit = clonePointer(usageLimits.ToolCallLimit)
 	usageLimits.CostLimitUSD = clonePointer(usageLimits.CostLimitUSD)
@@ -139,14 +132,28 @@ func specializeAgentOutput[Output, Deps, AgentOutput any](
 		endStrategy:        agent.endStrategy,
 		sequentialTools:    agent.sequentialTools,
 		capabilities:       slices.Clone(agent.capabilities),
-		capInstructions:    cloneInstructionParts(agent.capInstructions),
-		capSettings:        settingsLayers,
-		capInstructionIDs:  maps.Clone(agent.capInstructionIDs),
+		capabilityRoots:    slices.Clone(agent.capabilityRoots),
+		capabilityRootIDs:  slices.Clone(agent.capabilityRootIDs),
+		capabilitySetups:   cloneCapabilitySetups(agent.capabilitySetups),
 		eventListeners:     slices.Clone(agent.eventListeners),
 		tools:              tools,
+		nativeToolEntries:  cloneNativeToolEntries(agent.nativeToolEntries),
 		toolsets:           slices.Clone(agent.toolsets),
 	}
 	return specialized, nil
+}
+
+func cloneCapabilitySetups(setups []capabilitySetup) []capabilitySetup {
+	cloned := make([]capabilitySetup, len(setups))
+	for index, setup := range setups {
+		cloned[index] = capabilitySetup{
+			instructionSourceID: setup.instructionSourceID,
+			instructions:        cloneInstructionParts(setup.instructions), tools: slices.Clone(setup.tools),
+			nativeTools: CloneNativeTools(setup.nativeTools), nativeOrLocal: slices.Clone(setup.nativeOrLocal),
+			settings: cloneModelSettingsSlice(setup.settings),
+		}
+	}
+	return cloned
 }
 
 func cloneModelSettingsSlice(settings []ModelSettings) []ModelSettings {

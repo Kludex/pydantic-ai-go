@@ -248,3 +248,56 @@ func main() {
 Use the narrowest hook that matches the behavior. Hooks receive detached values. Set `ModelRequestContext.ReplaceHistory` only when a request transformation must also replace durable history.
 
 Capability order is middleware order. Before hooks run from first to last. After and error hooks run in reverse order.
+
+## Emit typed events
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+type Progress struct {
+	Completed int `json:"completed"`
+	Total     int `json:"total"`
+}
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.OnEvent(agent, func(
+		_ context.Context,
+		_ *ai.RunContext[struct{}],
+		event *ai.CustomEvent[Progress],
+	) error {
+		fmt.Printf("%d/%d\n", event.Data.Completed, event.Data.Total)
+		return nil
+	}, ai.WithEventListenerTimeout(time.Second))
+
+	ai.AddTool(agent, "work", func(
+		_ context.Context,
+		run *ai.RunContext[struct{}],
+		_ struct{},
+	) (string, error) {
+		if err := run.Emit(ai.NewCustomEvent("progress", Progress{Completed: 1, Total: 1})); err != nil {
+			return "", err
+		}
+		return "done", nil
+	})
+
+	if _, err := agent.Run(context.Background(), "Run the work tool.", struct{}{}); err != nil {
+		panic(err)
+	}
+}
+```
+
+`CustomEvent` carries application data. It is visible to UI adapters by default. Use `SetUIVisible(false)` for server-only events. Use `ProjectForUI` when the frontend needs a smaller payload.
+
+A capability emits `CapabilityEvent` instead. `CapabilityRegistry.AddContextTool` gives a capability-owned tool a `RunInfo`, so emitted events include the capability ID, tool name, and tool call ID. Capability events stay server-side unless an application listener republishes them as custom events.
+
+Listeners normally run when an event reaches its stream position. Use `SetDispatch(ai.EventDispatchImmediate)` for a mutable capability decision that must settle before `RunInfo.Emit` returns. Agent listeners run after ordinary capability listeners and before capabilities in the `CapabilityInnermost` tier.

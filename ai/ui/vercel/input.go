@@ -294,6 +294,7 @@ func toolOutput(part UIMessagePart, name string) (any, ai.ToolReturnOutcome, err
 		if err := json.Unmarshal(part.Output, &content); err != nil {
 			return nil, "", fmt.Errorf("vercel: decode tool %q output: %w", name, err)
 		}
+		content = ai.NormalizeToolReturnContent(normalizeClientToolReturnContent(content))
 	}
 	outcome := ai.ToolReturnOutcomeSuccess
 	switch part.State {

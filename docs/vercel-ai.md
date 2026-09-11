@@ -104,6 +104,8 @@ func main() {
 
 `TransformStream` supports event delivery through queues and durable workflows without an HTTP request.
 
+Application `CustomEvent` values become `data-{name}` chunks. The projected payload maps to `data`. Capability events are internal and are not forwarded. Use `SetUIVisible(false)` to keep a custom event server-side, or `ProjectForUI` to expose only a safe payload.
+
 Cancel the context passed to `RunStream` to stop the agent run. The HTTP handler uses the request context, so a disconnected client cancels generation without a separate adapter token.
 
 ## Approve deferred tools

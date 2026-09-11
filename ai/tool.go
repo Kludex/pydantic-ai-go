@@ -64,6 +64,8 @@ type RunContext[Deps any] struct {
 	pendingMessages *pendingMessageQueue
 	cancellation    *runCancellation
 	emitEvent       func(StreamEvent, string, string, string) error
+	capabilityID    string
+	info            *RunInfo
 }
 
 // Usage returns the usage accumulated so far in this run.
@@ -140,13 +142,21 @@ func (rc *RunContext[Deps]) RevealedTools() []string {
 	return names
 }
 
-// Emit adds a custom event to this run's event stream. Tool attribution is
-// filled from the current tool when the event does not already provide it.
+// Emit adds an application event, or a capability event from a capability-owned tool.
+// Tool attribution is filled when the event does not already provide it.
+func (rc *RunContext[Deps]) capabilityInfo() *RunInfo {
+	info := *rc.info
+	info.capabilityID = rc.capabilityID
+	info.toolName = rc.ToolName
+	info.toolCallID = rc.ToolCallID
+	return &info
+}
+
 func (rc *RunContext[Deps]) Emit(event StreamEvent) error {
 	if rc.emitEvent == nil {
 		return fmt.Errorf("ai: event emission is only available during an agent run")
 	}
-	return rc.emitEvent(event, "", rc.ToolName, rc.ToolCallID)
+	return rc.emitEvent(event, rc.capabilityID, rc.ToolName, rc.ToolCallID)
 }
 
 // Cancel requests cancellation of this run. In-flight model and tool calls

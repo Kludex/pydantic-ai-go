@@ -2,6 +2,7 @@ package ai_test
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
@@ -94,6 +95,32 @@ func TestToolReturnURLWithoutMediaTypeRemainsApplicationData(t *testing.T) {
 	}
 }
 
+func TestKindCollidingToolReturnMappingsPreserveApplicationData(t *testing.T) {
+	serialized := []byte(`[{"kind":"request","parts":[{"part_kind":"tool-return","content":[
+		{"kind":"binary","media_type":"text/plain","text":"keep"},
+		{"kind":"uploaded-file","file_id":"file-1","status":"keep"},
+		{"kind":"image-url","media_type":"image/png","note":"keep"},
+		{"kind":"binary","media_type":"text/plain","attachment":{"kind":"image-url","url":"https://example.com/x.png","media_type":"image/png"}}
+	]}]}]`)
+	messages, err := ai.UnmarshalMessages(serialized)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content := messages[0].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart).Content.([]any)
+	for index := range 3 {
+		if _, ok := content[index].(map[string]any); !ok {
+			t.Fatalf("application mapping %d was coerced: %T", index, content[index])
+		}
+	}
+	parent := content[3].(map[string]any)
+	if parent["media_type"] != "text/plain" {
+		t.Fatalf("parent application data was lost: %#v", parent)
+	}
+	if _, ok := parent["attachment"].(ai.ImageURL); !ok {
+		t.Fatalf("nested valid file was not restored: %T", parent["attachment"])
+	}
+}
+
 func TestTextContentMetadataRoundTripsWithoutBecomingModelText(t *testing.T) {
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
 		Contents: []ai.UserContent{ai.TextContent{
@@ -121,7 +148,7 @@ func TestUnmarshalMessagesRejectsInvalidMultimodalScalar(t *testing.T) {
 	}
 }
 
-func TestUnmarshalMessagesRejectsInvalidNestedFileContent(t *testing.T) {
+func TestUnmarshalMessagesPreservesInvalidNestedFileShapes(t *testing.T) {
 	serializedValues := [][]byte{
 		[]byte(`[{"kind":"request","parts":[{"part_kind":"tool-return","content":[{
 			"nested":{"kind":"image-url","url":"https://example.com/image.png","media_type":"image/png","force_download":"invalid"}
@@ -131,8 +158,16 @@ func TestUnmarshalMessagesRejectsInvalidNestedFileContent(t *testing.T) {
 		}}]}]`),
 	}
 	for _, serialized := range serializedValues {
-		if _, err := ai.UnmarshalMessages(serialized); err == nil {
-			t.Fatal("expected nested file validation error")
+		messages, err := ai.UnmarshalMessages(serialized)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := ai.MarshalMessages(messages)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), `"force_download":"invalid"`) {
+			t.Fatalf("kind-colliding application data was lost: %s", encoded)
 		}
 	}
 }

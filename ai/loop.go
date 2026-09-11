@@ -182,7 +182,11 @@ func (a *Agent[Deps, Output]) newRun(
 	capInstructionIDs := make(map[string]struct{}, len(capabilities))
 	appendSetup := func(capability Capability, setup capabilitySetup) {
 		capabilityInstructions = append(capabilityInstructions, cloneInstructionParts(setup.instructions)...)
-		capabilityTools = append(capabilityTools, setup.tools...)
+		capabilityIndex := len(capSettings) + 1
+		for _, tool := range setup.tools {
+			tool.capabilityIndex = capabilityIndex
+			capabilityTools = append(capabilityTools, tool)
+		}
 		capabilityNativeTools = append(capabilityNativeTools, CloneNativeTools(setup.nativeTools)...)
 		nativeOrLocal = append(nativeOrLocal, setup.nativeOrLocal...)
 		capSettings = append(capSettings, capabilitySettingsLayer{
@@ -329,18 +333,18 @@ func (a *Agent[Deps, Output]) newRun(
 		}
 		call := tool.call
 		r.tools = append(r.tools, toolEntry[Deps]{
-			def: cloneToolDefinition(tool.def),
+			def: cloneToolDefinition(tool.def), capabilityIndex: tool.capabilityIndex,
 			validate: func(_ context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
 				return slices.Clone(rawArgs), nil
 			},
-			execute: func(ctx context.Context, _ *RunContext[Deps], validated any) (any, error) {
+			execute: func(ctx context.Context, rc *RunContext[Deps], validated any) (any, error) {
 				rawArgs, ok := validated.(json.RawMessage)
 				if !ok {
 					return nil, fmt.Errorf(
 						"validated arguments for tool %q have type %T, expected json.RawMessage", tool.def.Name, validated,
 					)
 				}
-				return call(ctx, rawArgs)
+				return call(ctx, rc.capabilityInfo(), rawArgs)
 			},
 		})
 		toolNames[tool.def.Name] = struct{}{}
@@ -414,11 +418,13 @@ func (a *Agent[Deps, Output]) newRun(
 			return r.configuredSystemPromptParts(ctx, r.rc)
 		},
 	}
+	r.rc.info = r.info
 	r.capabilityIDs = capabilityRunIDs(r.capabilities)
 	capabilityOffset := 0
 	if limits != (UsageLimits{}) {
 		capabilityOffset = 1
 	}
+	r.capabilityOffset = capabilityOffset
 	for index := range r.capSettings {
 		r.capSettings[index].capabilityID = r.capabilityIDs[index+capabilityOffset]
 	}
@@ -749,10 +755,11 @@ type run[Deps, Output any] struct {
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
 	eventMu              sync.Mutex
-	eventQueue           []StreamEvent
+	eventQueue           []queuedStreamEvent
 	eventDispatching     bool
 	eventErr             error
 	capabilityIDs        []string
+	capabilityOffset     int
 	commitStreamedOutput bool
 	recordSelectedModel  func(string)
 	observeUsage         func(Usage)
@@ -2658,6 +2665,11 @@ const (
 	toolSkipped          = "Tool not executed - a final result was already processed."
 )
 
+type queuedStreamEvent struct {
+	event      StreamEvent
+	dispatched bool
+}
+
 func (r *run[Deps, Output]) emitStreamEvent(event StreamEvent) bool {
 	_ = event.streamEventKind()
 	r.eventMu.Lock()
@@ -2665,13 +2677,51 @@ func (r *run[Deps, Output]) emitStreamEvent(event StreamEvent) bool {
 		r.eventMu.Unlock()
 		return false
 	}
-	r.eventQueue = append(r.eventQueue, event)
+	r.eventQueue = append(r.eventQueue, queuedStreamEvent{event: event})
 	if r.eventDispatching || r.emit == nil {
 		r.eventMu.Unlock()
 		return true
 	}
 	r.eventDispatching = true
 	r.eventMu.Unlock()
+	return r.drainStreamEvents()
+}
+
+func (r *run[Deps, Output]) streamEmitterActive() bool {
+	r.eventMu.Lock()
+	defer r.eventMu.Unlock()
+	return r.emit != nil
+}
+
+func (r *run[Deps, Output]) emitImmediateEvent(event StreamEvent) bool {
+	r.eventMu.Lock()
+	if r.eventErr != nil {
+		r.eventMu.Unlock()
+		return false
+	}
+	r.eventQueue = append(r.eventQueue, queuedStreamEvent{event: event, dispatched: true})
+	wasDispatching := r.eventDispatching
+	if !wasDispatching {
+		r.eventDispatching = true
+	}
+	r.eventMu.Unlock()
+
+	if err := r.dispatchStreamEvent(event); err != nil {
+		r.eventMu.Lock()
+		r.eventErr = err
+		r.eventQueue = nil
+		r.eventDispatching = false
+		r.eventMu.Unlock()
+		return false
+	}
+	if wasDispatching || r.emit == nil {
+		if !wasDispatching {
+			r.eventMu.Lock()
+			r.eventDispatching = false
+			r.eventMu.Unlock()
+		}
+		return true
+	}
 	return r.drainStreamEvents()
 }
 
@@ -2695,20 +2745,22 @@ func (r *run[Deps, Output]) drainStreamEvents() bool {
 			r.eventMu.Unlock()
 			return true
 		}
-		event := r.eventQueue[0]
+		queued := r.eventQueue[0]
 		r.eventQueue = r.eventQueue[1:]
 		emit := r.emit
 		r.eventMu.Unlock()
 
-		if err := r.dispatchStreamEvent(event); err != nil {
-			r.eventMu.Lock()
-			r.eventErr = err
-			r.eventQueue = nil
-			r.eventDispatching = false
-			r.eventMu.Unlock()
-			return false
+		if !queued.dispatched {
+			if err := r.dispatchStreamEvent(queued.event); err != nil {
+				r.eventMu.Lock()
+				r.eventErr = err
+				r.eventQueue = nil
+				r.eventDispatching = false
+				r.eventMu.Unlock()
+				return false
+			}
 		}
-		if !emit(event) {
+		if !emit(queued.event) {
 			r.eventMu.Lock()
 			r.eventQueue = nil
 			r.eventDispatching = false
@@ -2724,22 +2776,81 @@ func (r *run[Deps, Output]) capabilityInfo(index int) *RunInfo {
 	return &info
 }
 
+func capabilityIsInnermost(capability Capability) bool {
+	provider, ok := capability.(CapabilityOrderingProvider)
+	return ok && provider.CapabilityOrdering().Position == CapabilityInnermost
+}
+
 func (r *run[Deps, Output]) dispatchStreamEvent(event StreamEvent) error {
 	for index, capability := range r.capabilities {
-		listener, ok := capability.(EventListener)
-		if !ok {
+		if capabilityIsInnermost(capability) {
 			continue
 		}
-		if err := listener.OnEvent(r.ctx, r.capabilityInfo(index), event); err != nil {
-			return fmt.Errorf("ai: capability event listener: %w", err)
+		if err := r.dispatchCapabilityEvent(index, capability, event); err != nil {
+			return err
 		}
 	}
-	for _, listener := range r.agent.eventListeners {
-		if err := listener(r.ctx, r.rc.clone(), event); err != nil {
+	for _, registered := range r.agent.eventListeners {
+		if err := callEventListener(
+			r.ctx, "agent", registered.timeout,
+			func(ctx context.Context) error { return registered.listener(ctx, r.rc.clone(), event) },
+		); err != nil {
 			return fmt.Errorf("ai: agent event listener: %w", err)
 		}
 	}
+	for index, capability := range r.capabilities {
+		if !capabilityIsInnermost(capability) {
+			continue
+		}
+		if err := r.dispatchCapabilityEvent(index, capability, event); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+func (r *run[Deps, Output]) dispatchCapabilityEvent(index int, capability Capability, event StreamEvent) error {
+	listener, ok := capability.(EventListener)
+	if !ok {
+		return nil
+	}
+	timeout := time.Duration(0)
+	if provider, ok := capability.(EventListenerTimeoutProvider); ok {
+		timeout = provider.EventListenerTimeout()
+		if timeout < 0 {
+			return fmt.Errorf("ai: capability event listener timeout must not be negative")
+		}
+	}
+	name := fmt.Sprintf("%T", capability)
+	if err := callEventListener(
+		r.ctx, name, timeout,
+		func(ctx context.Context) error { return listener.OnEvent(ctx, r.capabilityInfo(index), event) },
+	); err != nil {
+		return fmt.Errorf("ai: capability event listener: %w", err)
+	}
+	return nil
+}
+
+func callEventListener(
+	ctx context.Context, name string, timeout time.Duration, call func(context.Context) error,
+) error {
+	if timeout <= 0 {
+		return call(ctx)
+	}
+	listenerCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err := call(listenerCtx)
+	if errors.Is(listenerCtx.Err(), context.DeadlineExceeded) {
+		return &EventListenerTimeoutError{Listener: name, Duration: timeout}
+	}
+	return err
+}
+
+func (r *run[Deps, Output]) capabilityIDFor(index int) string {
+	if index == 0 {
+		return ""
+	}
+	return r.capabilityIDs[index-1+r.capabilityOffset]
 }
 
 func (r *run[Deps, Output]) emitEvent(
@@ -2751,20 +2862,35 @@ func (r *run[Deps, Output]) emitEvent(
 	if err := validateEmittedEvent(event); err != nil {
 		return err
 	}
-	switch event := event.(type) {
+	immediate := false
+	queued := event
+	switch typed := event.(type) {
 	case customStreamEvent:
 		if capabilityID != "" {
 			return fmt.Errorf("ai: capabilities must emit capability events")
 		}
-		event.stampTool(toolName, toolCallID)
+		typed.stampTool(toolName, toolCallID)
+		if r.streamEmitterActive() {
+			queued = typed.cloneForStream()
+		}
 	case capabilityStreamEvent:
 		if capabilityID == "" {
 			return fmt.Errorf("ai: capability events may only be emitted by capabilities")
 		}
-		event.stampCapability(capabilityID)
-		event.stampTool(toolName, toolCallID)
+		typed.stampCapability(capabilityID)
+		typed.stampTool(toolName, toolCallID)
+		immediate = typed.eventDispatch() == EventDispatchImmediate
+		if !immediate && r.streamEmitterActive() {
+			queued = typed.cloneForStream()
+		}
 	}
-	if r.emitStreamEvent(event) {
+	var emitted bool
+	if immediate {
+		emitted = r.emitImmediateEvent(queued)
+	} else {
+		emitted = r.emitStreamEvent(queued)
+	}
+	if emitted {
 		return nil
 	}
 	if err := r.streamEventError(); err != nil {
@@ -3288,6 +3414,7 @@ func (r *run[Deps, Output]) executeCall(
 	toolRC := r.rc.clone()
 	toolRC.ToolName = call.ToolName
 	toolRC.ToolCallID = call.ToolCallID
+	toolRC.capabilityID = r.capabilityIDFor(entry.capabilityIndex)
 	toolRC.ToolCallApproved = resolving && resolution.kind == deferredCallApproval
 	toolRC.ToolCallMetadata = cloneSchemaMap(resolution.metadata)
 	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)

@@ -97,7 +97,7 @@ func (document *DocumentURL) UnmarshalJSON(data []byte) error {
 func (file UploadedFile) MarshalJSON() ([]byte, error) {
 	return json.Marshal(wireUserContent{
 		Kind: "uploaded-file", FileID: file.FileID, ProviderName: file.ProviderName,
-		MediaType: file.MediaType, Identifier: file.Identifier, VendorMetadata: file.VendorMetadata,
+		MediaType: file.ResolvedMediaType(), Identifier: file.ResolvedIdentifier(), VendorMetadata: file.VendorMetadata,
 	})
 }
 

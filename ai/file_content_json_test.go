@@ -64,8 +64,20 @@ func TestUploadedFileResolvedMetadata(t *testing.T) {
 		t.Fatalf("metadata was not inferred: type=%q id=%q", inferred.ResolvedMediaType(), inferred.ResolvedIdentifier())
 	}
 	for _, fileID := range []string{"opaque-file-id", "%"} {
-		if mediaType := (ai.UploadedFile{FileID: fileID}).ResolvedMediaType(); mediaType != "application/octet-stream" {
+		file := ai.UploadedFile{FileID: fileID}
+		if mediaType := file.ResolvedMediaType(); mediaType != "application/octet-stream" {
 			t.Fatalf("unexpected fallback media type %q", mediaType)
+		}
+		encoded, err := json.Marshal(file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var wire map[string]any
+		if err := json.Unmarshal(encoded, &wire); err != nil {
+			t.Fatal(err)
+		}
+		if wire["media_type"] != "application/octet-stream" || wire["identifier"] != file.ResolvedIdentifier() {
+			t.Fatalf("uploaded file defaults were not serialized: %s", encoded)
 		}
 	}
 }

@@ -39,6 +39,24 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 		transformer.stopped = !accepted
 		return accepted
 	}
+	if name, payload, visible, custom := ai.CustomEventUI(event); custom {
+		if visible {
+			switch projected := payload.(type) {
+			case Event:
+				yield(projected, nil)
+			case *Event:
+				if projected != nil {
+					yield(*projected, nil)
+				}
+			default:
+				yield(Event{Type: EventCustom, Name: name, Value: payload}, nil)
+			}
+		}
+		if transformer.stopped {
+			return errConsumerStopped
+		}
+		return nil
+	}
 	switch value := event.(type) {
 	case ai.PartStartEvent:
 		switch part := value.Part.(type) {

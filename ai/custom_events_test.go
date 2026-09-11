@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
@@ -120,9 +121,12 @@ type listenerCapability struct {
 	failure    error
 	seenID     string
 	mutateDone int
+	timeout    time.Duration
 }
 
 func (*listenerCapability) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (capability *listenerCapability) EventListenerTimeout() time.Duration { return capability.timeout }
 
 func (capability *listenerCapability) OnEvent(
 	_ context.Context, info *ai.RunInfo, event ai.StreamEvent,
@@ -334,6 +338,64 @@ func (*customEmittingCapability) BeforeModelRequest(
 	return request, info.Emit(ai.NewCustomEvent("invalid", struct{}{}))
 }
 
+type immediateEmittingCapability struct{}
+
+type repeatedImmediateEmittingCapability struct{}
+
+func (*repeatedImmediateEmittingCapability) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (*repeatedImmediateEmittingCapability) CapabilityID() string { return "repeated" }
+
+func (*repeatedImmediateEmittingCapability) BeforeModelRequest(
+	_ context.Context, info *ai.RunInfo, request ai.ModelRequestContext,
+) (ai.ModelRequestContext, error) {
+	first := info.Emit(ai.NewCapabilityEvent("repeated", "first", 1).SetDispatch(ai.EventDispatchImmediate))
+	second := info.Emit(ai.NewCapabilityEvent("repeated", "second", 2).SetDispatch(ai.EventDispatchImmediate))
+	return request, errors.Join(first, second)
+}
+
+func (*immediateEmittingCapability) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (*immediateEmittingCapability) CapabilityID() string { return "immediate" }
+
+func (*immediateEmittingCapability) BeforeModelRequest(
+	_ context.Context, info *ai.RunInfo, request ai.ModelRequestContext,
+) (ai.ModelRequestContext, error) {
+	return request, info.Emit(ai.NewCapabilityEvent("immediate", "decision", 1).
+		SetDispatch(ai.EventDispatchImmediate))
+}
+
+func TestImmediateCapabilityEventWithoutListeners(t *testing.T) {
+	agent := ai.NewAgent[deps, string](
+		fakes.NewTestModel(), ai.WithCapabilities(&immediateEmittingCapability{}),
+	)
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestImmediateCapabilityListenerErrorStopsRun(t *testing.T) {
+	sentinel := errors.New("immediate listener failed")
+	agent := ai.NewAgent[deps, string](
+		fakes.NewTestModel(),
+		ai.WithCapabilities(&immediateEmittingCapability{}, &listenerCapability{failure: sentinel}),
+	)
+	if _, err := agent.Run(t.Context(), "go", deps{}); !errors.Is(err, sentinel) {
+		t.Fatalf("unexpected immediate listener error: %v", err)
+	}
+}
+
+func TestRepeatedImmediateCapabilityListenerErrorStopsRun(t *testing.T) {
+	sentinel := errors.New("immediate listener failed")
+	agent := ai.NewAgent[deps, string](
+		fakes.NewTestModel(),
+		ai.WithCapabilities(&repeatedImmediateEmittingCapability{}, &listenerCapability{failure: sentinel}),
+	)
+	if _, err := agent.Run(t.Context(), "go", deps{}); !errors.Is(err, sentinel) {
+		t.Fatalf("unexpected repeated immediate listener error: %v", err)
+	}
+}
+
 func TestCapabilityEventListenerErrorStopsRun(t *testing.T) {
 	sentinel := errors.New("capability listener failed")
 	capability := &listenerCapability{failure: sentinel}
@@ -418,6 +480,400 @@ func TestBufferedAgentRunEventReturnsListenerError(t *testing.T) {
 	}
 	if _, ok, err := run.Next(); ok || !errors.Is(err, sentinel) {
 		t.Fatalf("unexpected buffered listener result: ok=%v err=%v", ok, err)
+	}
+}
+
+type contextToolCapability struct {
+	observed []bool
+}
+
+func (capability *contextToolCapability) Setup(registry *ai.CapabilityRegistry) error {
+	registry.AddContextTool(ai.ToolDefinition{Name: "owned", Schema: map[string]any{"type": "object"}}, func(
+		_ context.Context, info *ai.RunInfo, _ json.RawMessage,
+	) (any, error) {
+		if info.CapabilityID() != "owner" || info.ToolName() != "owned" || info.ToolCallID() != "owned-1" {
+			return nil, errors.New("capability tool attribution was not available")
+		}
+		streamEvent := ai.NewCapabilityEvent("owner", "progress", progressPayload{Done: 1})
+		if err := info.Emit(streamEvent); err != nil {
+			return nil, err
+		}
+		immediateEvent := ai.NewCapabilityEvent("owner", "decision", progressPayload{Done: 2}).
+			SetDispatch(ai.EventDispatchImmediate)
+		if err := info.Emit(immediateEvent); err != nil {
+			return nil, err
+		}
+		capability.observed = []bool{streamEvent.Data.Done == 9, immediateEvent.Data.Done == 9}
+		return "done", nil
+	})
+	return nil
+}
+
+func (*contextToolCapability) CapabilityID() string { return "owner" }
+
+type innermostEventListener struct {
+	order   *[]string
+	failure error
+}
+
+func (*innermostEventListener) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (*innermostEventListener) CapabilityOrdering() ai.CapabilityOrdering {
+	return ai.CapabilityOrdering{Position: ai.CapabilityInnermost}
+}
+
+func (listener *innermostEventListener) OnEvent(context.Context, *ai.RunInfo, ai.StreamEvent) error {
+	if listener.order != nil {
+		*listener.order = append(*listener.order, "innermost")
+	}
+	return listener.failure
+}
+
+func TestCapabilityOwnedToolAttributionAndDispatchModes(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "owned", ToolCallID: "owned-1", Args: json.RawMessage(`{}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	owner := &contextToolCapability{}
+	listener := &listenerCapability{mutateDone: 9}
+	agent := ai.NewAgent[deps, string](model, ai.WithCapabilities(owner, listener))
+	var events []*ai.CapabilityEvent[progressPayload]
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event, ok := event.(*ai.CapabilityEvent[progressPayload]); ok {
+			events = append(events, event)
+		}
+	}
+	if !slices.Equal(owner.observed, []bool{false, true}) {
+		t.Fatalf("dispatch mode was not respected: %v", owner.observed)
+	}
+	if len(events) != 2 {
+		t.Fatalf("unexpected capability events: %+v", events)
+	}
+	for _, event := range events {
+		if event.CapabilityID != "owner" || event.ToolName != "owned" || event.ToolCallID != "owned-1" ||
+			event.Data.Done != 9 {
+			t.Fatalf("event lost attribution or settled data: %+v", event)
+		}
+	}
+}
+
+type nestedImmediateListener struct {
+	seen []string
+}
+
+func (*nestedImmediateListener) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (listener *nestedImmediateListener) OnEvent(_ context.Context, info *ai.RunInfo, event ai.StreamEvent) error {
+	typed, ok := event.(*ai.CapabilityEvent[progressPayload])
+	if !ok {
+		return nil
+	}
+	listener.seen = append(listener.seen, typed.Kind)
+	if typed.Kind == "owner.decision" {
+		return info.Emit(ai.NewCapabilityEvent("listener", "nested", progressPayload{}).
+			SetDispatch(ai.EventDispatchImmediate))
+	}
+	return nil
+}
+
+func (*nestedImmediateListener) CapabilityID() string { return "listener" }
+
+func TestNestedImmediateEventsKeepCauseFirstOrder(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "owned", ToolCallID: "owned-1", Args: json.RawMessage(`{}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	owner := &contextToolCapability{}
+	listener := &nestedImmediateListener{}
+	agent := ai.NewAgent[deps, string](model, ai.WithCapabilities(owner, listener))
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	var kinds []string
+	for event, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event, ok := event.(*ai.CapabilityEvent[progressPayload]); ok {
+			kinds = append(kinds, event.Kind)
+		}
+	}
+	if !slices.Equal(kinds, []string{"owner.progress", "owner.decision", "listener.nested"}) {
+		t.Fatalf("nested immediate events were reordered: %v", kinds)
+	}
+}
+
+func TestAgentListenerRunsBeforeInnermostCapability(t *testing.T) {
+	var order []string
+	innermost := &innermostEventListener{order: &order}
+	agent := ai.NewAgent[deps, string](fakes.NewTestModel(), ai.WithCapabilities(innermost))
+	agent.AddEventListener(func(context.Context, *ai.RunContext[deps], ai.StreamEvent) error {
+		order = append(order, "agent")
+		return nil
+	})
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(order) == 0 || len(order)%2 != 0 {
+		t.Fatalf("listeners missed events: %v", order)
+	}
+	for index := 0; index < len(order); index += 2 {
+		if !slices.Equal(order[index:index+2], []string{"agent", "innermost"}) {
+			t.Fatalf("unexpected listener order: %v", order)
+		}
+	}
+}
+
+type waitingEventListener struct {
+	timeout time.Duration
+}
+
+func (*waitingEventListener) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (listener *waitingEventListener) EventListenerTimeout() time.Duration { return listener.timeout }
+
+func (*waitingEventListener) OnEvent(ctx context.Context, _ *ai.RunInfo, _ ai.StreamEvent) error {
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+func TestInnermostCapabilityListenerErrorStopsRun(t *testing.T) {
+	sentinel := errors.New("innermost failed")
+	agent := ai.NewAgent[deps, string](
+		fakes.NewTestModel(), ai.WithCapabilities(&innermostEventListener{failure: sentinel}),
+	)
+	if _, err := agent.Run(t.Context(), "go", deps{}); !errors.Is(err, sentinel) {
+		t.Fatalf("unexpected innermost listener error: %v", err)
+	}
+}
+
+func TestEventListenerTimeout(t *testing.T) {
+	agent := ai.NewAgent[deps, string](fakes.NewTestModel())
+	agent.AddEventListener(func(ctx context.Context, _ *ai.RunContext[deps], _ ai.StreamEvent) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, ai.WithEventListenerTimeout(time.Millisecond))
+	_, err := agent.Run(t.Context(), "go", deps{})
+	var timeout *ai.EventListenerTimeoutError
+	if !errors.As(err, &timeout) || timeout.Duration != time.Millisecond || !timeout.Timeout() {
+		t.Fatalf("unexpected listener timeout: %v", err)
+	}
+
+	capabilityAgent := ai.NewAgent[deps, string](
+		fakes.NewTestModel(), ai.WithCapabilities(&waitingEventListener{timeout: time.Millisecond}),
+	)
+	_, err = capabilityAgent.Run(t.Context(), "go", deps{})
+	if !errors.As(err, &timeout) {
+		t.Fatalf("unexpected capability listener timeout: %v", err)
+	}
+
+	timedAgent := ai.NewAgent[deps, string](
+		fakes.NewTestModel(), ai.WithCapabilities(&listenerCapability{timeout: time.Second}),
+	)
+	if _, err := timedAgent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+
+	negativeAgent := ai.NewAgent[deps, string](
+		fakes.NewTestModel(), ai.WithCapabilities(&listenerCapability{timeout: -time.Second}),
+	)
+	if _, err := negativeAgent.Run(t.Context(), "go", deps{}); err == nil ||
+		!strings.Contains(err.Error(), "must not be negative") {
+		t.Fatalf("unexpected negative capability timeout: %v", err)
+	}
+}
+
+func TestCustomAndCapabilityEventJSONRoundTrip(t *testing.T) {
+	custom := ai.NewCustomEvent("progress", progressPayload{Done: 3}).SetUIVisible(false)
+	custom.ProjectForUI(func(data progressPayload) any { return map[string]any{"completed": data.Done} })
+	projected := custom.Payload().(map[string]any)
+	if projected["completed"] != 3 {
+		t.Fatalf("unexpected projected payload: %#v", projected)
+	}
+	encoded, err := json.Marshal(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded ai.CustomEvent[progressPayload]
+	if err := json.Unmarshal(encoded, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	payload := decoded.Payload().(map[string]any)
+	if _, err := json.Marshal(decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Name != "progress" || decoded.VisibleInUI() || payload["completed"] != float64(3) {
+		t.Fatalf("custom event did not round trip: encoded=%s decoded=%+v payload=%#v", encoded, decoded, payload)
+	}
+
+	capability := ai.NewCapabilityEvent("index", "decision", progressPayload{Done: 4}).
+		SetDispatch(ai.EventDispatchImmediate)
+	encoded, err = json.Marshal(capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decodedCapability ai.CapabilityEvent[progressPayload]
+	if err := json.Unmarshal(encoded, &decodedCapability); err != nil {
+		t.Fatal(err)
+	}
+	if decodedCapability.Kind != "index.decision" || decodedCapability.Data.Done != 4 ||
+		decodedCapability.Dispatch != ai.EventDispatchImmediate {
+		t.Fatalf("capability event did not round trip: %s %+v", encoded, decodedCapability)
+	}
+
+	plain := ai.NewCustomEvent("plain", progressPayload{Done: 1})
+	encoded, err = json.Marshal(plain)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(encoded), `"event_kind":"custom"`) {
+		t.Fatalf("unexpected plain event JSON: %s", encoded)
+	}
+	if plain.Payload() != (progressPayload{Done: 1}) {
+		t.Fatalf("unexpected default payload: %#v", plain.Payload())
+	}
+	var streamDispatch ai.CapabilityEvent[progressPayload]
+	if err := json.Unmarshal(
+		[]byte(`{"kind":"index.stream","data":{"Done":1},"event_kind":"capability"}`), &streamDispatch,
+	); err != nil ||
+		streamDispatch.Dispatch != ai.EventDispatchStream {
+		t.Fatalf("default dispatch was not restored: %+v %v", streamDispatch, err)
+	}
+	if name, payload, visible, ok := ai.CustomEventUI(plain); !ok || name != "plain" || !visible ||
+		payload != (progressPayload{Done: 1}) {
+		t.Fatalf("custom event UI projection failed: %q %#v %v %v", name, payload, visible, ok)
+	}
+	if _, _, _, ok := ai.CustomEventUI(ai.FinishEvent{}); ok {
+		t.Fatal("framework event was treated as a custom UI event")
+	}
+	if _, err := json.Marshal(ai.CapabilityEvent[progressPayload]{Kind: "index.stream"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCustomAndCapabilityEventConfigurationErrors(t *testing.T) {
+	for name, fn := range map[string]func(){
+		"nil projector": func() { ai.NewCustomEvent("x", 1).ProjectForUI(nil) },
+		"dispatch":      func() { ai.NewCapabilityEvent("x", "y", 1).SetDispatch("later") },
+		"timeout":       func() { ai.WithEventListenerTimeout(0) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			fn()
+		})
+	}
+	for name, target := range map[string]any{
+		"custom malformed":     &ai.CustomEvent[progressPayload]{},
+		"capability malformed": &ai.CapabilityEvent[progressPayload]{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := json.Unmarshal([]byte(`{`), target); err == nil {
+				t.Fatal("expected JSON error")
+			}
+		})
+	}
+	var malformedCustom ai.CustomEvent[progressPayload]
+	if err := malformedCustom.UnmarshalJSON([]byte(`{`)); err == nil {
+		t.Fatal("custom event accepted malformed JSON")
+	}
+	var malformedCapability ai.CapabilityEvent[progressPayload]
+	if err := malformedCapability.UnmarshalJSON([]byte(`{`)); err == nil {
+		t.Fatal("capability event accepted malformed JSON")
+	}
+	var custom ai.CustomEvent[progressPayload]
+	if err := json.Unmarshal([]byte(`{"event_kind":"capability"}`), &custom); err == nil {
+		t.Fatal("custom event accepted another event kind")
+	}
+	var capability ai.CapabilityEvent[progressPayload]
+	for _, encoded := range []string{
+		`{"event_kind":"custom"}`,
+		`{"event_kind":"capability","event_dispatch":"later"}`,
+	} {
+		if err := json.Unmarshal([]byte(encoded), &capability); err == nil {
+			t.Fatalf("capability event accepted %s", encoded)
+		}
+	}
+	invalidDispatch := &ai.CapabilityEvent[int]{Kind: "x.y", Dispatch: "later"}
+	agent := ai.NewAgent[deps, string](fakes.NewTestModel())
+	run, err := agent.StartRun(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := run.Emit(invalidDispatch); err == nil {
+		t.Fatal("run accepted invalid event dispatch")
+	}
+	if err := run.Close(); err != nil {
+		t.Fatal(err)
+	}
+	nullPayload := ai.NewCustomEvent("null", 1).ProjectForUI(func(int) any { return nil })
+	encoded, err := json.Marshal(nullPayload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decodedNull ai.CustomEvent[int]
+	if err := json.Unmarshal(encoded, &decodedNull); err != nil || decodedNull.Payload() != nil {
+		t.Fatalf("null UI payload did not round trip: payload=%#v err=%v", decodedNull.Payload(), err)
+	}
+	if _, err := json.Marshal(ai.NewCustomEvent("bad", make(chan int))); err == nil {
+		t.Fatal("custom event marshaled unsupported data")
+	}
+	badProjection := ai.NewCustomEvent("bad", 1).ProjectForUI(func(int) any { return make(chan int) })
+	if _, err := json.Marshal(badProjection); err == nil {
+		t.Fatal("custom event marshaled unsupported UI payload")
+	}
+}
+
+func TestCapabilityToolRegistrationRejectsNilFunctions(t *testing.T) {
+	for name, register := range map[string]func(*ai.CapabilityRegistry){
+		"plain": func(registry *ai.CapabilityRegistry) {
+			registry.AddTool(ai.ToolDefinition{Name: "x"}, nil)
+		},
+		"context": func(registry *ai.CapabilityRegistry) {
+			registry.AddContextTool(ai.ToolDefinition{Name: "x"}, nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic")
+				}
+			}()
+			register(&ai.CapabilityRegistry{})
+		})
+	}
+}
+
+func TestNormalizeToolReturnContentPreservesInvalidCandidates(t *testing.T) {
+	for _, input := range []map[string]any{
+		{"kind": "binary", "media_type": "text/plain", "data": 42},
+		{"kind": "binary", "media_type": "text/plain", "data": "eA==", "extra": make(chan int)},
+	} {
+		normalized := ai.NormalizeToolReturnContent(input)
+		if _, ok := normalized.(map[string]any); !ok {
+			t.Fatalf("invalid candidate was narrowed: %T", normalized)
+		}
 	}
 }
 

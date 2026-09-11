@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -50,6 +51,33 @@ func TestHandlerStreamsTextAndToolEvents(t *testing.T) {
 	}
 	if events[toolStart].ParentMessageID != events[textStart].MessageID {
 		t.Fatalf("tool call is not owned by the assistant message: %#v", events)
+	}
+}
+
+func TestPrepareInputRehydratesToolReturnContent(t *testing.T) {
+	input := agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{{
+			ID: "call", Type: "function", Function: agui.ToolCallFunction{Name: "files", Arguments: `{}`},
+		}}},
+		{ID: "tool", Role: "tool", ToolCallID: "call", Content: []any{
+			map[string]any{
+				"kind": "binary", "media_type": "application/octet-stream", "data": "AAE=",
+			},
+			map[string]any{"kind": "binary", "media_type": "text/plain", "label": "keep"},
+		}},
+		{ID: "user", Role: "user", Content: "continue"},
+	}}
+	_, history, _, err := agui.PrepareInput(input, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := history[1].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart).Content.([]any)
+	binary, ok := result[0].(ai.BinaryContent)
+	if !ok || !slices.Equal(binary.Data, []byte{0, 1}) {
+		t.Fatalf("binary tool return was not restored: %#v", result[0])
+	}
+	if mapping, ok := result[1].(map[string]any); !ok || mapping["label"] != "keep" {
+		t.Fatalf("kind-colliding application data was lost: %#v", result[1])
 	}
 }
 

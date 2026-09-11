@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/durable"
 )
 
@@ -72,6 +73,49 @@ func TestCodecAndInvocationErrors(t *testing.T) {
 
 func encodeInt(int) ([]byte, error) { return []byte("1"), nil }
 func decodeInt([]byte) (int, error) { return 1, nil }
+
+type eventPayload struct {
+	Done int `json:"done"`
+}
+
+func TestJSONCodecPreservesTypedEvents(t *testing.T) {
+	visible := false
+	customCodec := durable.JSONCodec[*ai.CustomEvent[eventPayload]]{}
+	custom := ai.NewCustomEvent("progress", eventPayload{Done: 2})
+	custom.ToolName = "work"
+	custom.ToolCallID = "call-1"
+	custom.SetUIVisible(visible)
+	custom.ProjectForUI(func(value eventPayload) any { return map[string]any{"completed": value.Done} })
+	encoded, err := customCodec.Encode(custom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := customCodec.Decode(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Data.Done != 2 || decoded.ToolName != "work" || decoded.ToolCallID != "call-1" ||
+		decoded.VisibleInUI() || decoded.Payload().(map[string]any)["completed"] != float64(2) {
+		t.Fatalf("custom event did not survive the durable codec: %+v", decoded)
+	}
+
+	capabilityCodec := durable.JSONCodec[*ai.CapabilityEvent[eventPayload]]{}
+	capability := ai.NewCapabilityEvent("index", "decision", eventPayload{Done: 3}).
+		SetDispatch(ai.EventDispatchImmediate)
+	capability.CapabilityID = "index"
+	encoded, err = capabilityCodec.Encode(capability)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedCapability, err := capabilityCodec.Decode(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decodedCapability.Data.Done != 3 || decodedCapability.CapabilityID != "index" ||
+		decodedCapability.Dispatch != ai.EventDispatchImmediate {
+		t.Fatalf("capability event did not survive the durable codec: %+v", decodedCapability)
+	}
+}
 
 func TestJSONCodec(t *testing.T) {
 	codec := durable.JSONCodec[map[string]int]{}

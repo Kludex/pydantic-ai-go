@@ -65,6 +65,97 @@ func binaryFile(dataURI string) (ai.BinaryContent, error) {
 	return ai.BinaryContent{Data: data, MediaType: mediaType}, nil
 }
 
+func normalizeClientToolReturnContent(value any) any {
+	switch value := value.(type) {
+	case []any:
+		normalized := make([]any, len(value))
+		for index, item := range value {
+			normalized[index] = normalizeClientToolReturnContent(item)
+		}
+		return normalized
+	case map[string]any:
+		normalized := make(map[string]any, len(value))
+		for key, item := range value {
+			normalized[key] = normalizeClientToolReturnContent(item)
+		}
+		kind, _ := normalized["kind"].(string)
+		if kind == "binary" {
+			if mediaType, ok := normalized["media_type"].(string); ok && mediaType != "" {
+				if data, ok := jsBinaryBytes(normalized["data"]); ok {
+					normalized["data"] = base64.URLEncoding.EncodeToString(data)
+				}
+			}
+		} else if mediaType, exists := normalized["media_type"]; !exists || mediaType == nil || mediaType == "" {
+			if inferred, ok := inferredURLMediaType(kind, normalized["url"]); ok {
+				normalized["media_type"] = inferred
+			}
+		}
+		return normalized
+	default:
+		return value
+	}
+}
+
+func inferredURLMediaType(kind string, value any) (string, bool) {
+	rawURL, ok := value.(string)
+	if !ok || rawURL == "" {
+		return "", false
+	}
+	var mediaType string
+	var err error
+	switch kind {
+	case "image-url":
+		mediaType, err = (ai.ImageURL{URL: rawURL}).ResolvedMediaType()
+	case "video-url":
+		mediaType, err = (ai.VideoURL{URL: rawURL}).ResolvedMediaType()
+	case "audio-url":
+		mediaType, err = (ai.AudioURL{URL: rawURL}).ResolvedMediaType()
+	case "document-url":
+		mediaType, err = (ai.DocumentURL{URL: rawURL}).ResolvedMediaType()
+	default:
+		return "", false
+	}
+	return mediaType, err == nil && mediaType != ""
+}
+
+func jsBinaryBytes(value any) ([]byte, bool) {
+	mapping, ok := value.(map[string]any)
+	if !ok {
+		return nil, false
+	}
+	if mapping["type"] == "Buffer" {
+		values, ok := mapping["data"].([]any)
+		if !ok {
+			return nil, false
+		}
+		return jsonBytes(values)
+	}
+	if len(mapping) == 0 {
+		return nil, false
+	}
+	values := make([]any, len(mapping))
+	for index := range values {
+		value, ok := mapping[fmt.Sprint(index)]
+		if !ok {
+			return nil, false
+		}
+		values[index] = value
+	}
+	return jsonBytes(values)
+}
+
+func jsonBytes(values []any) ([]byte, bool) {
+	result := make([]byte, len(values))
+	for index, value := range values {
+		number, ok := value.(float64)
+		if !ok || number < 0 || number > 255 || number != float64(byte(number)) {
+			return nil, false
+		}
+		result[index] = byte(number)
+	}
+	return result, true
+}
+
 func fileChunk(part ai.FilePart) Chunk {
 	return Chunk{
 		Type:      ChunkFile,

@@ -47,8 +47,9 @@ type CapabilityRegistry struct {
 }
 
 type capabilityTool struct {
-	def  ToolDefinition
-	call func(ctx context.Context, rawArgs json.RawMessage) (any, error)
+	def             ToolDefinition
+	call            func(ctx context.Context, info *RunInfo, rawArgs json.RawMessage) (any, error)
+	capabilityIndex int
 }
 
 type capabilitySetup struct {
@@ -62,6 +63,21 @@ type capabilitySetup struct {
 
 // AddTool registers a tool from an explicit definition, like Agent.AddRawTool.
 func (r *CapabilityRegistry) AddTool(def ToolDefinition, fn func(ctx context.Context, rawArgs json.RawMessage) (any, error)) {
+	if fn == nil {
+		panic("ai: capability tool function must not be nil")
+	}
+	r.AddContextTool(def, func(ctx context.Context, _ *RunInfo, rawArgs json.RawMessage) (any, error) {
+		return fn(ctx, rawArgs)
+	})
+}
+
+// AddContextTool registers a tool that can inspect the untyped run context and emit capability events.
+func (r *CapabilityRegistry) AddContextTool(
+	def ToolDefinition, fn func(ctx context.Context, info *RunInfo, rawArgs json.RawMessage) (any, error),
+) {
+	if fn == nil {
+		panic("ai: capability tool function must not be nil")
+	}
 	r.tools = append(r.tools, capabilityTool{def: def, call: fn})
 }
 
@@ -123,6 +139,8 @@ type RunInfo struct {
 	model            func() Model
 	systemPrompts    func(context.Context) ([]SystemPromptPart, error)
 	capabilityID     string
+	toolName         string
+	toolCallID       string
 	emitEvent        func(StreamEvent, string, string, string) error
 }
 
@@ -181,12 +199,18 @@ func (ri *RunInfo) ContextWindowUsed() (float64, bool) {
 // It is empty outside a capability-specific callback.
 func (ri *RunInfo) CapabilityID() string { return ri.capabilityID }
 
+// ToolName returns the current capability-owned tool name, or an empty string outside tool execution.
+func (ri *RunInfo) ToolName() string { return ri.toolName }
+
+// ToolCallID returns the current model-assigned call ID, or an empty string outside tool execution.
+func (ri *RunInfo) ToolCallID() string { return ri.toolCallID }
+
 // Emit adds an event from a capability callback to this run's event stream.
 func (ri *RunInfo) Emit(event StreamEvent) error {
 	if ri.emitEvent == nil {
 		return fmt.Errorf("ai: event emission is only available during an agent run")
 	}
-	return ri.emitEvent(event, ri.capabilityID, "", "")
+	return ri.emitEvent(event, ri.capabilityID, ri.toolName, ri.toolCallID)
 }
 
 // ModelRequestFunc continues the model-request chain.

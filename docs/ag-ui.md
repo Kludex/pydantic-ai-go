@@ -108,6 +108,8 @@ func main() {
 
 `TransformStream` is useful when agent events arrive through a queue or durable workflow instead of an HTTP request.
 
+Application `CustomEvent` values become AG-UI `CUSTOM` events. The event name maps to `name`, and `Payload()` maps to `value`. Capability events are internal and are not forwarded. Use `SetUIVisible(false)` to keep a custom event server-side, or `ProjectForUI` to expose only a safe payload.
+
 Cancel the context passed to `RunStream` to stop the agent run. The HTTP handler uses the request context, so a disconnected client cancels generation without a separate adapter token.
 
 ## Receive state and context

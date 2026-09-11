@@ -76,6 +76,72 @@ func TestTransformStreamEventVariants(t *testing.T) {
 	}
 }
 
+func TestTransformCustomEvents(t *testing.T) {
+	hidden := false
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.NewCustomEvent("progress", struct {
+			Done int `json:"done"`
+		}{Done: 2}).ProjectForUI(func(data struct {
+			Done int `json:"done"`
+		}) any {
+			return map[string]any{"completed": data.Done}
+		}), nil)
+		event := ai.NewCustomEvent("internal", map[string]any{"secret": true}).SetUIVisible(hidden)
+		yield(event, nil)
+		yield(ai.NewCustomEvent("passthrough", "ignored").ProjectForUI(func(string) any {
+			return agui.Event{Type: agui.EventStateSnapshot, Snapshot: map[string]any{"ready": true}}
+		}), nil)
+		yield(ai.NewCustomEvent("pointer", "ignored").ProjectForUI(func(string) any {
+			return &agui.Event{Type: agui.EventStateDelta, Delta: []any{"patch"}}
+		}), nil)
+		yield(ai.NewCustomEvent("nil-pointer", "ignored").ProjectForUI(func(string) any {
+			return (*agui.Event)(nil)
+		}), nil)
+		capability := ai.NewCapabilityEvent("index", "status", map[string]any{"value": 1})
+		capability.CapabilityID = "index"
+		yield(capability, nil)
+		yield(ai.FinishEvent{}, nil)
+	})
+	var custom []agui.Event
+	var snapshot *agui.Event
+	var delta *agui.Event
+	for event, err := range agui.TransformStream(stream, "thread", "run") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == agui.EventCustom {
+			custom = append(custom, event)
+		}
+		if event.Type == agui.EventStateSnapshot {
+			event := event
+			snapshot = &event
+		}
+		if event.Type == agui.EventStateDelta {
+			event := event
+			delta = &event
+		}
+	}
+	if len(custom) != 1 || custom[0].Name != "progress" ||
+		custom[0].Value.(map[string]any)["completed"] != 2 || snapshot == nil || delta == nil ||
+		snapshot.Snapshot.(map[string]any)["ready"] != true {
+		t.Fatalf("unexpected custom events: custom=%#v snapshot=%#v delta=%#v", custom, snapshot, delta)
+	}
+}
+
+func TestTransformCustomEventConsumerStops(t *testing.T) {
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.NewCustomEvent("stop", 1), nil)
+	})
+	seen := 0
+	agui.TransformStream(stream, "thread", "run")(func(event agui.Event, _ error) bool {
+		seen++
+		return event.Type != agui.EventCustom
+	})
+	if seen != 2 {
+		t.Fatalf("unexpected events before stop: %d", seen)
+	}
+}
+
 func TestTransformReasoningVersions(t *testing.T) {
 	for _, test := range []struct {
 		version string

@@ -63,6 +63,8 @@ Implement `Codec` when an engine has its own payload format. Implement `CacheIde
 
 Operation names cover model requests and streams, suspended-response cancellation, compaction, event handlers, capability operations, and function, dynamic, or MCP toolset discovery, validation, instruction, and call operations.
 
+`CustomEvent[T]` and `CapabilityEvent[T]` implement typed JSON round trips. Their event kind, attribution, dispatch mode, UI visibility, and projected UI payload survive a `durable.JSONCodec` boundary. Serialize the concrete generic event type because Go cannot recover a type argument from a bare `StreamEvent` interface.
+
 ## Model ownership
 
 ```go

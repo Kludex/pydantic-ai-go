@@ -93,6 +93,22 @@ type transformState struct {
 }
 
 func (state *transformState) transform(yield func(Chunk, error) bool, event ai.StreamEvent) bool {
+	if name, payload, visible, custom := ai.CustomEventUI(event); custom {
+		if !visible {
+			return true
+		}
+		switch projected := payload.(type) {
+		case Chunk:
+			if validateToolResultChunk(projected) == nil {
+				return yield(projected, nil)
+			}
+		case *Chunk:
+			if projected != nil && validateToolResultChunk(*projected) == nil {
+				return yield(*projected, nil)
+			}
+		}
+		return yield(Chunk{Type: ChunkType("data-" + name), Data: payload}, nil)
+	}
 	switch value := event.(type) {
 	case ai.PartStartEvent:
 		if !state.startStep(yield) {

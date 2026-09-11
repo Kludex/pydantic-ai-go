@@ -2,55 +2,63 @@ package ai
 
 import "encoding/json"
 
-func narrowToolReturnContent(content any) (any, error) {
+// NormalizeToolReturnContent rebuilds valid nested multimodal wire values without
+// coercing application maps that only collide with a reserved kind.
+func NormalizeToolReturnContent(content any) any {
+	return narrowToolReturnContent(content)
+}
+
+func narrowToolReturnContent(content any) any {
 	switch content := content.(type) {
 	case map[string]any:
-		if kind, _ := content["kind"].(string); isNestedFileContent(kind, content) {
-			encoded, _ := json.Marshal(content)
-			var wire wireUserContent
-			_ = json.Unmarshal(encoded, &wire)
-			value, err := unmarshalUserContentItem(wire)
-			if err != nil {
-				return nil, err
-			}
-			return value, nil
+		if value, ok := nestedFileContent(content); ok {
+			return value
 		}
 		result := make(map[string]any, len(content))
 		for key, value := range content {
-			narrowed, err := narrowToolReturnContent(value)
-			if err != nil {
-				return nil, err
-			}
-			result[key] = narrowed
+			result[key] = narrowToolReturnContent(value)
 		}
-		return result, nil
+		return result
 	case []any:
 		result := make([]any, len(content))
 		for index, value := range content {
-			narrowed, err := narrowToolReturnContent(value)
-			if err != nil {
-				return nil, err
-			}
-			result[index] = narrowed
+			result[index] = narrowToolReturnContent(value)
 		}
-		return result, nil
+		return result
 	default:
-		return content, nil
+		return content
 	}
 }
 
-func isNestedFileContent(kind string, content map[string]any) bool {
+func nestedFileContent(content map[string]any) (UserContent, bool) {
+	kind, _ := content["kind"].(string)
+	if !isCompleteNestedFileContent(kind, content) {
+		return nil, false
+	}
+	encoded, err := json.Marshal(content)
+	if err != nil {
+		return nil, false
+	}
+	var wire wireUserContent
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		return nil, false
+	}
+	value, err := unmarshalUserContentItem(wire)
+	return value, err == nil
+}
+
+func isCompleteNestedFileContent(kind string, content map[string]any) bool {
+	nonEmptyString := func(key string) bool {
+		value, ok := content[key].(string)
+		return ok && value != ""
+	}
 	switch kind {
 	case "image-url", "video-url", "audio-url", "document-url":
-		_, hasURL := content["url"]
-		mediaType, hasMediaType := content["media_type"].(string)
-		return hasURL && hasMediaType && mediaType != ""
+		return nonEmptyString("url") && nonEmptyString("media_type")
 	case "binary":
-		_, ok := content["media_type"]
-		return ok
+		return nonEmptyString("media_type") && content["data"] != nil
 	case "uploaded-file":
-		_, ok := content["file_id"]
-		return ok
+		return nonEmptyString("file_id") && nonEmptyString("provider_name")
 	default:
 		return false
 	}

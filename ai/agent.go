@@ -52,7 +52,7 @@ type Agent[Deps, Output any] struct {
 	capabilityRootIDs  []string
 	capabilitySetups   []capabilitySetup
 	outputValidators   []func(ctx context.Context, rc *RunContext[Deps], out Output) error
-	eventListeners     []EventListenerFunc[Deps]
+	eventListeners     []agentEventListener[Deps]
 
 	tools             []toolEntry[Deps]
 	nativeToolEntries []nativeToolEntry[Deps]
@@ -61,10 +61,11 @@ type Agent[Deps, Output any] struct {
 }
 
 type toolEntry[Deps any] struct {
-	def      ToolDefinition
-	validate toolValidateFunc[Deps]
-	execute  toolExecuteFunc[Deps]
-	prepare  ToolPrepareFunc[Deps]
+	def             ToolDefinition
+	validate        toolValidateFunc[Deps]
+	execute         toolExecuteFunc[Deps]
+	prepare         ToolPrepareFunc[Deps]
+	capabilityIndex int
 }
 
 type instructionRunner[Deps any] struct {

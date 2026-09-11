@@ -24,6 +24,7 @@ github.com/Kludex/pydantic-ai-go
 │   ├── ai/models/anthropic/
 │   ├── ai/models/google/
 │   ├── ai/models/fakes/                    // package fakes: TestModel, FunctionModel for users' tests
+│   ├── ai/images/                          // direct image generation, providers, instrumentation, fakes
 │   ├── ai/mcp/                             // official MCP client and toolset adapters
 │   └── ai/a2a/                             // official A2A server and client adapters
 └── examples/

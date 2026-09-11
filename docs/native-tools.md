@@ -642,7 +642,9 @@ func main() {
 
 The outer model uses native image generation when it supports the configured tool. Otherwise, it receives a local `generate_image` function. That function runs the fallback model through `NewImageOutputAgent` and returns the generated `BinaryContent` as rich tool content. The image settings apply to both paths.
 
-Set `ResolveModel` instead of `Model` when dependencies choose the fallback model for each tool call. The resolver receives a detached `RunContext` and may run concurrently. A dedicated image endpoint such as `gpt-image-1` cannot run the conversational subagent; use an image-capable conversational model instead.
+Set `ResolveModel` instead of `Model` when dependencies choose the fallback model for each tool call. The resolver receives a detached `RunContext` and may run concurrently.
+
+A dedicated image endpoint cannot run the conversational subagent. Wrap an [`images.Generator`](images.md) with `images.NewGenerationTool`, then pass `ai.NewFunctionToolset(tool)` as `ImageGenerationCapabilityConfig.Local`. The native tool remains preferred when the selected conversational model supports it. The direct generator handles the fallback without another agent run.
 
 `ImageGenerationTool` exposes portable action, background, input-fidelity, moderation, model, compression, format, partial-image, quality, size, and aspect-ratio settings. OpenAI Responses maps `1:1`, `2:3`, and `3:2` aspect ratios to supported pixel sizes. Unsupported or conflicting OpenAI dimensions fail before transport.
 

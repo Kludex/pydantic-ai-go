@@ -1,0 +1,342 @@
+package images_test
+
+import (
+	"context"
+	"errors"
+	"reflect"
+	"strings"
+	"testing"
+	"time"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/images"
+	"github.com/Kludex/pydantic-ai-go/ai/images/fakes"
+	modelfakes "github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+type noNativeModel struct{ *modelfakes.FunctionModel }
+
+func (*noNativeModel) SupportsNativeTool(ai.NativeTool) bool { return false }
+
+type valueModel struct{}
+
+func (valueModel) Generate(context.Context, string, []images.Input, images.Settings) (*images.Result, error) {
+	return &images.Result{Images: []images.GeneratedImage{{Content: ai.BinaryContent{MediaType: "image/png"}}}}, nil
+}
+func (valueModel) Name() string                     { return "value" }
+func (valueModel) ProviderName() string             { return "test" }
+func (valueModel) ProviderURL() string              { return "" }
+func (valueModel) DefaultSettings() images.Settings { return images.Settings{} }
+
+type model struct {
+	name, provider, url string
+	defaults            images.Settings
+	result              *images.Result
+	err                 error
+	prompt              string
+	inputs              []images.Input
+	settings            images.Settings
+}
+
+func (model *model) Generate(
+	_ context.Context, prompt string, inputs []images.Input, settings images.Settings,
+) (*images.Result, error) {
+	model.prompt, model.inputs, model.settings = prompt, inputs, settings
+	return model.result, model.err
+}
+func (model *model) Name() string                     { return model.name }
+func (model *model) ProviderName() string             { return model.provider }
+func (model *model) ProviderURL() string              { return model.url }
+func (model *model) DefaultSettings() images.Settings { return model.defaults.Clone() }
+
+func TestGeneratorPrecedenceOverrideAndDetachment(t *testing.T) {
+	defaultDimensions := images.Dimensions{Width: 512, Height: 512}
+	base := &model{name: "base", provider: "test", defaults: images.Settings{
+		Dimensions: &defaultDimensions, ExtraHeaders: map[string]string{"default": "yes"},
+	}, result: &images.Result{
+		Images: []images.GeneratedImage{{
+			Content:         ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
+			ProviderDetails: map[string]any{"nested": []any{"value"}},
+		}},
+		Usage: ai.Usage{Details: map[string]int{"images": 1}}, ProviderDetails: map[string]any{"ok": true},
+	}}
+	generator := images.New(base, images.WithSettings(images.Settings{AspectRatio: images.AspectRatio16To9}))
+	override := &model{name: "override", provider: "test", result: &images.Result{
+		Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("override"), MediaType: "image/webp"}}},
+	}}
+	result, err := generator.Generate(images.WithModel(t.Context(), override), "draw", []images.Input{
+		ai.BinaryContent{Data: []byte("reference"), MediaType: "image/png"},
+	}, images.Settings{AspectRatio: images.AspectRatio3To2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if generator.Model() != base || override.prompt != "draw" || override.settings.AspectRatio != images.AspectRatio3To2 {
+		t.Fatalf("unexpected request: %#v %#v", override.prompt, override.settings)
+	}
+	override.inputs[0].(ai.BinaryContent).Data[0] = 'X'
+	if result.Image().MediaType != "image/webp" {
+		t.Fatalf("unexpected result: %#v", result)
+	}
+	result.Images[0].Content.Data[0] = 'X'
+	if string(override.result.Images[0].Content.Data) != "override" {
+		t.Fatal("generator result was not detached")
+	}
+}
+
+func TestGeneratorValidationAndModelErrors(t *testing.T) {
+	requestErr := errors.New("failed")
+	base := &model{name: "test", provider: "test", err: requestErr}
+	generator := images.New(base)
+	if _, err := generator.Generate(t.Context(), "draw", nil); !errors.Is(err, requestErr) {
+		t.Fatalf("unexpected model error: %v", err)
+	}
+	for _, test := range []struct {
+		prompt   string
+		inputs   []images.Input
+		settings []images.Settings
+		contains string
+	}{
+		{prompt: " ", contains: "prompt must not be empty"},
+		{prompt: "draw", inputs: []images.Input{ai.BinaryContent{MediaType: "text/plain"}}, contains: "image media type"},
+		{prompt: "draw", inputs: []images.Input{ai.UploadedFile{MediaType: "application/pdf"}}, contains: "image media type"},
+		{prompt: "draw", settings: []images.Settings{{}, {}}, contains: "at most one"},
+		{prompt: "draw", settings: []images.Settings{{Dimensions: &images.Dimensions{Width: 1}, AspectRatio: images.AspectRatio1To1}}, contains: "mutually exclusive"},
+		{prompt: "draw", settings: []images.Settings{{Dimensions: &images.Dimensions{Width: -1, Height: 1}}}, contains: "positive"},
+	} {
+		_, err := generator.Generate(t.Context(), test.prompt, test.inputs, test.settings...)
+		if err == nil || !strings.Contains(err.Error(), test.contains) {
+			t.Fatalf("expected %q, got %v", test.contains, err)
+		}
+	}
+	base.err = nil
+	if _, err := generator.Generate(t.Context(), "draw", nil); err == nil || !strings.Contains(err.Error(), "nil result") {
+		t.Fatalf("unexpected nil error: %v", err)
+	}
+	base.result = &images.Result{}
+	if _, err := generator.Generate(t.Context(), "draw", nil); err == nil || !strings.Contains(err.Error(), "no generated images") {
+		t.Fatalf("unexpected empty error: %v", err)
+	}
+}
+
+func TestSettingsMediaResultAndWrapper(t *testing.T) {
+	dimensions := images.Dimensions{Width: 10, Height: 20}
+	cycle := map[string]any{}
+	cycle["self"] = cycle
+	cyclicSlice := []any{nil}
+	cyclicSlice[0] = cyclicSlice
+	settings := images.Settings{
+		Dimensions: &dimensions, ExtraHeaders: map[string]string{"x": "one"},
+		ExtraBody: map[string]any{
+			"nested": map[string]any{"value": "one"}, "slice": []any{[]string{"two"}},
+			"array": [1][]string{{"array"}}, "nil_map": map[string]any(nil), "nil_slice": []string(nil),
+			"nil": nil, "nil_interface": []any{nil}, "cycle": cycle, "slice_cycle": cyclicSlice, "scalar": "value",
+		},
+		ProviderSettings: map[string]any{"value": []string{"one"}},
+	}
+	cloned := settings.Clone()
+	settings.Dimensions.Width = 99
+	settings.ExtraBody["nested"].(map[string]any)["value"] = "changed"
+	if cloned.Dimensions.Width != 10 || cloned.ExtraBody["nested"].(map[string]any)["value"] != "one" ||
+		cloned.ExtraBody["slice"].([]any)[0].([]string)[0] != "two" ||
+		cloned.ExtraBody["array"].([1][]string)[0][0] != "array" {
+		t.Fatalf("settings not detached: %#v", cloned)
+	}
+	clonedCycle := cloned.ExtraBody["cycle"].(map[string]any)
+	if reflect.ValueOf(clonedCycle).Pointer() != reflect.ValueOf(clonedCycle["self"]).Pointer() {
+		t.Fatal("map cycle was not retained")
+	}
+	clonedSlice := cloned.ExtraBody["slice_cycle"].([]any)
+	if reflect.ValueOf(clonedSlice).Pointer() != reflect.ValueOf(clonedSlice[0]).Pointer() {
+		t.Fatal("slice cycle was not retained")
+	}
+	merged := images.MergeSettings(cloned, images.Settings{
+		AspectRatio: images.AspectRatio1To1, ExtraHeaders: map[string]string{},
+		ProviderSettings: map[string]any{"other": true},
+	})
+	if merged.AspectRatio != images.AspectRatio1To1 || len(merged.ExtraHeaders) != 0 || merged.ProviderSettings["other"] != true {
+		t.Fatalf("unexpected merge: %#v", merged)
+	}
+	if got := images.MediaTypeFromBytes([]byte("\x89PNGrest")); got != "image/png" {
+		t.Fatal(got)
+	}
+	if got := images.MediaTypeFromBytes([]byte("\xff\xd8\xffrest")); got != "image/jpeg" {
+		t.Fatal(got)
+	}
+	if got := images.MediaTypeFromBytes([]byte("RIFFxxxxWEBPrest")); got != "image/webp" {
+		t.Fatal(got)
+	}
+	if images.MediaTypeFromBytes([]byte("no")) != "" || images.OutputFormat("text/plain") != "" ||
+		images.OutputFormat("image/webp") != "webp" {
+		t.Fatal("unexpected media detection")
+	}
+	if err := (images.Settings{}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (images.Settings{Dimensions: &images.Dimensions{Width: 1, Height: 1}}).Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if merged := images.MergeSettings(images.Settings{}, images.Settings{}); merged.ExtraBody != nil {
+		t.Fatal("empty merge changed nil maps")
+	}
+	if merged := images.MergeSettings(images.Settings{}, images.Settings{
+		ExtraBody: map[string]any{}, ProviderSettings: map[string]any{"value": true},
+	}); merged.ProviderSettings["value"] != true {
+		t.Fatal("provider settings were not initialized")
+	}
+	if _, _, _, err := images.PrepareRequest("draw", []images.Input{&ai.ImageURL{}}, images.Settings{}); err == nil {
+		t.Fatal("pointer input was accepted")
+	}
+	_, copiedInputs, _, err := images.PrepareRequest("draw", []images.Input{
+		ai.ImageURL{URL: "https://example.com/a.png", VendorMetadata: map[string]any{"x": []string{"one"}}},
+		ai.UploadedFile{FileID: "file", ProviderName: "test", MediaType: "image/png", VendorMetadata: map[string]any{"x": "one"}},
+	}, images.Settings{})
+	if err != nil || len(copiedInputs) != 2 {
+		t.Fatalf("unexpected copied inputs: %#v %v", copiedInputs, err)
+	}
+
+	fake := fakes.NewModel(fakes.WithName("custom"), fakes.WithProviderName("provider"))
+	wrapped := images.WrapModel(fake)
+	if wrapped.Name() != "custom" || wrapped.ProviderName() != "provider" || wrapped.UnwrapModel() != fake {
+		t.Fatalf("wrapper did not delegate: %#v", wrapped)
+	}
+	result, err := fake.Generate(t.Context(), "two words", nil, images.Settings{})
+	if err != nil || result.Usage.InputTokens != 2 || result.ProviderResponseID == "" {
+		t.Fatalf("unexpected fake result: %#v %v", result, err)
+	}
+	first := result.Image()
+	first.Data[0] = 0
+	if reflect.DeepEqual(first.Data, result.Images[0].Content.Data) {
+		t.Fatal("Image exposed result bytes")
+	}
+	emptyResult := (images.Result{}).Clone()
+	if emptyResult.Image().MediaType != "" || emptyResult.Images != nil {
+		t.Fatal("empty result returned an image")
+	}
+
+	priced := images.Result{
+		ModelName: "gpt-image-1", ProviderName: "openai", Timestamp: time.Now(),
+		Usage: ai.Usage{InputTokens: 1, OutputTokens: 1},
+	}
+	if _, err := priced.Price(); err != nil {
+		t.Fatalf("price failed: %v", err)
+	}
+}
+
+func TestGenerationTool(t *testing.T) {
+	direct := &model{name: "image", provider: "test", result: &images.Result{
+		Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("generated"), MediaType: "image/png"}}},
+	}}
+	generator := images.New(direct)
+	tool := images.NewGenerationTool[struct{}](generator, images.ToolConfig{Description: "Draw it."})
+	calls := 0
+	outer := &noNativeModel{modelfakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		calls++
+		if calls == 1 {
+			if len(params.Tools) != 1 || params.Tools[0].Name != "generate_image" || params.Tools[0].Description != "Draw it." {
+				t.Fatalf("unexpected tool: %#v", params.Tools)
+			}
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "generate_image", ToolCallID: "image", Args: []byte(`{"prompt":"A gopher"}`),
+			}}}, nil
+		}
+		request := messages[len(messages)-1].(ai.ModelRequest)
+		returned := request.Parts[0].(ai.ToolReturnPart).Content.(ai.BinaryContent)
+		if string(returned.Data) != "generated" {
+			t.Fatalf("unexpected generated image: %#v", returned)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})}
+	capability := ai.NewImageGenerationCapability(ai.ImageGenerationCapabilityConfig[struct{}]{
+		Native: ai.ImageGenerationTool{}, Local: ai.NewFunctionToolset(tool),
+	})
+	agent := ai.NewAgent[struct{}, string](outer, ai.WithCapabilities(capability))
+	result, err := agent.Run(t.Context(), "draw", struct{}{})
+	if err != nil || result.Output != "done" || calls != 2 {
+		t.Fatalf("unexpected agent result: %#v calls=%d err=%v", result, calls, err)
+	}
+	if capturePanic(func() { images.NewGenerationTool[struct{}](nil, images.ToolConfig{}) }) == nil {
+		t.Fatal("nil generator did not panic")
+	}
+}
+
+func TestGenerationToolFailures(t *testing.T) {
+	filtered := &model{name: "image", provider: "test", err: &ai.ContentFilterError{Message: "blocked"}}
+	tool := images.NewGenerationTool[struct{}](images.New(filtered), images.ToolConfig{})
+	calls := 0
+	outer := modelfakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		calls++
+		if calls == 1 {
+			if params.Tools[0].Name != "generate_image" {
+				t.Fatalf("unexpected default tool: %#v", params.Tools[0])
+			}
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "generate_image", ToolCallID: "image", Args: []byte(`{"prompt":"A gopher"}`),
+			}}}, nil
+		}
+		request := messages[len(messages)-1].(ai.ModelRequest)
+		if _, ok := request.Parts[0].(ai.RetryPromptPart); !ok {
+			t.Fatalf("expected retry prompt: %#v", request.Parts)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[struct{}, string](outer)
+	agent.AddTool(tool)
+	if _, err := agent.Run(t.Context(), "draw", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+
+	multiple := &model{name: "image", provider: "test", result: &images.Result{Images: []images.GeneratedImage{
+		{Content: ai.BinaryContent{Data: []byte("one"), MediaType: "image/png"}},
+		{Content: ai.BinaryContent{Data: []byte("two"), MediaType: "image/png"}},
+	}}}
+	tool = images.NewGenerationTool[struct{}](images.New(multiple), images.ToolConfig{Name: "draw_image"})
+	outer = modelfakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "draw_image", ToolCallID: "image", Args: []byte(`{"prompt":"A gopher"}`),
+		}}}, nil
+	})
+	agent = ai.NewAgent[struct{}, string](outer)
+	agent.AddTool(tool)
+	if _, err := agent.Run(t.Context(), "draw", struct{}{}); err == nil || !strings.Contains(err.Error(), "expected exactly one") {
+		t.Fatalf("unexpected multiple-image error: %v", err)
+	}
+
+	directFailure := errors.New("direct failure")
+	failed := &model{name: "image", provider: "test", err: directFailure}
+	tool = images.NewGenerationTool[struct{}](images.New(failed), images.ToolConfig{})
+	outer = modelfakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "generate_image", ToolCallID: "image", Args: []byte(`{"prompt":"A gopher"}`),
+		}}}, nil
+	})
+	agent = ai.NewAgent[struct{}, string](outer)
+	agent.AddTool(tool)
+	if _, err := agent.Run(t.Context(), "draw", struct{}{}); !errors.Is(err, directFailure) {
+		t.Fatalf("unexpected direct error: %v", err)
+	}
+}
+
+func TestNilModels(t *testing.T) {
+	var typedNil *model
+	if images.New(valueModel{}).Model().Name() != "value" {
+		t.Fatal("value model was rejected")
+	}
+	for _, function := range []func(){
+		func() { images.New(nil) }, func() { images.New(typedNil) },
+		func() { images.WrapModel(nil) }, func() { images.WithModel(context.Background(), nil) },
+	} {
+		if panicValue := capturePanic(function); panicValue == nil {
+			t.Fatal("nil model did not panic")
+		}
+	}
+}
+
+func capturePanic(function func()) (value any) {
+	defer func() { value = recover() }()
+	function()
+	return nil
+}

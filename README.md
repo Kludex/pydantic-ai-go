@@ -307,6 +307,7 @@ func TestAgent(t *testing.T) {
 | Add OpenTelemetry or send telemetry to Logfire | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |
 | Evaluate an agent | [`evals.NewTextTask` or `evals.NewTask`](docs/evals.md) |
 | Generate query or document vectors | [`embeddings.Embedder`](docs/embeddings.md) |
+| Generate or edit images directly | [`images.Generator`](docs/images.md) |
 | Call a model without an agent | `RequestModel` or `StreamModel` |
 | Drive a run one event at a time | `AgentRun` |
 

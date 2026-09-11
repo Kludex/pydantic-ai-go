@@ -24,6 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Terminal and browser chat entry points with provider-prefixed model inference, MCP configuration, streamed tool status, and session history.
 - Durable operation backend contracts with stable naming, codecs, cache identity, explicit model ownership, and Temporal, DBOS, and Prefect registration policies.
 - Typed embedding clients for OpenAI-compatible APIs, Google Gemini and Vertex AI, Cohere, VoyageAI, Amazon Bedrock, and local Ollama models.
+- Direct image generation and editing through OpenAI, Google Gemini and Vertex AI, and xAI, with portable geometry, provider settings, batches, wrappers, deterministic fakes, and OpenTelemetry instrumentation.
 - Typed prompt templates and deterministic XML formatting for structured prompt data.
 - Agent delegation through typed tools with nested usage and limit propagation.
 - OpenTelemetry tracing and metrics for agents, model requests, tools, output functions, compaction, and embeddings.

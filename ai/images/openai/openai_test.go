@@ -274,6 +274,101 @@ func TestGeometryAndSettingsPrecedence(t *testing.T) {
 	}
 }
 
+func TestEditEncodingDownloadAndGeometryEdges(t *testing.T) {
+	imageServer := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = response.Write(png)
+	}))
+	defer imageServer.Close()
+	api := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_, _ = io.WriteString(response, `{"data":[{"b64_json":"`+base64.StdEncoding.EncodeToString(png)+`"}]}`)
+	}))
+	defer api.Close()
+	model := imageopenai.NewModel("gpt-image-2", imageopenai.WithBaseURL(api.URL), imageopenai.WithHTTPClient(api.Client()))
+
+	user := "user"
+	n := 1
+	settings, err := (imageopenai.Settings{
+		Common: images.Settings{ExtraBody: map[string]any{
+			"boolean": true, "integer": 1, "mapping": map[string]any{"value": true}, "stringer": testStringer{},
+		}},
+		N: &n, User: &user, InputFidelity: imageopenai.InputFidelityHigh,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := model.Generate(t.Context(), "draw", nil, settings)
+	if err != nil || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "input fidelity") {
+		t.Fatalf("unexpected generation warning: %#v %v", result, err)
+	}
+
+	for _, input := range []images.Input{
+		ai.BinaryContent{Data: []byte("jpeg"), MediaType: "image/jpeg"},
+		ai.BinaryContent{Data: []byte("webp"), MediaType: "image/webp"},
+		ai.ImageURL{URL: imageServer.URL + "/image.webp", ForceDownload: ai.FileDownloadAllowLocal},
+	} {
+		if _, err := model.Generate(t.Context(), "edit", []images.Input{input}, images.Settings{}); err != nil {
+			t.Fatalf("valid edit input failed: %#v %v", input, err)
+		}
+	}
+	for _, input := range []images.Input{
+		ai.ImageURL{URL: imageServer.URL + "/image", ForceDownload: "invalid"},
+		ai.ImageURL{URL: imageServer.URL + "/image", ForceDownload: ai.FileDownloadSafe},
+		ai.ImageURL{URL: imageServer.URL + "/image", ForceDownload: ai.FileDownloadAllowLocal},
+		ai.UploadedFile{FileID: "file", ProviderName: "openai", MediaType: "image/png"},
+	} {
+		if _, err := imageopenai.NewModel("gpt-image-2").Generate(
+			t.Context(), "edit", []images.Input{input}, images.Settings{},
+		); err == nil {
+			t.Fatalf("invalid edit input accepted: %#v", input)
+		}
+	}
+	if _, err := model.Generate(t.Context(), "edit", []images.Input{
+		ai.BinaryContent{Data: png, MediaType: "image/png"},
+	}, images.Settings{ExtraBody: map[string]any{
+		"plain": "value", "boolean": true, "integer": 1, "stringer": testStringer{},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, extra := range []map[string]any{{"model": "other"}, {"custom": make(chan int)}} {
+		if _, err := model.Generate(t.Context(), "edit", []images.Input{
+			ai.BinaryContent{Data: png, MediaType: "image/png"},
+		}, images.Settings{ExtraBody: extra}); err == nil {
+			t.Fatalf("invalid multipart extra body accepted: %#v", extra)
+		}
+	}
+
+	if _, err := imageopenai.NewModel("gpt-image-2", imageopenai.WithBaseURL("://bad")).Generate(
+		t.Context(), "edit", []images.Input{ai.BinaryContent{Data: png, MediaType: "image/png"}}, images.Settings{},
+	); err == nil {
+		t.Fatal("invalid edit endpoint accepted")
+	}
+
+	legacy := imageopenai.NewModel("gpt-image-1")
+	if _, err := legacy.Generate(t.Context(), "draw", nil, images.Settings{
+		Dimensions: &images.Dimensions{Width: 512, Height: 512},
+	}); err == nil {
+		t.Fatal("invalid legacy dimensions accepted")
+	}
+	for _, test := range []struct {
+		size  string
+		ratio images.AspectRatio
+	}{
+		{"invalid", images.AspectRatio1To1}, {"0x1024", images.AspectRatio1To1},
+		{"1024x1024", images.AspectRatio("invalid")}, {"1024x1024", images.AspectRatio1To1},
+	} {
+		providerSettings, err := (imageopenai.Settings{
+			Common: images.Settings{AspectRatio: test.ratio}, Size: &test.size,
+		}).Build()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := model.Generate(t.Context(), "draw", nil, providerSettings); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func TestRequestFailuresAndReferenceTypes(t *testing.T) {
 	if _, err := imageopenai.NewModel("gpt-image-2").Generate(t.Context(), " ", nil, images.Settings{}); err == nil {
 		t.Fatal("empty prompt accepted")
@@ -295,16 +390,24 @@ func TestRequestFailuresAndReferenceTypes(t *testing.T) {
 	if _, err := model.Generate(t.Context(), "draw", nil, images.Settings{}); err == nil {
 		t.Fatal("invalid endpoint accepted")
 	}
+	connectionErr := errors.New("transport")
 	model = imageopenai.NewModel("gpt-image-2", imageopenai.WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return nil, errors.New("transport")
+		return nil, connectionErr
 	})}))
-	if _, err := model.Generate(t.Context(), "draw", nil, images.Settings{}); err == nil || !strings.Contains(err.Error(), "transport") {
+	_, err := model.Generate(t.Context(), "draw", nil, images.Settings{})
+	var transportError *ai.ModelTransportError
+	var apiError ai.ModelAPIError
+	if !errors.As(err, &transportError) || !errors.As(err, &apiError) || !errors.Is(err, connectionErr) ||
+		transportError.ModelName != "gpt-image-2" || transportError.ProviderName != "openai" ||
+		transportError.Operation != "request" {
 		t.Fatalf("unexpected transport error: %v", err)
 	}
+	readErr := errors.New("read")
 	model = imageopenai.NewModel("gpt-image-2", imageopenai.WithHTTPClient(&http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: 200, Body: errorBody{}}, nil
+		return &http.Response{StatusCode: 200, Body: errorBody{err: readErr}}, nil
 	})}))
-	if _, err := model.Generate(t.Context(), "draw", nil, images.Settings{}); err == nil || !strings.Contains(err.Error(), "read response") {
+	_, err = model.Generate(t.Context(), "draw", nil, images.Settings{})
+	if !errors.As(err, &transportError) || !errors.Is(err, readErr) || transportError.Operation != "read response" {
 		t.Fatalf("unexpected read error: %v", err)
 	}
 	if _, err := imageopenai.NewModel("gpt-image-2").Generate(t.Context(), "draw", nil, images.Settings{
@@ -348,16 +451,20 @@ func TestRequestFailuresAndReferenceTypes(t *testing.T) {
 	}
 }
 
+type testStringer struct{}
+
+func (testStringer) String() string { return "stringer" }
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
 }
 
-type errorBody struct{}
+type errorBody struct{ err error }
 
-func (errorBody) Read([]byte) (int, error) { return 0, errors.New("read") }
-func (errorBody) Close() error             { return nil }
+func (body errorBody) Read([]byte) (int, error) { return 0, body.err }
+func (errorBody) Close() error                  { return nil }
 
 func capturePanic(function func()) (value any) {
 	defer func() { value = recover() }()

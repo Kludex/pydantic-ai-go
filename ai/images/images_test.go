@@ -18,6 +18,15 @@ type noNativeModel struct{ *modelfakes.FunctionModel }
 
 func (*noNativeModel) SupportsNativeTool(ai.NativeTool) bool { return false }
 
+type plainModel struct{ result *images.Result }
+
+func (model plainModel) Generate(context.Context, string, []images.Input, images.Settings) (*images.Result, error) {
+	return model.result, nil
+}
+func (plainModel) Name() string         { return "plain" }
+func (plainModel) ProviderName() string { return "test" }
+func (plainModel) ProviderURL() string  { return "" }
+
 type valueModel struct{}
 
 func (valueModel) Generate(context.Context, string, []images.Input, images.Settings) (*images.Result, error) {
@@ -80,6 +89,36 @@ func TestGeneratorPrecedenceOverrideAndDetachment(t *testing.T) {
 	result.Images[0].Content.Data[0] = 'X'
 	if string(override.result.Images[0].Content.Data) != "override" {
 		t.Fatal("generator result was not detached")
+	}
+}
+
+func TestGeneratorWithoutModelDefaults(t *testing.T) {
+	plain := plainModel{result: &images.Result{Images: []images.GeneratedImage{{
+		Content: ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
+	}}}}
+	result, err := images.New(plain).Generate(t.Context(), "draw", nil)
+	if err != nil || result.ModelName != "" {
+		t.Fatalf("unexpected result: %#v %v", result, err)
+	}
+}
+
+func TestImageTransportErrors(t *testing.T) {
+	base := &model{name: "image", provider: "provider"}
+	if images.NewModelTransportError(t.Context(), base, "request", nil) != nil {
+		t.Fatal("nil transport error was changed")
+	}
+	cause := errors.New("connection")
+	err := images.NewModelTransportError(t.Context(), base, "read response", cause)
+	var transport *ai.ModelTransportError
+	if !errors.As(err, &transport) || !errors.Is(err, cause) || transport.ModelName != "image" ||
+		transport.ProviderName != "provider" || transport.Operation != "read response" {
+		t.Fatalf("unexpected transport error: %v", err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	err = images.NewModelTransportError(ctx, base, "request", context.Canceled)
+	if !errors.Is(err, context.Canceled) || errors.As(err, &transport) {
+		t.Fatalf("cancellation became a model API error: %v", err)
 	}
 }
 
@@ -258,6 +297,139 @@ func TestGenerationTool(t *testing.T) {
 	}
 	if capturePanic(func() { images.NewGenerationTool[struct{}](nil, images.ToolConfig{}) }) == nil {
 		t.Fatal("nil generator did not panic")
+	}
+}
+
+func TestImageGenerationCapabilityDirectFallback(t *testing.T) {
+	direct := &model{name: "image", provider: "test", result: &images.Result{
+		Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("generated"), MediaType: "image/png"}}},
+	}}
+	generator := images.New(direct)
+	resolverCalls := 0
+	outerCalls := 0
+	outer := &noNativeModel{modelfakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		outerCalls++
+		if outerCalls == 1 {
+			if len(params.NativeTools) != 0 || len(params.Tools) != 1 || params.Tools[0].NativeFallbackFor != "image_generation" {
+				t.Fatalf("unexpected direct fallback tools: %#v %#v", params.NativeTools, params.Tools)
+			}
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "generate_image", ToolCallID: "image", Args: []byte(`{"prompt":"A gopher"}`),
+			}}}, nil
+		}
+		request := messages[len(messages)-1].(ai.ModelRequest)
+		returned := request.Parts[0].(ai.ToolReturnPart).Content.(ai.BinaryContent)
+		if string(returned.Data) != "generated" {
+			t.Fatalf("unexpected generated image: %#v", returned)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})}
+	capability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+		ResolveNative: func(context.Context, *ai.RunContext[struct{}]) (ai.ImageGenerationTool, error) {
+			resolverCalls++
+			return ai.ImageGenerationTool{AspectRatio: ai.ImageAspectRatio3x2}, nil
+		},
+		Generator: generator,
+	})
+	result, err := ai.NewAgent[struct{}, string](outer, ai.WithCapabilities(capability)).Run(t.Context(), "draw", struct{}{})
+	if err != nil || result.Output != "done" || resolverCalls != 2 || direct.settings.AspectRatio != images.AspectRatio3To2 {
+		t.Fatalf("unexpected direct fallback: result=%#v resolves=%d settings=%#v err=%v",
+			result, resolverCalls, direct.settings, err)
+	}
+
+	nativeModel := &selectiveImageModel{supported: true}
+	nativeCapability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+		Native: ai.ImageGenerationTool{}, Generator: generator,
+		Settings: images.Settings{AspectRatio: images.AspectRatio16To9},
+	})
+	if _, err := ai.NewAgent[struct{}, string](nativeModel, ai.WithCapabilities(nativeCapability)).Run(
+		t.Context(), "draw", struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(nativeModel.params.NativeTools) != 1 || len(nativeModel.params.Tools) != 0 ||
+		nativeModel.params.NativeTools[0].(ai.ImageGenerationTool).AspectRatio != ai.ImageAspectRatio16x9 {
+		t.Fatalf("portable aspect ratio did not reach native path: %#v", nativeModel.params)
+	}
+}
+
+type selectiveImageModel struct {
+	supported bool
+	params    ai.ModelRequestParams
+}
+
+func (model *selectiveImageModel) Request(
+	_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+) (*ai.ModelResponse, error) {
+	model.params = params
+	return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+}
+
+func (*selectiveImageModel) Name() string                                { return "selective" }
+func (model *selectiveImageModel) SupportsNativeTool(ai.NativeTool) bool { return model.supported }
+
+func TestImageGenerationCapabilityRejectsUnsupportedEdit(t *testing.T) {
+	direct := &model{name: "image", provider: "test", result: &images.Result{
+		Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("generated"), MediaType: "image/png"}}},
+	}}
+	outer := &noNativeModel{modelfakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "generate_image", ToolCallID: "image", Args: []byte(`{"prompt":"edit it"}`),
+		}}}, nil
+	})}
+	capability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+		Native: ai.ImageGenerationTool{Action: ai.ImageGenerationActionEdit}, FallbackModel: direct,
+	})
+	_, err := ai.NewAgent[struct{}, string](outer, ai.WithCapabilities(capability)).Run(t.Context(), "edit", struct{}{})
+	if err == nil || !strings.Contains(err.Error(), "cannot edit without reference images") || direct.prompt != "" {
+		t.Fatalf("unexpected edit fallback result: prompt=%q err=%v", direct.prompt, err)
+	}
+}
+
+func TestImageGenerationCapabilityResolverError(t *testing.T) {
+	resolveErr := errors.New("resolve native")
+	capability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+		ResolveNative: func(context.Context, *ai.RunContext[struct{}]) (ai.ImageGenerationTool, error) {
+			return ai.ImageGenerationTool{}, resolveErr
+		},
+		Generator: images.New(&model{name: "image", provider: "test"}),
+	})
+	_, err := ai.NewAgent[struct{}, string](&selectiveImageModel{}, ai.WithCapabilities(capability)).Run(
+		t.Context(), "draw", struct{}{},
+	)
+	if !errors.Is(err, resolveErr) {
+		t.Fatalf("unexpected resolver error: %v", err)
+	}
+}
+
+func TestImageGenerationCapabilityValidation(t *testing.T) {
+	generator := images.New(&model{name: "image", provider: "test"})
+	for _, function := range []func(){
+		func() {
+			images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Local: ai.NewFunctionToolset[struct{}](), Generator: generator,
+			})
+		},
+		func() {
+			images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Generator: generator, FallbackModel: &model{name: "other", provider: "test"},
+			})
+		},
+		func() {
+			images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Generator: generator, Settings: images.Settings{
+					Dimensions: &images.Dimensions{Width: 1, Height: 1}, AspectRatio: images.AspectRatio1To1,
+				},
+			})
+		},
+	} {
+		if capturePanic(function) == nil {
+			t.Fatal("invalid direct fallback configuration did not panic")
+		}
 	}
 }
 

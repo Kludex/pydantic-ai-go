@@ -14,6 +14,12 @@ packages=(
     ./ai/internal/contextwindow
     ./ai/internal/download
     ./ai/internal/schema
+    ./ai/images
+    ./ai/images/fakes
+    ./ai/images/google
+    ./ai/images/infer
+    ./ai/images/openai
+    ./ai/images/xai
     ./ai/retries
     ./ai/evals
     ./ai/embeddings

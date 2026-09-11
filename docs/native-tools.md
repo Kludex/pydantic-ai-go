@@ -648,7 +648,7 @@ Use `NewDynamicImageGenerationCapabilityWithFallback` when dependencies choose i
 
 `NewDynamicXSearchCapabilityWithFallback` applies the same rule to X search. Its fallback subagent receives the resolved handle filters, date bounds, media-understanding flags, and raw-output setting. A resolver error stops the fallback instead of silently enabling a default native tool.
 
-A dedicated image endpoint cannot run the conversational subagent. Wrap an [`images.Generator`](images.md) with `images.NewGenerationTool`, then pass `ai.NewFunctionToolset(tool)` as `ImageGenerationCapabilityConfig.Local`. The native tool remains preferred when the selected conversational model supports it. The direct generator handles the fallback without another agent run.
+A dedicated image endpoint cannot run the conversational subagent. Pass an [`images.Generator`](images.md) as `images.CapabilityConfig.Generator`, or pass its model as `FallbackModel`. The native tool remains preferred when the selected conversational model supports it. Portable geometry reaches either path, including native settings resolved for the current request. An edit-only request fails if it reaches the direct fallback because the local `generate_image` call has no reference-image input.
 
 `ImageGenerationTool` exposes portable action, background, input-fidelity, moderation, model, compression, format, partial-image, quality, size, and aspect-ratio settings. OpenAI Responses maps `1:1`, `2:3`, and `3:2` aspect ratios to supported pixel sizes. Unsupported or conflicting OpenAI dimensions fail before transport.
 

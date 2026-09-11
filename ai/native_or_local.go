@@ -34,6 +34,7 @@ type nativeOrLocalRegistration[Deps any] struct {
 	nativeID       string
 	local          Toolset[Deps]
 	rebuildLocal   func(NativeTool) Toolset[Deps]
+	localFactory   func(NativeTool) Toolset[Deps]
 	requiredReason string
 }
 
@@ -77,6 +78,16 @@ func NewDynamicNativeOrLocalToolset[Deps any](
 	local Toolset[Deps],
 	options ...NativeOrLocalOption,
 ) *NativeOrLocalTool[Deps] {
+	return newDynamicNativeOrLocalToolset(nativeID, resolve, local, nil, options...)
+}
+
+func newDynamicNativeOrLocalToolset[Deps any](
+	nativeID string,
+	resolve NativeToolFunc[Deps],
+	local Toolset[Deps],
+	localFactory func(NativeTool) Toolset[Deps],
+	options ...NativeOrLocalOption,
+) *NativeOrLocalTool[Deps] {
 	if nativeID == "" {
 		panic("ai: dynamic native-or-local tool ID must not be empty")
 	}
@@ -85,7 +96,8 @@ func NewDynamicNativeOrLocalToolset[Deps any](
 	}
 	config := applyNativeOrLocalOptions(options)
 	return &NativeOrLocalTool[Deps]{registration: nativeOrLocalRegistration[Deps]{
-		resolve: resolve, nativeID: nativeID, local: local, requiredReason: config.requiredReason,
+		resolve: resolve, nativeID: nativeID, local: local, localFactory: localFactory,
+		requiredReason: config.requiredReason,
 	}}
 }
 
@@ -155,6 +167,14 @@ func (tool *NativeOrLocalTool[Deps]) CombineCapabilities(capabilities []Capabili
 		for index := len(values) - 2; index >= 0; index-- {
 			if values[index].registration.rebuildLocal != nil {
 				registration.rebuildLocal = values[index].registration.rebuildLocal
+				break
+			}
+		}
+	}
+	if registration.localFactory == nil {
+		for index := len(values) - 2; index >= 0; index-- {
+			if values[index].registration.localFactory != nil {
+				registration.localFactory = values[index].registration.localFactory
 				break
 			}
 		}

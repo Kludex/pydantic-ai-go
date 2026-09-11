@@ -1,0 +1,49 @@
+---
+version: 2
+interactions:
+    - id: 0
+      request:
+        proto: HTTP/1.1
+        proto_major: 1
+        proto_minor: 1
+        content_length: 145
+        host: generativelanguage.googleapis.com
+        body: '{"contents":[{"role":"user","parts":[{"text":"A tiny blue square on a white background."}]}],"generationConfig":{"responseModalities":["IMAGE"]}}'
+        headers:
+            Content-Type:
+                - application/json
+        url: https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent
+        method: POST
+      response:
+        proto: HTTP/2.0
+        proto_major: 2
+        proto_minor: 0
+        content_length: -1
+        uncompressed: true
+        body: '{"candidates":[{"content":{"parts":[{"inlineData":{"data":"iVBORw0KGgpyZWNvcmRlZA==","mimeType":"image/png"}}],"role":"model"},"finishReason":"STOP","index":0}],"modelVersion":"gemini-2.5-flash-image","responseId":"o-Kjaui-IpLtxs0PsZDj4Ao","usageMetadata":{"candidatesTokenCount":1290,"candidatesTokensDetails":[{"modality":"IMAGE","tokenCount":1290}],"promptTokenCount":10,"promptTokensDetails":[{"modality":"TEXT","tokenCount":10}],"serviceTier":"standard","totalTokenCount":1300}}'
+        headers:
+            Alt-Svc:
+                - h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+            Content-Type:
+                - application/json; charset=UTF-8
+            Date:
+                - Fri, 11 Sep 2026 11:14:48 GMT
+            Server:
+                - scaffolding on HTTPServer2
+            Server-Timing:
+                - gfet4t7; dur=5492
+            Vary:
+                - Origin
+                - X-Origin
+                - Referer
+            X-Content-Type-Options:
+                - nosniff
+            X-Frame-Options:
+                - SAMEORIGIN
+            X-Gemini-Service-Tier:
+                - standard
+            X-Xss-Protection:
+                - "0"
+        status: 200 OK
+        code: 200
+        duration: 5.561553125s

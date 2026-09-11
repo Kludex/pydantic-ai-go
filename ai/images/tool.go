@@ -12,6 +12,8 @@ import (
 type ToolConfig struct {
 	// Settings are applied to each direct image request.
 	Settings Settings
+	// Action rejects edit-only native requests because the fallback receives no reference images.
+	Action ai.ImageGenerationAction
 	// Name overrides the default generate_image tool name.
 	Name string
 	// Description overrides the default model-facing description.
@@ -38,6 +40,11 @@ func NewGenerationTool[Deps any](generator *Generator, config ToolConfig) ai.Too
 			Prompt string `json:"prompt" jsonschema_description:"A description of the image to generate."`
 		},
 	) (ai.BinaryContent, error) {
+		if config.Action == ai.ImageGenerationActionEdit {
+			return ai.BinaryContent{}, fmt.Errorf(
+				"images: direct image generation fallback cannot edit without reference images; call Generator.Generate with inputs",
+			)
+		}
 		result, err := generator.Generate(ctx, args.Prompt, nil, settings)
 		if err != nil {
 			var filtered *ai.ContentFilterError

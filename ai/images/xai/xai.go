@@ -1,70 +1,64 @@
-// Package xai implements images.Model against xAI's image API.
+// Package xai implements images.Model against xAI's image generation gRPC API.
 package xai
 
 import (
+	"crypto/tls"
 	"fmt"
-	"net/http"
-	"net/url"
 	"os"
-	"slices"
 	"strings"
+	"sync"
 
 	"github.com/Kludex/pydantic-ai-go/ai/images"
-	modelopenai "github.com/Kludex/pydantic-ai-go/ai/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/images/xai/internal/xaiapi"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
-const defaultBaseURL = "https://api.x.ai/v1"
+const (
+	defaultTarget      = "api.x.ai:443"
+	defaultProviderURL = "https://api.x.ai/v1"
+	maximumMessageSize = 20 << 20
+)
 
-// Model calls xAI's direct image generation endpoint.
+// Model calls xAI's direct image generation gRPC API.
 type Model struct {
-	name           string
-	providerName   string
-	baseURL        string
-	apiKey         string
-	httpClient     *http.Client
-	headers        http.Header
-	query          url.Values
-	prepareRequest modelopenai.RequestPreparationFunc
-	settings       images.Settings
+	name        string
+	providerURL string
+	target      string
+	apiKey      string
+	connection  grpc.ClientConnInterface
+	settings    images.Settings
+	clientOnce  sync.Once
+	client      xaiapi.ImageClient
+	ownedConn   *grpc.ClientConn
+	clientErr   error
 }
 
 // Option configures a Model.
 type Option func(*Model)
 
-// WithProvider configures an xAI-compatible endpoint.
-func WithProvider(provider modelopenai.ProviderConfig) Option {
-	if provider.BaseURL == "" {
-		panic("xai images: provider base URL must not be empty")
-	}
-	if provider.Name == "" {
-		provider.Name = "xai"
-	}
-	headers := provider.Headers.Clone()
-	query := cloneValues(provider.Query)
-	return func(model *Model) {
-		model.providerName = provider.Name
-		model.baseURL = strings.TrimRight(provider.BaseURL, "/")
-		model.apiKey = provider.APIKey
-		if provider.HTTPClient != nil {
-			model.httpClient = provider.HTTPClient
-		}
-		model.headers = headers.Clone()
-		model.query = cloneValues(query)
-		model.prepareRequest = provider.PrepareRequest
-	}
-}
-
 // WithAPIKey sets the API key. The default is XAI_API_KEY.
 func WithAPIKey(apiKey string) Option { return func(model *Model) { model.apiKey = apiKey } }
 
-// WithBaseURL points the model at an xAI-compatible endpoint.
-func WithBaseURL(baseURL string) Option {
-	return func(model *Model) { model.baseURL = strings.TrimRight(baseURL, "/") }
+// WithTarget sets the xAI-compatible gRPC target used by the model-owned connection.
+func WithTarget(target string) Option {
+	if strings.TrimSpace(target) == "" {
+		panic("xai images: gRPC target must not be empty")
+	}
+	return func(model *Model) { model.target = target }
 }
 
-// WithHTTPClient sets the caller-owned HTTP client used for requests.
-func WithHTTPClient(client *http.Client) Option {
-	return func(model *Model) { model.httpClient = client }
+// WithProviderURL sets the endpoint identity used for pricing and telemetry.
+func WithProviderURL(providerURL string) Option {
+	return func(model *Model) { model.providerURL = strings.TrimRight(providerURL, "/") }
+}
+
+// WithClient sets a caller-owned gRPC connection. The model never closes it.
+func WithClient(connection grpc.ClientConnInterface) Option {
+	if connection == nil {
+		panic("xai images: gRPC client connection must not be nil")
+	}
+	return func(model *Model) { model.connection = connection }
 }
 
 // WithDefaultSettings sets defaults overridden by each image request.
@@ -76,8 +70,8 @@ func WithDefaultSettings(settings images.Settings) Option {
 // NewModel creates an xAI Grok Imagine model.
 func NewModel(name string, options ...Option) *Model {
 	model := &Model{
-		name: name, providerName: "xai", baseURL: defaultBaseURL,
-		apiKey: os.Getenv("XAI_API_KEY"), httpClient: http.DefaultClient,
+		name: name, providerURL: defaultProviderURL, target: defaultTarget,
+		apiKey: os.Getenv("XAI_API_KEY"),
 	}
 	for _, option := range options {
 		option(model)
@@ -89,48 +83,43 @@ func NewModel(name string, options ...Option) *Model {
 func (model *Model) Name() string { return model.name }
 
 // ProviderName returns the durable provider identity.
-func (model *Model) ProviderName() string { return model.providerName }
+func (*Model) ProviderName() string { return "xai" }
 
-// ProviderURL returns the configured provider endpoint.
-func (model *Model) ProviderURL() string { return model.baseURL }
+// ProviderURL returns the configured provider endpoint identity.
+func (model *Model) ProviderURL() string { return model.providerURL }
 
 // DefaultSettings returns detached model defaults.
 func (model *Model) DefaultSettings() images.Settings { return model.settings.Clone() }
 
-func (model *Model) endpoint() string {
-	endpoint := model.baseURL + "/images/generations"
-	if query := model.query.Encode(); query != "" {
-		endpoint += "?" + query
-	}
-	return endpoint
-}
-
-func cloneValues(values url.Values) url.Values {
-	if values == nil {
+// Close releases only the default connection created by the model.
+// A connection supplied through WithClient remains owned by the caller.
+func (model *Model) Close() error {
+	if model.ownedConn == nil {
 		return nil
 	}
-	cloned := make(url.Values, len(values))
-	for key, value := range values {
-		cloned[key] = slices.Clone(value)
-	}
-	return cloned
+	return model.ownedConn.Close()
 }
 
-func (model *Model) configureRequest(request *http.Request, extraHeaders map[string]string) error {
-	request.Header.Set("Content-Type", "application/json")
-	if model.apiKey != "" {
-		request.Header.Set("Authorization", "Bearer "+model.apiKey)
-	}
-	for name, values := range model.headers {
-		request.Header[name] = slices.Clone(values)
-	}
-	if model.prepareRequest != nil {
-		if err := model.prepareRequest(request); err != nil {
-			return fmt.Errorf("xai images: prepare request: %w", err)
+func (model *Model) imageClient() (xaiapi.ImageClient, error) {
+	model.clientOnce.Do(func() {
+		connection := model.connection
+		if connection == nil {
+			model.ownedConn, model.clientErr = grpc.NewClient(
+				model.target,
+				grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS12})),
+				grpc.WithDefaultCallOptions(
+					grpc.MaxCallSendMsgSize(maximumMessageSize),
+					grpc.MaxCallRecvMsgSize(maximumMessageSize),
+				),
+			)
+			connection = model.ownedConn
 		}
+		if model.clientErr == nil {
+			model.client = xaiapi.NewImageClient(connection)
+		}
+	})
+	if model.clientErr != nil {
+		return nil, fmt.Errorf("xai images: create gRPC client: %w", model.clientErr)
 	}
-	for name, value := range extraHeaders {
-		request.Header.Set(name, value)
-	}
-	return nil
+	return model.client, nil
 }

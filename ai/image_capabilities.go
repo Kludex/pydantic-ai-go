@@ -6,20 +6,53 @@ import "context"
 type ImageGenerationCapabilityConfig[Deps any] struct {
 	// Native configures provider-hosted image generation.
 	Native ImageGenerationTool
+	// ResolveNative configures provider-hosted image generation before each model request.
+	// When set, it replaces Native.
+	ResolveNative ImageGenerationFunc[Deps]
 	// Local is the lifecycle-aware fallback toolset.
 	Local Toolset[Deps]
+	// LocalForNative derives a local fallback from the native settings resolved for the same request.
+	LocalForNative ImageGenerationLocalFunc[Deps]
 }
 
+// ImageGenerationLocalFunc derives one local fallback tool from the native settings resolved for a request.
+type ImageGenerationLocalFunc[Deps any] func(ImageGenerationTool) Tool[Deps]
+
 // NewImageGenerationCapability creates native-first image generation.
-// A nil Local requires native support.
+// A nil local fallback requires native support.
 func NewImageGenerationCapability[Deps any](
 	config ImageGenerationCapabilityConfig[Deps],
 ) *NativeOrLocalTool[Deps] {
+	if !toolsetIsNil(config.Local) && config.LocalForNative != nil {
+		panic("ai: image-generation capability accepts either Local or LocalForNative, not both")
+	}
 	var options []NativeOrLocalOption
-	if toolsetIsNil(config.Local) {
+	if toolsetIsNil(config.Local) && config.LocalForNative == nil {
 		options = nativeRequirementOption("no local image-generation fallback was configured")
 	}
-	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
+	if config.ResolveNative == nil && config.LocalForNative == nil {
+		return NewNativeOrLocalToolset(config.Native, config.Local, options...)
+	}
+	resolve := config.ResolveNative
+	if resolve == nil {
+		native := cloneNativeTool(config.Native).(ImageGenerationTool)
+		resolve = func(context.Context, *RunContext[Deps]) (ImageGenerationTool, error) {
+			return cloneNativeTool(native).(ImageGenerationTool), nil
+		}
+	}
+	var factory func(NativeTool) Toolset[Deps]
+	if config.LocalForNative != nil {
+		factory = func(tool NativeTool) Toolset[Deps] {
+			return NewFunctionToolset(config.LocalForNative(tool.(ImageGenerationTool)))
+		}
+	}
+	return newDynamicNativeOrLocalToolset(
+		"image_generation",
+		func(ctx context.Context, rc *RunContext[Deps]) (NativeTool, error) { return resolve(ctx, rc) },
+		config.Local,
+		factory,
+		options...,
+	)
 }
 
 // NewImageGenerationCapabilityWithFallback creates native-first image generation

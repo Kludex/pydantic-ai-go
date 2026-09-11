@@ -1,0 +1,44 @@
+// Source: xai-org/xai-sdk-python v1.18.0 (a2231b51520e590f1df3c497f99bd95cd893dc53).
+syntax = "proto3";
+
+package xai_api;
+
+option go_package = "github.com/Kludex/pydantic-ai-go/ai/images/xai/internal/xaiapi";
+
+enum ServiceTier {
+  SERVICE_TIER_UNSPECIFIED = 0;
+  SERVICE_TIER_DEFAULT = 1;
+  SERVICE_TIER_PRIORITY = 2;
+}
+
+enum ServerSideTool {
+  SERVER_SIDE_TOOL_INVALID = 0;
+  SERVER_SIDE_TOOL_WEB_SEARCH = 1;
+  SERVER_SIDE_TOOL_X_SEARCH = 2;
+  SERVER_SIDE_TOOL_CODE_EXECUTION = 3;
+  SERVER_SIDE_TOOL_VIEW_IMAGE = 4;
+  SERVER_SIDE_TOOL_VIEW_X_VIDEO = 5;
+  SERVER_SIDE_TOOL_COLLECTIONS_SEARCH = 6;
+  SERVER_SIDE_TOOL_MCP = 7;
+  SERVER_SIDE_TOOL_ATTACHMENT_SEARCH = 8;
+  SERVER_SIDE_TOOL_IMAGE_SEARCH = 10;
+  SERVER_SIDE_TOOL_IMAGE_GENERATION = 11;
+}
+
+message SamplingUsage {
+  int32 completion_tokens = 1;
+  int32 prompt_tokens = 2;
+  int32 total_tokens = 3;
+  int32 prompt_text_tokens = 4;
+  int32 prompt_image_tokens = 5;
+  int32 reasoning_tokens = 6;
+  int32 cached_prompt_text_tokens = 7;
+  int32 num_sources_used = 8;
+  repeated ServerSideTool server_side_tools_used = 9;
+  optional int64 cost_in_usd_ticks = 11;
+}
+
+message EmbeddingUsage {
+  int32 num_text_embeddings = 1;
+  int32 num_image_embeddings = 2;
+}

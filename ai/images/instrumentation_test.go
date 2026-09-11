@@ -71,6 +71,15 @@ func TestInstrumentation(t *testing.T) {
 	if images.InstrumentModel(instrumented) != instrumented {
 		t.Fatal("instrumentation was not idempotent")
 	}
+	if _, err := instrumented.Generate(t.Context(), "draw", nil, images.Settings{
+		ProviderSettings: map[string]any{"invalid": make(chan int)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	serialized := imageSpanAttributes(exporter.GetSpans()[1].Attributes)["image_generation_settings"]
+	if serialized != `"unable to serialize"` {
+		t.Fatalf("unexpected unserializable settings marker: %#v", serialized)
+	}
 	priced := images.NewInstrumentedModel(&model{
 		name: "gpt-image-1", provider: "openai", result: &images.Result{
 			Images:    []images.GeneratedImage{{Content: ai.BinaryContent{MediaType: "image/png"}}},

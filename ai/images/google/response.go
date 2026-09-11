@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
@@ -33,14 +34,26 @@ type generateResponse struct {
 		BlockReasonMessage string           `json:"blockReasonMessage"`
 		SafetyRatings      []map[string]any `json:"safetyRatings"`
 	} `json:"promptFeedback"`
-	UsageMetadata *struct {
-		PromptTokens    int    `json:"promptTokenCount"`
-		CandidateTokens int    `json:"candidatesTokenCount"`
-		ThoughtsTokens  int    `json:"thoughtsTokenCount"`
-		CachedTokens    int    `json:"cachedContentTokenCount"`
-		TotalTokens     int    `json:"totalTokenCount"`
-		TrafficType     string `json:"trafficType"`
-	} `json:"usageMetadata"`
+	UsageMetadata *usageMetadata `json:"usageMetadata"`
+}
+
+type usageMetadata struct {
+	PromptTokens              int           `json:"promptTokenCount"`
+	CandidateTokens           int           `json:"candidatesTokenCount"`
+	ThoughtsTokens            int           `json:"thoughtsTokenCount"`
+	CachedTokens              int           `json:"cachedContentTokenCount"`
+	ToolUsePromptTokens       int           `json:"toolUsePromptTokenCount"`
+	TotalTokens               int           `json:"totalTokenCount"`
+	TrafficType               string        `json:"trafficType"`
+	PromptTokenDetails        []tokenDetail `json:"promptTokensDetails"`
+	CacheTokenDetails         []tokenDetail `json:"cacheTokensDetails"`
+	CandidateTokenDetails     []tokenDetail `json:"candidatesTokensDetails"`
+	ToolUsePromptTokenDetails []tokenDetail `json:"toolUsePromptTokensDetails"`
+}
+
+type tokenDetail struct {
+	Modality   string `json:"modality"`
+	TokenCount int    `json:"tokenCount"`
 }
 
 var filteredReasons = map[string]bool{
@@ -108,23 +121,56 @@ func (model *Model) parseResponse(prompt string, body []byte) (*images.Result, e
 	}, nil
 }
 
-func googleUsage(usage *struct {
-	PromptTokens    int    `json:"promptTokenCount"`
-	CandidateTokens int    `json:"candidatesTokenCount"`
-	ThoughtsTokens  int    `json:"thoughtsTokenCount"`
-	CachedTokens    int    `json:"cachedContentTokenCount"`
-	TotalTokens     int    `json:"totalTokenCount"`
-	TrafficType     string `json:"trafficType"`
-}) ai.Usage {
-	mapped := ai.Usage{Requests: 1}
-	if usage == nil {
-		return mapped
+func googleUsage(metadata *usageMetadata) ai.Usage {
+	usage := ai.Usage{Requests: 1}
+	if metadata == nil {
+		return usage
 	}
-	mapped.InputTokens = usage.PromptTokens
-	mapped.OutputTokens = usage.CandidateTokens
-	mapped.ReasoningTokens = usage.ThoughtsTokens
-	mapped.CacheReadTokens = usage.CachedTokens
-	return mapped
+	usage.InputTokens = metadata.PromptTokens + metadata.ToolUsePromptTokens
+	usage.OutputTokens = metadata.CandidateTokens + metadata.ThoughtsTokens
+	usage.ReasoningTokens = metadata.ThoughtsTokens
+	usage.CacheReadTokens = metadata.CachedTokens
+	usage.Details = map[string]int{}
+	if metadata.CachedTokens != 0 {
+		usage.Details["cached_content_tokens"] = metadata.CachedTokens
+	}
+	if metadata.ThoughtsTokens != 0 {
+		usage.Details["thoughts_tokens"] = metadata.ThoughtsTokens
+	}
+	if metadata.ToolUsePromptTokens != 0 {
+		usage.Details["tool_use_prompt_tokens"] = metadata.ToolUsePromptTokens
+	}
+	addTokenDetails(usage.Details, metadata.PromptTokenDetails, "prompt")
+	addTokenDetails(usage.Details, metadata.CacheTokenDetails, "cache")
+	addTokenDetails(usage.Details, metadata.CandidateTokenDetails, "candidates")
+	addTokenDetails(usage.Details, metadata.ToolUsePromptTokenDetails, "tool_use_prompt")
+	for _, detail := range metadata.PromptTokenDetails {
+		if detail.Modality == "AUDIO" {
+			usage.InputAudioTokens += detail.TokenCount
+		}
+	}
+	for _, detail := range metadata.CacheTokenDetails {
+		if detail.Modality == "AUDIO" {
+			usage.CacheAudioReadTokens += detail.TokenCount
+		}
+	}
+	for _, detail := range metadata.CandidateTokenDetails {
+		if detail.Modality == "AUDIO" {
+			usage.OutputAudioTokens += detail.TokenCount
+		}
+	}
+	if len(usage.Details) == 0 {
+		usage.Details = nil
+	}
+	return usage
+}
+
+func addTokenDetails(details map[string]int, values []tokenDetail, suffix string) {
+	for _, detail := range values {
+		if detail.Modality != "" && detail.TokenCount != 0 {
+			details[strings.ToLower(detail.Modality)+"_"+suffix+"_tokens"] += detail.TokenCount
+		}
+	}
 }
 
 func googleProviderDetails(response generateResponse) map[string]any {

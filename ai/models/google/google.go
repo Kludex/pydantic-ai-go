@@ -1109,7 +1109,7 @@ func (u googleUsage) hasTokens() bool {
 
 func (u googleUsage) usage() ai.Usage {
 	usage := ai.Usage{
-		Requests: 1, InputTokens: u.PromptTokenCount,
+		Requests: 1, InputTokens: u.PromptTokenCount + u.ToolUsePromptTokenCount,
 		OutputTokens:    u.CandidatesTokenCount + u.ThoughtsTokenCount,
 		CacheReadTokens: u.CachedContentTokenCount, ReasoningTokens: u.ThoughtsTokenCount,
 		Details: map[string]int{},

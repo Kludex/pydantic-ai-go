@@ -15,7 +15,7 @@ func registerNativeOrLocal[Deps any](
 		if !ok {
 			return nil, nil, fmt.Errorf("ai: native-or-local dependencies do not match agent")
 		}
-		if toolsetIsNil(registration.local) && registration.requiredReason == "" {
+		if toolsetIsNil(registration.local) && registration.localFactory == nil && registration.requiredReason == "" {
 			return nil, nil, fmt.Errorf("ai: native-or-local local toolset must not be nil")
 		}
 		entry := nativeToolEntry[Deps]{
@@ -33,13 +33,29 @@ func registerNativeOrLocal[Deps any](
 		}
 		candidateEntries = append(candidateEntries, entry)
 		if entry.requiredReason == "" {
-			candidateToolsets = append(candidateToolsets, nativeFallbackToolsetID(registration.local, entry.expectedID))
+			local := registration.local
+			if registration.localFactory != nil {
+				local = resolvedNativeToolset[Deps]{nativeID: entry.expectedID, factory: registration.localFactory}
+			}
+			candidateToolsets = append(candidateToolsets, nativeFallbackToolsetID(local, entry.expectedID))
 		}
 	}
 	if err := ValidateNativeTools(staticNativeTools(candidateEntries)); err != nil {
 		return nil, nil, err
 	}
 	return candidateEntries, candidateToolsets, nil
+}
+
+type resolvedNativeToolset[Deps any] struct {
+	nativeID string
+	factory  func(NativeTool) Toolset[Deps]
+}
+
+func (toolset resolvedNativeToolset[Deps]) Tools(
+	ctx context.Context, rc *RunContext[Deps],
+) ([]Tool[Deps], error) {
+	native := rc.resolvedNativeTool[toolset.nativeID]
+	return resolveToolsetTools(ctx, rc, toolset.factory(cloneNativeTool(native)))
 }
 
 func nativeFallbackToolsetID[Deps any](toolset Toolset[Deps], nativeID string) Toolset[Deps] {

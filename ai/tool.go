@@ -56,16 +56,17 @@ type RunContext[Deps any] struct {
 	// UsageLimits contains detached limits applied to this run.
 	UsageLimits UsageLimits
 
-	usage           *Usage
-	usageMu         *sync.Mutex
-	toolCalls       *atomic.Int64
-	messages        *[]ModelMessage
-	revealedTools   *map[string]struct{}
-	pendingMessages *pendingMessageQueue
-	cancellation    *runCancellation
-	emitEvent       func(StreamEvent, string, string, string) error
-	capabilityID    string
-	info            *RunInfo
+	usage              *Usage
+	usageMu            *sync.Mutex
+	toolCalls          *atomic.Int64
+	messages           *[]ModelMessage
+	revealedTools      *map[string]struct{}
+	pendingMessages    *pendingMessageQueue
+	cancellation       *runCancellation
+	emitEvent          func(StreamEvent, string, string, string) error
+	capabilityID       string
+	info               *RunInfo
+	resolvedNativeTool map[string]NativeTool
 }
 
 // Usage returns the usage accumulated so far in this run.
@@ -125,6 +126,12 @@ func (rc *RunContext[Deps]) clone() *RunContext[Deps] {
 	cloned.ModelSettings = rc.ModelSettings.Clone()
 	cloned.UsageLimits.ToolCallLimit = clonePointer(rc.UsageLimits.ToolCallLimit)
 	cloned.UsageLimits.CostLimitUSD = clonePointer(rc.UsageLimits.CostLimitUSD)
+	if rc.resolvedNativeTool != nil {
+		cloned.resolvedNativeTool = make(map[string]NativeTool, len(rc.resolvedNativeTool))
+		for id, tool := range rc.resolvedNativeTool {
+			cloned.resolvedNativeTool[id] = cloneNativeTool(tool)
+		}
+	}
 	return &cloned
 }
 

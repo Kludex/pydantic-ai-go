@@ -1809,12 +1809,15 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	rc := r.rc.clone()
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.outputMaxRetries
+	rc.resolvedNativeTool = make(map[string]NativeTool, len(r.nativeToolEntries))
 	for _, entry := range r.nativeToolEntries {
 		if entry.requiredReason != "" {
 			params.nativeToolSupportRequired = true
 		}
 		if entry.fn == nil {
-			params.NativeTools = append(params.NativeTools, cloneNativeTool(entry.tool))
+			tool := cloneNativeTool(entry.tool)
+			params.NativeTools = append(params.NativeTools, tool)
+			rc.resolvedNativeTool[tool.UniqueID()] = cloneNativeTool(tool)
 			continue
 		}
 		tool, err := entry.fn(ctx, rc.clone())
@@ -1832,7 +1835,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		if entry.requiredReason != "" && tool.IsOptional() {
 			return ModelRequestParams{}, nativeRequiredOptionalError(entry.expectedID, entry.requiredReason)
 		}
-		params.NativeTools = append(params.NativeTools, cloneNativeTool(tool))
+		tool = cloneNativeTool(tool)
+		params.NativeTools = append(params.NativeTools, tool)
+		rc.resolvedNativeTool[tool.UniqueID()] = cloneNativeTool(tool)
 	}
 	if err := ValidateNativeTools(params.NativeTools); err != nil {
 		return ModelRequestParams{}, err

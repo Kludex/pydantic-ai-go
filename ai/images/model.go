@@ -86,6 +86,20 @@ func PrepareRequest(prompt string, inputs []Input, settings Settings) (string, [
 	return prompt, cloneInputs(inputs), settings.Clone(), nil
 }
 
+// NewModelTransportError classifies a connection or response-read failure for fallback decisions.
+// Context cancellation remains inspectable through errors.Is instead.
+func NewModelTransportError(ctx context.Context, model Model, operation string, err error) error {
+	if err == nil {
+		return nil
+	}
+	if ctx.Err() != nil {
+		return fmt.Errorf("%s images: %s: %w", model.ProviderName(), operation, err)
+	}
+	return &ai.ModelTransportError{
+		ModelName: model.Name(), ProviderName: model.ProviderName(), Operation: operation, Err: err,
+	}
+}
+
 func modelDefaultSettings(model Model) Settings {
 	if configured, ok := model.(DefaultSettingsModel); ok {
 		return configured.DefaultSettings().Clone()

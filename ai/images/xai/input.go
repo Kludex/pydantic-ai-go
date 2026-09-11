@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/images"
@@ -16,47 +17,50 @@ func (model *Model) mapInputs(ctx context.Context, inputs []images.Input) (input
 	seenURL := false
 	orderViolated := false
 	for _, input := range inputs {
-		switch input := input.(type) {
-		case ai.UploadedFile:
-			if input.ProviderName != model.providerName && input.ProviderName != "xai" {
+		if uploaded, ok := input.(ai.UploadedFile); ok {
+			if uploaded.ProviderName != model.ProviderName() {
 				return inputReferences{}, fmt.Errorf(
-					"xai images: uploaded file %q belongs to provider %q", input.FileID, input.ProviderName,
+					"xai images: uploaded file %q belongs to provider %q", uploaded.FileID, uploaded.ProviderName,
 				)
 			}
 			if seenURL {
 				orderViolated = true
 			}
-			fileIDs = append(fileIDs, input.FileID)
-		case ai.BinaryContent:
-			urls = append(urls, "data:"+input.MediaType+";base64,"+base64.StdEncoding.EncodeToString(input.Data))
-			seenURL = true
-		case ai.ImageURL:
-			if err := input.ForceDownload.Validate(); err != nil {
-				return inputReferences{}, err
-			}
-			value := input.URL
-			if input.ForceDownload != ai.FileDownloadNever {
-				downloaded, err := download.Fetch(ctx, input.URL, input.ForceDownload == ai.FileDownloadAllowLocal)
-				if err != nil {
-					return inputReferences{}, fmt.Errorf("xai images: download reference image: %w", err)
-				}
-				mediaType := input.MediaType
-				if mediaType == "" {
-					mediaType = downloaded.MediaType
-				}
-				if mediaType == "" {
-					mediaType = images.MediaTypeFromBytes(downloaded.Data)
-				}
-				if mediaType == "" {
-					return inputReferences{}, fmt.Errorf("xai images: cannot determine reference image media type")
-				}
-				value = "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(downloaded.Data)
-			}
-			urls = append(urls, value)
-			seenURL = true
-		default:
-			return inputReferences{}, fmt.Errorf("xai images: unsupported input type %T", input)
+			fileIDs = append(fileIDs, uploaded.FileID)
+			continue
 		}
+		if binary, ok := input.(ai.BinaryContent); ok {
+			urls = append(urls, "data:"+binary.MediaType+";base64,"+base64.StdEncoding.EncodeToString(binary.Data))
+			seenURL = true
+			continue
+		}
+		imageURL := input.(ai.ImageURL)
+		if err := imageURL.ForceDownload.Validate(); err != nil {
+			return inputReferences{}, err
+		}
+		value := imageURL.URL
+		if imageURL.ForceDownload != ai.FileDownloadNever {
+			downloaded, err := download.Fetch(ctx, imageURL.URL, imageURL.ForceDownload == ai.FileDownloadAllowLocal)
+			if err != nil {
+				return inputReferences{}, fmt.Errorf("xai images: download reference image: %w", err)
+			}
+			mediaType := imageURL.MediaType
+			if mediaType == "" {
+				mediaType = downloaded.MediaType
+			}
+			if mediaType == "" {
+				mediaType = images.MediaTypeFromBytes(downloaded.Data)
+			}
+			if mediaType == "" {
+				return inputReferences{}, fmt.Errorf("xai images: cannot determine reference image media type")
+			}
+			if !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+				return inputReferences{}, fmt.Errorf("xai images: reference content must have an image media type, got %q", mediaType)
+			}
+			value = "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(downloaded.Data)
+		}
+		urls = append(urls, value)
+		seenURL = true
 	}
 	if orderViolated {
 		return inputReferences{}, fmt.Errorf("xai images: place uploaded files before URL or binary inputs to preserve order")

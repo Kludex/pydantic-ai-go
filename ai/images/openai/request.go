@@ -55,12 +55,12 @@ func (model *Model) Generate(
 	}
 	response, err := model.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("openai images: request: %w", err)
+		return nil, images.NewModelTransportError(ctx, model, "request", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("openai images: read response: %w", err)
+		return nil, images.NewModelTransportError(ctx, model, "read response", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		if moderationBlocked(body) {

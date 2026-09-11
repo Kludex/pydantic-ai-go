@@ -58,38 +58,36 @@ func (model *Model) editRequest(
 }
 
 func openAIInput(ctx context.Context, input images.Input, providerName string) ([]byte, string, error) {
-	switch input := input.(type) {
-	case ai.BinaryContent:
-		return append([]byte(nil), input.Data...), input.MediaType, nil
-	case ai.ImageURL:
-		if err := input.ForceDownload.Validate(); err != nil {
+	if binary, ok := input.(ai.BinaryContent); ok {
+		return append([]byte(nil), binary.Data...), binary.MediaType, nil
+	}
+	if imageURL, ok := input.(ai.ImageURL); ok {
+		if err := imageURL.ForceDownload.Validate(); err != nil {
 			return nil, "", err
 		}
-		downloaded, err := download.Fetch(ctx, input.URL, input.ForceDownload == ai.FileDownloadAllowLocal)
+		downloaded, err := download.Fetch(ctx, imageURL.URL, imageURL.ForceDownload == ai.FileDownloadAllowLocal)
 		if err != nil {
 			return nil, "", fmt.Errorf("openai images: download reference image: %w", err)
 		}
-		mediaType := input.MediaType
+		mediaType := imageURL.MediaType
 		if mediaType == "" {
 			mediaType = downloaded.MediaType
 		}
 		if mediaType == "" {
-			mediaType, err = input.ResolvedMediaType()
+			mediaType, err = imageURL.ResolvedMediaType()
 			if err != nil {
 				return nil, "", err
 			}
 		}
 		return downloaded.Data, mediaType, nil
-	case ai.UploadedFile:
-		if input.ProviderName != providerName {
-			return nil, "", fmt.Errorf(
-				"openai images: uploaded file %q belongs to provider %q", input.FileID, input.ProviderName,
-			)
-		}
-		return nil, "", fmt.Errorf(
-			"openai images: editing requires file content and does not accept uploaded file IDs",
-		)
-	default:
-		return nil, "", fmt.Errorf("openai images: unsupported input type %T", input)
 	}
+	uploaded := input.(ai.UploadedFile)
+	if uploaded.ProviderName != providerName {
+		return nil, "", fmt.Errorf(
+			"openai images: uploaded file %q belongs to provider %q", uploaded.FileID, uploaded.ProviderName,
+		)
+	}
+	return nil, "", fmt.Errorf(
+		"openai images: editing requires file content and does not accept uploaded file IDs",
+	)
 }

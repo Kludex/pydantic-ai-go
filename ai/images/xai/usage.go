@@ -1,33 +1,25 @@
 package xai
 
-import ai "github.com/Kludex/pydantic-ai-go/ai"
+import (
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/images/xai/internal/xaiapi"
+)
 
-type usageResponse struct {
-	PromptTokens           int      `json:"prompt_tokens"`
-	CompletionTokens       int      `json:"completion_tokens"`
-	ReasoningTokens        int      `json:"reasoning_tokens"`
-	PromptTextTokens       int      `json:"prompt_text_tokens"`
-	PromptImageTokens      int      `json:"prompt_image_tokens"`
-	CachedPromptTextTokens int      `json:"cached_prompt_text_tokens"`
-	CostUSD                *float64 `json:"cost_usd"`
-	CostTicks              *int     `json:"cost_in_usd_ticks"`
-}
-
-func xaiUsage(usage *usageResponse) ai.Usage {
+func xaiUsage(usage *xaiapi.SamplingUsage) ai.Usage {
 	mapped := ai.Usage{Requests: 1}
 	if usage == nil {
 		return mapped
 	}
-	mapped.InputTokens = usage.PromptTokens
-	mapped.OutputTokens = usage.CompletionTokens
-	mapped.ReasoningTokens = usage.ReasoningTokens
-	mapped.CacheReadTokens = usage.CachedPromptTextTokens
+	mapped.InputTokens = int(usage.PromptTokens)
+	mapped.OutputTokens = int(usage.CompletionTokens)
+	mapped.ReasoningTokens = int(usage.ReasoningTokens)
+	mapped.CacheReadTokens = int(usage.CachedPromptTextTokens)
 	details := map[string]int{}
 	if usage.PromptTextTokens != 0 {
-		details["input_text_tokens"] = usage.PromptTextTokens
+		details["input_text_tokens"] = int(usage.PromptTextTokens)
 	}
 	if usage.PromptImageTokens != 0 {
-		details["input_image_tokens"] = usage.PromptImageTokens
+		details["input_image_tokens"] = int(usage.PromptImageTokens)
 	}
 	if len(details) > 0 {
 		mapped.Details = details

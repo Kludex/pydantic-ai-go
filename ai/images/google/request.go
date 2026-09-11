@@ -112,12 +112,12 @@ func (model *Model) Generate(
 	}
 	response, err := model.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("google images: request: %w", err)
+		return nil, images.NewModelTransportError(ctx, model, "request", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("google images: read response: %w", err)
+		return nil, images.NewModelTransportError(ctx, model, "read response", err)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return nil, &modelgoogle.APIError{StatusCode: response.StatusCode, Body: string(responseBody)}

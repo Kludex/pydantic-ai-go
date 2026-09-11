@@ -59,11 +59,12 @@ func (model *Model) mapInput(ctx context.Context, input images.Input) (part, err
 			if mediaType == "" {
 				return part{}, fmt.Errorf("google images: cannot determine reference image media type")
 			}
+			if !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+				return part{}, fmt.Errorf("google images: reference content must have an image media type, got %q", mediaType)
+			}
 			mapped.InlineData = &inlineData{MIMEType: mediaType, Data: base64.StdEncoding.EncodeToString(downloaded.Data)}
 		}
 		mapped.MediaResolution = input.VendorMetadata["media_resolution"]
-	default:
-		return part{}, fmt.Errorf("google images: unsupported input type %T", input)
 	}
 	return mapped, nil
 }

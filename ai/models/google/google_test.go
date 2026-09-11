@@ -622,7 +622,7 @@ func TestRequestTextResponse(t *testing.T) {
 	if textPart.ProviderName != "google" || textPart.ProviderDetails["thought_signature"] != "signature" {
 		t.Fatalf("thought signature metadata lost: %+v", textPart)
 	}
-	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 || resp.Usage.Requests != 1 ||
+	if resp.Usage.InputTokens != 19 || resp.Usage.OutputTokens != 5 || resp.Usage.Requests != 1 ||
 		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 ||
 		resp.Usage.InputAudioTokens != 2 || resp.Usage.CacheAudioReadTokens != 1 ||
 		resp.Usage.OutputAudioTokens != 1 || resp.Usage.Details["cached_content_tokens"] != 4 ||

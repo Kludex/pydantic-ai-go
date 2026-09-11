@@ -198,6 +198,8 @@ func main() {
 
 The outer model uses native image generation when it supports it. Otherwise, it receives a local `generate_image` function backed by the direct generator. Pass `FallbackModel` instead of `Generator` when you do not need generator-level defaults. Pass `ResolveNative` when dependencies choose native settings for each request. A resolved native aspect ratio also reaches the direct fallback unless `Settings` defines direct geometry.
 
+Repeated declarations merge native fields and direct `Settings` in registration order. Later non-zero fields take precedence. `ProviderSettings` merges by provider key. A generator or local fallback is inherited from another declaration in the same layer. Conflicting `Dimensions` and `AspectRatio` values fail during capability registration.
+
 The fallback expects exactly one generated image because one tool result represents one artifact. A content-filter refusal becomes a model retry, so the outer model can rephrase its request. An edit-only native request fails if it reaches the direct fallback because the `generate_image` function receives no reference images. Call `Generator.Generate` directly for editing and batches.
 
 ## Tests

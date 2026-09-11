@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- `images.NewImageGenerationCapability` now returns `*images.ImageGenerationCapability[Deps]` so repeated declarations merge direct settings and native configuration. Pass it through `ai.WithCapabilities` as before. If you passed its result to `Agent.AddNativeOrLocal`, use `ai.WithCapabilities` instead.
 - Preserve separate OpenAI Chat text parts when streamed tool calls appear between text chunks, including tagged thinking streams.
 - Capabilities with stable IDs now combine within one registration layer and are replaced as complete wrapper subtrees by matching run capabilities. Invalid collisions and unsafe default merges fail before execution.
 - Dynamic image-generation and X-search fallback subagents now resolve the same native configuration as the outer path. Models without native tool-availability deltas receive provider-neutral synthetic search exchanges without splitting parallel result batches.

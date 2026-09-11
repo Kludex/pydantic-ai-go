@@ -3,6 +3,7 @@ package images_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -381,13 +382,32 @@ func TestRepeatedDirectImageCapabilitiesMergeSettingsAndFallback(t *testing.T) {
 			direct := &model{name: "image", provider: "test", result: &images.Result{
 				Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("generated"), MediaType: "image/png"}}},
 			}}
+			dimensions := images.Dimensions{Width: 1280, Height: 720}
+			compression := 80
+			nativeSettings := ai.ImageGenerationTool{
+				Action:            ai.ImageGenerationActionGenerate,
+				Background:        ai.ImageGenerationBackgroundOpaque,
+				InputFidelity:     ai.ImageGenerationInputFidelityHigh,
+				Moderation:        ai.ImageGenerationModerationLow,
+				Model:             "image-model",
+				OutputCompression: &compression,
+				OutputFormat:      ai.ImageGenerationOutputPNG,
+				PartialImages:     1,
+				Quality:           ai.ImageGenerationQualityHigh,
+				AspectRatio:       ai.ImageAspectRatio3x2,
+				Optional:          true,
+			}
+			settings := images.Settings{
+				Dimensions:       &dimensions,
+				ExtraHeaders:     map[string]string{"X-Probe": "present"},
+				ExtraBody:        map[string]any{"seed": 42},
+				ProviderSettings: map[string]any{"probe": map[string]any{"enabled": true}},
+			}
 			generatorCapability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
-				Native:    ai.ImageGenerationTool{Quality: ai.ImageGenerationQualityHigh},
-				Generator: images.New(direct),
+				Native: nativeSettings, Generator: images.New(direct),
 			})
 			settingsCapability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
-				Native:   ai.ImageGenerationTool{Size: ai.ImageGenerationSize2K},
-				Settings: images.Settings{AspectRatio: images.AspectRatio16To9},
+				Native: ai.ImageGenerationTool{Size: ai.ImageGenerationSize2K}, Settings: settings,
 			})
 			capabilities := []ai.Capability{generatorCapability, settingsCapability}
 			if settingsFirst {
@@ -401,8 +421,12 @@ func TestRepeatedDirectImageCapabilitiesMergeSettingsAndFallback(t *testing.T) {
 				t.Fatal(err)
 			}
 			native := nativeModel.params.NativeTools[0].(ai.ImageGenerationTool)
-			if native.Quality != ai.ImageGenerationQualityHigh || native.Size != ai.ImageGenerationSize2K ||
-				native.AspectRatio != ai.ImageAspectRatio16x9 {
+			if native.Action != nativeSettings.Action || native.Background != nativeSettings.Background ||
+				native.InputFidelity != nativeSettings.InputFidelity || native.Moderation != nativeSettings.Moderation ||
+				native.Model != nativeSettings.Model || native.OutputCompression == nil || *native.OutputCompression != 80 ||
+				native.OutputFormat != nativeSettings.OutputFormat || native.PartialImages != nativeSettings.PartialImages ||
+				native.Quality != nativeSettings.Quality || native.Size != ai.ImageGenerationSize2K ||
+				native.AspectRatio != nativeSettings.AspectRatio || !native.Optional {
 				t.Fatalf("static native image settings were not merged: %#v", native)
 			}
 
@@ -425,12 +449,195 @@ func TestRepeatedDirectImageCapabilitiesMergeSettingsAndFallback(t *testing.T) {
 			result, err := ai.NewAgent[struct{}, string](
 				outer, ai.WithCapabilities(capabilities...),
 			).Run(t.Context(), "draw", struct{}{})
-			if err != nil || result.Output != "done" || requests != 2 ||
-				direct.settings.AspectRatio != images.AspectRatio16To9 {
+			if err != nil || result.Output != "done" || requests != 2 || !reflect.DeepEqual(direct.settings, settings) {
 				t.Fatalf("inherited direct fallback failed: result=%#v requests=%d settings=%#v err=%v",
 					result, requests, direct.settings, err)
 			}
 		})
+	}
+}
+
+func TestRepeatedDirectImageCapabilitySettingsOverrideByRegistrationOrder(t *testing.T) {
+	firstDimensions := images.Dimensions{Width: 512, Height: 512}
+	secondDimensions := images.Dimensions{Width: 1024, Height: 768}
+	direct := &model{name: "image", provider: "test", result: &images.Result{
+		Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("generated"), MediaType: "image/png"}}},
+	}}
+	first := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+		Generator: images.New(direct),
+		Settings: images.Settings{
+			Dimensions:       &firstDimensions,
+			ExtraHeaders:     map[string]string{"X-Order": "first"},
+			ExtraBody:        map[string]any{"order": "first"},
+			ProviderSettings: map[string]any{"retained": true, "order": "first"},
+		},
+	})
+	second := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+		Settings: images.Settings{
+			Dimensions:       &secondDimensions,
+			ExtraHeaders:     map[string]string{"X-Order": "second"},
+			ExtraBody:        map[string]any{"order": "second"},
+			ProviderSettings: map[string]any{"order": "second"},
+		},
+	})
+	requests := 0
+	outer := &noNativeModel{modelfakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: params.Tools[0].Name, ToolCallID: "image", Args: []byte(`{"prompt":"A gopher"}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})}
+	if _, err := ai.NewAgent[struct{}, string](outer, ai.WithCapabilities(first, second)).Run(
+		t.Context(), "draw", struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(direct.settings.Dimensions, &secondDimensions) ||
+		direct.settings.ExtraHeaders["X-Order"] != "second" || direct.settings.ExtraBody["order"] != "second" ||
+		direct.settings.ProviderSettings["order"] != "second" || direct.settings.ProviderSettings["retained"] != true {
+		t.Fatalf("later image settings did not override earlier settings: %#v", direct.settings)
+	}
+}
+
+func TestRepeatedDirectImageCapabilityResolvesMergedNativeOncePerRequest(t *testing.T) {
+	direct := &model{name: "image", provider: "test", result: &images.Result{
+		Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("generated"), MediaType: "image/png"}}},
+	}}
+	resolveCalls := 0
+	dynamic := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+		ResolveNative: func(context.Context, *ai.RunContext[struct{}]) (ai.ImageGenerationTool, error) {
+			resolveCalls++
+			return ai.ImageGenerationTool{
+				Quality: ai.ImageGenerationQualityHigh, AspectRatio: ai.ImageAspectRatio3x2,
+			}, nil
+		},
+	})
+	fallback := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+		Native: ai.ImageGenerationTool{Size: ai.ImageGenerationSize2K}, Generator: images.New(direct),
+	})
+	nativeModel := &selectiveImageModel{supported: true}
+	if _, err := ai.NewAgent[struct{}, string](nativeModel, ai.WithCapabilities(dynamic, fallback)).Run(
+		t.Context(), "draw", struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	native := nativeModel.params.NativeTools[0].(ai.ImageGenerationTool)
+	if resolveCalls != 1 || native.Quality != ai.ImageGenerationQualityHigh ||
+		native.Size != ai.ImageGenerationSize2K || native.AspectRatio != ai.ImageAspectRatio3x2 {
+		t.Fatalf("dynamic native settings were not merged once: calls=%d native=%#v", resolveCalls, native)
+	}
+
+	requests := 0
+	outer := &noNativeModel{modelfakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: params.Tools[0].Name, ToolCallID: "image", Args: []byte(`{"prompt":"A gopher"}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})}
+	if _, err := ai.NewAgent[struct{}, string](outer, ai.WithCapabilities(fallback, dynamic)).Run(
+		t.Context(), "draw", struct{}{},
+	); err != nil {
+		t.Fatal(err)
+	}
+	if resolveCalls != 3 || direct.settings.AspectRatio != images.AspectRatio3To2 {
+		t.Fatalf("dynamic fallback did not reuse request settings: calls=%d settings=%#v", resolveCalls, direct.settings)
+	}
+}
+
+func TestRepeatedDirectImageCapabilityInheritsLocalFallback(t *testing.T) {
+	local := ai.NewFunctionToolset(ai.NewSimpleTool[struct{}](
+		"local_image", func(context.Context, struct{}) (string, error) { return "image", nil },
+	))
+	for _, localFirst := range []bool{false, true} {
+		localCapability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{Local: local})
+		settingsCapability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+			Native:   ai.ImageGenerationTool{Optional: true},
+			Settings: images.Settings{ExtraHeaders: map[string]string{"X-Probe": "present"}},
+		})
+		capabilities := []ai.Capability{settingsCapability, localCapability}
+		if localFirst {
+			capabilities[0], capabilities[1] = capabilities[1], capabilities[0]
+		}
+		outer := &noNativeModel{modelfakes.NewFunctionModel(func(
+			_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			if len(params.NativeTools) != 0 || len(params.Tools) != 1 || params.Tools[0].Name != "local_image" {
+				t.Fatalf("local fallback was not inherited: %#v", params)
+			}
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+		})}
+		if _, err := ai.NewAgent[struct{}, string](outer, ai.WithCapabilities(capabilities...)).Run(
+			t.Context(), "draw", struct{}{},
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestDirectImageCapabilityCombinerValidationAndNativeRequirement(t *testing.T) {
+	capability := images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{})
+	if capability.CapabilityID() != "image_generation" {
+		t.Fatalf("unexpected capability ID %q", capability.CapabilityID())
+	}
+	if _, err := capability.CombineCapabilities(nil); err == nil {
+		t.Fatal("empty image capability collection was accepted")
+	}
+	if _, err := capability.CombineCapabilities([]ai.Capability{
+		ai.NewImageGenerationCapability(ai.ImageGenerationCapabilityConfig[struct{}]{}),
+	}); err == nil {
+		t.Fatal("incompatible image capability was accepted")
+	}
+	var nilCapability *images.ImageGenerationCapability[struct{}]
+	if err := nilCapability.Setup(&ai.CapabilityRegistry{}); err == nil {
+		t.Fatal("nil image capability was accepted")
+	}
+	panicValue := capturePanic(func() {
+		ai.NewAgent[struct{}, string](&selectiveImageModel{supported: true}, ai.WithCapabilities(
+			images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Native: ai.ImageGenerationTool{Optional: true},
+			}),
+		))
+	})
+	if !strings.Contains(fmt.Sprint(panicValue), "requires native support") {
+		t.Fatalf("unexpected native-required validation: %q", panicValue)
+	}
+}
+
+func TestRepeatedDirectImageCapabilityRejectsMergedSettingsConflict(t *testing.T) {
+	for _, capabilities := range [][]ai.Capability{
+		{
+			images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Settings: images.Settings{Dimensions: &images.Dimensions{Width: 1, Height: 1}},
+			}),
+			images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Settings: images.Settings{AspectRatio: images.AspectRatio1To1},
+			}),
+		},
+		{
+			images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Settings: images.Settings{AspectRatio: images.AspectRatio1To1},
+			}),
+			images.NewImageGenerationCapability(images.CapabilityConfig[struct{}]{
+				Settings: images.Settings{Dimensions: &images.Dimensions{Width: 1, Height: 1}},
+			}),
+		},
+	} {
+		panicValue := capturePanic(func() {
+			ai.NewAgent[struct{}, string](&selectiveImageModel{supported: true}, ai.WithCapabilities(capabilities...))
+		})
+		if !strings.Contains(fmt.Sprint(panicValue), "dimensions and aspect ratio are mutually exclusive") {
+			t.Fatalf("unexpected merged settings conflict: %q", panicValue)
+		}
 	}
 }
 

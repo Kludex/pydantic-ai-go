@@ -1485,6 +1485,11 @@ func TestResponsesNativeDeferredToolSearch(t *testing.T) {
 	params := ai.ModelRequestParams{
 		Tools: []ai.ToolDefinition{search}, DeferredTools: []ai.ToolDefinition{first, second}, AllowText: true,
 	}
+	if !model.SupportsToolAvailabilityDelta(params) || model.SupportsToolAvailabilityDelta(ai.ModelRequestParams{
+		DeferredTools: []ai.ToolDefinition{first},
+	}) {
+		t.Fatal("unexpected deferred tool support")
+	}
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "find"}}}}
 	response, err := model.Request(t.Context(), messages, params)
 	if err != nil {

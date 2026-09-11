@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- Preserve separate OpenAI Chat text parts when streamed tool calls appear between text chunks, including tagged thinking streams.
 - Capabilities with stable IDs now combine within one registration layer and are replaced as complete wrapper subtrees by matching run capabilities. Invalid collisions and unsafe default merges fail before execution.
 - Dynamic image-generation and X-search fallback subagents now resolve the same native configuration as the outer path. Models without native tool-availability deltas receive provider-neutral synthetic search exchanges without splitting parallel result batches.
 - All library packages now live under `ai/`. The core package uses `github.com/Kludex/pydantic-ai-go/ai`, and subpackages use paths such as `github.com/Kludex/pydantic-ai-go/ai/models/openai`.
@@ -15,6 +16,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Added
 
+- Context-aware background pricing updates with immediate and hourly downloads, atomic last-good snapshots, shared workers, bounded responses, and caller-provided clients and error handling.
 - A typed agent loop with structured output, tools, retries, usage limits, cancellation, deferred execution, message enqueueing, manual runs, and synchronous or streamed results.
 - OpenAI Chat Completions and Responses, OpenAI Codex subscription authentication with OAuth PKCE and safe credential rotation, Amazon Bedrock Converse with streaming, native output, prompt caching, token counting, Nova code interpreter, inference profiles, guardrails, performance options, request metadata, and prompt variables, Anthropic Messages with legacy Bedrock InvokeModel generation, streaming, and token counting, Google Gemini and Vertex AI, Azure OpenAI, GitHub Copilot, vLLM, Groq, OpenRouter, and Z.AI model providers.
 - Provider-neutral native tools for web search, web fetch, code execution, image generation, file search, MCP servers, advisors, memory, and X search where providers support them.

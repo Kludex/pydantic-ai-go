@@ -131,6 +131,35 @@ Without pre-request counting, `PerRequestInputTokenLimit` uses the input count r
 
 All zero numeric limits are disabled. `ToolCallLimit` and `CostLimitUSD` use pointers so you can enforce a zero limit explicitly.
 
-## Pricing data updates
+## Keep pricing data current
 
-The library uses the pricing data bundled with `genai-prices` v0.1.6. That Go module exposes an immutable calculator and no supported background updater. Upgrade the dependency to refresh pricing and context-window metadata.
+```go
+package main
+
+import (
+	"context"
+	"os"
+	"os/signal"
+	"syscall"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+)
+
+func main() {
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	updater := ai.UpdatePricesInBackground(ctx, ai.PriceUpdateConfig{})
+	defer updater.Stop()
+
+	<-ctx.Done()
+}
+```
+
+`UpdatePricesInBackground` downloads the current `genai-prices` data immediately. It then refreshes the data every hour. Downloads do not block your caller. `ModelResponse.Price`, automatic cost calculation, image pricing, and embedding pricing use the latest valid snapshot.
+
+A failed download leaves the last valid snapshot in use. The updater accepts only HTTP 200 responses and limits response bodies to 8 MiB by default. Set `PriceUpdateConfig.OnError` when you need to report failures. The library does not log failures.
+
+Set `PriceUpdateConfig.HTTPClient`, `URL`, `Interval`, or `MaxBodyBytes` to control downloads. A supplied HTTP client remains yours. The updater does not mutate it or close its idle connections.
+
+Call `Stop` during shutdown. It is safe to call more than once. Identical configurations without an error callback share one download worker. The worker remains active until every subscribing updater stops or its context is canceled.

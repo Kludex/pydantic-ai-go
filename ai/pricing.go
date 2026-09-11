@@ -57,15 +57,16 @@ func WithPricingDiagnosticSink(ctx context.Context, sink PricingDiagnosticSink) 
 	return context.WithValue(ctx, pricingDiagnosticContextKey{}, pricingDiagnosticReporter{sink: sink})
 }
 
-// Price calculates this response's price using the bundled genai-prices snapshot.
+// Price calculates this response's price using the current genai-prices snapshot.
 // It returns lookup and usage errors to callers that need explicit pricing diagnostics.
 func (response ModelResponse) Price() (PriceCalculation, error) {
+	calculator := currentPriceCalculator.Load()
 	request := genaiprices.PriceRequest{
 		Usage: usageForPricing(response.Usage), Model: response.ModelName, Timestamp: response.Timestamp,
 	}
 	if response.ProviderURL != "" {
 		request.ProviderAPIURL = response.ProviderURL
-		calculation, err := genaiprices.Calculate(request)
+		calculation, err := calculatePrice(calculator, request)
 		if err == nil {
 			return calculation, nil
 		}
@@ -75,7 +76,7 @@ func (response ModelResponse) Price() (PriceCalculation, error) {
 	}
 	request.ProviderAPIURL = ""
 	request.ProviderID = response.ProviderName
-	return genaiprices.Calculate(request)
+	return calculatePrice(calculator, request)
 }
 
 func priceProspectiveUsage(ctx context.Context, model Model, usage Usage) Usage {

@@ -160,6 +160,80 @@ func TestStreamToolCalls(t *testing.T) {
 	}
 }
 
+func TestStreamPreservesTextAfterTaggedThinkingAndToolCall(t *testing.T) {
+	model := newServer(t, sseHandler(t, []string{
+		`{"choices":[{"delta":{"content":"Before <think>plan"}}]}`,
+		`{"choices":[{"delta":{"content":" carefully</think>"}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"lookup","arguments":"{\"value\":1}"}}]}}]}`,
+		`{"choices":[{"delta":{"content":"After the lookup."},"finish_reason":"tool_calls"}]}`,
+		`[DONE]`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var textIDs, thinkingIDs []string
+	response, err := ai.CollectModelStream(func(yield func(ai.ModelStreamEvent, error) bool) {
+		for event, err := range stream {
+			switch event := event.(type) {
+			case ai.TextDeltaEvent:
+				textIDs = append(textIDs, event.PartID)
+			case ai.ThinkingDeltaEvent:
+				thinkingIDs = append(thinkingIDs, event.PartID)
+			}
+			if !yield(event, err) {
+				return
+			}
+		}
+	}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(textIDs) != 2 || textIDs[0] != "text" || textIDs[1] != "text:2" ||
+		len(thinkingIDs) != 2 || thinkingIDs[0] != "text:1" || thinkingIDs[1] != thinkingIDs[0] {
+		t.Fatalf("unstable or colliding tagged stream IDs: text=%v thinking=%v", textIDs, thinkingIDs)
+	}
+	if len(response.Parts) != 4 {
+		t.Fatalf("unexpected response parts: %#v", response.Parts)
+	}
+	before, beforeOK := response.Parts[0].(ai.TextPart)
+	thinking, thinkingOK := response.Parts[1].(ai.ThinkingPart)
+	call, callOK := response.Parts[2].(ai.ToolCallPart)
+	after, afterOK := response.Parts[3].(ai.TextPart)
+	if !beforeOK || before.Content != "Before " || !thinkingOK || thinking.Content != "plan carefully" ||
+		!callOK || call.ToolName != "lookup" || call.ToolCallID != "call-1" || string(call.Args) != `{"value":1}` ||
+		!afterOK || after.Content != "After the lookup." {
+		t.Fatalf("unexpected accumulated response parts: %#v", response.Parts)
+	}
+}
+
+func TestStreamKeepsTaggedThinkingOpenAcrossToolCall(t *testing.T) {
+	model := newServer(t, sseHandler(t, []string{
+		`{"choices":[{"delta":{"content":"<think>Checking"}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"lookup","arguments":"{}"}}]}}]}`,
+		`{"choices":[{"delta":{"content":"</think> Continued."},"finish_reason":"tool_calls"}]}`,
+		`[DONE]`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := ai.CollectModelStream(stream, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 3 {
+		t.Fatalf("unexpected response parts: %#v", response.Parts)
+	}
+	thinking, thinkingOK := response.Parts[0].(ai.ThinkingPart)
+	call, callOK := response.Parts[1].(ai.ToolCallPart)
+	text, textOK := response.Parts[2].(ai.TextPart)
+	if !thinkingOK || thinking.Content != "Checking" || !callOK || call.ToolName != "lookup" ||
+		!textOK || text.Content != " Continued." {
+		t.Fatalf("unexpected accumulated response parts: %#v", response.Parts)
+	}
+}
+
 func TestStreamInterleavedToolCallDeltas(t *testing.T) {
 	model := newServer(t, sseHandler(t, []string{
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"one","arguments":"{\"x\":"}}]}}]}`,
@@ -335,6 +409,26 @@ func TestStreamEarlyBreaks(t *testing.T) {
 			if count == breakAt {
 				break
 			}
+		}
+	}
+}
+
+func TestStreamBreakWhileSeparatingTextAfterTool(t *testing.T) {
+	model := newServer(t, sseHandler(t, []string{
+		`{"choices":[{"delta":{"content":"before<"}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"lookup","arguments":"{}"}}]}}]}`,
+		`[DONE]`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text, ok := event.(ai.TextDeltaEvent); ok && text.Delta == "<" {
+			break
 		}
 	}
 }

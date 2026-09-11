@@ -61,7 +61,7 @@ func (result Result) ForInput(input string) ([]float64, bool) {
 	return nil, false
 }
 
-// Price calculates the result's price using the bundled genai-prices snapshot.
+// Price calculates the result's price using the current genai-prices snapshot.
 func (result Result) Price() (ai.PriceCalculation, error) {
 	response := ai.ModelResponse{
 		ModelName: result.ModelName, ProviderName: result.ProviderName, ProviderURL: result.ProviderURL,

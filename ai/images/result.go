@@ -68,7 +68,7 @@ func (result Result) Image() ai.BinaryContent {
 	return result.Images[0].Clone().Content
 }
 
-// Price calculates the result price using the bundled genai-prices snapshot.
+// Price calculates the result price using the current genai-prices snapshot.
 func (result Result) Price() (ai.PriceCalculation, error) {
 	response := ai.ModelResponse{
 		ModelName: result.ModelName, ProviderName: result.ProviderName, ProviderURL: result.ProviderURL,

@@ -54,6 +54,15 @@ type profileOnlyModel struct {
 
 func (model *profileOnlyModel) ModelProfile() ai.ModelProfile { return model.profile }
 
+type identityOnlyModel struct {
+	requestModel
+	providerName string
+	providerURL  string
+}
+
+func (model identityOnlyModel) ProviderName() string { return model.providerName }
+func (model identityOnlyModel) ProviderURL() string  { return model.providerURL }
+
 type contextWindowCapability struct {
 	values []float64
 	known  []bool
@@ -103,6 +112,22 @@ func TestContextWindowUnknownAndFallbackMinimum(t *testing.T) {
 	}
 	if ai.WrapModel(profileOnly).ContextWindow() != 2048 {
 		t.Fatal("model profile did not supply the context window")
+	}
+	identified := identityOnlyModel{
+		requestModel: requestModel{name: "gpt-5", request: func(
+			context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+		}},
+		providerName: "openai",
+		providerURL:  "https://api.openai.com/v1",
+	}
+	if window := ai.WrapModel(identified).ContextWindow(); window != 400_000 {
+		t.Fatalf("provider identity resolved context window %d", window)
+	}
+	unidentified := requestModel{name: "unknown", request: identified.Request}
+	if window := ai.WrapModel(unidentified).ContextWindow(); window != 0 {
+		t.Fatalf("model without context metadata reported window %d", window)
 	}
 }
 

@@ -436,7 +436,7 @@ func TestInstructionIDValidation(t *testing.T) {
 			t.Fatalf("invalid instruction part marshaled: %+v", invalidPart)
 		}
 	}
-	if err := json.Unmarshal([]byte(`{`), &part); err == nil {
+	if err := part.UnmarshalJSON([]byte(`{`)); err == nil {
 		t.Fatal("instruction part accepted malformed JSON")
 	}
 }
@@ -446,6 +446,21 @@ func TestInstructionContributionErrors(t *testing.T) {
 		fakes.NewTestModel(), ai.WithCapabilities(identifiedEmptyCapability{id: "unused"}),
 	).Run(t.Context(), "hello", struct{}{}); err != nil {
 		t.Fatalf("identified capability without instructions failed: %v", err)
+	}
+	var anonymousParts []ai.InstructionPart
+	anonymousModel := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		anonymousParts = params.InstructionParts
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	if _, err := ai.NewAgent[struct{}, string](anonymousModel, ai.WithCapabilities(
+		identifiedStringInstructionCapability{instructions: "Anonymous capability."},
+	)).Run(t.Context(), "hello", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(anonymousParts) != 1 || anonymousParts[0].ID != nil {
+		t.Fatalf("anonymous capability received an instruction ID: %+v", anonymousParts)
 	}
 	assertOutputFunctionPanics(t, func() {
 		ai.NewAgent[struct{}, string](fakes.NewTestModel(), ai.WithCapabilities(badNameInstructionCapability{}))

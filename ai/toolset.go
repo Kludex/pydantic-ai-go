@@ -56,7 +56,7 @@ type ToolsetInstructionsProvider[Deps any] interface {
 }
 
 type toolsetInstructionRelay interface {
-	relaysToolsetInstructions()
+	relaysToolsetInstructions() bool
 }
 
 // ToolFilterFunc decides whether one tool remains available for a model step.
@@ -246,7 +246,7 @@ type combinedToolset[Deps any] struct {
 	toolsets []Toolset[Deps]
 }
 
-func (combinedToolset[Deps]) relaysToolsetInstructions() {}
+func (combinedToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t combinedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -293,7 +293,7 @@ type filteredToolset[Deps any] struct {
 	filter  ToolFilterFunc[Deps]
 }
 
-func (filteredToolset[Deps]) relaysToolsetInstructions() {}
+func (filteredToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t filteredToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -326,7 +326,7 @@ type prefixedToolset[Deps any] struct {
 	prefix  string
 }
 
-func (prefixedToolset[Deps]) relaysToolsetInstructions() {}
+func (prefixedToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t prefixedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -352,7 +352,7 @@ type renamedToolset[Deps any] struct {
 	names   map[string]string
 }
 
-func (renamedToolset[Deps]) relaysToolsetInstructions() {}
+func (renamedToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t renamedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -390,7 +390,7 @@ type preparedToolset[Deps any] struct {
 	prepare ToolsPrepareFunc[Deps]
 }
 
-func (preparedToolset[Deps]) relaysToolsetInstructions() {}
+func (preparedToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t preparedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -436,7 +436,7 @@ type returnSchemaToolset[Deps any] struct {
 	toolset Toolset[Deps]
 }
 
-func (returnSchemaToolset[Deps]) relaysToolsetInstructions() {}
+func (returnSchemaToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (toolset returnSchemaToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -466,7 +466,7 @@ type defaultedToolset[Deps any] struct {
 	timeout    time.Duration
 }
 
-func (defaultedToolset[Deps]) relaysToolsetInstructions() {}
+func (defaultedToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t defaultedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -499,7 +499,7 @@ type deferredToolset[Deps any] struct {
 	names   map[string]struct{}
 }
 
-func (deferredToolset[Deps]) relaysToolsetInstructions() {}
+func (deferredToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t deferredToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -528,7 +528,7 @@ type approvalRequiredToolset[Deps any] struct {
 	check   ToolsetApprovalFunc[Deps]
 }
 
-func (approvalRequiredToolset[Deps]) relaysToolsetInstructions() {}
+func (approvalRequiredToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t approvalRequiredToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -583,7 +583,7 @@ type metadataToolset[Deps any] struct {
 	metadata map[string]any
 }
 
-func (metadataToolset[Deps]) relaysToolsetInstructions() {}
+func (metadataToolset[Deps]) relaysToolsetInstructions() bool { return true }
 
 func (t metadataToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
@@ -664,7 +664,8 @@ func resolveToolsetInstructions[Deps any](
 		}
 	}
 	if source == nil {
-		if _, relay := toolset.(toolsetInstructionRelay); !relay {
+		relay, ok := toolset.(toolsetInstructionRelay)
+		if !ok || !relay.relaysToolsetInstructions() {
 			parts = cloneInstructionParts(parts)
 			for index := range parts {
 				parts[index].ID = nil

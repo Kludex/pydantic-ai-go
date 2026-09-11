@@ -93,6 +93,40 @@ func TestImageGenerationCapabilityDerivesLocalFromResolvedNative(t *testing.T) {
 	}
 }
 
+func TestRepeatedDynamicImageCapabilitiesRetainLocalFactory(t *testing.T) {
+	factoryCalls := 0
+	localCalls := 0
+	first := ai.NewImageGenerationCapability(ai.ImageGenerationCapabilityConfig[nativeOrLocalDeps]{
+		ResolveNative: func(
+			context.Context, *ai.RunContext[nativeOrLocalDeps],
+		) (ai.ImageGenerationTool, error) {
+			return ai.ImageGenerationTool{Model: "first"}, nil
+		},
+		LocalForNative: func(tool ai.ImageGenerationTool) ai.Tool[nativeOrLocalDeps] {
+			factoryCalls++
+			if tool.Model != "second" {
+				t.Fatalf("local factory received stale native settings: %#v", tool)
+			}
+			return nativeOrLocalSearchTool(t, &localCalls)
+		},
+	})
+	second := ai.NewDynamicNativeOrLocalToolset(
+		"image_generation",
+		func(context.Context, *ai.RunContext[nativeOrLocalDeps]) (ai.NativeTool, error) {
+			return ai.ImageGenerationTool{Model: "second"}, nil
+		},
+		ai.Toolset[nativeOrLocalDeps](nil),
+	)
+	model := &selectiveNativeModel{supported: map[string]bool{}, callLocal: true}
+	agent := ai.NewAgent[nativeOrLocalDeps, string](model, ai.WithCapabilities(first, second))
+	if _, err := agent.Run(t.Context(), "draw", nativeOrLocalDeps{}); err != nil {
+		t.Fatal(err)
+	}
+	if factoryCalls != 2 || localCalls != 1 {
+		t.Fatalf("retained local factory calls=%d local calls=%d", factoryCalls, localCalls)
+	}
+}
+
 func TestImageGenerationCapabilityLocalFactoryValidation(t *testing.T) {
 	assertNativeOrLocalPanic(t, "either Local or LocalForNative", func() {
 		ai.NewImageGenerationCapability(ai.ImageGenerationCapabilityConfig[struct{}]{

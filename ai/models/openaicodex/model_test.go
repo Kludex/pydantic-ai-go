@@ -703,6 +703,56 @@ func TestRefreshFailureIsSharedThenRetried(t *testing.T) {
 	}
 }
 
+func TestCompletedRefreshFailureIsSharedWithInflightRequest(t *testing.T) {
+	firstCodex := make(chan struct{})
+	secondCodex := make(chan struct{})
+	allowSecondUnauthorized := make(chan struct{})
+	var codexCalls atomic.Int64
+	var tokenCalls atomic.Int64
+	model := newModel(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Hostname() == "auth.openai.com" {
+			tokenCalls.Add(1)
+			<-secondCodex
+			return response(http.StatusServiceUnavailable, `{"error":"temporarily_unavailable"}`), nil
+		}
+		switch codexCalls.Add(1) {
+		case 1:
+			close(firstCodex)
+			return response(http.StatusUnauthorized, `{}`), nil
+		case 2:
+			close(secondCodex)
+			<-allowSecondUnauthorized
+			return response(http.StatusUnauthorized, `{}`), nil
+		default:
+			t.Fatalf("unexpected Codex request count: %d", codexCalls.Load())
+			return nil, nil
+		}
+	}))
+	firstDone := make(chan error, 1)
+	go func() {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		firstDone <- err
+	}()
+	<-firstCodex
+	secondDone := make(chan error, 1)
+	go func() {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		secondDone <- err
+	}()
+	firstErr := <-firstDone
+	close(allowSecondUnauthorized)
+	secondErr := <-secondDone
+	for _, err := range []error{firstErr, secondErr} {
+		var refresh *openaicodex.CredentialsRefreshError
+		if !errors.As(err, &refresh) {
+			t.Fatalf("unexpected shared refresh error: %v", err)
+		}
+	}
+	if tokenCalls.Load() != 1 {
+		t.Fatalf("completed refresh failure triggered %d token requests", tokenCalls.Load())
+	}
+}
+
 func TestMalformedJWTsUseThe401Authority(t *testing.T) {
 	tokens := []string{
 		"not-a-jwt", "header.%%.signature", "header..signature", jwt(map[string]any{}),

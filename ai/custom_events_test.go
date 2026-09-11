@@ -843,6 +843,14 @@ func TestCustomAndCapabilityEventConfigurationErrors(t *testing.T) {
 	if _, err := json.Marshal(badProjection); err == nil {
 		t.Fatal("custom event marshaled unsupported UI payload")
 	}
+	var restored ai.CustomEvent[int]
+	if err := json.Unmarshal([]byte(`{"name":"bad","data":1,"ui_payload":{"valid":true}}`), &restored); err != nil {
+		t.Fatal(err)
+	}
+	restored.Payload().(map[string]any)["invalid"] = make(chan int)
+	if _, err := json.Marshal(restored); err == nil {
+		t.Fatal("custom event marshaled a mutated restored UI payload")
+	}
 }
 
 func TestCapabilityToolRegistrationRejectsNilFunctions(t *testing.T) {

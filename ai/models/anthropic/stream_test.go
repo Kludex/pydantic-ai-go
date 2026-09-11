@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +13,85 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
+
+func TestAnthropicStreamContainerRecovery(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(response, "data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+	model := anthropic.NewModel("claude-sonnet-4-6", anthropic.WithBaseURL(server.URL),
+		anthropic.WithHTTPClient(server.Client()))
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "use file"}}},
+		ai.ModelResponse{ProviderName: "anthropic", ProviderDetails: map[string]any{"container_id": "expired"}},
+	}
+	stream, err := model.StreamRequest(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file", ProviderName: "anthropic"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, streamErr := range stream {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+	}
+	if calls != 2 {
+		t.Fatalf("unexpected request count: %d", calls)
+	}
+
+	calls = 0
+	client := &http.Client{Transport: anthropicRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		calls++
+		if calls == 1 {
+			return &http.Response{StatusCode: http.StatusInternalServerError, Body: http.NoBody}, nil
+		}
+		return nil, errors.New("offline")
+	})}
+	model = anthropic.NewModel("claude-sonnet-4-6", anthropic.WithBaseURL("https://anthropic.example"),
+		anthropic.WithHTTPClient(client))
+	if _, err := model.StreamRequest(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file", ProviderName: "anthropic"}}},
+	}}); err == nil || calls != 2 {
+		t.Fatalf("unexpected retry transport result: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestAnthropicStreamStaleThinkingRetryErrors(t *testing.T) {
+	for name, second := range map[string]func() (*http.Response, error){"transport": func() (*http.Response, error) { return nil, errors.New("offline") },
+		"api": func() (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusForbidden, Body: http.NoBody}, nil
+		},
+		"read": func() (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusBadRequest, Body: anthropicErrorBody{}}, nil
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			client := &http.Client{Transport: anthropicRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(
+						`{"error":{"message":"The block is bound to a different conversation"}}`,
+					))}, nil
+				}
+				return second()
+			})}
+			model := anthropic.NewModel("claude-fable-5-1", anthropic.WithBaseURL("https://anthropic.example"),
+				anthropic.WithHTTPClient(client))
+			if _, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{}); err == nil || calls != 2 {
+				t.Fatalf("unexpected retry result: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+}
 
 func anthropicSSE(t *testing.T, events []string) http.HandlerFunc {
 	t.Helper()

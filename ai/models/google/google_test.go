@@ -389,6 +389,22 @@ func TestThinkingSettings(t *testing.T) {
 			model: "gemini-3-pro", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelXHigh},
 			level: "HIGH", include: true, hasInclude: true,
 		},
+		"flash minimum snaps up": {
+			model: "gemini-3.8-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
+			level: "LOW", include: true, hasInclude: true,
+		},
+		"pro medium tie snaps down": {
+			model: "gemini-3-pro-preview", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
+			level: "LOW", include: true, hasInclude: true,
+		},
+		"flash lite image low snaps down": {
+			model: "gemini-3.1-flash-lite-image", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow},
+			level: "MINIMAL", include: true, hasInclude: true,
+		},
+		"flash lite image medium snaps up": {
+			model: "gemini-3.1-flash-lite-image", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
+			level: "HIGH", include: true, hasInclude: true,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var body map[string]any

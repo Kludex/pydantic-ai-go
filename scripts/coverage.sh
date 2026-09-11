@@ -34,6 +34,7 @@ packages=(
     ./ai/models/cerebras
     ./ai/models/cohere
     ./ai/models/crusoe
+    ./ai/models/githubcopilot
     ./ai/models/google
     ./ai/models/groq
     ./ai/models/huggingface
@@ -41,6 +42,7 @@ packages=(
     ./ai/models/mistral
     ./ai/models/ollama
     ./ai/models/snowflake
+    ./ai/models/vllm
     ./ai/models/xai
     ./ai/models/zai
     ./ai/mcp

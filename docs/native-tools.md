@@ -504,7 +504,9 @@ func main() {
 }
 ```
 
-Only files whose `ProviderName` matches the selected provider are attached. Anthropic places uploads on the first user message so the cacheable prefix stays stable. It also retains and reuses the response container ID through subsequent tool turns.
+Only files whose `ProviderName` matches the selected provider are attached. Anthropic places uploads on every user turn except a turn containing only tool results. This keeps uploads in the active generation turn without breaking native tool pairing. It reuses the response container ID and retries once without a history-derived ID when an expired container returns a server error.
+
+Anthropic native web-search counts are preserved as `Usage.Details["web_search_requests"]` and included in automatic pricing.
 
 Use `WithResponsesCodeExecutionOutputs` when you need OpenAI code-interpreter logs and generated images:
 

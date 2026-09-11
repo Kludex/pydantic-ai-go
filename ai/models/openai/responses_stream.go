@@ -702,11 +702,46 @@ func (m *ResponsesModel) responsesEventStream(
 				}, nil)
 				return
 			case "response.failed", "response.incomplete":
-				message := event.Response.Status
-				if event.Response.Error != nil {
-					message = event.Response.Error.Code + ": " + event.Response.Error.Message
+				var snapshotParts []ai.ResponsePart
+				if len(event.Response.Output) > 0 {
+					response, err := modelResponseFromResponses(event.Response, includeRawAnnotations)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					setResponsesProvider(response, m.providerName, m.baseURL)
+					snapshotParts = response.Parts
+					if value, ok := response.ProviderDetails["refusal"].(string); ok {
+						hasRefusal = true
+						refusal = value
+					}
+					if !emittedParts && !yieldStaticResponsesParts(response, yield) {
+						return
+					}
 				}
-				yield(nil, fmt.Errorf("openai: Responses stream %s: %s", event.Type, message))
+				modelName := event.Response.Model
+				if modelName == "" {
+					modelName = m.name
+				}
+				rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
+					event.Response.Status, event.Response.IncompleteDetails,
+					event.Response.CreatedAt, event.Response.Background,
+				)
+				if hasRefusal {
+					if providerDetails == nil {
+						providerDetails = map[string]any{}
+					}
+					delete(providerDetails, "finish_reason")
+					providerDetails["refusal"] = refusal
+					rawFinishReason = "content_filter"
+					snapshotParts = nil
+				}
+				yield(ai.FinishEvent{
+					Parts: snapshotParts, Usage: event.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+					ProviderResponseID: event.Response.ID,
+					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
+				}, nil)
 				return
 			case "error":
 				yield(nil, fmt.Errorf("openai: Responses stream error %s: %s", event.Error.Code, event.Error.Message))

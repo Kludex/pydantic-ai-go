@@ -206,11 +206,46 @@ func TestStreamErrors(t *testing.T) {
 			t.Fatal("expected parse error")
 		}
 	})
-	t.Run("missing DONE", func(t *testing.T) {
+	t.Run("clean EOF", func(t *testing.T) {
 		model := newServer(t, sseHandler(t, []string{`{"choices":[{"delta":{"content":"hi"}}]}`}))
+		events, err := collect(t, model, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := events[len(events)-1].(ai.FinishEvent); !ok {
+			t.Fatalf("clean EOF did not finish the stream: %#v", events)
+		}
+	})
+	t.Run("clean EOF with metadata", func(t *testing.T) {
+		model := newServer(t, sseHandler(t, []string{`{"id":"id","model":"served","created":10,"choices":[{"delta":{"content":"hi"},"finish_reason":"stop"}]}`}))
+		events, err := collect(t, model, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		finish := events[len(events)-1].(ai.FinishEvent)
+		if finish.ProviderResponseID != "id" || finish.ModelName != "served" ||
+			finish.ProviderDetails["finish_reason"] != "stop" || finish.Timestamp.IsZero() {
+			t.Fatalf("unexpected clean EOF metadata: %+v", finish)
+		}
+	})
+	t.Run("required finish reason", func(t *testing.T) {
+		server := httptest.NewServer(sseHandler(t, []string{`{"choices":[{"delta":{"content":"hi"}}]}`}))
+		defer server.Close()
+		model := openai.NewModel("test", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+			openai.WithChatCompatibility(openai.ChatCompatibility{RequireFinishReason: true}))
 		_, err := collect(t, model, ai.ModelRequestParams{})
-		if err == nil || !strings.Contains(err.Error(), "[DONE]") {
-			t.Fatalf("expected missing DONE error, got %v", err)
+		if err == nil || !strings.Contains(err.Error(), "finish_reason") {
+			t.Fatalf("expected missing finish reason error, got %v", err)
+		}
+	})
+	t.Run("required finish reason before DONE", func(t *testing.T) {
+		server := httptest.NewServer(sseHandler(t, []string{`{"choices":[{"delta":{"content":"hi"}}]}`, `[DONE]`}))
+		defer server.Close()
+		model := openai.NewModel("test", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+			openai.WithChatCompatibility(openai.ChatCompatibility{RequireFinishReason: true}))
+		_, err := collect(t, model, ai.ModelRequestParams{})
+		if err == nil || !strings.Contains(err.Error(), "finish_reason") {
+			t.Fatalf("expected missing finish reason error, got %v", err)
 		}
 	})
 	t.Run("bad payload", func(t *testing.T) {

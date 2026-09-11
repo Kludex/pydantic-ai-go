@@ -15,9 +15,11 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/embeddings/openai"
 	"github.com/Kludex/pydantic-ai-go/ai/embeddings/voyageai"
 	modelazure "github.com/Kludex/pydantic-ai-go/ai/models/azure"
+	modelgithubcopilot "github.com/Kludex/pydantic-ai-go/ai/models/githubcopilot"
 	modelgoogle "github.com/Kludex/pydantic-ai-go/ai/models/google"
 	modelopenai "github.com/Kludex/pydantic-ai-go/ai/models/openai"
 	modelopenrouter "github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
+	modelvllm "github.com/Kludex/pydantic-ai-go/ai/models/vllm"
 	modelzai "github.com/Kludex/pydantic-ai-go/ai/models/zai"
 )
 
@@ -76,6 +78,20 @@ func Model(name string, options ...Option) (embeddings.Model, error) {
 	}
 	configuration.resolvers["zai"] = func(modelName string) (embeddings.Model, error) {
 		return openai.NewModel(modelName, openai.WithProvider(modelzai.NewProviderConfig())), nil
+	}
+	configuration.resolvers["vllm"] = func(modelName string) (embeddings.Model, error) {
+		provider, err := modelvllm.NewProviderConfig()
+		if err != nil {
+			return nil, err
+		}
+		return openai.NewModel(modelName, openai.WithProvider(provider)), nil
+	}
+	configuration.resolvers["github-copilot"] = func(modelName string) (embeddings.Model, error) {
+		provider, err := modelgithubcopilot.NewProviderConfig()
+		if err != nil {
+			return nil, err
+		}
+		return openai.NewModel(modelName, openai.WithProvider(provider)), nil
 	}
 	configuration.resolvers["bedrock"] = func(modelName string) (embeddings.Model, error) {
 		return bedrock.NewModel(modelName)

@@ -342,7 +342,8 @@ func TestRequestTextResponse(t *testing.T) {
 			}]}],
 			"usage": {
 				"input_tokens": 12, "output_tokens": 3,
-				"cache_creation_input_tokens": 3, "cache_read_input_tokens": 4
+				"cache_creation_input_tokens": 3, "cache_read_input_tokens": 4,
+				"server_tool_use": {"web_search_requests": 2}
 			}
 		}`))
 	})
@@ -391,7 +392,7 @@ func TestRequestTextResponse(t *testing.T) {
 		resp.Usage.CacheWriteTokens != 3 || resp.Usage.CacheReadTokens != 4 ||
 		resp.Usage.Details["input_tokens"] != 12 || resp.Usage.Details["output_tokens"] != 3 ||
 		resp.Usage.Details["cache_creation_input_tokens"] != 3 ||
-		resp.Usage.Details["cache_read_input_tokens"] != 4 {
+		resp.Usage.Details["cache_read_input_tokens"] != 4 || resp.Usage.Details["web_search_requests"] != 2 {
 		t.Fatalf("unexpected usage %+v", resp.Usage)
 	}
 }
@@ -1881,7 +1882,7 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 		"disabled maximum": {model: "claude-opus-5", settings: mustAnthropicSettings(t, anthropic.Settings{
 			Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}, Effort: anthropic.EffortMax,
 		})},
-		"forced fable output": {model: "claude-fable-5", settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{
+		"forced fable 5.1 output": {model: "claude-fable-5-1", settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{
 			Level: ai.ThinkingLevelEnabled,
 		}}, params: ai.ModelRequestParams{OutputTool: outputTool}},
 	} {
@@ -1910,6 +1911,360 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 		}}); err == nil {
 			t.Fatalf("%s direct effort was accepted", name)
 		}
+	}
+}
+
+func TestAnthropicContainerUploadsAndRecovery(t *testing.T) {
+	calls := 0
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		if calls == 1 {
+			response.WriteHeader(http.StatusInternalServerError)
+			_, _ = response.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"Internal server error"}}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"id":"response","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}],"usage":{}}`))
+	}))
+	defer server.Close()
+	model := anthropic.NewModel("claude-sonnet-4-6", anthropic.WithBaseURL(server.URL),
+		anthropic.WithHTTPClient(server.Client()))
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "first"}}},
+		ai.ModelResponse{ProviderName: "anthropic", ProviderDetails: map[string]any{"container_id": "expired"}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "second"}}},
+	}
+	_, err := model.Request(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file-1", ProviderName: "anthropic"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 || bodies[0]["container"] != "expired" || bodies[1]["container"] != nil {
+		t.Fatalf("unexpected container retry: %#v", bodies)
+	}
+	for _, raw := range bodies[0]["messages"].([]any) {
+		message := raw.(map[string]any)
+		if message["role"] != "user" {
+			continue
+		}
+		content := message["content"].([]any)
+		if content[len(content)-1].(map[string]any)["type"] != "container_upload" {
+			t.Fatalf("container upload missing from user turn: %#v", message)
+		}
+	}
+}
+
+func TestAnthropicStaleThinkingRecoveryPersists(t *testing.T) {
+	calls := 0
+	var bodies []map[string]any
+	var betas []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls++
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		bodies = append(bodies, body)
+		betas = append(betas, request.Header.Get("anthropic-beta"))
+		if calls == 1 {
+			response.WriteHeader(http.StatusBadRequest)
+			_, _ = response.Write([]byte(`{"error":{"message":"The block is bound to a different conversation"}}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"id":"response","model":"claude-fable-5-1","content":[{"type":"text","text":"done"}],"input_transformations":[{"type":"thinking_dropped","reason":"prefix_binding_mismatch"}],"usage":{}}`))
+	}))
+	defer server.Close()
+	model := anthropic.NewModel("claude-fable-5-1", anthropic.WithBaseURL(server.URL),
+		anthropic.WithHTTPClient(server.Client()))
+	response, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{ProviderName: "anthropic", Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "old", Signature: "signature", ProviderName: "anthropic"},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 2 || bodies[0]["thinking"] != nil ||
+		bodies[1]["thinking"].(map[string]any)["block_binding"].(map[string]any)["prefix_mismatch_behavior"] != "drop_block" ||
+		!strings.Contains(betas[1], "thinking-binding-controls-2026-08-01") {
+		t.Fatalf("unexpected recovery requests: bodies=%#v betas=%#v", bodies, betas)
+	}
+	_, err = model.Request(t.Context(), []ai.ModelMessage{*response, ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: "continue"},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 || bodies[2]["thinking"].(map[string]any)["block_binding"] == nil {
+		t.Fatalf("recovery was not preserved: %#v", bodies[2])
+	}
+}
+
+func TestAnthropicStaleThinkingRecoveryEdges(t *testing.T) {
+	t.Run("serialized history and raw thinking", func(t *testing.T) {
+		var body map[string]any
+		var beta string
+		model := newNamedServer(t, "claude-fable-5-1", func(response http.ResponseWriter, request *http.Request) {
+			beta = request.Header.Get("anthropic-beta")
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+		})
+		history := []ai.ModelMessage{
+			ai.ModelResponse{Parts: []ai.ResponsePart{ai.CompactionPart{Content: "old"}}, ProviderDetails: map[string]any{
+				"input_transformations": []any{map[string]any{"type": "thinking_dropped", "reason": "prefix_binding_mismatch"}},
+			}},
+			ai.ModelResponse{ProviderDetails: map[string]any{
+				"input_transformations": []any{map[string]any{"type": "thinking_dropped", "reason": "prefix_binding_mismatch"}},
+			}},
+		}
+		_, err := model.Request(t.Context(), history, ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraBody: map[string]any{
+			"thinking": map[string]any{"type": "adaptive"},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		thinking := body["thinking"].(map[string]any)
+		if thinking["type"] != "adaptive" || thinking["block_binding"] == nil ||
+			!strings.Contains(beta, "thinking-binding-controls-2026-08-01") {
+			t.Fatalf("unexpected persisted raw thinking: body=%#v beta=%q", body, beta)
+		}
+	})
+
+	t.Run("raw thinking retry", func(t *testing.T) {
+		calls := 0
+		var second map[string]any
+		model := newNamedServer(t, "claude-fable-5-1", func(response http.ResponseWriter, request *http.Request) {
+			calls++
+			var body map[string]any
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			if calls == 1 {
+				response.WriteHeader(http.StatusBadRequest)
+				_, _ = response.Write([]byte(`{"error":{"message":"The block is bound to a different conversation"}}`))
+				return
+			}
+			second = body
+			_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+		})
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraBody: map[string]any{
+			"thinking": map[string]any{"type": "adaptive"},
+		}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calls != 2 || second["thinking"].(map[string]any)["block_binding"] == nil {
+			t.Fatalf("raw thinking was not recovered: %#v", second)
+		}
+	})
+
+	t.Run("compaction resets recovery", func(t *testing.T) {
+		var body map[string]any
+		model := newNamedServer(t, "claude-fable-5-1", func(response http.ResponseWriter, request *http.Request) {
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+		})
+		history := []ai.ModelMessage{ai.ModelResponse{
+			ProviderDetails: map[string]any{"input_transformations": []map[string]any{{
+				"type": "thinking_dropped", "reason": "prefix_binding_mismatch",
+			}}},
+			Parts: []ai.ResponsePart{ai.CompactionPart{Content: "summary", ProviderName: "anthropic",
+				ProviderDetails: map[string]any{"encrypted_content": "opaque"}}},
+		}}
+		if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
+			t.Fatal(err)
+		}
+		if body["thinking"] != nil {
+			t.Fatalf("compaction boundary retained stale recovery: %#v", body)
+		}
+	})
+
+	for name, modelName := range map[string]string{"wrong model": "claude-sonnet-5", "explicit binding": "claude-fable-5-1"} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			model := newNamedServer(t, modelName, func(response http.ResponseWriter, _ *http.Request) {
+				calls++
+				response.WriteHeader(http.StatusBadRequest)
+				_, _ = response.Write([]byte(`{"error":{"message":"The block is bound to a different conversation"}}`))
+			})
+			settings := ai.ModelSettings{}
+			if name == "explicit binding" {
+				settings.ExtraBody = map[string]any{"thinking": map[string]any{
+					"block_binding": map[string]any{"prefix_mismatch_behavior": "error"},
+				}}
+			}
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: settings}); err == nil || calls != 1 {
+				t.Fatalf("unexpected stale-thinking result: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+
+	t.Run("tool-result-only turn", func(t *testing.T) {
+		var body map[string]any
+		model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+		})
+		history := []ai.ModelMessage{
+			ai.ModelResponse{ProviderName: "anthropic", Parts: []ai.ResponsePart{
+				ai.ToolCallPart{ToolName: "tool", ToolCallID: "call", Args: json.RawMessage(`{}`)},
+			}},
+			ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.ToolReturnPart{ToolName: "tool", ToolCallID: "call", Content: "done"},
+			}},
+		}
+		_, err := model.Request(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+			ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file-1", ProviderName: "anthropic"}}},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		messages := body["messages"].([]any)
+		content := messages[len(messages)-1].(map[string]any)["content"].([]any)
+		for _, item := range content {
+			if item.(map[string]any)["type"] == "container_upload" {
+				t.Fatalf("upload was attached to a tool-result-only turn: %#v", content)
+			}
+		}
+	})
+
+	t.Run("server error without upload", func(t *testing.T) {
+		calls := 0
+		model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+			calls++
+			response.WriteHeader(http.StatusInternalServerError)
+		})
+		history := []ai.ModelMessage{ai.ModelResponse{ProviderName: "anthropic", ProviderDetails: map[string]any{
+			"container_id": "container",
+		}}}
+		if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err == nil || calls != 1 {
+			t.Fatalf("unexpected container retry: calls=%d err=%v", calls, err)
+		}
+	})
+}
+
+func TestAnthropicCountTokensStaleThinkingRecovery(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		calls++
+		if calls == 1 {
+			response.WriteHeader(http.StatusBadRequest)
+			_, _ = response.Write([]byte(`{"error":{"message":"The block is bound to a different conversation"}}`))
+			return
+		}
+		if !strings.Contains(request.Header.Get("anthropic-beta"), "thinking-binding-controls-2026-08-01") {
+			t.Error("thinking binding beta missing from token-count retry")
+		}
+		_, _ = response.Write([]byte(`{"input_tokens":7}`))
+	}))
+	defer server.Close()
+	model := anthropic.NewModel("claude-fable-5-1", anthropic.WithBaseURL(server.URL),
+		anthropic.WithHTTPClient(server.Client()))
+	usage, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: "hello"},
+	}}}, ai.ModelRequestParams{})
+	if err != nil || usage.InputTokens != 7 || calls != 2 {
+		t.Fatalf("unexpected count recovery: usage=%+v calls=%d err=%v", usage, calls, err)
+	}
+}
+
+func TestAnthropicRecoveryTransportErrors(t *testing.T) {
+	for name, setup := range map[string]struct {
+		model   string
+		status  int
+		body    string
+		history []ai.ModelMessage
+		params  ai.ModelRequestParams
+	}{
+		"container": {
+			model: "claude-sonnet-4-6", status: http.StatusInternalServerError, body: "error",
+			history: []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "use file"}}},
+				ai.ModelResponse{ProviderName: "anthropic", ProviderDetails: map[string]any{
+					"container_id": "expired",
+				}},
+			},
+			params: ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.CodeExecutionTool{Files: []ai.UploadedFile{{
+				FileID: "file", ProviderName: "anthropic",
+			}}}}},
+		},
+		"thinking": {
+			model: "claude-fable-5-1", status: http.StatusBadRequest,
+			body: `{"error":{"message":"The block is bound to a different conversation"}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			calls := 0
+			client := &http.Client{Transport: anthropicRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				calls++
+				if calls == 1 {
+					return &http.Response{StatusCode: setup.status, Body: io.NopCloser(strings.NewReader(setup.body))}, nil
+				}
+				return nil, errors.New("offline")
+			})}
+			model := anthropic.NewModel(setup.model, anthropic.WithBaseURL("https://anthropic.example"),
+				anthropic.WithHTTPClient(client))
+			if _, err := model.Request(t.Context(), setup.history, setup.params); err == nil || calls != 2 {
+				t.Fatalf("unexpected retry result: calls=%d err=%v", calls, err)
+			}
+		})
+	}
+	t.Run("token count", func(t *testing.T) {
+		calls := 0
+		client := &http.Client{Transport: anthropicRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			calls++
+			if calls == 1 {
+				return &http.Response{StatusCode: http.StatusBadRequest, Body: io.NopCloser(strings.NewReader(
+					`{"error":{"message":"The block is bound to a different conversation"}}`,
+				))}, nil
+			}
+			return nil, errors.New("offline")
+		})}
+		model := anthropic.NewModel("claude-fable-5-1", anthropic.WithBaseURL("https://anthropic.example"),
+			anthropic.WithHTTPClient(client))
+		_, err := model.CountTokens(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "hello"},
+		}}}, ai.ModelRequestParams{})
+		if err == nil || calls != 2 {
+			t.Fatalf("unexpected retry result: calls=%d err=%v", calls, err)
+		}
+	})
+}
+
+func TestAnthropicStreamStaleThinkingRecovery(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			response.WriteHeader(http.StatusBadRequest)
+			_, _ = response.Write([]byte(`{"error":{"message":"The block is bound to a different conversation"}}`))
+			return
+		}
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(response, "data: {\"type\":\"message_start\",\"message\":{\"id\":\"id\",\"model\":\"claude-fable-5-1\",\"input_transformations\":[{\"type\":\"thinking_dropped\",\"reason\":\"prefix_binding_mismatch\"}]}}\n\n"+
+			"data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"input_transformations\":[{\"type\":\"thinking_dropped\",\"reason\":\"prefix_binding_mismatch\"}]}\n\n"+
+			"data: {\"type\":\"message_stop\"}\n\n")
+	}))
+	defer server.Close()
+	model := anthropic.NewModel("claude-fable-5-1", anthropic.WithBaseURL(server.URL),
+		anthropic.WithHTTPClient(server.Client()))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finish ai.FinishEvent
+	for event, streamErr := range stream {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		if value, ok := event.(ai.FinishEvent); ok {
+			finish = value
+		}
+	}
+	if calls != 2 || len(finish.ProviderDetails["input_transformations"].([]map[string]any)) != 1 {
+		t.Fatalf("unexpected stream recovery: calls=%d finish=%+v", calls, finish)
 	}
 }
 

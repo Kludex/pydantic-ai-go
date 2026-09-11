@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -112,6 +113,11 @@ func buildConverseInput(
 		reservedCachePoints++
 	}
 	limitCachePoints(input.Messages, 4-reservedCachePoints)
+	if bedrockAnthropicDisallowsSampling(modelName) {
+		params.Settings = params.Settings.Clone()
+		params.Settings.Temperature = nil
+		params.Settings.TopP = nil
+	}
 	input.InferenceConfig = inferenceConfiguration(params.Settings)
 	input.OutputConfig, err = outputConfiguration(params)
 	if err != nil {
@@ -122,6 +128,19 @@ func buildConverseInput(
 	}
 	input.ServiceTier = serviceTier(params.Settings.ServiceTier)
 	return input, nil
+}
+
+func bedrockAnthropicDisallowsSampling(modelName string) bool {
+	name := strings.ToLower(modelName)
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-opus-4-7", "claude-opus-4-8",
+		"claude-opus-5", "claude-sonnet-5",
+	} {
+		if strings.Contains(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func outputConfiguration(params ai.ModelRequestParams) (*types.OutputConfig, error) {

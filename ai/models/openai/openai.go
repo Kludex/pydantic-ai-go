@@ -87,6 +87,10 @@ type ChatCompatibility struct {
 	ReasoningContent bool
 	// Reasoning enables the unified reasoning extension.
 	Reasoning bool
+	// ReasoningText enables GitHub Copilot's reasoning_text extension.
+	ReasoningText bool
+	// ReasoningFallback enables vLLM reasoning with reasoning_content fallback.
+	ReasoningFallback bool
 	// ReasoningDetails enables OpenRouter-style reasoning details.
 	ReasoningDetails bool
 	// LegacyMaxTokens sends max_tokens instead of max_completion_tokens.
@@ -107,6 +111,14 @@ type ChatCompatibility struct {
 	NativeToolFunc ChatNativeToolFunc
 	// FinishReasons maps provider-specific stop reasons.
 	FinishReasons map[string]ai.FinishReason
+	// RequireFinishReason rejects a clean stream end without a terminal finish reason.
+	RequireFinishReason bool
+	// DisableRequiredToolChoice prevents tool_choice=required on endpoints that reject it.
+	DisableRequiredToolChoice bool
+	// DisableForcedToolChoiceWithThinking prevents forced tools while reasoning is active.
+	DisableForcedToolChoiceWithThinking bool
+	// ReasoningEnabledByDefault marks models that reason without an explicit effort.
+	ReasoningEnabledByDefault bool
 }
 
 // WithChatCompatibility configures OpenAI-compatible response and history
@@ -126,18 +138,24 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 	}
 	return func(model *Model) {
 		model.chatCompatibility = ChatCompatibility{
-			ReasoningContent:     compatibility.ReasoningContent,
-			Reasoning:            compatibility.Reasoning,
-			ReasoningDetails:     compatibility.ReasoningDetails,
-			LegacyMaxTokens:      compatibility.LegacyMaxTokens,
-			ExtendedMetadata:     compatibility.ExtendedMetadata,
-			ExecutedTools:        compatibility.ExecutedTools,
-			VideoInput:           compatibility.VideoInput,
-			FileURLInput:         compatibility.FileURLInput,
-			AudioInputDataURI:    compatibility.AudioInputDataURI,
-			DisableDocumentInput: compatibility.DisableDocumentInput,
-			NativeToolFunc:       compatibility.NativeToolFunc,
-			FinishReasons:        maps.Clone(finishReasons),
+			ReasoningContent:                    compatibility.ReasoningContent,
+			Reasoning:                           compatibility.Reasoning,
+			ReasoningText:                       compatibility.ReasoningText,
+			ReasoningFallback:                   compatibility.ReasoningFallback,
+			ReasoningDetails:                    compatibility.ReasoningDetails,
+			LegacyMaxTokens:                     compatibility.LegacyMaxTokens,
+			ExtendedMetadata:                    compatibility.ExtendedMetadata,
+			ExecutedTools:                       compatibility.ExecutedTools,
+			VideoInput:                          compatibility.VideoInput,
+			FileURLInput:                        compatibility.FileURLInput,
+			AudioInputDataURI:                   compatibility.AudioInputDataURI,
+			DisableDocumentInput:                compatibility.DisableDocumentInput,
+			NativeToolFunc:                      compatibility.NativeToolFunc,
+			FinishReasons:                       maps.Clone(finishReasons),
+			RequireFinishReason:                 compatibility.RequireFinishReason,
+			DisableRequiredToolChoice:           compatibility.DisableRequiredToolChoice,
+			DisableForcedToolChoiceWithThinking: compatibility.DisableForcedToolChoiceWithThinking,
+			ReasoningEnabledByDefault:           compatibility.ReasoningEnabledByDefault,
 		}
 	}
 }
@@ -334,6 +352,9 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		if response := m.azureContentFilterResponse(resp.StatusCode, data); response != nil {
+			return response, nil
+		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	response, err := m.parseResponse(data)
@@ -342,6 +363,39 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 		response.ProviderURL = m.baseURL
 	}
 	return response, err
+}
+
+func (m *Model) azureContentFilterResponse(statusCode int, data []byte) *ai.ModelResponse {
+	if m.providerName != "azure" || statusCode != http.StatusBadRequest {
+		return nil
+	}
+	var envelope struct {
+		Error *struct {
+			Code       string         `json:"code"`
+			InnerError map[string]any `json:"innererror"`
+		} `json:"error"`
+		Code       string         `json:"code"`
+		InnerError map[string]any `json:"innererror"`
+	}
+	if json.Unmarshal(data, &envelope) != nil {
+		return nil
+	}
+	code, inner := envelope.Code, envelope.InnerError
+	if envelope.Error != nil {
+		code, inner = envelope.Error.Code, envelope.Error.InnerError
+	}
+	if code != "content_filter" {
+		return nil
+	}
+	details := map[string]any{"finish_reason": "content_filter"}
+	if result, ok := inner["content_filter_result"]; ok {
+		details["content_filter_result"] = result
+	}
+	return &ai.ModelResponse{
+		ModelName: m.name, ProviderName: m.providerName, ProviderURL: m.baseURL,
+		FinishReason: ai.FinishReasonContentFilter, State: ai.ModelResponseStateComplete,
+		ProviderDetails: details,
+	}
 }
 
 // APIError is a provider API failure. StatusCode is zero when an OpenAI-compatible
@@ -405,6 +459,7 @@ type chatMessage struct {
 	Content          any               `json:"content,omitempty"` // string or []contentPart
 	ReasoningContent string            `json:"reasoning_content,omitempty"`
 	Reasoning        string            `json:"reasoning,omitempty"`
+	ReasoningText    string            `json:"reasoning_text,omitempty"`
 	ReasoningDetails []reasoningDetail `json:"reasoning_details,omitempty"`
 	ToolCalls        []toolCall        `json:"tool_calls,omitempty"`
 	ToolCallID       string            `json:"tool_call_id,omitempty"`
@@ -533,7 +588,7 @@ func (m *Model) buildPayload(
 			}
 		}
 	}
-	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
+	reasoningEffort, err := openAIThinkingEffortForModel(m.name, params.Settings.Thinking)
 	if err != nil {
 		return nil, err
 	}
@@ -566,7 +621,7 @@ func (m *Model) buildPayload(
 		req.LegacyMaxTokens = req.MaxTokens
 		req.MaxTokens = 0
 	}
-	if openAIReasoningActive(reasoningEffort) {
+	if openAIModelReasoningActive(m.name, reasoningEffort) {
 		req.Temperature = nil
 		req.TopP = nil
 	}
@@ -628,7 +683,10 @@ func (m *Model) buildPayload(
 			return nil, err
 		}
 		req.Tools = append(req.Tools, converted)
-		if !params.AllowText {
+		reasoningActive := reasoningEffort != "none" &&
+			(reasoningEffort != "" || m.chatCompatibility.ReasoningEnabledByDefault)
+		if !params.AllowText && !m.chatCompatibility.DisableRequiredToolChoice &&
+			(!m.chatCompatibility.DisableForcedToolChoiceWithThinking || !reasoningActive) {
 			req.ToolChoice = "required"
 		}
 	}
@@ -701,6 +759,18 @@ func openAIServiceTier(tier ai.ServiceTier) (ai.ServiceTier, error) {
 	}
 }
 
+func openAIThinkingEffortForModel(modelName string, settings *ai.ThinkingSettings) (string, error) {
+	effort, err := openAIThinkingEffort(settings)
+	if err != nil {
+		return "", err
+	}
+	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
+	if effort == "minimal" && (strings.HasPrefix(modelName, "gpt-5.6") || strings.HasPrefix(modelName, "gpt-6-astra")) {
+		return "low", nil
+	}
+	return effort, nil
+}
+
 func openAIThinkingEffort(settings *ai.ThinkingSettings) (string, error) {
 	if settings == nil || settings.Level == "" {
 		return "", nil
@@ -718,8 +788,10 @@ func openAIThinkingEffort(settings *ai.ThinkingSettings) (string, error) {
 	}
 }
 
-func openAIReasoningActive(effort string) bool {
-	return effort != "" && effort != "none"
+func openAIModelReasoningActive(modelName, effort string) bool {
+	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
+	return effort != "none" && (effort != "" || strings.HasPrefix(modelName, "gpt-5.6") ||
+		strings.HasPrefix(modelName, "gpt-6-astra"))
 }
 
 func (model *Model) convertMessage(
@@ -794,6 +866,16 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]chatMessage, error) {
 				if model.chatCompatibility.Reasoning {
 					msg.Reasoning += p.Content
 				}
+				if model.chatCompatibility.ReasoningText {
+					msg.ReasoningText += p.Content
+				}
+				if model.chatCompatibility.ReasoningFallback {
+					if p.ID == "reasoning_content" {
+						msg.ReasoningContent += p.Content
+					} else {
+						msg.Reasoning += p.Content
+					}
+				}
 			}
 		case ai.ToolCallPart:
 			msg.ToolCalls = append(msg.ToolCalls, toolCall{
@@ -839,6 +921,7 @@ type chatResponse struct {
 			Refusal          string             `json:"refusal"`
 			ReasoningContent string             `json:"reasoning_content"`
 			Reasoning        string             `json:"reasoning"`
+			ReasoningText    string             `json:"reasoning_text"`
 			ReasoningDetails []reasoningDetail  `json:"reasoning_details"`
 			Annotations      []map[string]any   `json:"annotations"`
 			ToolCalls        []toolCall         `json:"tool_calls"`
@@ -1050,6 +1133,22 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 			resp.Parts = append(resp.Parts, ai.ThinkingPart{
 				Content: msg.Reasoning, ProviderName: model.providerName,
 			})
+		}
+		if model.chatCompatibility.ReasoningText && msg.ReasoningText != "" {
+			resp.Parts = append(resp.Parts, ai.ThinkingPart{
+				Content: msg.ReasoningText, ID: "reasoning_text", ProviderName: model.providerName,
+			})
+		}
+		if model.chatCompatibility.ReasoningFallback {
+			content, id := msg.Reasoning, "reasoning"
+			if content == "" {
+				content, id = msg.ReasoningContent, "reasoning_content"
+			}
+			if content != "" {
+				resp.Parts = append(resp.Parts, ai.ThinkingPart{
+					Content: content, ID: id, ProviderName: model.providerName,
+				})
+			}
 		}
 	}
 	if model.chatCompatibility.ExecutedTools {

@@ -28,26 +28,57 @@ func (m *Model) StreamRequest(
 		return m.streamLegacyBedrock(ctx, payload, params.Settings.ExtraHeaders)
 	}
 	payload.Stream = true
-	body, err := marshalRequest(payload, payload.ExtraBody)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
+	send := func() (*http.Response, error) {
+		body, err := marshalRequest(payload, payload.ExtraBody)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic: marshal request: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/messages", bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		setExtraHeaders(req, params.Settings.ExtraHeaders)
+		m.setRequestHeaders(req, payload, true)
+		resp, err := m.httpClient.Do(req)
+		if err != nil {
+			return nil, ai.NewModelTransportError(ctx, m, "request", err)
+		}
+		return resp, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/messages", bytes.NewReader(body))
+	resp, err := send()
 	if err != nil {
 		return nil, err
 	}
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
-	m.setRequestHeaders(req, payload, true)
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, ai.NewModelTransportError(ctx, m, "request", err)
+	if resp.StatusCode == http.StatusInternalServerError && payload.ContainerFromHistory &&
+		messagesHaveContainerUploads(payload.Messages) {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		payload.Container = nil
+		resp, err = send()
+		if err != nil {
+			return nil, err
+		}
 	}
 	if resp.StatusCode != http.StatusOK {
-		data, err := io.ReadAll(resp.Body)
+		data, readErr := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		if err != nil {
-			return nil, ai.NewModelTransportError(ctx, m, "read error response", err)
+		if readErr != nil {
+			return nil, ai.NewModelTransportError(ctx, m, "read error response", readErr)
+		}
+		if anthropicStaleThinkingError(m.name, resp.StatusCode, data, payload) {
+			enableAnthropicStaleThinkingDrop(payload)
+			resp, err = send()
+			if err != nil {
+				return nil, err
+			}
+			if resp.StatusCode == http.StatusOK {
+				return m.eventStream(ctx, resp.Body), nil
+			}
+			data, readErr = io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				return nil, ai.NewModelTransportError(ctx, m, "read error response", readErr)
+			}
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
@@ -64,6 +95,7 @@ type streamEvent struct {
 		Container *struct {
 			ID string `json:"id"`
 		} `json:"container"`
+		InputTransformations []map[string]any `json:"input_transformations"`
 	} `json:"message"`
 	ContentBlock responseContentBlock `json:"content_block"`
 	Delta        struct {
@@ -78,8 +110,9 @@ type streamEvent struct {
 			ID string `json:"id"`
 		} `json:"container"`
 	} `json:"delta"`
-	Usage anthropicUsage `json:"usage"`
-	Error struct {
+	Usage                anthropicUsage   `json:"usage"`
+	InputTransformations []map[string]any `json:"input_transformations"`
+	Error                struct {
 		Type    string `json:"type"`
 		Message string `json:"message"`
 	} `json:"error"`
@@ -95,6 +128,7 @@ func (m *Model) eventStream(
 		responseID := ""
 		stopReason := ""
 		containerID := ""
+		var inputTransformations []map[string]any
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		searchCalls := make(map[int]responseContentBlock)
@@ -123,6 +157,9 @@ func (m *Model) eventStream(
 				usage = event.Message.Usage.usage()
 				if event.Message.Container != nil {
 					containerID = event.Message.Container.ID
+				}
+				if len(event.Message.InputTransformations) > 0 {
+					inputTransformations = slices.Clone(event.Message.InputTransformations)
 				}
 			case "content_block_start":
 				_, toolSearch := anthropicToolSearchStrategy(event.ContentBlock.Name)
@@ -220,6 +257,9 @@ func (m *Model) eventStream(
 				if event.Delta.StopReason != "" {
 					stopReason = event.Delta.StopReason
 				}
+				if len(event.InputTransformations) > 0 {
+					inputTransformations = slices.Clone(event.InputTransformations)
+				}
 			case "message_stop":
 				providerDetails := map[string]any{}
 				if stopReason != "" {
@@ -227,6 +267,9 @@ func (m *Model) eventStream(
 				}
 				if containerID != "" {
 					providerDetails["container_id"] = containerID
+				}
+				if len(inputTransformations) > 0 {
+					providerDetails["input_transformations"] = slices.Clone(inputTransformations)
 				}
 				if len(providerDetails) == 0 {
 					providerDetails = nil

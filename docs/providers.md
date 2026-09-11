@@ -32,7 +32,7 @@ Use `openai.NewResponsesModel` instead of `openai.NewModel` when you need the Re
 
 Chat Completions accepts provider-hosted documents as `ai.UploadedFile` values with `ProviderName: "openai"`. Uploaded image IDs are not valid Chat image inputs. Use an image URL, inline image data, or the Responses API instead.
 
-Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, and `gpt-5.6` model families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
+Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, `gpt-5.6`, and `gpt-6-astra` model families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
 
 ### Predicted output
 
@@ -113,7 +113,7 @@ func main() {
 }
 ```
 
-`PromptCacheOptions` controls request-wide GPT-5.6 caching for Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolvePromptCacheRetention` reports the longest requested lifetime for durable backends without treating in-memory caching as durable.
+`PromptCacheOptions` controls request-wide caching for GPT-5.6 and later models, including GPT-6 Astra, with Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolvePromptCacheRetention` reports the longest requested lifetime for durable backends without treating in-memory caching as durable.
 
 ## OpenAI-compatible endpoints
 
@@ -174,6 +174,74 @@ func main() {
 ```
 
 The compatibility layer sends OpenAI wire formats. It cannot make an endpoint support OpenAI features that the endpoint does not implement.
+
+## vLLM
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/vllm"
+)
+
+func main() {
+	model, err := vllm.NewModel("Qwen/Qwen3-32B")
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "What is the capital of France?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `VLLM_BASE_URL` to the OpenAI-compatible API root, such as `http://localhost:8000/v1`. Set `VLLM_API_KEY` only when your server requires authentication. The model keeps your HTTP client caller-owned.
+
+vLLM can return reasoning through either `reasoning` or `reasoning_content`. The adapter normalizes both without duplicating content and sends each value back through its original field. It enables portable thinking only for model families whose vLLM contract supports the standard effort values.
+
+Native structured output includes the schema in the instructions because vLLM guided decoding masks tokens but does not show the schema to the model. Leading system messages are merged for chat templates that accept only one. Start vLLM with its model-specific tool parser when you need automatic tool calls.
+
+## GitHub Copilot
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/githubcopilot"
+)
+
+func main() {
+	model, err := githubcopilot.NewModel("claude-haiku-4.5")
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Explain structured concurrency.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `GITHUB_COPILOT_API_KEY`. `GITHUB_COPILOT_API_TOKEN` and `COPILOT_GITHUB_TOKEN` are fallback names. The provider deliberately ignores `GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_API_KEY` so it cannot send a general GitHub credential to the Copilot inference service.
+
+Copilot model availability depends on your subscription. The adapter sends model IDs unchanged and uses the Chat Completions endpoint. It normalizes `reasoning_text` for Claude and Gemini models and drops sampling settings rejected by the affected Claude families. Responses-only models, realtime, and embeddings are not supported by the service. The embedding inference prefix remains available for upstream compatibility, but Copilot currently rejects `/embeddings` requests.
+
+Use `githubcopilot.WithBaseURL` for an enterprise host or local proxy. The default integration headers match GitHub's Copilot clients. A caller-provided HTTP client remains caller-owned.
 
 ## Cohere
 
@@ -687,7 +755,9 @@ func main() {
 }
 ```
 
-Claude Sonnet 4.6+, Opus 4.6+, Fable 5, and Mythos 5 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budget, sampling, effort, and forced-tool combinations fail or are omitted according to the model profile.
+Claude Sonnet 4.6+, Opus 4.6+, Fable 5 and 5.1, and Mythos 5 and 5.1 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budget, sampling, effort, and forced-tool combinations fail or are omitted according to the model profile.
+
+Claude Fable 5.1 can reject a signed thinking block when the preceding instructions or tools changed. The adapter retries that request once with `prefix_mismatch_behavior: drop_block`. Anthropic reports the drop in `ModelResponse.ProviderDetails["input_transformations"]`, and later requests in the same normalized history preserve the recovery setting. Keep dynamic instructions and tool order stable when possible because the changed prefix also prevents prompt-cache reuse.
 
 ### Prompt caching
 

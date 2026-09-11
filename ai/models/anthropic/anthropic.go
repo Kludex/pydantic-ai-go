@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -149,28 +150,49 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if m.legacyBedrockClient != nil {
 		return m.requestLegacyBedrock(ctx, payload, params.Settings.ExtraHeaders)
 	}
-	body, err := marshalRequest(payload, payload.ExtraBody)
-	if err != nil {
-		return nil, fmt.Errorf("anthropic: marshal request: %w", err)
+	send := func() (int, []byte, error) {
+		body, err := marshalRequest(payload, payload.ExtraBody)
+		if err != nil {
+			return 0, nil, fmt.Errorf("anthropic: marshal request: %w", err)
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/messages", bytes.NewReader(body))
+		if err != nil {
+			return 0, nil, err
+		}
+		setExtraHeaders(req, params.Settings.ExtraHeaders)
+		m.setRequestHeaders(req, payload, false)
+		resp, err := m.httpClient.Do(req)
+		if err != nil {
+			return 0, nil, ai.NewModelTransportError(ctx, m, "request", err)
+		}
+		data, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return 0, nil, ai.NewModelTransportError(ctx, m, "read response", readErr)
+		}
+		return resp.StatusCode, data, nil
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, m.baseURL+"/messages", bytes.NewReader(body))
+	statusCode, data, err := send()
 	if err != nil {
 		return nil, err
 	}
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
-	m.setRequestHeaders(req, payload, false)
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, ai.NewModelTransportError(ctx, m, "request", err)
+	if statusCode == http.StatusInternalServerError && payload.ContainerFromHistory &&
+		messagesHaveContainerUploads(payload.Messages) {
+		payload.Container = nil
+		statusCode, data, err = send()
+		if err != nil {
+			return nil, err
+		}
 	}
-	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
+	if anthropicStaleThinkingError(m.name, statusCode, data, payload) {
+		enableAnthropicStaleThinkingDrop(payload)
+		statusCode, data, err = send()
+		if err != nil {
+			return nil, err
+		}
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	if statusCode != http.StatusOK {
+		return nil, &APIError{StatusCode: statusCode, Body: string(data)}
 	}
 	response, err := parseResponse(data)
 	if response != nil {
@@ -222,33 +244,48 @@ func (m *Model) CountTokens(
 		ToolChoice: payload.ToolChoice, Thinking: payload.Thinking, ContextManagement: payload.ContextManagement,
 		CacheControl: payload.CacheControl,
 	}
-	body, err := marshalRequest(countPayload, payload.ExtraBody)
-	if err != nil {
-		return ai.Usage{}, fmt.Errorf("anthropic: marshal token count request: %w", err)
+	send := func() (int, []byte, error) {
+		countPayload.Thinking = payload.Thinking
+		body, err := marshalRequest(countPayload, payload.ExtraBody)
+		if err != nil {
+			return 0, nil, fmt.Errorf("anthropic: marshal token count request: %w", err)
+		}
+		req, err := http.NewRequestWithContext(
+			ctx, http.MethodPost, m.baseURL+"/messages/count_tokens?beta=true", bytes.NewReader(body),
+		)
+		if err != nil {
+			return 0, nil, err
+		}
+		setExtraHeaders(req, params.Settings.ExtraHeaders)
+		headerPayload := *payload
+		headerPayload.Betas = slices.DeleteFunc(slices.Clone(payload.Betas), func(beta string) bool {
+			return beta != "context-management-2025-06-27" && beta != "thinking-binding-controls-2026-08-01"
+		})
+		m.setRequestHeaders(req, &headerPayload, false)
+		resp, err := m.httpClient.Do(req)
+		if err != nil {
+			return 0, nil, ai.NewModelTransportError(ctx, m, "token count request", err)
+		}
+		data, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			return 0, nil, ai.NewModelTransportError(ctx, m, "read token count response", readErr)
+		}
+		return resp.StatusCode, data, nil
 	}
-	req, err := http.NewRequestWithContext(
-		ctx, http.MethodPost, m.baseURL+"/messages/count_tokens?beta=true", bytes.NewReader(body),
-	)
+	statusCode, data, err := send()
 	if err != nil {
 		return ai.Usage{}, err
 	}
-	setExtraHeaders(req, params.Settings.ExtraHeaders)
-	headerPayload := *payload
-	headerPayload.Betas = slices.DeleteFunc(slices.Clone(payload.Betas), func(beta string) bool {
-		return beta != "context-management-2025-06-27"
-	})
-	m.setRequestHeaders(req, &headerPayload, false)
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return ai.Usage{}, ai.NewModelTransportError(ctx, m, "token count request", err)
+	if anthropicStaleThinkingError(m.name, statusCode, data, payload) {
+		enableAnthropicStaleThinkingDrop(payload)
+		statusCode, data, err = send()
+		if err != nil {
+			return ai.Usage{}, err
+		}
 	}
-	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return ai.Usage{}, ai.NewModelTransportError(ctx, m, "read token count response", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return ai.Usage{}, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	if statusCode != http.StatusOK {
+		return ai.Usage{}, &APIError{StatusCode: statusCode, Body: string(data)}
 	}
 	var counted struct {
 		InputTokens *int `json:"input_tokens"`
@@ -311,27 +348,28 @@ func (e *APIError) Error() string {
 func (*APIError) IsModelAPIError() bool { return true }
 
 type messagesRequest struct {
-	Model             string                       `json:"model"`
-	MaxTokens         int                          `json:"max_tokens"`
-	System            any                          `json:"system,omitempty"`
-	Messages          []messageParam               `json:"messages"`
-	Tools             []toolParam                  `json:"tools,omitempty"`
-	ToolChoice        *toolChoiceParam             `json:"tool_choice,omitempty"`
-	Temperature       *float64                     `json:"temperature,omitempty"`
-	TopP              *float64                     `json:"top_p,omitempty"`
-	Stop              []string                     `json:"stop_sequences,omitempty"`
-	Stream            bool                         `json:"stream,omitempty"`
-	ToolAdditions     bool                         `json:"-"`
-	Compaction        bool                         `json:"-"`
-	Thinking          *thinkingParam               `json:"thinking,omitempty"`
-	ServiceTier       string                       `json:"service_tier,omitempty"`
-	ContextManagement map[string]any               `json:"context_management,omitempty"`
-	Container         any                          `json:"container,omitempty"`
-	MCPServers        []anthropicMCPServer         `json:"mcp_servers,omitempty"`
-	Betas             []string                     `json:"-"`
-	CacheControl      *anthropicPromptCacheControl `json:"cache_control,omitempty"`
-	OutputConfig      *anthropicOutputConfig       `json:"output_config,omitempty"`
-	ExtraBody         map[string]any               `json:"-"`
+	Model                string                       `json:"model"`
+	MaxTokens            int                          `json:"max_tokens"`
+	System               any                          `json:"system,omitempty"`
+	Messages             []messageParam               `json:"messages"`
+	Tools                []toolParam                  `json:"tools,omitempty"`
+	ToolChoice           *toolChoiceParam             `json:"tool_choice,omitempty"`
+	Temperature          *float64                     `json:"temperature,omitempty"`
+	TopP                 *float64                     `json:"top_p,omitempty"`
+	Stop                 []string                     `json:"stop_sequences,omitempty"`
+	Stream               bool                         `json:"stream,omitempty"`
+	ToolAdditions        bool                         `json:"-"`
+	Compaction           bool                         `json:"-"`
+	ContainerFromHistory bool                         `json:"-"`
+	Thinking             *thinkingParam               `json:"thinking,omitempty"`
+	ServiceTier          string                       `json:"service_tier,omitempty"`
+	ContextManagement    map[string]any               `json:"context_management,omitempty"`
+	Container            any                          `json:"container,omitempty"`
+	MCPServers           []anthropicMCPServer         `json:"mcp_servers,omitempty"`
+	Betas                []string                     `json:"-"`
+	CacheControl         *anthropicPromptCacheControl `json:"cache_control,omitempty"`
+	OutputConfig         *anthropicOutputConfig       `json:"output_config,omitempty"`
+	ExtraBody            map[string]any               `json:"-"`
 }
 
 type anthropicOutputConfig struct {
@@ -358,8 +396,13 @@ type anthropicMCPToolConfiguration struct {
 }
 
 type thinkingParam struct {
-	Type         string `json:"type"`
-	BudgetTokens int    `json:"budget_tokens,omitempty"`
+	Type         string                `json:"type,omitempty"`
+	BudgetTokens int                   `json:"budget_tokens,omitempty"`
+	BlockBinding *thinkingBlockBinding `json:"block_binding,omitempty"`
+}
+
+type thinkingBlockBinding struct {
+	PrefixMismatchBehavior string `json:"prefix_mismatch_behavior"`
 }
 
 type messageParam struct {
@@ -825,7 +868,7 @@ func anthropicDisallowsSamplingSettings(modelName string) bool {
 }
 
 func anthropicSupportsForcedToolChoice(modelName string) bool {
-	for _, prefix := range []string{"claude-fable-5", "claude-mythos-5", "claude-mythos-preview"} {
+	for _, prefix := range []string{"claude-fable-5-1", "claude-mythos-5-1"} {
 		if strings.HasPrefix(modelName, prefix) {
 			return false
 		}
@@ -996,13 +1039,35 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
+	if anthropicHistoryNeedsStaleThinkingDrop(m.name, msgs) {
+		if rawThinking, ok := params.Settings.ExtraBody["thinking"].(map[string]any); ok {
+			params.Settings.ExtraBody = maps.Clone(params.Settings.ExtraBody)
+			rawThinking = maps.Clone(rawThinking)
+			if _, configured := rawThinking["block_binding"]; !configured {
+				rawThinking["block_binding"] = map[string]any{"prefix_mismatch_behavior": "drop_block"}
+				params.Settings.ExtraBody["thinking"] = rawThinking
+			}
+		} else {
+			if thinking == nil {
+				thinking = &thinkingParam{}
+			}
+			thinking.BlockBinding = &thinkingBlockBinding{PrefixMismatchBehavior: "drop_block"}
+		}
+	}
 	serviceTier, err := anthropicServiceTier(params.Settings.ServiceTier)
 	if err != nil {
 		return nil, err
 	}
 	container := anthropicContainerFromHistory(msgs)
+	containerFromHistory := container != nil
+	if len(msgs) > 0 {
+		if response, ok := msgs[len(msgs)-1].(ai.ModelResponse); ok && response.State == ai.ModelResponseStateSuspended {
+			containerFromHistory = false
+		}
+	}
 	if providerSettings.ContainerSet {
 		container = providerSettings.Container
+		containerFromHistory = false
 	}
 	temperature := params.Settings.Temperature
 	topP := params.Settings.TopP
@@ -1010,20 +1075,29 @@ func (m *Model) buildPayload(
 		temperature = nil
 		topP = nil
 	}
+	rawThinkingBinding := false
+	if rawThinking, ok := params.Settings.ExtraBody["thinking"].(map[string]any); ok {
+		_, rawThinkingBinding = rawThinking["block_binding"]
+	}
+	if (thinking != nil && thinking.BlockBinding != nil || rawThinkingBinding) &&
+		!slices.Contains(nativeBetas, "thinking-binding-controls-2026-08-01") {
+		nativeBetas = append(nativeBetas, "thinking-binding-controls-2026-08-01")
+	}
 	req := &messagesRequest{
-		Model:        m.name,
-		Tools:        nativeTools,
-		MCPServers:   mcpServers,
-		Betas:        nativeBetas,
-		MaxTokens:    params.Settings.MaxTokens,
-		Temperature:  temperature,
-		TopP:         topP,
-		Stop:         params.Settings.StopSequences,
-		Thinking:     thinking,
-		ServiceTier:  serviceTier,
-		Container:    container,
-		CacheControl: promptCacheControl(cache.Automatic),
-		ExtraBody:    params.Settings.ExtraBody,
+		Model:                m.name,
+		Tools:                nativeTools,
+		MCPServers:           mcpServers,
+		Betas:                nativeBetas,
+		MaxTokens:            params.Settings.MaxTokens,
+		Temperature:          temperature,
+		TopP:                 topP,
+		Stop:                 params.Settings.StopSequences,
+		Thinking:             thinking,
+		ServiceTier:          serviceTier,
+		Container:            container,
+		ContainerFromHistory: containerFromHistory,
+		CacheControl:         promptCacheControl(cache.Automatic),
+		ExtraBody:            params.Settings.ExtraBody,
 	}
 	if params.Instructions != "" {
 		req.System = params.Instructions
@@ -1101,7 +1175,7 @@ func (m *Model) buildPayload(
 	}
 	if uploads := anthropicContainerUploads(params.NativeTools); len(uploads) > 0 {
 		for index := range req.Messages {
-			if req.Messages[index].Role != "user" {
+			if req.Messages[index].Role != "user" || anthropicToolResultsOnly(req.Messages[index].Content) {
 				continue
 			}
 			for _, fileID := range uploads {
@@ -1109,7 +1183,6 @@ func (m *Model) buildPayload(
 					Type: "container_upload", FileID: fileID,
 				})
 			}
-			break
 		}
 	}
 	if err := resolveAnthropicCachePoints(&req.Messages); err != nil {
@@ -1240,6 +1313,105 @@ func anthropicContainerUploads(nativeTools []ai.NativeTool) []string {
 		}
 	}
 	return uploads
+}
+
+func anthropicToolResultsOnly(content []contentBlock) bool {
+	onlyToolResults := len(content) > 0
+	for _, block := range content {
+		if block.Type != "tool_result" {
+			return false
+		}
+	}
+	return onlyToolResults
+}
+
+func messagesHaveContainerUploads(messages []messageParam) bool {
+	for _, message := range messages {
+		for _, block := range message.Content {
+			if block.Type == "container_upload" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func anthropicStaleThinkingError(modelName string, statusCode int, data []byte, payload *messagesRequest) bool {
+	if !strings.HasPrefix(strings.ToLower(modelName), "claude-fable-5-1") || statusCode != http.StatusBadRequest ||
+		payload.Thinking != nil && payload.Thinking.BlockBinding != nil {
+		return false
+	}
+	if thinking, ok := payload.ExtraBody["thinking"].(map[string]any); ok {
+		if _, configured := thinking["block_binding"]; configured {
+			return false
+		}
+	}
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	return json.Unmarshal(data, &body) == nil &&
+		strings.Contains(body.Error.Message, "The block is bound to a different conversation")
+}
+
+func enableAnthropicStaleThinkingDrop(payload *messagesRequest) {
+	if thinking, ok := payload.ExtraBody["thinking"].(map[string]any); ok {
+		payload.ExtraBody = maps.Clone(payload.ExtraBody)
+		thinking = maps.Clone(thinking)
+		thinking["block_binding"] = map[string]any{"prefix_mismatch_behavior": "drop_block"}
+		payload.ExtraBody["thinking"] = thinking
+	} else {
+		if payload.Thinking == nil {
+			payload.Thinking = &thinkingParam{}
+		}
+		payload.Thinking.BlockBinding = &thinkingBlockBinding{PrefixMismatchBehavior: "drop_block"}
+	}
+	if !slices.Contains(payload.Betas, "thinking-binding-controls-2026-08-01") {
+		payload.Betas = append(payload.Betas, "thinking-binding-controls-2026-08-01")
+	}
+}
+
+func anthropicHistoryNeedsStaleThinkingDrop(modelName string, messages []ai.ModelMessage) bool {
+	if !strings.HasPrefix(strings.ToLower(modelName), "claude-fable-5-1") {
+		return false
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		response, ok := messages[index].(ai.ModelResponse)
+		if !ok {
+			continue
+		}
+		compactionBoundary := false
+		for _, part := range response.Parts {
+			if _, compacted := part.(ai.CompactionPart); compacted {
+				compactionBoundary = true
+				break
+			}
+		}
+		if compactionBoundary {
+			return false
+		}
+		switch transformations := response.ProviderDetails["input_transformations"].(type) {
+		case []map[string]any:
+			for _, transformation := range transformations {
+				if anthropicThinkingWasDropped(transformation) {
+					return true
+				}
+			}
+		case []any:
+			for _, value := range transformations {
+				if transformation, ok := value.(map[string]any); ok && anthropicThinkingWasDropped(transformation) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func anthropicThinkingWasDropped(transformation map[string]any) bool {
+	return transformation["type"] == "thinking_dropped" &&
+		transformation["reason"] == "prefix_binding_mismatch"
 }
 
 func anthropicContainerFromHistory(messages []ai.ModelMessage) any {
@@ -1746,13 +1918,14 @@ func supportsStrictTools(name string) bool {
 }
 
 type messagesResponse struct {
-	ID          string                 `json:"id"`
-	Model       string                 `json:"model"`
-	StopReason  string                 `json:"stop_reason"`
-	ServiceTier string                 `json:"service_tier"`
-	Content     []responseContentBlock `json:"content"`
-	Usage       anthropicUsage         `json:"usage"`
-	Container   *struct {
+	ID                   string                 `json:"id"`
+	Model                string                 `json:"model"`
+	StopReason           string                 `json:"stop_reason"`
+	ServiceTier          string                 `json:"service_tier"`
+	Content              []responseContentBlock `json:"content"`
+	Usage                anthropicUsage         `json:"usage"`
+	InputTransformations []map[string]any       `json:"input_transformations"`
+	Container            *struct {
 		ID string `json:"id"`
 	} `json:"container"`
 }
@@ -1780,6 +1953,9 @@ type anthropicUsage struct {
 	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
 	Iterations               []anthropicIterationUsage `json:"iterations"`
+	ServerToolUse            *struct {
+		WebSearchRequests int `json:"web_search_requests"`
+	} `json:"server_tool_use"`
 }
 
 type anthropicIterationUsage struct {
@@ -1796,6 +1972,9 @@ func (u anthropicUsage) usage() ai.Usage {
 		"output_tokens":               u.OutputTokens,
 		"cache_creation_input_tokens": u.CacheCreationInputTokens,
 		"cache_read_input_tokens":     u.CacheReadInputTokens,
+	}
+	if u.ServerToolUse != nil && u.ServerToolUse.WebSearchRequests > 0 {
+		details["web_search_requests"] = u.ServerToolUse.WebSearchRequests
 	}
 	if len(u.Iterations) > 0 {
 		for _, iteration := range u.Iterations {
@@ -1840,6 +2019,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	}
 	if mr.Container != nil && mr.Container.ID != "" {
 		providerDetails["container_id"] = mr.Container.ID
+	}
+	if len(mr.InputTransformations) > 0 {
+		providerDetails["input_transformations"] = slices.Clone(mr.InputTransformations)
 	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil

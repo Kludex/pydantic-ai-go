@@ -14,7 +14,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 ### Added
 
 - A typed agent loop with structured output, tools, retries, usage limits, cancellation, deferred execution, message enqueueing, manual runs, and synchronous or streamed results.
-- OpenAI Chat Completions and Responses, Amazon Bedrock Converse with streaming, native output, prompt caching, token counting, Nova code interpreter, inference profiles, guardrails, performance options, request metadata, and prompt variables, Anthropic Messages with legacy Bedrock InvokeModel generation, streaming, and token counting, Google Gemini and Vertex AI, Azure OpenAI, Groq, OpenRouter, and Z.AI model providers.
+- OpenAI Chat Completions and Responses, Amazon Bedrock Converse with streaming, native output, prompt caching, token counting, Nova code interpreter, inference profiles, guardrails, performance options, request metadata, and prompt variables, Anthropic Messages with legacy Bedrock InvokeModel generation, streaming, and token counting, Google Gemini and Vertex AI, Azure OpenAI, GitHub Copilot, vLLM, Groq, OpenRouter, and Z.AI model providers.
 - Provider-neutral native tools for web search, web fetch, code execution, image generation, file search, MCP servers, advisors, memory, and X search where providers support them.
 - Capability middleware for runs, model requests, tool validation and execution, output validation and processing, instructions, history processing, event streams, and deferred calls.
 - MCP clients and toolsets for Streamable HTTP, SSE, stdio, shared sessions, OAuth, sampling, elicitation, prompts, resources, and configuration files.
@@ -46,7 +46,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Add a run-scoped AG-UI queue for state snapshots, JSON Patch deltas, and custom events.
 - Widen AG-UI `Event.Delta` to carry state patch arrays as well as streamed text.
 - Preserve AG-UI developer messages, typed-tool kinds, failed outcomes, and provider-native identities through encrypted metadata and echoed history.
-- Infer embedding models for the audited OpenAI-compatible provider aliases, including environment-configured LiteLLM and Snowflake endpoints.
+- Infer embedding models for the audited OpenAI-compatible provider aliases, including environment-configured LiteLLM, Snowflake, vLLM, and GitHub Copilot endpoints.
+- Preserve Anthropic stale-thinking recovery and active-turn container uploads, normalize OpenAI-compatible finish behavior, and map Anthropic web-search usage for pricing.
 - Send native JSON Schema output through Anthropic `output_config.format` on supported Claude model families.
 - Extend reflected JSON Schema with embedded structs, nullable pointers, JSON/time/text/base64 representations, and common validation annotations.
 - Add typed Gemini and Vertex cached-content references with API-required system and tool omission.

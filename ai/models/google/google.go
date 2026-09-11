@@ -765,7 +765,7 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 			config.IncludeThoughts = &include
 		}
 		if gemini3 {
-			config.ThinkingLevel = "MINIMAL"
+			config.ThinkingLevel = googleThinkingLevel(modelName, "MINIMAL")
 		} else {
 			budget := 0
 			config.ThinkingBudget = &budget
@@ -794,7 +794,7 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 		if !ok {
 			return nil, fmt.Errorf("google: invalid thinking level %q", settings.Level)
 		}
-		config.ThinkingLevel = level
+		config.ThinkingLevel = googleThinkingLevel(modelName, level)
 		return config, nil
 	}
 	budgets := map[ai.ThinkingLevel]int{
@@ -807,6 +807,35 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 	}
 	config.ThinkingBudget = &budget
 	return config, nil
+}
+
+func googleThinkingLevel(modelName, requested string) string {
+	var supported []string
+	name := strings.ToLower(modelName)
+	switch {
+	case strings.HasPrefix(name, "gemini-3.1-flash-lite-image"):
+		supported = []string{"MINIMAL", "HIGH"}
+	case strings.HasPrefix(name, "gemini-3.7-flash"), strings.HasPrefix(name, "gemini-3.8-flash"),
+		strings.HasPrefix(name, "gemini-3.1-pro-preview"):
+		supported = []string{"LOW", "MEDIUM", "HIGH"}
+	case strings.HasPrefix(name, "gemini-3-pro-preview"):
+		supported = []string{"LOW", "HIGH"}
+	default:
+		return requested
+	}
+	order := map[string]int{"MINIMAL": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}
+	best := supported[0]
+	bestDistance := 4
+	for _, level := range supported {
+		distance := order[level] - order[requested]
+		if distance < 0 {
+			distance = -distance
+		}
+		if distance < bestDistance || distance == bestDistance && order[level] < order[best] {
+			best, bestDistance = level, distance
+		}
+	}
+	return best
 }
 
 func (model *Model) convertMessage(ctx context.Context, msg ai.ModelMessage) ([]content, error) {

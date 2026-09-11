@@ -77,6 +77,27 @@ func TestChatThinkingSettings(t *testing.T) {
 		})
 	}
 
+	t.Run("GPT-6 Astra", func(t *testing.T) {
+		var body map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			_ = json.NewDecoder(request.Body).Decode(&body)
+			_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
+		}))
+		defer server.Close()
+		model := openai.NewModel("gpt-6-astra", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+		temperature := 0.5
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal}, Temperature: &temperature,
+		}})
+		if err != nil || body["reasoning_effort"] != "low" || body["temperature"] != nil {
+			t.Fatalf("unexpected GPT-6 request: body=%#v err=%v", body, err)
+		}
+		_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Temperature: &temperature}})
+		if err != nil || body["temperature"] != nil {
+			t.Fatalf("GPT-6 default reasoning retained temperature: body=%#v err=%v", body, err)
+		}
+	})
+
 	model := openai.NewModel("gpt-5")
 	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
 		Thinking: &ai.ThinkingSettings{Level: "extreme"},

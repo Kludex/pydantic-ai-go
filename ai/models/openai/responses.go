@@ -141,6 +141,11 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		if response := (&Model{
+			name: m.name, providerName: m.providerName, baseURL: m.baseURL,
+		}).azureContentFilterResponse(resp.StatusCode, data); response != nil {
+			return response, nil
+		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	response, err := parseResponsesResponse(data, payload.IncludeRawAnnotations)
@@ -738,7 +743,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		return nil, err
 	}
 	params.Settings = settings
-	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
+	reasoningEffort, err := openAIThinkingEffortForModel(m.name, params.Settings.Thinking)
 	if err != nil {
 		return nil, err
 	}
@@ -768,7 +773,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if reasoningEffort != "" {
 		req.Reasoning = &responsesReasoning{Effort: reasoningEffort}
 	}
-	if openAIReasoningActive(reasoningEffort) {
+	if openAIModelReasoningActive(m.name, reasoningEffort) {
 		req.Temperature = nil
 		req.TopP = nil
 	}
@@ -1000,7 +1005,8 @@ func responsesPhaseSupported(modelName string, override *bool) bool {
 	}
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
 	return strings.HasPrefix(modelName, "gpt-5.3-codex") || strings.HasPrefix(modelName, "gpt-5.4") ||
-		strings.HasPrefix(modelName, "gpt-5.5") || strings.HasPrefix(modelName, "gpt-5.6")
+		strings.HasPrefix(modelName, "gpt-5.5") || strings.HasPrefix(modelName, "gpt-5.6") ||
+		strings.HasPrefix(modelName, "gpt-6-astra")
 }
 
 func openAIResponsesFinishReason(reason string) ai.FinishReason {

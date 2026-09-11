@@ -13,6 +13,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/cerebras"
 	"github.com/Kludex/pydantic-ai-go/ai/models/cohere"
 	"github.com/Kludex/pydantic-ai-go/ai/models/crusoe"
+	"github.com/Kludex/pydantic-ai-go/ai/models/githubcopilot"
 	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
 	"github.com/Kludex/pydantic-ai-go/ai/models/huggingface"
@@ -21,6 +22,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
 	"github.com/Kludex/pydantic-ai-go/ai/models/snowflake"
+	"github.com/Kludex/pydantic-ai-go/ai/models/vllm"
 	"github.com/Kludex/pydantic-ai-go/ai/models/xai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/zai"
 )
@@ -58,6 +60,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"openai-responses": func(name string) (ai.Model, error) { return openai.NewResponsesModel(name), nil },
 		"anthropic":        func(name string) (ai.Model, error) { return anthropic.NewModel(name), nil },
 		"google":           func(name string) (ai.Model, error) { return google.NewModel(name), nil },
+		"github-copilot":   func(name string) (ai.Model, error) { return githubcopilot.NewModel(name) },
 		"bedrock":          func(name string) (ai.Model, error) { return bedrock.NewModel(name), nil },
 		"bedrock-mantle":   func(name string) (ai.Model, error) { return bedrockmantle.NewModel(name), nil },
 		"cerebras":         func(name string) (ai.Model, error) { return cerebras.NewModel(name), nil },
@@ -69,6 +72,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"ollama":           func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
 		"openrouter":       func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
 		"snowflake":        func(name string) (ai.Model, error) { return snowflake.NewModel(name), nil },
+		"vllm":             func(name string) (ai.Model, error) { return vllm.NewModel(name) },
 		"xai":              func(name string) (ai.Model, error) { return xai.NewModel(name), nil },
 		"zai":              func(name string) (ai.Model, error) { return zai.NewModel(name), nil },
 	}}

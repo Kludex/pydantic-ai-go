@@ -58,6 +58,38 @@ func TestAzureV1Model(t *testing.T) {
 	}
 }
 
+func TestAzureContentFilterResponse(t *testing.T) {
+	t.Setenv("OPENAI_API_VERSION", "")
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(`{"error":{"code":"content_filter","message":"filtered","innererror":{"content_filter_result":{"hate":{"filtered":true,"severity":"high"}}}}}`))
+	}))
+	defer server.Close()
+	for name, constructor := range map[string]func() (ai.Model, error){
+		"chat": func() (ai.Model, error) {
+			return azure.NewModel("deployment", azure.Config{Endpoint: server.URL + "/v1", APIKey: "key", HTTPClient: server.Client()})
+		},
+		"responses": func() (ai.Model, error) {
+			return azure.NewResponsesModel("deployment", azure.Config{Endpoint: server.URL + "/v1", APIKey: "key", HTTPClient: server.Client()})
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model, err := constructor()
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			filter := result.ProviderDetails["content_filter_result"].(map[string]any)
+			if result.FinishReason != ai.FinishReasonContentFilter || filter["hate"] == nil {
+				t.Fatalf("unexpected filtered response: %+v", result)
+			}
+		})
+	}
+}
+
 func TestAzureLegacyResponsesModelFromEnvironment(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/openai/responses" || r.URL.Query().Get("api-version") != "2025-04-01" {

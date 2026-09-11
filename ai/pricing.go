@@ -164,6 +164,7 @@ var pricingUsageAliases = map[string]genaiprices.UsageKey{
 	"audio_prompt_tokens":          genaiprices.UsageInputAudioTokens,
 	"image_prompt_tokens":          genaiprices.UsageInputImageTokens,
 	"video_prompt_tokens":          genaiprices.UsageInputVideoTokens,
+	"web_search_requests":          genaiprices.UsageWebSearches,
 	"text_cache_tokens":            genaiprices.UsageCacheTextReadTokens,
 	"audio_cache_tokens":           genaiprices.UsageCacheAudioReadTokens,
 	"image_cache_tokens":           genaiprices.UsageCacheImageReadTokens,

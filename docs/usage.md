@@ -58,7 +58,7 @@ The bundled implementations are:
 | Anthropic Messages | `/messages/count_tokens` |
 | Gemini Developer API and Vertex AI | `:countTokens` |
 
-OpenAI Chat Completions and Z.AI do not expose compatible token-counting endpoints. They return `ErrTokenCountingUnsupported` when pre-request counting is enabled.
+OpenAI Chat Completions, OpenAI Codex subscription models, and Z.AI do not expose compatible token-counting endpoints. They return `ErrTokenCountingUnsupported` when pre-request counting is enabled.
 
 Pre-request counting uses the final request after model hooks and capability middleware. It includes prepared tools, output schemas, instructions, and the request-only history view. The count is a projection. It is not added to `Result.Usage()`.
 

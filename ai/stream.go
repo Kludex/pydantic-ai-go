@@ -18,6 +18,14 @@ type StreamingModel interface {
 	) (iter.Seq2[ModelStreamEvent, error], error)
 }
 
+// CollectModelStream drains provider events into one detached response. Model
+// wrappers use it to adapt streaming-only endpoints to the Model contract.
+func CollectModelStream(
+	events iter.Seq2[ModelStreamEvent, error], params ModelRequestParams,
+) (*ModelResponse, error) {
+	return accumulate(events, params, nil, nil)
+}
+
 // ModelStreamEvent is a provider-facing response delta. Agent.RunStream
 // normalizes these into StreamEvent lifecycle events.
 type ModelStreamEvent interface {

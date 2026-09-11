@@ -211,6 +211,7 @@ The bundled providers use the same `ai.Model` interface.
 | --- | --- | --- |
 | OpenAI Chat Completions | `openai.NewModel("gpt-5-mini")` | `OPENAI_API_KEY` |
 | OpenAI Responses | `openai.NewResponsesModel("gpt-5-mini")` | `OPENAI_API_KEY` |
+| OpenAI Codex subscription | `openaicodex.NewModel("gpt-5.6-luna")` | Codex CLI or caller-owned credential source |
 | Azure OpenAI | `azure.NewModel("deployment", azure.Config{})` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
 | Amazon Bedrock | `bedrock.NewModel("us.amazon.nova-lite-v1:0")` | Standard AWS SDK configuration |
 | Amazon Bedrock Mantle | `bedrockmantle.NewModel("openai.gpt-5.6-luna")` | `AWS_BEARER_TOKEN_BEDROCK` or standard AWS SDK configuration |
@@ -230,7 +231,7 @@ The bundled providers use the same `ai.Model` interface.
 | xAI | `xai.NewModel("grok-4.3")` | `XAI_API_KEY` |
 | Z.AI | `zai.NewModel("glm-5.3-flash")` | `ZAI_API_KEY` |
 
-Provider options configure caller-owned clients, endpoints, credentials, and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints and Azure API versions. See [Amazon Bedrock](docs/bedrock.md) for AWS SDK configuration and Converse behavior.
+Provider options configure caller-owned clients, endpoints, credentials, and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints and Azure API versions. See [OpenAI Codex subscription](docs/openai-codex.md) for read-only CLI credentials, OAuth PKCE, and rotated credential storage. See [Amazon Bedrock](docs/bedrock.md) for AWS SDK configuration and Converse behavior.
 
 ## Test an agent without network calls
 

@@ -26,6 +26,7 @@ packages=(
     ./ai/embeddings/voyageai
     ./ai/models/fakes
     ./ai/models/openai
+    ./ai/models/openaicodex
     ./ai/models/openrouter
     ./ai/models/anthropic
     ./ai/models/azure

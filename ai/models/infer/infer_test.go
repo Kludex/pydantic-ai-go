@@ -3,6 +3,8 @@ package infer_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,12 +22,20 @@ func (valueModel) Request(context.Context, []ai.ModelMessage, ai.ModelRequestPar
 func TestModels(t *testing.T) {
 	t.Setenv("VLLM_BASE_URL", "http://localhost:8000/v1")
 	t.Setenv("GITHUB_COPILOT_API_KEY", "token")
+	codexHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(
+		`{"tokens":{"access_token":"access","refresh_token":"refresh","account_id":"account"}}`,
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", codexHome)
 	tests := []struct {
 		name     string
 		provider string
 	}{
 		{"openai:gpt-5-mini", "openai"},
 		{"openai-responses:gpt-5-mini", "openai"},
+		{"openai-codex:gpt-5.6-luna", "openai-codex"},
 		{"anthropic:claude-sonnet-4-5", "anthropic"},
 		{"google:gemini-2.5-flash", "google"},
 		{"github-copilot:claude-haiku-4.5", "github-copilot"},

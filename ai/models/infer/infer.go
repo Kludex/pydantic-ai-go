@@ -20,6 +20,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/mistral"
 	"github.com/Kludex/pydantic-ai-go/ai/models/ollama"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openaicodex"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
 	"github.com/Kludex/pydantic-ai-go/ai/models/snowflake"
 	"github.com/Kludex/pydantic-ai-go/ai/models/vllm"
@@ -58,6 +59,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 	configuration := config{resolvers: map[string]Resolver{
 		"openai":           func(name string) (ai.Model, error) { return openai.NewModel(name), nil },
 		"openai-responses": func(name string) (ai.Model, error) { return openai.NewResponsesModel(name), nil },
+		"openai-codex":     func(name string) (ai.Model, error) { return openaicodex.NewModel(name) },
 		"anthropic":        func(name string) (ai.Model, error) { return anthropic.NewModel(name), nil },
 		"google":           func(name string) (ai.Model, error) { return google.NewModel(name), nil },
 		"github-copilot":   func(name string) (ai.Model, error) { return githubcopilot.NewModel(name) },

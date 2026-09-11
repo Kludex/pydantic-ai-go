@@ -1,6 +1,6 @@
 # Provider configuration
 
-Choose a model package and pass the model to your agent. Each package reads its standard API key environment variable by default.
+Choose a model package and pass the model to your agent. Most packages read their standard API key environment variable by default. OpenAI Codex reads your Codex CLI login instead.
 
 ## OpenAI
 
@@ -114,6 +114,38 @@ func main() {
 ```
 
 `PromptCacheOptions` controls request-wide caching for GPT-5.6 and later models, including GPT-6 Astra, with Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolvePromptCacheRetention` reports the longest requested lifetime for durable backends without treating in-memory caching as durable.
+
+## OpenAI Codex subscription
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openaicodex"
+)
+
+func main() {
+	model, err := openaicodex.NewModel("gpt-5.6-luna")
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Say hello.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Run `codex login` first. The model reads the Codex CLI credentials but never writes them. Use a caller-owned `CredentialSource` when refreshed credentials must survive the process.
+
+See [OpenAI Codex subscription](openai-codex.md) for OAuth PKCE login, durable rotation, request security, and wire limitations.
 
 ## OpenAI-compatible endpoints
 

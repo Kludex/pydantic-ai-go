@@ -127,6 +127,9 @@ func validateConnect(model Model, params ConnectParams) (ConnectParams, Profile,
 	if profile.AudioInputSampleRate <= 0 || profile.AudioOutputSampleRate <= 0 {
 		return ConnectParams{}, Profile{}, fmt.Errorf("realtime: model profile sample rates must be positive")
 	}
+	if profile.ContextWindow < 0 {
+		return ConnectParams{}, Profile{}, fmt.Errorf("realtime: model profile context window must not be negative")
+	}
 	if settings.OutputModality == OutputModalityText && !profile.SupportsTextOutput {
 		return ConnectParams{}, Profile{}, fmt.Errorf("realtime: model %q does not support text output", model.Name())
 	}

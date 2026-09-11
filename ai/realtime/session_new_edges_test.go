@@ -69,6 +69,40 @@ func TestTerminalErrorSurvivesFullEventBuffer(t *testing.T) {
 	_ = session.Close(t.Context())
 }
 
+func TestAutomaticBargeInWithoutInterruptionSupportStandsDown(t *testing.T) {
+	connection := newFakeConnection()
+	profile := fullProfile()
+	profile.SupportsInterruption = false
+	session, err := realtime.Open(
+		t.Context(), &fakeModel{connection: connection, profile: profile}, realtime.ConnectParams{},
+		realtime.WithBargeIn(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close(t.Context()) }()
+
+	_ = session.StreamAudio(t.Context())
+	connection.events <- realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "assistant"}
+	connection.events <- realtime.InputSpeechStarted{}
+	for event, eventErr := range session.Events(t.Context()) {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		if _, ok := event.(realtime.InputSpeechStartEvent); ok {
+			break
+		}
+	}
+	if session.Err() != nil || session.Closed() {
+		t.Fatalf("unsupported automatic barge-in terminated the session: %v", session.Err())
+	}
+	select {
+	case input := <-connection.sent:
+		t.Fatalf("unsupported automatic barge-in sent %#v", input)
+	default:
+	}
+}
+
 func TestAutomaticBargeInFailureEndsSession(t *testing.T) {
 	connection := newFakeConnection()
 	session, err := realtime.Open(

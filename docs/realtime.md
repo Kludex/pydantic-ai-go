@@ -42,6 +42,8 @@ func main() {
 
 `realtime.Open` owns the connection pump and background tool calls. Close the session when you stop consuming events. The session retains portable `ai.ModelMessage` history through `Messages` and `NewMessages`.
 
+`model.Profile().ContextWindow` uses the bundled `genai-prices` metadata when the model has a recorded limit. Zero means unknown. Set `realtime.ProfileOverride.ContextWindow` to replace the detected value, including with an explicit zero.
+
 A string passed to `Send` asks the model to respond. Do not call `CreateResponse` after sending text. That asks for two responses. Pass `realtime.WithResponse(false)` to add passive text context. Images are passive by default. Pass `realtime.WithResponse(true)` with an image to ask for a response in the same operation.
 
 OpenAI reads `OPENAI_API_KEY`. Use `openai.WithAPIKey`, `openai.WithBaseURL`, `openai.WithHTTPClient`, and `openai.WithHeaders` when you need explicit transport configuration.
@@ -142,7 +144,7 @@ Set `WithAudioRetention` when you need raw audio in portable history. Retained a
 
 ## Handle barge-in
 
-Pass `realtime.WithBargeIn(true)` to `Open` when one device-paced `StreamAudio` consumer plays the output. The session tracks completed chunks, flushes unheard audio when user speech starts, and truncates provider history when supported.
+Pass `realtime.WithBargeIn(true)` to `Open` when one device-paced `StreamAudio` consumer plays the output. The session tracks completed chunks, flushes unheard audio when user speech starts, and truncates provider history when supported. Automatic barge-in does nothing when the model profile does not support interruption.
 
 For an application-owned trigger, read `PlayedAudioBytes` and pass the result to `InterruptAtAudio`. Keep your own playback counter when your audio layer buffers ahead of the device. You can pass an exact millisecond position to `Interrupt` instead.
 

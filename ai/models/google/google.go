@@ -15,6 +15,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 	jsonschema "github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
@@ -30,6 +31,7 @@ type Model struct {
 	prepareRequest    RequestPreparationFunc
 	strictToolSupport bool
 	defaultSettings   ai.ModelSettings
+	contextWindow     int
 }
 
 // Option configures a Model.
@@ -70,6 +72,7 @@ func NewModel(name string, opts ...Option) *Model {
 	for _, opt := range opts {
 		opt(m)
 	}
+	m.contextWindow = contextwindow.Lookup(m.name, m.providerName, m.baseURL)
 	return m
 }
 
@@ -91,10 +94,17 @@ func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	}
 }
 
-// ModelProfile reports support for generated image output.
+// ModelProfile reports model behavior and the bundled context window when known.
 func (m *Model) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, SupportsImageOutput: supportsImageOutput(m.name)}
+	return ai.ModelProfile{
+		DefaultOutputMode:   ai.OutputModeTool,
+		SupportsImageOutput: supportsImageOutput(m.name),
+		ContextWindow:       m.contextWindow,
+	}
 }
+
+// ContextWindow returns the bundled context window. Zero means unknown.
+func (m *Model) ContextWindow() int { return m.contextWindow }
 
 // Transport returns the configured Gemini Developer API or Vertex AI route.
 func (m *Model) Transport() Transport { return m.transport }

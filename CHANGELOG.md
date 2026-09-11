@@ -40,6 +40,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 - Forward visible typed custom events through AG-UI and Vercel AI, and add capability-owned attribution, immediate decision dispatch, ordered listeners, listener timeouts, and durable event envelopes.
 - Preserve kind-colliding application tool-return maps, restore uploaded-file serialization defaults, and normalize Vercel URL and JavaScript binary tool outputs.
+- Resolve bundled standard and realtime model context windows from `genai-prices` v0.1.6 metadata, while preserving explicit and unknown profile values.
 - Add Logfire messages and JSON schemas to model and tool spans, including model-visible retry and terminal-failure results.
 - Widen Vercel AI `Chunk.Data` and `UIMessagePart.Data` from object-only maps to arbitrary JSON values. Existing map values remain valid.
 - Emit Vercel AI response metadata through the protocol's final `message-metadata` chunk instead of attaching it to `finish`.
@@ -101,7 +102,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Fixed
 
-- No fixes have been released yet.
+- Keep realtime sessions open when automatic barge-in is enabled for a model without interruption support.
+- Let a realtime tool close its session without racing the connection pump into waiting on that tool.
 
 ### Security
 

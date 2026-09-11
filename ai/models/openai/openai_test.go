@@ -24,6 +24,15 @@ func newServer(t *testing.T, handler http.HandlerFunc) *openai.Model {
 	)
 }
 
+func TestContextWindows(t *testing.T) {
+	if got := openai.NewModel("gpt-5").ContextWindow(); got != 400_000 {
+		t.Fatalf("unexpected Chat Completions context window %d", got)
+	}
+	if got := openai.NewResponsesModel("gpt-5.4").ContextWindow(); got != 1_050_000 {
+		t.Fatalf("unexpected Responses context window %d", got)
+	}
+}
+
 func TestDefaultSettingsAreDetached(t *testing.T) {
 	stop := []string{"stop"}
 	settings := ai.ModelSettings{MaxTokens: 42, StopSequences: stop}

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime/internal/openaiprotocol"
 	openairt "github.com/Kludex/pydantic-ai-go/ai/realtime/openai"
@@ -126,6 +127,7 @@ func NewModel(name string, config Config, options ...Option) (*Model, error) {
 	profile.SupportsAsyncToolCalls = true
 	profile.EmitsInputSpeechEvents = true
 	profile.SupportsThinking = supportsThinking(name)
+	profile.ContextWindow = contextwindow.Lookup(name, "azure", config.Endpoint)
 	if modelAPIs(name) == voiceLiveOnly {
 		profile.SupportsWebRTC = false
 	}

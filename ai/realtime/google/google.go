@@ -16,6 +16,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
 	"google.golang.org/genai"
 )
@@ -145,6 +146,7 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsToolReturnSchema = true
 	profile.SupportedNativeTools = map[string]bool{"web_search": true}
 	profile.AudioInputSampleRate = 16000
+	profile.ContextWindow = contextwindow.Lookup(name, "google", "")
 	apiKey := os.Getenv("GOOGLE_API_KEY")
 	if apiKey == "" {
 		apiKey = os.Getenv("GEMINI_API_KEY")

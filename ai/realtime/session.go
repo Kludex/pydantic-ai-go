@@ -126,7 +126,7 @@ func WithImageRetention(every, maximum int) SessionOption {
 	}
 }
 
-// WithBargeIn makes the session flush unheard audio and interrupt output when user speech starts.
+// WithBargeIn makes supported models flush unheard audio and interrupt output when user speech starts.
 func WithBargeIn(enabled bool) SessionOption {
 	return func(config *sessionConfig) { config.handleBargeIn = enabled }
 }
@@ -720,7 +720,7 @@ func (session *Session) Close(ctx context.Context) error {
 	if fromOwnTool {
 		waitCtx = context.WithoutCancel(ctx)
 	}
-	session.cancel(context.Canceled)
+	// Publish tool-owned cleanup before cancellation wakes the pump.
 	session.toolMu.Lock()
 	if fromOwnTool {
 		session.closingFromTool = true
@@ -731,6 +731,7 @@ func (session *Session) Close(ctx context.Context) error {
 		}
 	}
 	session.toolMu.Unlock()
+	session.cancel(context.Canceled)
 	closeErr := session.connection.Close(waitCtx)
 	select {
 	case <-session.done:
@@ -807,7 +808,7 @@ func (session *Session) handle(event CodecEvent) bool {
 		interrupts, ok := session.connection.(SpeechInterruptionConnection)
 		session.serverCancelling = ok && interrupts.InterruptsResponseOnSpeech()
 		session.mu.Unlock()
-		if session.config.handleBargeIn {
+		if session.config.handleBargeIn && session.profile.SupportsInterruption {
 			if played, err := session.PlayedAudioBytes(); err == nil {
 				if _, err := session.InterruptAtAudio(session.ctx, played); err != nil {
 					session.fail(err)

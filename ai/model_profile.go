@@ -1,5 +1,7 @@
 package ai
 
+import "github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
+
 // ModelProfile describes model-specific output, message-preparation, and
 // context-window behavior. The zero value defaults reflected output to a
 // function tool, uses the standard prompted-output template, converts realtime
@@ -120,6 +122,9 @@ func modelContextWindow(model Model) int {
 	}
 	if profiled, ok := model.(ModelProfiler); ok {
 		return profiled.ModelProfile().ContextWindow
+	}
+	if identified, ok := model.(ModelProviderIdentity); ok {
+		return contextwindow.Lookup(model.Name(), identified.ProviderName(), identified.ProviderURL())
 	}
 	return 0
 }

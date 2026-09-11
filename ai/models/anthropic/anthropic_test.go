@@ -55,6 +55,12 @@ func newServerWithOptions(
 	return anthropic.NewModel("claude-sonnet-4-5", append(options, opts...)...)
 }
 
+func TestContextWindow(t *testing.T) {
+	if got := anthropic.NewModel("claude-sonnet-4-5").ContextWindow(); got != 200_000 {
+		t.Fatalf("unexpected context window %d", got)
+	}
+}
+
 func TestAnthropicCountTokens(t *testing.T) {
 	var body map[string]any
 	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {

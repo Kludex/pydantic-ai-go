@@ -37,6 +37,7 @@ type ResponsesModel struct {
 	codeExecutionOutputs   bool
 	fileSearchResults      bool
 	chatCompatibility      ChatCompatibility
+	contextWindow          int
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
@@ -59,6 +60,7 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 		codeExecutionOutputs: m.responsesCodeExecutionOutputs,
 		fileSearchResults:    m.responsesFileSearchResults,
 		chatCompatibility:    m.chatCompatibility,
+		contextWindow:        m.contextWindow,
 	}
 }
 
@@ -82,11 +84,13 @@ func (m *ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
 	}
 }
 
-// ModelProfile reports support for generated images and native tool reveals.
+// ModelProfile reports model behavior and the bundled context window when known.
 func (m *ResponsesModel) ModelProfile() ai.ModelProfile {
 	return ai.ModelProfile{
-		DefaultOutputMode: ai.OutputModeTool, SupportsImageOutput: true,
+		DefaultOutputMode:             ai.OutputModeTool,
+		SupportsImageOutput:           true,
 		SupportsToolAvailabilityDelta: m.deferredToolSupport,
+		ContextWindow:                 m.contextWindow,
 	}
 }
 
@@ -102,6 +106,9 @@ func (m *ResponsesModel) SupportsToolAvailabilityDelta(params ai.ModelRequestPar
 	}
 	return false
 }
+
+// ContextWindow returns the bundled context window. Zero means unknown.
+func (m *ResponsesModel) ContextWindow() int { return m.contextWindow }
 
 // ProviderName returns the durable provider identity.
 func (m *ResponsesModel) ProviderName() string { return m.providerName }

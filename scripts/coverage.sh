@@ -11,6 +11,7 @@ packages=(
     ./ai/durable/dbos
     ./ai/durable/prefect
     ./ai/durable/temporal
+    ./ai/internal/contextwindow
     ./ai/internal/download
     ./ai/internal/schema
     ./ai/retries

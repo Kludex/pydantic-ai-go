@@ -16,6 +16,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime/internal/openaiprotocol"
 	"github.com/coder/websocket"
@@ -93,6 +94,7 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsAsyncToolCalls = true
 	profile.EmitsInputSpeechEvents = true
 	profile.SupportsThinking = supportsThinking(name)
+	profile.ContextWindow = contextwindow.Lookup(name, "openai", defaultBaseURL)
 	model := &Model{
 		name: name, apiKey: getenv("OPENAI_API_KEY"), baseURL: defaultBaseURL,
 		client: http.DefaultClient, headers: http.Header{}, profile: profile,

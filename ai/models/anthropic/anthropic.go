@@ -16,6 +16,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 )
 
@@ -32,12 +33,15 @@ type Model struct {
 	schemaWarning       func(SchemaWarning)
 	defaultSettings     ai.ModelSettings
 	legacyBedrockClient LegacyBedrockClient
+	contextWindow       int
 }
 
-// ModelProfile reports native tool-availability support for compatible Anthropic models.
+// ModelProfile reports model behavior and the bundled context window when known.
 func (m *Model) ModelProfile() ai.ModelProfile {
 	return ai.ModelProfile{
-		DefaultOutputMode: ai.OutputModeTool, SupportsToolAvailabilityDelta: m.deferredToolSupport,
+		DefaultOutputMode:             ai.OutputModeTool,
+		SupportsToolAvailabilityDelta: m.deferredToolSupport,
+		ContextWindow:                 m.contextWindow,
 	}
 }
 
@@ -104,11 +108,15 @@ func NewModel(name string, opts ...Option) *Model {
 	for _, opt := range opts {
 		opt(m)
 	}
+	m.contextWindow = contextwindow.Lookup(m.name, "anthropic", m.baseURL)
 	return m
 }
 
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
+
+// ContextWindow returns the bundled context window. Zero means unknown.
+func (m *Model) ContextWindow() int { return m.contextWindow }
 
 // SupportsNativeTool reports Anthropic native-tool support.
 func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {

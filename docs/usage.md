@@ -102,6 +102,27 @@ func main() {
 
 Use `errors.Is(err, ai.ErrTokenCountingUnsupported)` when a model may not support counting.
 
+## Inspect context-window usage
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
+)
+
+func main() {
+	profile := openai.NewModel("gpt-5").ModelProfile()
+	fmt.Println(profile.ContextWindow)
+}
+```
+
+Bundled OpenAI, Anthropic, and Google models resolve `ModelProfile.ContextWindow` from the `genai-prices` v0.1.6 snapshot. A zero value means the model is unknown or its metadata does not specify a limit. An explicit `ai.NewProfiledModel` profile always wins.
+
+`RunContext.ContextWindowUsed` and `RunInfo.ContextWindowUsed` divide the latest response token count by this window. A fallback model uses the smallest known candidate window. Both methods return `known=false` when either value is unavailable.
+
 ## Per-request and cumulative limits
 
 `PerRequestInputTokenLimit` caps one context window. `InputTokenLimit` accumulates input tokens over the run. A tool loop can stay below the per-request limit while exceeding the cumulative limit.
@@ -109,3 +130,7 @@ Use `errors.Is(err, ai.ErrTokenCountingUnsupported)` when a model may not suppor
 Without pre-request counting, `PerRequestInputTokenLimit` uses the input count reported by each response. A suspended continuation is checked conservatively against its combined input usage.
 
 All zero numeric limits are disabled. `ToolCallLimit` and `CostLimitUSD` use pointers so you can enforce a zero limit explicitly.
+
+## Pricing data updates
+
+The library uses the pricing data bundled with `genai-prices` v0.1.6. That Go module exposes an immutable calculator and no supported background updater. Upgrade the dependency to refresh pricing and context-window metadata.

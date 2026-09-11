@@ -13,6 +13,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime/internal/openaiprotocol"
 	openairt "github.com/Kludex/pydantic-ai-go/ai/realtime/openai"
@@ -80,6 +81,7 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsSessionSeeding = true
 	profile.SupportsThinking = name == "grok-voice-latest" || strings.HasPrefix(name, "grok-voice-think-")
 	profile.EmitsInputSpeechEvents = true
+	profile.ContextWindow = contextwindow.Lookup(name, "x-ai", defaultBaseURL)
 	model := &Model{
 		name: name, apiKey: strings.TrimSpace(os.Getenv("XAI_API_KEY")), baseURL: defaultBaseURL,
 		client: http.DefaultClient, headers: http.Header{}, profile: profile,

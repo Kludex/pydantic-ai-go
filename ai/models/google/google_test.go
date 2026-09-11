@@ -39,6 +39,12 @@ func newNamedServer(t *testing.T, name string, handler http.HandlerFunc, extra .
 	return google.NewModel(name, append(opts, extra...)...)
 }
 
+func TestContextWindow(t *testing.T) {
+	if got := google.NewModel("gemini-2.5-flash").ContextWindow(); got != 1_048_576 {
+		t.Fatalf("unexpected context window %d", got)
+	}
+}
+
 func TestCachedContentSettings(t *testing.T) {
 	temperature := 0.2
 	common := ai.ModelSettings{Temperature: &temperature, ExtraBody: map[string]any{"custom": true}}

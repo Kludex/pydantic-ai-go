@@ -16,6 +16,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 )
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
@@ -38,6 +39,7 @@ type Model struct {
 	responsesFileSearchResults    bool
 	chatWebSearchSupport          *bool
 	chatCompatibility             ChatCompatibility
+	contextWindow                 int
 }
 
 // Option configures a Model.
@@ -288,11 +290,23 @@ func NewModel(name string, opts ...Option) *Model {
 	for _, opt := range opts {
 		opt(m)
 	}
+	m.contextWindow = contextwindow.Lookup(m.name, m.providerName, m.baseURL)
 	return m
 }
 
 // Name returns the model name.
 func (m *Model) Name() string { return m.name }
+
+// ModelProfile returns model behavior and the bundled context window when known.
+func (m *Model) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{
+		DefaultOutputMode: ai.OutputModeTool,
+		ContextWindow:     m.contextWindow,
+	}
+}
+
+// ContextWindow returns the bundled context window. Zero means unknown.
+func (m *Model) ContextWindow() int { return m.contextWindow }
 
 // SupportsNativeTool reports Chat Completions native-tool support.
 func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {

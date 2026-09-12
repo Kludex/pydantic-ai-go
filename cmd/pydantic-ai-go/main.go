@@ -48,6 +48,7 @@ func run(arguments []string) error {
 	if !web {
 		return cli.Run(context.Background(), agent, struct{}{}, cli.Config{MCPConfigPath: *mcpConfig})
 	}
+	ai.SetBannerEnabled(false)
 	var hosts []string
 	if *allowedHosts != "" {
 		hosts = strings.Split(*allowedHosts, ",")

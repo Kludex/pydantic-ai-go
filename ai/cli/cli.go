@@ -66,6 +66,7 @@ func Run[Deps, Output any](
 	}
 	history := append([]ai.ModelMessage(nil), config.History...)
 	usage := ai.Usage{}
+	agent.WriteBanner(output, options...)
 	scanner := bufio.NewScanner(input)
 	for {
 		if _, err := io.WriteString(output, promptLabel); err != nil {

@@ -2,7 +2,7 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@f998089a30c03c8df9ed6da98353fa4c225a9770`.
+Audited upstream baseline: `pydantic/pydantic-ai@86b250f3d5e26f4cb25617a82904c720f690193d`.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 
@@ -19,6 +19,7 @@ Status:
 
 - [x] Typed `Agent[Deps, Output]` and `Run`.
 - [x] Stable application agent identity through `WithAgentName`, static or dependency-rendered descriptions, public agent/run context access, type-safe rendering failures, output-specialization preservation, and OpenTelemetry name/description attribution with explicit telemetry-only name overrides.
+- [x] A concurrency-safe first-run banner for interactive terminals and recognized coding agents, with resolved model, output, function-tool, and user-capability details; automatic instrumentation, CI, and test suppression; environment and API opt-outs; and startup placement in terminal chat sessions.
 - [x] Plain-text and tool-based structured output.
 - [x] Native structured output for OpenAI Chat Completions and Google Gemini.
 - [x] Output validators with model retries via `AddOutputValidator`.
@@ -267,7 +268,7 @@ Status:
 - [x] Compatibility and semantic-versioning policy for public Go APIs, supported Go versions, persisted messages, providers, deprecations, and inspectable errors, plus an unreleased changelog.
 - [x] Public-API benchmarks cover loop overhead, streaming consumption, schema reflection, and eight-way parallel tool execution, with a reproducible `benchstat` comparison guide.
 - [x] Use the tagged `genai-prices` Go `v0.1.6` module release instead of a commit pseudo-version.
-- [x] Audited upstream through `f998089a30c03c8df9ed6da98353fa4c225a9770`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6.
+- [x] Audited upstream through `86b250f3d5e26f4cb25617a82904c720f690193d`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6. Interactive agent runs and terminal chat sessions provide the upstream first-run banner behavior.
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 
@@ -281,6 +282,9 @@ Status:
 - `ba121fcab1` automatic realtime barge-in stands down when interruption is unsupported. Supported models retain playback-aware flushing, truncation, and cancellation.
 - `04c31e937` is implemented through the dedicated OpenAI Codex subscription package, including OAuth, credential rotation, the narrower Responses wire dialect, and model inference.
 - Anthropic token counting retries stale thinking blocks for the current call. Unlike Python's mutable message objects, Go's public model boundary receives value messages and does not mutate caller-owned history to persist count-only recovery state. Generated response metadata preserves recovery across ordinary, serialized, and normalized history.
+- `f6afee204` is permanently inapplicable to the bundled durable backends. They register application-owned callbacks and do not implement Temporal tool activity opt-outs. Durable `OperationID` values already carry `ToolsetKind`, so no Go path imports MCP to identify an operation.
+- `fbd2beb0b` is implemented by the process-wide first-run banner and terminal chat startup banner. Python `rich`, package-distribution discovery, `pytest` blocker exemptions, and inherited thread-lock replacement after `fork` are language/runtime-specific; Go uses an atomic claim, build information, and `go test` detection.
+- `86b250f3d` adds comparisons for the Python library, Harness SDK, Pydantic Graph, and their combined product surface. Those pages and navigation redirects are product documentation, not portable library behavior, and would make incorrect claims if copied into the Go port.
 
 ## Audit status
 

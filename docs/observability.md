@@ -53,6 +53,30 @@ go get go.opentelemetry.io/otel/exporters/stdout/stdouttrace
 
 Use an OTLP exporter instead when you send traces to an observability service. The instrumentation uses the standard OpenTelemetry tracer and meter providers.
 
+## Control the first-run banner
+
+```go
+package main
+
+import ai "github.com/Kludex/pydantic-ai-go/ai"
+
+func main() {
+	ai.SetBannerEnabled(false)
+}
+```
+
+Before you configure instrumentation, the first agent run in a process writes a short banner to `stderr`.
+The banner appears only when `stderr` is a terminal or a recognized coding agent reads the process output.
+It is not shown for instrumented agents, in CI, or under `go test`.
+
+Set `PYDANTIC_AI_NO_BANNER` to any value to disable the banner without changing code.
+You can also call `SetBannerEnabled(false)` before the first run.
+The setting and the once-per-process claim are safe for concurrent runs.
+
+`cli.Run` writes the banner before its first prompt.
+If you build another terminal interface, call `Agent.WriteBanner` with the interface output before you start reading prompts.
+The method omits the tool count when run-scoped capabilities or toolsets cannot be inspected safely before the run.
+
 ## Send telemetry to Logfire
 
 ```go

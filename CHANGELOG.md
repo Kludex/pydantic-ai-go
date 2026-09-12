@@ -17,6 +17,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Added
 
+- A once-per-process interactive first-run banner with resolved agent, model, output, tool, and capability details; coding-agent detection; CI, test, environment, API, and instrumentation suppression; and terminal CLI placement.
 - Context-aware background pricing updates with immediate and hourly downloads, atomic last-good snapshots, shared workers, bounded responses, and caller-provided clients and error handling.
 - A typed agent loop with structured output, tools, retries, usage limits, cancellation, deferred execution, message enqueueing, manual runs, and synchronous or streamed results.
 - OpenAI Chat Completions and Responses, OpenAI Codex subscription authentication with OAuth PKCE and safe credential rotation, Amazon Bedrock Converse with streaming, native output, prompt caching, token counting, Nova code interpreter, inference profiles, guardrails, performance options, request metadata, and prompt variables, Anthropic Messages with legacy Bedrock InvokeModel generation, streaming, and token counting, Google Gemini and Vertex AI, Azure OpenAI, GitHub Copilot, vLLM, Groq, OpenRouter, and Z.AI model providers.

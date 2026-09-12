@@ -273,3 +273,60 @@ func TestIOErrors(t *testing.T) {
 		t.Fatalf("unexpected error output failure: %v", err)
 	}
 }
+
+func TestRunStartsWithBanner(t *testing.T) {
+	oldArgs := os.Args
+	os.Args = []string{"pydantic-ai-go"}
+	t.Cleanup(func() { os.Args = oldArgs })
+	for _, name := range []string{"CI", "PYDANTIC_AI_NO_BANNER", "FORCE_COLOR"} {
+		unsetCLIEnv(t, name)
+	}
+	t.Setenv("AI_AGENT", "test-harness")
+	t.Setenv("NO_COLOR", "1")
+	ai.SetBannerEnabled(true)
+
+	configPath := t.TempDir() + "/mcp.json"
+	if err := os.WriteFile(configPath, []byte(`{"mcpServers":{"docs":{"command":"echo"}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](
+		fakes.NewTestModel(), ai.WithAgentName("terminal-agent"), ai.WithCapabilities(ai.NewInstrumentation()),
+	)
+	agent.AddRawTool(ai.ToolDefinition{
+		Name: "local", Schema: map[string]any{"type": "object", "properties": map[string]any{}},
+	}, func(context.Context, json.RawMessage) (any, error) { return "ok", nil })
+	output := &bytes.Buffer{}
+	if err := cli.Run(context.Background(), agent, struct{}{}, cli.Config{
+		Input: strings.NewReader("/exit\n"), Output: output, MCPConfigPath: configPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	text := output.String()
+	if !strings.Contains(text, "agent: terminal-agent | model: test-model | capabilities: 1") {
+		t.Fatalf("startup banner is missing run details: %q", text)
+	}
+	if strings.Contains(text, "tools:") {
+		t.Fatalf("startup banner reported an incomplete tool count: %q", text)
+	}
+	if strings.Contains(text, "observability: off") {
+		t.Fatalf("instrumented startup banner advertised observability setup: %q", text)
+	}
+	if strings.Index(text, "`---.._|_..---'") > strings.Index(text, "> ") {
+		t.Fatalf("startup banner did not precede the first prompt: %q", text)
+	}
+}
+
+func unsetCLIEnv(t *testing.T, name string) {
+	t.Helper()
+	value, exists := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if exists {
+			_ = os.Setenv(name, value)
+		} else {
+			_ = os.Unsetenv(name)
+		}
+	})
+}

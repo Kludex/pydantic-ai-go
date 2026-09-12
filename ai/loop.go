@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"slices"
 	"strconv"
@@ -263,6 +264,7 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, fmt.Errorf("ai: run capability native-or-local setup: %w", err)
 	}
+	bannerCapabilities := len(capabilities)
 	if limits != (UsageLimits{}) {
 		postRequestLimits := usageLimitsCapability{limits: limits}
 		preRequestLimits := usagePreRequestLimitsCapability{limits: limits}
@@ -282,7 +284,8 @@ func (a *Agent[Deps, Output]) newRun(
 		prompt:           cloneUserPromptPart(prompt),
 		explicitRunModel: cfg.model != nil, staticModelID: cfg.modelID,
 		runModelSelectors: slices.Clone(cfg.modelSelectors), resolvedModels: make(map[string]Model),
-		pendingMessages: &pendingMessageQueue{},
+		pendingMessages:    &pendingMessageQueue{},
+		bannerCapabilities: bannerCapabilities, bannerOutput: bannerOutputType(reflect.TypeFor[Output]()),
 	}
 	if cfg.deferredResults != nil {
 		results := cloneDeferredToolResults(*cfg.deferredResults)
@@ -752,6 +755,8 @@ type run[Deps, Output any] struct {
 	pendingDeferred            *DeferredToolRequests
 	pendingMessages            *pendingMessageQueue
 	runStep                    int
+	bannerCapabilities         int
+	bannerOutput               string
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
 	eventMu              sync.Mutex
@@ -1265,6 +1270,15 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	if err := r.compileCurrentSchemas(request.Params); err != nil {
 		return nil, err
 	}
+	modelID := r.rc.ModelID
+	if modelID == "" {
+		modelID = r.model.Name()
+	}
+	toolCount := len(request.Params.Tools)
+	displayRunBanner(os.Stderr, bannerDetails{
+		name: r.agent.name, model: modelID, output: r.bannerOutput, tools: &toolCount,
+		capabilities: r.bannerCapabilities, observability: true,
+	}, r.runStep != 1 || hasInstrumentationCapability(r.capabilities) || hasInstrumentedModel(r.model))
 	response, err := next(ctx, request.Messages, request.Params)
 	var retry *RetryError
 	if err != nil && !errors.As(err, &retry) {

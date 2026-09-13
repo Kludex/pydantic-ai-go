@@ -2,7 +2,7 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@86b250f3d5e26f4cb25617a82904c720f690193d`.
+Audited upstream baseline: `pydantic/pydantic-ai@5cbacfc8f86d653baa0ca2e31970cbf4f0fcec95`.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 
@@ -268,12 +268,13 @@ Status:
 - [x] Compatibility and semantic-versioning policy for public Go APIs, supported Go versions, persisted messages, providers, deprecations, and inspectable errors, plus an unreleased changelog.
 - [x] Public-API benchmarks cover loop overhead, streaming consumption, schema reflection, and eight-way parallel tool execution, with a reproducible `benchstat` comparison guide.
 - [x] Use the tagged `genai-prices` Go `v0.1.6` module release instead of a commit pseudo-version.
-- [x] Audited upstream through `86b250f3d5e26f4cb25617a82904c720f690193d`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6. Interactive agent runs and terminal chat sessions provide the upstream first-run banner behavior.
+- [x] Audited upstream through `5cbacfc8f86d653baa0ca2e31970cbf4f0fcec95`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6. Interactive agent runs and terminal chat sessions provide the upstream first-run banner behavior. The upstream enterprise-support sales page and unified-site navigation are product-site-only.
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 
 ## Upstream audit notes
 
+- `5cbacfc8f` adds Pydantic's enterprise-support sales page and its unified-site navigation entry. It is permanently inapplicable because this Go port does not offer support from Pydantic AI engineers or use Pydantic's website components and navigation.
 - `ece5a6336` is implemented by the bundled DeepSeek and Together models, including their provider-specific forced-tool behavior and DeepSeek Responses native output.
 - `32505b2a4`, `9a2b7f2e9`, and `e1357f6ad` are covered by generic model names plus Gemini 3.8 thinking rules, GPT-6 Astra phase/cache/reasoning behavior, and Claude Fable/Mythos 5.1 behavior.
 - `f8853dca6`, `716f2ae4a`, and `edcb123c1` are Python overload or internal refactors. Existing Go constructors and shared direct-HTTP request paths already provide the resulting behavior.

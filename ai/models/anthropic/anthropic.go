@@ -433,9 +433,9 @@ type messageParam struct {
 type contentBlock struct {
 	Type string `json:"type"`
 	// text and thinking
-	Text      string `json:"text,omitempty"`
-	Thinking  string `json:"thinking,omitempty"`
-	Signature string `json:"signature,omitempty"`
+	Text      string  `json:"text,omitempty"`
+	Thinking  *string `json:"thinking,omitempty"`
+	Signature string  `json:"signature,omitempty"`
 	// image
 	Source *imageSource `json:"source,omitempty"`
 	// tool_use
@@ -1080,6 +1080,10 @@ func (m *Model) buildPayload(
 	}
 	container := anthropicContainerFromHistory(msgs)
 	containerFromHistory := container != nil
+	if container != nil && !hasAnthropicCodeExecutionTool(params.NativeTools) {
+		container = nil
+		containerFromHistory = false
+	}
 	if len(msgs) > 0 {
 		if response, ok := msgs[len(msgs)-1].(ai.ModelResponse); ok && response.State == ai.ModelResponseStateSuspended {
 			containerFromHistory = false
@@ -1308,6 +1312,16 @@ func hasAnthropicMemoryTool(nativeTools []ai.NativeTool) bool {
 	for _, nativeTool := range nativeTools {
 		switch nativeTool.(type) {
 		case ai.MemoryTool, *ai.MemoryTool:
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnthropicCodeExecutionTool(nativeTools []ai.NativeTool) bool {
+	for _, nativeTool := range nativeTools {
+		switch nativeTool.(type) {
+		case ai.CodeExecutionTool, *ai.CodeExecutionTool:
 			return true
 		}
 	}
@@ -1698,7 +1712,7 @@ func convertResponse(
 			}
 		case ai.ThinkingPart:
 			if p.Signature != "" && (p.ProviderName == "" || p.ProviderName == "anthropic") {
-				blocks = append(blocks, contentBlock{Type: "thinking", Thinking: p.Content, Signature: p.Signature})
+				blocks = append(blocks, contentBlock{Type: "thinking", Thinking: &p.Content, Signature: p.Signature})
 			}
 		case ai.ToolCallPart:
 			blocks = append(blocks, contentBlock{Type: "tool_use", ID: p.ToolCallID, Name: p.ToolName, Input: p.Args})

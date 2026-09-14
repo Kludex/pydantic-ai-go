@@ -335,7 +335,7 @@ func TestCredentialRefreshSingleFlightAndPersistence(t *testing.T) {
 					errorsSeen <- requestErr
 				}()
 			}
-			for tokenCalls.Load() == 0 {
+			for tokenCalls.Load() == 0 || !proactive && codexCalls.Load() < 5 {
 				time.Sleep(time.Millisecond)
 			}
 			close(release)

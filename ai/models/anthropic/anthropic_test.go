@@ -1014,6 +1014,31 @@ func TestAssistantHistoryWithMixedParts(t *testing.T) {
 	}
 }
 
+func TestReplayedThinkingBlockWithEmptyContentKeepsThinkingField(t *testing.T) {
+	var gotBody map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	msgs := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "", Signature: "sig"},
+		ai.ToolCallPart{ToolName: "t", Args: json.RawMessage(`{}`), ToolCallID: "tu1"},
+	}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	blocks := gotBody["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	block := blocks[0].(map[string]any)
+	if block["type"] != "thinking" {
+		t.Fatalf("expected a thinking block first, got %v", blocks)
+	}
+	if thinking, ok := block["thinking"]; !ok || thinking != "" {
+		t.Fatalf(`expected "thinking":"" to be present (not omitted), got %v`, block)
+	}
+}
+
 func TestMultimodalUserPrompt(t *testing.T) {
 	var gotBody map[string]any
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -1703,6 +1728,13 @@ func TestAnthropicContainerAndCodeExecutionSettings(t *testing.T) {
 		t.Fatalf("fresh request reused a container: %#v", body)
 	}
 
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := body["container"]; exists {
+		t.Fatalf("a request without the code execution tool reused a container: %#v", body)
+	}
+
 	legacy := newNamedServer(t, "claude-haiku-4-5", func(http.ResponseWriter, *http.Request) {})
 	latest, err := (anthropic.Settings{
 		CodeExecutionToolVersion: anthropic.CodeExecutionToolVersion20260120,
@@ -2145,7 +2177,9 @@ func TestAnthropicStaleThinkingRecoveryEdges(t *testing.T) {
 		history := []ai.ModelMessage{ai.ModelResponse{ProviderName: "anthropic", ProviderDetails: map[string]any{
 			"container_id": "container",
 		}}}
-		if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err == nil || calls != 1 {
+		if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+		}); err == nil || calls != 1 {
 			t.Fatalf("unexpected container retry: calls=%d err=%v", calls, err)
 		}
 	})

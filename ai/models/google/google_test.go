@@ -1057,25 +1057,32 @@ func TestGoogleNativeToolPartErrors(t *testing.T) {
 	}
 }
 
-func TestGoogleSkipsForeignThinkingPart(t *testing.T) {
+func TestGoogleFiltersThinkingPartsByProvider(t *testing.T) {
 	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		contents := body["contents"].([]any)
-		for _, c := range contents {
-			for _, p := range c.(map[string]any)["parts"].([]any) {
-				if _, thought := p.(map[string]any)["thought"]; thought {
-					t.Errorf("a foreign-provider thinking part reached the request: %+v", p)
+		var thoughts []map[string]any
+		for _, content := range body["contents"].([]any) {
+			for _, part := range content.(map[string]any)["parts"].([]any) {
+				if _, ok := part.(map[string]any)["thought"]; ok {
+					thoughts = append(thoughts, part.(map[string]any))
 				}
 			}
+		}
+		if len(thoughts) != 1 || thoughts[0]["text"] != "reasoning from gemini" ||
+			thoughts[0]["thoughtSignature"] != "signature" {
+			t.Errorf("unexpected thinking parts: %+v", thoughts)
 		}
 		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`))
 	})
 
 	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
 		ai.ThinkingPart{Content: "reasoning from claude", ProviderName: "anthropic"},
+		ai.ThinkingPart{Content: "reasoning from gemini", ProviderName: "google-gla", ProviderDetails: map[string]any{
+			"thought_signature": "signature",
+		}},
 		ai.TextPart{Content: "the answer"},
 	}}}
 	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {

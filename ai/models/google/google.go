@@ -872,7 +872,7 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 				rp.ProviderName, rp.ProviderDetails,
 			)})
 		case ai.ThinkingPart:
-			if rp.ProviderName != "" && rp.ProviderName != model.providerName {
+			if !model.matchesGoogleProvider(rp.ProviderName) {
 				continue
 			}
 			parts = append(parts, part{
@@ -955,25 +955,25 @@ func googlePartMetadata(signature, providerName string) (string, map[string]any)
 }
 
 func (model *Model) googleThoughtSignature(providerName string, details map[string]any) string {
-	if providerName != "" && providerName != model.providerName {
-		knownProvider := false
-		switch model.providerName {
-		case "google", "google-cloud", "google-vertex", "google-gla":
-			knownProvider = true
-		}
-		if !knownProvider {
-			return ""
-		}
-		if model.transport == TransportVertexAI {
-			if providerName != "google-cloud" && providerName != "google-vertex" {
-				return ""
-			}
-		} else if providerName != "google" && providerName != "google-gla" {
-			return ""
-		}
+	if !model.matchesGoogleProvider(providerName) {
+		return ""
 	}
 	signature, _ := details["thought_signature"].(string)
 	return signature
+}
+
+func (model *Model) matchesGoogleProvider(providerName string) bool {
+	if providerName == "" || providerName == model.providerName {
+		return true
+	}
+	if model.providerName != "google" && model.providerName != "google-cloud" &&
+		model.providerName != "google-vertex" && model.providerName != "google-gla" {
+		return false
+	}
+	if model.transport == TransportVertexAI {
+		return providerName == "google-cloud" || providerName == "google-vertex"
+	}
+	return providerName == "google" || providerName == "google-gla"
 }
 
 func convertTool(def ai.ToolDefinition) functionDeclaration {

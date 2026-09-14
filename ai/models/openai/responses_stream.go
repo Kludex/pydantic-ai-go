@@ -755,6 +755,8 @@ func (m *ResponsesModel) responsesEventStream(
 				"response.image_generation_call.completed",
 				"response.file_search_call.in_progress", "response.file_search_call.searching",
 				"response.file_search_call.completed",
+				"response.web_search_call.in_progress", "response.web_search_call.searching",
+				"response.web_search_call.completed",
 				"response.mcp_list_tools.in_progress", "response.mcp_list_tools.completed",
 				"response.mcp_list_tools.failed", "response.mcp_call.in_progress",
 				"response.mcp_call.completed", "response.mcp_call.failed",

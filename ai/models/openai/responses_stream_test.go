@@ -1101,6 +1101,9 @@ func TestResponsesStreamWebSearchNativeTool(t *testing.T) {
 	model := newResponsesServer(t, sseHandler(t, []string{
 		`{"type":"response.created","response":{"id":"response","created_at":100,"status":"in_progress"}}`,
 		`{"type":"response.output_item.added","output_index":0,"item":{"type":"web_search_call","id":"web-1","status":"in_progress"}}`,
+		`{"type":"response.web_search_call.in_progress","item_id":"web-1"}`,
+		`{"type":"response.web_search_call.searching","item_id":"web-1"}`,
+		`{"type":"response.web_search_call.completed","item_id":"web-1"}`,
 		`{"type":"response.output_item.done","output_index":0,"item":{"type":"web_search_call","id":"web-1","status":"completed","action":{"type":"search","query":"Go news"}}}`,
 		`{"type":"response.completed","response":{"id":"response","model":"gpt-5","created_at":100,"status":"completed","usage":{}}}`,
 		`[DONE]`,

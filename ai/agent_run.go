@@ -268,8 +268,8 @@ func (r *AgentRun[Deps, Output]) Err() error {
 func (r *AgentRun[Deps, Output]) Close() error {
 	r.startWorker()
 	r.stopOnce.Do(func() {
-		close(r.stop)
 		r.run.cancellation.cancelRun()
+		close(r.stop)
 	})
 	<-r.done
 	r.stateMu.RLock()

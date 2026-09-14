@@ -6,14 +6,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
-### Changed
-
-- `images.NewImageGenerationCapability` now returns `*images.ImageGenerationCapability[Deps]` so repeated declarations merge direct settings and native configuration. Pass it through `ai.WithCapabilities` as before. If you passed its result to `Agent.AddNativeOrLocal`, use `ai.WithCapabilities` instead.
-- Preserve separate OpenAI Chat text parts when streamed tool calls appear between text chunks, including tagged thinking streams.
-- Capabilities with stable IDs now combine within one registration layer and are replaced as complete wrapper subtrees by matching run capabilities. Invalid collisions and unsafe default merges fail before execution.
-- Dynamic image-generation and X-search fallback subagents now resolve the same native configuration as the outer path. Models without native tool-availability deltas receive provider-neutral synthetic search exchanges without splitting parallel result batches.
-- All library packages now live under `ai/`. The core package uses `github.com/Kludex/pydantic-ai-go/ai`, and subpackages use paths such as `github.com/Kludex/pydantic-ai-go/ai/models/openai`.
-- Browser chat now serves PydanticAI's official `@pydantic/ai-chat-ui` with cached remote or local HTML, model and native-tool selectors, approval continuation, and configuration and health endpoints. `webchat.Config.AllowedHosts` now permits only IP addresses and localhost by default; set it to `[]string{"*"}` only to restore unrestricted host access behind an authentication boundary.
+## [0.4.0] - 2026-09-14
 
 ### Added
 
@@ -41,6 +34,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- `images.NewImageGenerationCapability` now returns `*images.ImageGenerationCapability[Deps]` so repeated declarations merge direct settings and native configuration. Pass it through `ai.WithCapabilities` as before. If you passed its result to `Agent.AddNativeOrLocal`, use `ai.WithCapabilities` instead.
+- Preserve separate OpenAI Chat text parts when streamed tool calls appear between text chunks, including tagged thinking streams.
+- Capabilities with stable IDs now combine within one registration layer and are replaced as complete wrapper subtrees by matching run capabilities. Invalid collisions and unsafe default merges fail before execution.
+- Dynamic image-generation and X-search fallback subagents now resolve the same native configuration as the outer path. Models without native tool-availability deltas receive provider-neutral synthetic search exchanges without splitting parallel result batches.
+- All library packages now live under `ai/`. The core package uses `github.com/Kludex/pydantic-ai-go/ai`, and subpackages use paths such as `github.com/Kludex/pydantic-ai-go/ai/models/openai`.
+- Browser chat now serves PydanticAI's official `@pydantic/ai-chat-ui` with cached remote or local HTML, model and native-tool selectors, approval continuation, and configuration and health endpoints. `webchat.Config.AllowedHosts` now permits only IP addresses and localhost by default; set it to `[]string{"*"}` only to restore unrestricted host access behind an authentication boundary.
 - Forward visible typed custom events through AG-UI and Vercel AI, and add capability-owned attribution, immediate decision dispatch, ordered listeners, listener timeouts, and durable event envelopes.
 - Preserve kind-colliding application tool-return maps, restore uploaded-file serialization defaults, and normalize Vercel URL and JavaScript binary tool outputs.
 - Resolve bundled standard and realtime model context windows from `genai-prices` v0.1.6 metadata, while preserving explicit and unknown profile values.
@@ -105,9 +104,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Fixed
 
+- Accept OpenAI Responses web-search progress events without aborting streamed runs.
 - Keep realtime sessions open when automatic barge-in is enabled for a model without interruption support.
 - Let a realtime tool close its session without racing the connection pump into waiting on that tool.
 
 ### Security
 
 - No security fixes have been released yet.
+
+[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Kludex/pydantic-ai-go/commits/v0.4.0

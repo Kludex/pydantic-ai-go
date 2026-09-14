@@ -219,7 +219,8 @@ func TestResponsesWebSearchNativeTool(t *testing.T) {
 		UserLocation: &ai.WebSearchUserLocation{
 			City: "Paris", Country: "FR", Region: "IDF", Timezone: "Europe/Paris",
 		},
-		AllowedDomains: []string{"go.dev"}, ExternalWebAccess: &external,
+		AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"example.com"},
+		ExternalWebAccess: &external,
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +230,8 @@ func TestResponsesWebSearchNativeTool(t *testing.T) {
 	filters := tool["filters"].(map[string]any)
 	if tool["type"] != "web_search" || tool["search_context_size"] != "high" ||
 		tool["external_web_access"] != false || location["type"] != "approximate" || location["city"] != "Paris" ||
-		filters["allowed_domains"].([]any)[0] != "go.dev" {
+		filters["allowed_domains"].([]any)[0] != "go.dev" ||
+		filters["blocked_domains"].([]any)[0] != "example.com" {
 		t.Fatalf("unexpected web search request: %#v", tool)
 	}
 	if len(response.Parts) != 3 {
@@ -259,6 +261,29 @@ func TestResponsesWebSearchNativeTool(t *testing.T) {
 	if replayed["type"] != "web_search_call" || replayed["id"] != "web-1" ||
 		replayed["action"].(map[string]any)["query"] != "Go news" || replayed["status"] != "completed" {
 		t.Fatalf("unexpected web search replay: %#v", replayed)
+	}
+}
+
+func TestResponsesWebSearchBlockedOnly(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[
+			{"type":"message","id":"message","content":[{"type":"output_text","text":"done"}]}
+		]}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.WebSearchTool{BlockedDomains: []string{"example.com"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	filters := tool["filters"].(map[string]any)
+	if tool["type"] != "web_search" || filters["allowed_domains"] != nil ||
+		filters["blocked_domains"].([]any)[0] != "example.com" {
+		t.Fatalf("unexpected blocked-only web search request: %#v", tool)
 	}
 }
 

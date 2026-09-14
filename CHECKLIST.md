@@ -2,7 +2,7 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@f998089a30c03c8df9ed6da98353fa4c225a9770`.
+Audited upstream baseline: `pydantic/pydantic-ai@8762545fa01fabfee6904e6166dd18aac759a005`.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 
@@ -267,7 +267,7 @@ Status:
 - [x] Compatibility and semantic-versioning policy for public Go APIs, supported Go versions, persisted messages, providers, deprecations, and inspectable errors, plus an unreleased changelog.
 - [x] Public-API benchmarks cover loop overhead, streaming consumption, schema reflection, and eight-way parallel tool execution, with a reproducible `benchstat` comparison guide.
 - [x] Use the tagged `genai-prices` Go `v0.1.6` module release instead of a commit pseudo-version.
-- [x] Audited upstream through `f998089a30c03c8df9ed6da98353fa4c225a9770`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6.
+- [x] Audited upstream through `8762545fa01fabfee6904e6166dd18aac759a005`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, preserved OpenAI Chat text boundaries after tool calls, and OpenAI Responses web-search `blocked_domains`. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6.
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 
@@ -280,6 +280,7 @@ Status:
 - `3dd00d8b86` is implemented through `UpdatePricesInBackground`, using `genai-prices` v0.1.6 immutable calculator snapshots and its canonical remote data URL.
 - `ba121fcab1` automatic realtime barge-in stands down when interruption is unsupported. Supported models retain playback-aware flushing, truncation, and cancellation.
 - `04c31e937` is implemented through the dedicated OpenAI Codex subscription package, including OAuth, credential rotation, the narrower Responses wire dialect, and model inference.
+- `8762545f` ships OpenAI Responses `blocked_domains` through the existing web search filters struct, mirroring the xAI `excluded_domains` field. The CLI banner (`fbd2beb0`) and Temporal activity opt-out fix (`f6afee20`) are Python-only or out of scope per `PLAN.md`.
 - Anthropic token counting retries stale thinking blocks for the current call. Unlike Python's mutable message objects, Go's public model boundary receives value messages and does not mutate caller-owned history to persist count-only recovery state. Generated response metadata preserves recovery across ordinary, serialized, and normalized history.
 
 ## Audit status

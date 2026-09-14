@@ -548,7 +548,12 @@ type responsesWebSearchLocation struct {
 }
 
 type responsesWebSearchFilters struct {
-	AllowedDomains []string `json:"allowed_domains"`
+	// AllowedDomains restricts web search to exact provider domains.
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	// BlockedDomains excludes exact provider search domains. The OpenAI API accepts the
+	// field even when the official SDK type does not yet expose it; the Go adapter renders
+	// it directly to preserve that support.
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
 func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (responsesTool, bool, error) {
@@ -600,16 +605,22 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 			Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
 		}
 	}
-	if len(webSearch.AllowedDomains) > 0 {
-		if providerName == "xai" {
-			tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
-		} else {
-			tool.Filters = &responsesWebSearchFilters{AllowedDomains: slices.Clone(webSearch.AllowedDomains)}
-		}
-	}
 	if providerName == "xai" {
+		if len(webSearch.AllowedDomains) > 0 {
+			tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
+		}
 		tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
 		return tool, true, nil
+	}
+	if len(webSearch.AllowedDomains) > 0 || len(webSearch.BlockedDomains) > 0 {
+		filters := responsesWebSearchFilters{}
+		if len(webSearch.AllowedDomains) > 0 {
+			filters.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
+		}
+		if len(webSearch.BlockedDomains) > 0 {
+			filters.BlockedDomains = slices.Clone(webSearch.BlockedDomains)
+		}
+		tool.Filters = &filters
 	}
 	if webSearch.ExternalWebAccess != nil {
 		external := *webSearch.ExternalWebAccess

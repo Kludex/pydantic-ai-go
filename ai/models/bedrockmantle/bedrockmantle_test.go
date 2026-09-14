@@ -80,7 +80,7 @@ func TestRoutesInterfacesAndQualifiesToolIDs(t *testing.T) {
 		t.Fatal("request preparation mutated caller history")
 	}
 	for _, input := range replayInput {
-		if callID, ok := input["call_id"]; ok && callID != "resp_1:call_0" {
+		if callID, ok := input["call_id"]; ok && callID != "call_0" {
 			t.Fatalf("unexpected replay input: %#v", replayInput)
 		}
 	}

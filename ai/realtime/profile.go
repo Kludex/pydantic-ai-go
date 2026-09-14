@@ -37,9 +37,12 @@ type Profile struct {
 	AudioInputSampleRate int
 	// AudioOutputSampleRate is the produced PCM output rate in hertz.
 	AudioOutputSampleRate int
+	// ContextWindow is the maximum combined input and output token count.
+	// Zero means the limit is unknown.
+	ContextWindow int
 }
 
-// ProfileOverride is a partial profile layer. Pointer booleans can enable or disable a claim.
+// ProfileOverride is a partial profile layer. Pointer fields distinguish omitted and zero values.
 type ProfileOverride struct {
 	// SupportsImageInput overrides image input support.
 	SupportsImageInput *bool
@@ -73,6 +76,8 @@ type ProfileOverride struct {
 	AudioInputSampleRate int
 	// AudioOutputSampleRate replaces the output rate when positive.
 	AudioOutputSampleRate int
+	// ContextWindow replaces the context window. Point to zero to keep it unknown.
+	ContextWindow *int
 }
 
 // DefaultProfile returns conservative provider-neutral defaults.
@@ -114,6 +119,9 @@ func MergeProfile(base Profile, override ProfileOverride) Profile {
 	}
 	if override.AudioOutputSampleRate != 0 {
 		base.AudioOutputSampleRate = override.AudioOutputSampleRate
+	}
+	if override.ContextWindow != nil {
+		base.ContextWindow = *override.ContextWindow
 	}
 	return base
 }

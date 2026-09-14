@@ -827,6 +827,25 @@ func TestRunStreamFallbackEarlyBreakOnReplay(t *testing.T) {
 			t.Fatalf("breakAt %d: result should be nil", breakAt)
 		}
 	}
+
+	fileModel := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.FilePart{Content: ai.BinaryContent{Data: []byte("file"), MediaType: "text/plain"}},
+			ai.TextPart{Content: "done"},
+		}}, nil
+	})
+	fileStream := ai.NewAgent[deps, string](fileModel).RunStream(t.Context(), "go", deps{})
+	for _, err := range fileStream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+		break
+	}
+	if fileStream.Result() != nil {
+		t.Fatal("stopped fallback file replay produced a result")
+	}
 }
 
 func TestRunStreamFallbackModelError(t *testing.T) {

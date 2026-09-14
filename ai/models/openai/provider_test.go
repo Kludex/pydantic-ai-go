@@ -3,6 +3,7 @@ package openai_test
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -550,6 +551,153 @@ func TestOpenAIExtendedChatCompatibility(t *testing.T) {
 	_, err = emptyModel.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}})
 	if err == nil || !strings.Contains(err.Error(), "rendered an empty type") {
 		t.Fatalf("unexpected empty native type error: %v", err)
+	}
+}
+
+func TestOpenAINewChatCompatibilityFields(t *testing.T) {
+	t.Run("reasoning fields", func(t *testing.T) {
+		var body map[string]any
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			_, _ = response.Write([]byte(`{"choices":[{"message":{"reasoning":"preferred","reasoning_content":"fallback","reasoning_text":"copilot","content":"done"},"finish_reason":"stop"}]}`))
+		}))
+		defer server.Close()
+		model := openai.NewModel("model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+			openai.WithChatCompatibility(openai.ChatCompatibility{ReasoningFallback: true, ReasoningText: true}))
+		response, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.ThinkingPart{Content: "old fallback", ID: "reasoning_content"},
+			ai.ThinkingPart{Content: "old preferred", ID: "reasoning"},
+			ai.ThinkingPart{Content: "old copilot", ID: "reasoning_text"},
+		}}}, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		message := body["messages"].([]any)[0].(map[string]any)
+		if message["reasoning"] != "old preferredold copilot" || message["reasoning_content"] != "old fallback" ||
+			message["reasoning_text"] != "old fallbackold preferredold copilot" {
+			t.Fatalf("unexpected replayed reasoning: %#v", message)
+		}
+		if len(response.Parts) != 3 || response.Parts[1].(ai.ThinkingPart).ID != "reasoning" {
+			t.Fatalf("unexpected normalized reasoning: %#v", response.Parts)
+		}
+	})
+
+	t.Run("reasoning content fallback", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			_, _ = response.Write([]byte(`{"choices":[{"message":{"reasoning_content":"fallback","content":"done"},"finish_reason":"stop"}]}`))
+		}))
+		defer server.Close()
+		model := openai.NewModel("model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+			openai.WithChatCompatibility(openai.ChatCompatibility{ReasoningFallback: true}))
+		response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil || response.Parts[0].(ai.ThinkingPart).ID != "reasoning_content" {
+			t.Fatalf("unexpected fallback response: %+v %v", response, err)
+		}
+	})
+
+	for name, responseBody := range map[string]string{
+		"malformed":  `not-json`,
+		"other code": `{"error":{"code":"other"}}`,
+		"direct":     `{"code":"content_filter"}`,
+		"wrapped":    `{"error":{"code":"content_filter","innererror":{"content_filter_result":{"hate":true}}}}`,
+	} {
+		t.Run("azure "+name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				response.WriteHeader(http.StatusBadRequest)
+				_, _ = response.Write([]byte(responseBody))
+			}))
+			defer server.Close()
+			model := openai.NewModel("model", openai.WithProvider(openai.ProviderConfig{
+				Name: "azure", BaseURL: server.URL, HTTPClient: server.Client(),
+			}))
+			result, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+			if name == "direct" || name == "wrapped" {
+				if err != nil || result.FinishReason != ai.FinishReasonContentFilter {
+					t.Fatalf("unexpected filter response: %+v %v", result, err)
+				}
+				if name == "direct" && result.ProviderDetails["content_filter_result"] != nil {
+					t.Fatalf("unexpected direct filter details: %+v", result)
+				}
+				if name == "wrapped" && result.ProviderDetails["content_filter_result"] == nil {
+					t.Fatalf("missing wrapped filter details: %+v", result)
+				}
+			} else if err == nil {
+				t.Fatal("expected Azure API error")
+			}
+		})
+	}
+	t.Run("Azure Responses", func(t *testing.T) {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+			response.WriteHeader(http.StatusBadRequest)
+			_, _ = response.Write([]byte(`{"code":"content_filter"}`))
+		}))
+		defer server.Close()
+		model := openai.NewResponsesModel("model", openai.WithProvider(openai.ProviderConfig{
+			Name: "azure", BaseURL: server.URL, HTTPClient: server.Client(),
+		}))
+		result, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil || result.FinishReason != ai.FinishReasonContentFilter {
+			t.Fatalf("unexpected Responses filter result: %+v %v", result, err)
+		}
+	})
+}
+
+func TestOpenAIReasoningFallbackStream(t *testing.T) {
+	for name, delta := range map[string]string{
+		"preferred": `{"reasoning":"think","reasoning_content":"duplicate"}`,
+		"fallback":  `{"reasoning_content":"think"}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+				response.Header().Set("Content-Type", "text/event-stream")
+				_, _ = fmt.Fprintf(response, "data: {\"choices\":[{\"delta\":%s,\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n", delta)
+			}))
+			defer server.Close()
+			model := openai.NewModel("model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+				openai.WithChatCompatibility(openai.ChatCompatibility{ReasoningFallback: true}))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for event, streamErr := range stream {
+				if streamErr != nil {
+					t.Fatal(streamErr)
+				}
+				if thinking, ok := event.(ai.ThinkingDeltaEvent); ok {
+					if thinking.Delta != "think" {
+						t.Fatalf("unexpected thinking delta: %+v", thinking)
+					}
+					break
+				}
+			}
+		})
+	}
+}
+
+func TestOpenAIReasoningTextStream(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		response.Header().Set("Content-Type", "text/event-stream")
+		_, _ = io.WriteString(response, "data: {\"choices\":[{\"delta\":{\"reasoning_text\":\"think\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
+	}))
+	defer server.Close()
+	model := openai.NewModel("model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+		openai.WithChatCompatibility(openai.ChatCompatibility{ReasoningText: true}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, streamErr := range stream {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		if thinking, ok := event.(ai.ThinkingDeltaEvent); ok {
+			if thinking.ID != "reasoning_text" || thinking.Delta != "think" {
+				t.Fatalf("unexpected reasoning text: %+v", thinking)
+			}
+			break
+		}
 	}
 }
 

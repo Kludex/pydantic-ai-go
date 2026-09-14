@@ -39,6 +39,24 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 		transformer.stopped = !accepted
 		return accepted
 	}
+	if name, payload, visible, custom := ai.CustomEventUI(event); custom {
+		if visible {
+			switch projected := payload.(type) {
+			case Event:
+				yield(projected, nil)
+			case *Event:
+				if projected != nil {
+					yield(*projected, nil)
+				}
+			default:
+				yield(Event{Type: EventCustom, Name: name, Value: payload}, nil)
+			}
+		}
+		if transformer.stopped {
+			return errConsumerStopped
+		}
+		return nil
+	}
 	switch value := event.(type) {
 	case ai.PartStartEvent:
 		switch part := value.Part.(type) {
@@ -245,7 +263,7 @@ func (transformer *eventTransformer) reasoningDelta(yield func(Event, error) boo
 }
 
 func (transformer *eventTransformer) openReasoning(yield func(Event, error) bool) {
-	modern := transformer.version.atLeast(0, 1, 13)
+	modern := transformer.version.atLeast(0, 1, 11)
 	if !transformer.reasoningStarted {
 		kind := EventThinkingStart
 		if modern {
@@ -271,7 +289,7 @@ func (transformer *eventTransformer) openReasoning(yield func(Event, error) bool
 }
 
 func (transformer *eventTransformer) endReasoning(yield func(Event, error) bool, part ai.ThinkingPart) {
-	modern := transformer.version.atLeast(0, 1, 13)
+	modern := transformer.version.atLeast(0, 1, 11)
 	metadata := reasoningMetadata(part)
 	if !transformer.reasoningStarted && (!modern || len(metadata) == 0) {
 		transformer.reasoningID = ""
@@ -309,14 +327,14 @@ func (transformer *eventTransformer) endReasoning(yield func(Event, error) bool,
 }
 
 func (transformer *eventTransformer) reasoningMessageID() string {
-	if transformer.version.atLeast(0, 1, 13) {
+	if transformer.version.atLeast(0, 1, 11) {
 		return transformer.reasoningID
 	}
 	return ""
 }
 
 func (transformer *eventTransformer) reasoningContentType() EventType {
-	if transformer.version.atLeast(0, 1, 13) {
+	if transformer.version.atLeast(0, 1, 11) {
 		return EventReasoningMessageContent
 	}
 	return EventThinkingTextMessageContent
@@ -376,7 +394,7 @@ func (transformer *eventTransformer) startToolCall(
 	}, nil) {
 		return
 	}
-	if kind != "" && transformer.version.atLeast(0, 1, 13) {
+	if kind != "" && transformer.version.atLeast(0, 1, 11) {
 		yield(Event{
 			Type: EventReasoningEncryptedValue, Subtype: "tool-call", EntityID: toolCallID,
 			EncryptedValue: encryptedToolValue(kind, ""),
@@ -409,7 +427,7 @@ func (transformer *eventTransformer) toolResult(
 	yield(Event{
 		Type: EventToolCallResult, MessageID: messageID, Role: "tool", ToolCallID: toolCallID, Content: content,
 	}, nil)
-	if outcome != "" && outcome != ai.ToolReturnOutcomeSuccess && transformer.version.atLeast(0, 1, 13) {
+	if outcome != "" && outcome != ai.ToolReturnOutcomeSuccess && transformer.version.atLeast(0, 1, 11) {
 		yield(Event{
 			Type: EventReasoningEncryptedValue, Subtype: "message", EntityID: messageID,
 			EncryptedValue: encryptedToolValue(kind, outcome),

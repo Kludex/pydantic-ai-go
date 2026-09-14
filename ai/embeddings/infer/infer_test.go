@@ -20,6 +20,8 @@ import (
 )
 
 func TestBuiltInModels(t *testing.T) {
+	t.Setenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+	t.Setenv("GITHUB_COPILOT_API_KEY", "token")
 	tests := []struct {
 		name         string
 		typeCheck    func(embeddings.Model) bool
@@ -44,6 +46,14 @@ func TestBuiltInModels(t *testing.T) {
 		},
 		{
 			name: "zai:embedding-3", providerName: "zai", modelName: "embedding-3",
+			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*openai.Model); return ok },
+		},
+		{
+			name: "vllm:intfloat/e5-mistral-7b-instruct", providerName: "vllm", modelName: "intfloat/e5-mistral-7b-instruct",
+			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*openai.Model); return ok },
+		},
+		{
+			name: "github-copilot:embedding", providerName: "github-copilot", modelName: "embedding",
 			typeCheck: func(model embeddings.Model) bool { _, ok := model.(*openai.Model); return ok },
 		},
 		{
@@ -198,6 +208,16 @@ func TestErrors(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_API_KEY", "")
 	if _, err := infer.Model("azure:model"); err == nil || !strings.Contains(err.Error(), "endpoint") {
 		t.Fatalf("unexpected Azure inference error: %v", err)
+	}
+	t.Setenv("VLLM_BASE_URL", "")
+	if _, err := infer.Model("vllm:model"); err == nil || !strings.Contains(err.Error(), "VLLM_BASE_URL") {
+		t.Fatalf("unexpected vLLM inference error: %v", err)
+	}
+	t.Setenv("GITHUB_COPILOT_API_KEY", "")
+	t.Setenv("GITHUB_COPILOT_API_TOKEN", "")
+	t.Setenv("COPILOT_GITHUB_TOKEN", "")
+	if _, err := infer.Model("github-copilot:model"); err == nil || !strings.Contains(err.Error(), "GITHUB_COPILOT_API_KEY") {
+		t.Fatalf("unexpected Copilot inference error: %v", err)
 	}
 	for _, test := range []struct {
 		name  string

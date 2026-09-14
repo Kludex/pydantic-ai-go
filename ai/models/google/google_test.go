@@ -39,6 +39,12 @@ func newNamedServer(t *testing.T, name string, handler http.HandlerFunc, extra .
 	return google.NewModel(name, append(opts, extra...)...)
 }
 
+func TestContextWindow(t *testing.T) {
+	if got := google.NewModel("gemini-2.5-flash").ContextWindow(); got != 1_048_576 {
+		t.Fatalf("unexpected context window %d", got)
+	}
+}
+
 func TestCachedContentSettings(t *testing.T) {
 	temperature := 0.2
 	common := ai.ModelSettings{Temperature: &temperature, ExtraBody: map[string]any{"custom": true}}
@@ -389,6 +395,22 @@ func TestThinkingSettings(t *testing.T) {
 			model: "gemini-3-pro", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelXHigh},
 			level: "HIGH", include: true, hasInclude: true,
 		},
+		"flash minimum snaps up": {
+			model: "gemini-3.8-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
+			level: "LOW", include: true, hasInclude: true,
+		},
+		"pro medium tie snaps down": {
+			model: "gemini-3-pro-preview", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
+			level: "LOW", include: true, hasInclude: true,
+		},
+		"flash lite image low snaps down": {
+			model: "gemini-3.1-flash-lite-image", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow},
+			level: "MINIMAL", include: true, hasInclude: true,
+		},
+		"flash lite image medium snaps up": {
+			model: "gemini-3.1-flash-lite-image", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
+			level: "HIGH", include: true, hasInclude: true,
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var body map[string]any
@@ -600,7 +622,7 @@ func TestRequestTextResponse(t *testing.T) {
 	if textPart.ProviderName != "google" || textPart.ProviderDetails["thought_signature"] != "signature" {
 		t.Fatalf("thought signature metadata lost: %+v", textPart)
 	}
-	if resp.Usage.InputTokens != 12 || resp.Usage.OutputTokens != 5 || resp.Usage.Requests != 1 ||
+	if resp.Usage.InputTokens != 19 || resp.Usage.OutputTokens != 5 || resp.Usage.Requests != 1 ||
 		resp.Usage.CacheReadTokens != 4 || resp.Usage.ReasoningTokens != 2 ||
 		resp.Usage.InputAudioTokens != 2 || resp.Usage.CacheAudioReadTokens != 1 ||
 		resp.Usage.OutputAudioTokens != 1 || resp.Usage.Details["cached_content_tokens"] != 4 ||

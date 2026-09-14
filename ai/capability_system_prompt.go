@@ -13,6 +13,14 @@ type ReinjectSystemPrompt struct {
 	ReplaceExisting bool
 }
 
+// CapabilityID identifies the single system-prompt reinjection policy for a run.
+func (ReinjectSystemPrompt) CapabilityID() string { return "reinject_system_prompt" }
+
+// CombineCapabilities merges repeated reinjection declarations.
+func (ReinjectSystemPrompt) CombineCapabilities(capabilities []Capability) (Capability, error) {
+	return MergeCapabilities(capabilities...)
+}
+
 // Setup implements Capability.
 func (ReinjectSystemPrompt) Setup(*CapabilityRegistry) error { return nil }
 

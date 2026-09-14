@@ -21,7 +21,7 @@ func NewMCPServerCapability[Deps any](
 	local := filterMCPToolset(config.Local, config.Native.AllowedTools)
 	var options []NativeOrLocalOption
 	if toolsetIsNil(local) {
-		options = nativeRequirementOption("no local MCP fallback was configured")
+		options = nativeFallbackRequirementOption("no local MCP fallback was configured")
 	}
 	return NewNativeOrLocalToolset(config.Native, local, options...)
 }

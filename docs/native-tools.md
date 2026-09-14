@@ -504,7 +504,9 @@ func main() {
 }
 ```
 
-Only files whose `ProviderName` matches the selected provider are attached. Anthropic places uploads on the first user message so the cacheable prefix stays stable. It also retains and reuses the response container ID through subsequent tool turns.
+Only files whose `ProviderName` matches the selected provider are attached. Anthropic places uploads on every user turn except a turn containing only tool results. This keeps uploads in the active generation turn without breaking native tool pairing. It reuses the response container ID and retries once without a history-derived ID when an expired container returns a server error.
+
+Anthropic native web-search counts are preserved as `Usage.Details["web_search_requests"]` and included in automatic pricing.
 
 Use `WithResponsesCodeExecutionOutputs` when you need OpenAI code-interpreter logs and generated images:
 
@@ -640,7 +642,13 @@ func main() {
 
 The outer model uses native image generation when it supports the configured tool. Otherwise, it receives a local `generate_image` function. That function runs the fallback model through `NewImageOutputAgent` and returns the generated `BinaryContent` as rich tool content. The image settings apply to both paths.
 
-Set `ResolveModel` instead of `Model` when dependencies choose the fallback model for each tool call. The resolver receives a detached `RunContext` and may run concurrently. A dedicated image endpoint such as `gpt-image-1` cannot run the conversational subagent; use an image-capable conversational model instead.
+Set `ResolveModel` instead of `Model` when dependencies choose the fallback model for each tool call. The resolver receives a detached `RunContext` and may run concurrently.
+
+Use `NewDynamicImageGenerationCapabilityWithFallback` when dependencies choose image settings. The same `ImageGenerationFunc` configures the outer native path and the fallback subagent. The fallback resolves it again from the outer tool-call context, so dependency-based quality, size, and output settings cannot fall back to zero-value defaults.
+
+`NewDynamicXSearchCapabilityWithFallback` applies the same rule to X search. Its fallback subagent receives the resolved handle filters, date bounds, media-understanding flags, and raw-output setting. A resolver error stops the fallback instead of silently enabling a default native tool.
+
+A dedicated image endpoint cannot run the conversational subagent. Pass an [`images.Generator`](images.md) as `images.CapabilityConfig.Generator`, or pass its model as `FallbackModel`. The native tool remains preferred when the selected conversational model supports it. Portable geometry reaches either path, including native settings resolved for the current request. An edit-only request fails if it reaches the direct fallback because the local `generate_image` call has no reference-image input.
 
 `ImageGenerationTool` exposes portable action, background, input-fidelity, moderation, model, compression, format, partial-image, quality, size, and aspect-ratio settings. OpenAI Responses maps `1:1`, `2:3`, and `3:2` aspect ratios to supported pixel sizes. Unsupported or conflicting OpenAI dimensions fail before transport.
 

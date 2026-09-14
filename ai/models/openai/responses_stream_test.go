@@ -1320,9 +1320,8 @@ func TestResponsesStreamProtocolErrors(t *testing.T) {
 	}{
 		{name: "malformed", chunks: []string{`not json`}, want: "parse Responses stream"},
 		{name: "error", chunks: []string{`{"type":"error","error":{"code":"busy","message":"later"}}`}, want: "busy"},
-		{name: "failed", chunks: []string{`{"type":"response.failed","response":{"status":"failed","error":{"code":"bad","message":"request"}}}`}, want: "bad: request"},
-		{name: "incomplete", chunks: []string{`{"type":"response.incomplete","response":{"status":"incomplete"}}`}, want: "incomplete"},
 		{name: "unknown", chunks: []string{`{"type":"mystery"}`}, want: "unknown Responses stream"},
+		{name: "invalid terminal output", chunks: []string{`{"type":"response.failed","response":{"status":"failed","output":[{"type":"mcp_approval_request"}]}}`}, want: "MCP approval requests"},
 		{name: "missing completed", chunks: []string{`{"type":"response.in_progress"}`, `[DONE]`}, want: "without response.completed"},
 	}
 	for _, test := range tests {
@@ -1333,6 +1332,52 @@ func TestResponsesStreamProtocolErrors(t *testing.T) {
 				t.Fatalf("expected %q error, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestResponsesStreamTerminalFinishReasons(t *testing.T) {
+	for name, test := range map[string]struct {
+		chunk string
+		want  ai.FinishReason
+		raw   any
+	}{
+		"failed": {
+			chunk: `{"type":"response.failed","response":{"id":"id","model":"served","status":"failed","error":{"code":"bad","message":"request"},"output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"partial"}]}]}}`,
+			want:  ai.FinishReasonError, raw: "failed",
+		},
+		"incomplete": {
+			chunk: `{"type":"response.incomplete","response":{"id":"id","status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[{"id":"message","type":"message","content":[{"type":"refusal","refusal":"blocked"}]}]}}`,
+			want:  ai.FinishReasonContentFilter, raw: nil,
+		},
+		"refusal without status": {
+			chunk: `{"type":"response.incomplete","response":{"id":"id","output":[{"id":"message","type":"message","content":[{"type":"refusal","refusal":"blocked"}]}]}}`,
+			want:  ai.FinishReasonContentFilter, raw: nil,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, []string{test.chunk}))
+			events, err := collect(t, model, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			finish := events[len(events)-1].(ai.FinishEvent)
+			if finish.FinishReason != test.want || finish.ProviderDetails["finish_reason"] != test.raw {
+				t.Fatalf("unexpected finish event: %+v", finish)
+			}
+		})
+	}
+}
+
+func TestResponsesTerminalSnapshotConsumerBreak(t *testing.T) {
+	model := newResponsesServer(t, sseHandler(t, []string{
+		`{"type":"response.failed","response":{"id":"id","status":"failed","output":[{"id":"message","type":"message","content":[{"type":"output_text","text":"partial"}]}]}}`,
+	}))
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+		break
 	}
 }
 

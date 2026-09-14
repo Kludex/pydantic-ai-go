@@ -43,7 +43,8 @@ type ModelRequest struct {
 	ConversationID string
 	// Metadata contains detached application request data.
 	Metadata map[string]any
-	// State reports complete or interrupted request construction.
+	// State reports complete or interrupted request construction. An interrupted
+	// request can have no parts when cancellation preceded every tool result.
 	State RequestState
 }
 
@@ -340,7 +341,8 @@ const SynthesizedToolReturnMetadataKey = "pydantic_ai_synthesized_tool_return"
 type ToolReturn struct {
 	// ReturnValue is the primary model-visible tool result.
 	ReturnValue any
-	// Content adds model-visible rich user content beside the result.
+	// Content adds model-visible rich user content beside the result. File
+	// content is framed with the originating tool name, call ID, and file ID.
 	Content []UserContent
 	// Metadata is detached application-only result data.
 	Metadata map[string]any

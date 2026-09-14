@@ -106,6 +106,19 @@ func (fallback *FallbackModel) Models() []Model {
 	return append([]Model(nil), fallback.models...)
 }
 
+// ContextWindow returns the smallest known candidate context window.
+// Candidates with unknown windows do not constrain the result.
+func (fallback *FallbackModel) ContextWindow() int {
+	window := 0
+	for _, model := range fallback.models {
+		candidate := modelContextWindow(model)
+		if candidate > 0 && (window == 0 || candidate < window) {
+			window = candidate
+		}
+	}
+	return window
+}
+
 // Request tries each model until one returns an accepted response.
 func (fallback *FallbackModel) Request(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,

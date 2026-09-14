@@ -96,7 +96,7 @@ func main() {
 }
 ```
 
-`infer.Model` requires a provider prefix. It supports the bundled `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, `ollama`, `openrouter`, `voyageai`, and `zai` providers. It also resolves OpenAI-compatible `alibaba`, `cerebras`, `crusoe`, `deepseek`, `fireworks`, `github`, `heroku`, `litellm`, `moonshotai`, `nebius`, `ovhcloud`, `sambanova`, `snowflake`, `together`, and `vercel` endpoints.
+`infer.Model` requires a provider prefix. It supports the bundled `openai`, `azure`, `bedrock`, `cohere`, `google`, `google-cloud`, `ollama`, `openrouter`, `vllm`, `voyageai`, and `zai` providers. It also resolves OpenAI-compatible `alibaba`, `cerebras`, `crusoe`, `deepseek`, `fireworks`, `github`, `github-copilot`, `heroku`, `litellm`, `moonshotai`, `nebius`, `ovhcloud`, `sambanova`, `snowflake`, `together`, and `vercel` endpoints.
 
 LiteLLM requires `LITELLM_BASE_URL`. Snowflake requires `SNOWFLAKE_BASE_URL`. Other compatible aliases use their public endpoint by default and accept a provider-specific base URL environment variable. Use `infer.WithProvider` to replace any resolver. Use `infer.WithAzureConfig` or `infer.WithVertexConfig` to configure the matching cloud provider.
 
@@ -171,7 +171,9 @@ func main() {
 }
 ```
 
-The provider name and URL remain attached to each result. `Result.Price` uses them with the bundled `genai-prices` snapshot. The `openrouter` and `zai` inference prefixes reuse their chat-provider endpoint and credential configuration. OpenRouter also forwards application attribution.
+The provider name and URL remain attached to each result. `Result.Price` uses them with the bundled `genai-prices` snapshot. The `openrouter`, `vllm`, `github-copilot`, and `zai` inference prefixes reuse their chat-provider endpoint and credential configuration. OpenRouter also forwards application attribution.
+
+Set `VLLM_BASE_URL` and use `infer.Model("vllm:intfloat/e5-mistral-7b-instruct")` for a vLLM server running a supported embedding model. `VLLM_API_KEY` is optional. GitHub Copilot currently rejects its `/embeddings` endpoint; its inference prefix exists only for upstream API compatibility.
 
 ## Local models with Ollama
 

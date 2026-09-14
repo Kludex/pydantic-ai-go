@@ -366,10 +366,7 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 		if len(wp.Content) > 0 {
 			_ = json.Unmarshal(wp.Content, &content)
 		}
-		content, err := narrowToolReturnContent(content)
-		if err != nil {
-			return nil, fmt.Errorf("ai: unmarshal tool return content: %w", err)
-		}
+		content = narrowToolReturnContent(content)
 		part := ToolReturnPart{
 			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID, ToolKind: wp.ToolKind,
 			Outcome: wp.Outcome, Metadata: wp.Metadata,
@@ -448,10 +445,7 @@ func unmarshalResponsePart(wp wirePart) (ResponsePart, error) {
 		if err := json.Unmarshal(wp.Content, &content); err != nil {
 			return nil, fmt.Errorf("ai: unmarshal native tool return content: %w", err)
 		}
-		content, err := narrowToolReturnContent(content)
-		if err != nil {
-			return nil, fmt.Errorf("ai: unmarshal native tool return content: %w", err)
-		}
+		content = narrowToolReturnContent(content)
 		part := NativeToolReturnPart{
 			ToolName: wp.ToolName, Content: content, ToolCallID: wp.ToolCallID, ToolKind: wp.ToolKind,
 			Metadata: wp.Metadata, Outcome: wp.Outcome, ProviderName: wp.ProviderName,
@@ -570,7 +564,7 @@ func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
 		case UploadedFile:
 			items = append(items, wireUserContent{
 				Kind: "uploaded-file", FileID: item.FileID, ProviderName: item.ProviderName,
-				MediaType: item.MediaType, Identifier: item.Identifier, VendorMetadata: item.VendorMetadata,
+				MediaType: item.ResolvedMediaType(), Identifier: item.ResolvedIdentifier(), VendorMetadata: item.VendorMetadata,
 			})
 		default:
 			return nil, fmt.Errorf("ai: unknown user content type %T", c)
@@ -647,10 +641,13 @@ func unmarshalUserContentItem(item wireUserContent) (UserContent, error) {
 		ttl, err := point.ResolvedTTL()
 		return CachePoint{TTL: ttl}, err
 	case "uploaded-file":
-		return UploadedFile{
+		file := UploadedFile{
 			FileID: item.FileID, ProviderName: item.ProviderName, MediaType: item.MediaType,
 			Identifier: item.Identifier, VendorMetadata: item.VendorMetadata,
-		}, nil
+		}
+		file.MediaType = file.ResolvedMediaType()
+		file.Identifier = file.ResolvedIdentifier()
+		return file, nil
 	default:
 		return nil, fmt.Errorf("ai: unknown user content kind %q", item.Kind)
 	}

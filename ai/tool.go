@@ -56,13 +56,17 @@ type RunContext[Deps any] struct {
 	// UsageLimits contains detached limits applied to this run.
 	UsageLimits UsageLimits
 
-	usage           *Usage
-	usageMu         *sync.Mutex
-	toolCalls       *atomic.Int64
-	messages        *[]ModelMessage
-	revealedTools   *map[string]struct{}
-	pendingMessages *pendingMessageQueue
-	cancellation    *runCancellation
+	usage              *Usage
+	usageMu            *sync.Mutex
+	toolCalls          *atomic.Int64
+	messages           *[]ModelMessage
+	revealedTools      *map[string]struct{}
+	pendingMessages    *pendingMessageQueue
+	cancellation       *runCancellation
+	emitEvent          func(StreamEvent, string, string, string) error
+	capabilityID       string
+	info               *RunInfo
+	resolvedNativeTool map[string]NativeTool
 }
 
 // Usage returns the usage accumulated so far in this run.
@@ -77,7 +81,42 @@ func (rc *RunContext[Deps]) Usage() Usage {
 }
 
 // Messages returns the conversation so far in this run.
-func (rc *RunContext[Deps]) Messages() []ModelMessage { return cloneModelMessages(*rc.messages) }
+func (rc *RunContext[Deps]) Messages() []ModelMessage {
+	if rc.messages == nil {
+		return nil
+	}
+	return cloneModelMessages(*rc.messages)
+}
+
+// ContextWindowUsed returns the fraction of the active model's context window
+// occupied by the latest model response. The boolean is false before a
+// response or when its usage or the model's context window is unknown.
+func (rc *RunContext[Deps]) ContextWindowUsed() (float64, bool) {
+	var messages []ModelMessage
+	if rc.messages != nil {
+		messages = *rc.messages
+	}
+	return contextWindowUsed(rc.Model, messages)
+}
+
+func contextWindowUsed(model Model, messages []ModelMessage) (float64, bool) {
+	window := modelContextWindow(model)
+	if window <= 0 {
+		return 0, false
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		response, ok := messages[index].(ModelResponse)
+		if !ok {
+			continue
+		}
+		tokens := response.Usage.TotalTokens()
+		if tokens <= 0 {
+			return 0, false
+		}
+		return float64(tokens) / float64(window), true
+	}
+	return 0, false
+}
 
 func (rc *RunContext[Deps]) clone() *RunContext[Deps] {
 	cloned := *rc
@@ -87,6 +126,12 @@ func (rc *RunContext[Deps]) clone() *RunContext[Deps] {
 	cloned.ModelSettings = rc.ModelSettings.Clone()
 	cloned.UsageLimits.ToolCallLimit = clonePointer(rc.UsageLimits.ToolCallLimit)
 	cloned.UsageLimits.CostLimitUSD = clonePointer(rc.UsageLimits.CostLimitUSD)
+	if rc.resolvedNativeTool != nil {
+		cloned.resolvedNativeTool = make(map[string]NativeTool, len(rc.resolvedNativeTool))
+		for id, tool := range rc.resolvedNativeTool {
+			cloned.resolvedNativeTool[id] = cloneNativeTool(tool)
+		}
+	}
 	return &cloned
 }
 
@@ -102,6 +147,23 @@ func (rc *RunContext[Deps]) RevealedTools() []string {
 	}
 	slices.Sort(names)
 	return names
+}
+
+// Emit adds an application event, or a capability event from a capability-owned tool.
+// Tool attribution is filled when the event does not already provide it.
+func (rc *RunContext[Deps]) capabilityInfo() *RunInfo {
+	info := *rc.info
+	info.capabilityID = rc.capabilityID
+	info.toolName = rc.ToolName
+	info.toolCallID = rc.ToolCallID
+	return &info
+}
+
+func (rc *RunContext[Deps]) Emit(event StreamEvent) error {
+	if rc.emitEvent == nil {
+		return fmt.Errorf("ai: event emission is only available during an agent run")
+	}
+	return rc.emitEvent(event, rc.capabilityID, rc.ToolName, rc.ToolCallID)
 }
 
 // Cancel requests cancellation of this run. In-flight model and tool calls
@@ -143,6 +205,12 @@ func (c *runCancellation) finish() {
 	defer c.mutex.Unlock()
 	c.active = false
 	c.cancel(nil)
+}
+
+func (c *runCancellation) isActive() bool {
+	c.mutex.Lock()
+	defer c.mutex.Unlock()
+	return c.active
 }
 
 // ToolPrepareFunc customizes one tool definition before each model request.

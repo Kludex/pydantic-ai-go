@@ -3,7 +3,9 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 )
@@ -21,11 +23,18 @@ type Capability interface {
 	Setup(reg *CapabilityRegistry) error
 }
 
-// CapabilityIDProvider optionally gives instruction contributions a stable
-// application source ID.
+// CapabilityIDProvider gives a capability a stable identity. The ID qualifies
+// instruction names and lets a run replace the matching agent capability.
 type CapabilityIDProvider interface {
-	// CapabilityID returns the stable source ID used to qualify instruction names.
+	// CapabilityID returns the stable identity of this capability.
 	CapabilityID() string
+}
+
+// CapabilityCombiner resolves repeated capabilities with the same ID in one
+// registration layer. Implementations must not mutate the supplied values.
+type CapabilityCombiner interface {
+	// CombineCapabilities combines same-type capabilities in registration order.
+	CombineCapabilities(capabilities []Capability) (Capability, error)
 }
 
 // CapabilityRegistry collects what a capability contributes at setup.
@@ -38,12 +47,37 @@ type CapabilityRegistry struct {
 }
 
 type capabilityTool struct {
-	def  ToolDefinition
-	call func(ctx context.Context, rawArgs json.RawMessage) (any, error)
+	def             ToolDefinition
+	call            func(ctx context.Context, info *RunInfo, rawArgs json.RawMessage) (any, error)
+	capabilityIndex int
+}
+
+type capabilitySetup struct {
+	instructionSourceID string
+	instructions        []InstructionPart
+	tools               []capabilityTool
+	nativeTools         []NativeTool
+	nativeOrLocal       []any
+	settings            []ModelSettings
 }
 
 // AddTool registers a tool from an explicit definition, like Agent.AddRawTool.
 func (r *CapabilityRegistry) AddTool(def ToolDefinition, fn func(ctx context.Context, rawArgs json.RawMessage) (any, error)) {
+	if fn == nil {
+		panic("ai: capability tool function must not be nil")
+	}
+	r.AddContextTool(def, func(ctx context.Context, _ *RunInfo, rawArgs json.RawMessage) (any, error) {
+		return fn(ctx, rawArgs)
+	})
+}
+
+// AddContextTool registers a tool that can inspect the untyped run context and emit capability events.
+func (r *CapabilityRegistry) AddContextTool(
+	def ToolDefinition, fn func(ctx context.Context, info *RunInfo, rawArgs json.RawMessage) (any, error),
+) {
+	if fn == nil {
+		panic("ai: capability tool function must not be nil")
+	}
 	r.tools = append(r.tools, capabilityTool{def: def, call: fn})
 }
 
@@ -104,6 +138,10 @@ type RunInfo struct {
 	metadata         *runMetadataState
 	model            func() Model
 	systemPrompts    func(context.Context) ([]SystemPromptPart, error)
+	capabilityID     string
+	toolName         string
+	toolCallID       string
+	emitEvent        func(StreamEvent, string, string, string) error
 }
 
 // AgentName returns the configured application agent name.
@@ -145,6 +183,34 @@ func (ri *RunInfo) Model() Model {
 		return nil
 	}
 	return ri.model()
+}
+
+// ContextWindowUsed returns the fraction of the active model's context window
+// occupied by the latest model response. The boolean is false when unknown.
+func (ri *RunInfo) ContextWindowUsed() (float64, bool) {
+	var messages []ModelMessage
+	if ri.messages != nil {
+		messages = *ri.messages
+	}
+	return contextWindowUsed(ri.Model(), messages)
+}
+
+// CapabilityID returns the run-local identity of the capability receiving a callback.
+// It is empty outside a capability-specific callback.
+func (ri *RunInfo) CapabilityID() string { return ri.capabilityID }
+
+// ToolName returns the current capability-owned tool name, or an empty string outside tool execution.
+func (ri *RunInfo) ToolName() string { return ri.toolName }
+
+// ToolCallID returns the current model-assigned call ID, or an empty string outside tool execution.
+func (ri *RunInfo) ToolCallID() string { return ri.toolCallID }
+
+// Emit adds an event from a capability callback to this run's event stream.
+func (ri *RunInfo) Emit(event StreamEvent) error {
+	if ri.emitEvent == nil {
+		return fmt.Errorf("ai: event emission is only available during an agent run")
+	}
+	return ri.emitEvent(event, ri.capabilityID, ri.toolName, ri.toolCallID)
 }
 
 // ModelRequestFunc continues the model-request chain.
@@ -222,8 +288,9 @@ type ModelIDResolver interface {
 }
 
 type capabilitySettingsLayer struct {
-	static   []ModelSettings
-	provider ModelSettingsProvider
+	static       []ModelSettings
+	provider     ModelSettingsProvider
+	capabilityID string
 }
 
 func capabilityModelSettingsProvider(capability Capability) ModelSettingsProvider {
@@ -288,10 +355,6 @@ func CombineCapabilities(capabilities ...Capability) Capability {
 func flattenCapabilities(capabilities []Capability) []Capability {
 	var flattened []Capability
 	for _, capability := range capabilities {
-		if combined, ok := capability.(combinedCapability); ok {
-			flattened = append(flattened, flattenCapabilities(combined.capabilities)...)
-			continue
-		}
 		flattened = append(flattened, capability)
 		if wrapper, ok := capability.(interface{ wrappedCapability() Capability }); ok {
 			wrapped := wrapper.wrappedCapability()
@@ -303,10 +366,32 @@ func flattenCapabilities(capabilities []Capability) []Capability {
 	return flattened
 }
 
+func capabilityRunIDs(capabilities []Capability) []string {
+	ids := make([]string, len(capabilities))
+	taken := make(map[string]struct{}, len(capabilities))
+	for index, capability := range capabilities {
+		ids[index] = capabilityIdentity(capability)
+		if ids[index] == "" {
+			name := strings.TrimPrefix(fmt.Sprintf("%T", capability), "*")
+			if separator := strings.LastIndexByte(name, '.'); separator >= 0 {
+				name = name[separator+1:]
+			}
+			for {
+				ids[index] = fmt.Sprintf("<%s:%s>", name, newRunID()[:6])
+				if _, exists := taken[ids[index]]; !exists {
+					break
+				}
+			}
+		}
+		taken[ids[index]] = struct{}{}
+	}
+	return ids
+}
+
 // WithCapabilities registers capabilities on the agent. Slice order is
 // middleware order: the first capability is outermost.
 func WithCapabilities(capabilities ...Capability) Option {
-	capabilities = flattenCapabilities(capabilities)
+	capabilities = slices.Clone(capabilities)
 	return func(config *config) {
 		config.capabilities = append(config.capabilities, capabilities...)
 	}

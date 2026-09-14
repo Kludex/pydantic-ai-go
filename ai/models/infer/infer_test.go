@@ -3,6 +3,8 @@ package infer_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -18,25 +20,42 @@ func (valueModel) Request(context.Context, []ai.ModelMessage, ai.ModelRequestPar
 }
 
 func TestModels(t *testing.T) {
+	t.Setenv("VLLM_BASE_URL", "http://localhost:8000/v1")
+	t.Setenv("DEEPSEEK_API_KEY", "token")
+	t.Setenv("GITHUB_COPILOT_API_KEY", "token")
+	t.Setenv("TOGETHER_API_KEY", "token")
+	codexHome := t.TempDir()
+	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(
+		`{"tokens":{"access_token":"access","refresh_token":"refresh","account_id":"account"}}`,
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CODEX_HOME", codexHome)
 	tests := []struct {
 		name     string
 		provider string
 	}{
 		{"openai:gpt-5-mini", "openai"},
 		{"openai-responses:gpt-5-mini", "openai"},
+		{"openai-codex:gpt-5.6-luna", "openai-codex"},
 		{"anthropic:claude-sonnet-4-5", "anthropic"},
 		{"google:gemini-2.5-flash", "google"},
+		{"github-copilot:claude-haiku-4.5", "github-copilot"},
 		{"bedrock:us.amazon.nova-lite-v1:0", "bedrock"},
 		{"bedrock-mantle:openai.gpt-5.6-luna", "bedrock-mantle"},
 		{"cerebras:gpt-oss-120b", "cerebras"},
 		{"cohere:command-r7b-12-2024", "cohere"},
 		{"crusoe:openai/gpt-oss-120b", "crusoe"},
+		{"deepseek:deepseek-chat", "deepseek"},
+		{"deepseek-responses:deepseek-v4-flash", "deepseek"},
 		{"groq:openai/gpt-oss-20b", "groq"},
 		{"huggingface:Qwen/Qwen3-32B", "huggingface"},
 		{"mistral:mistral-large-latest", "mistral"},
 		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},
 		{"snowflake:claude-sonnet-4-6", "snowflake"},
+		{"together:Qwen/Qwen3-32B", "together"},
+		{"vllm:Qwen/Qwen3-32B", "vllm"},
 		{"xai:grok-4.3", "xai"},
 		{"zai:glm-5.3-flash", "zai"},
 	}

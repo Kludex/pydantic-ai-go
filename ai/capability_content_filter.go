@@ -9,6 +9,14 @@ import (
 // terminal error, including responses that contain partial text.
 type RaiseContentFilterError struct{}
 
+// CapabilityID identifies the single content-filter policy for a run.
+func (RaiseContentFilterError) CapabilityID() string { return "raise_content_filter_error" }
+
+// CombineCapabilities collapses repeated identical content-filter policies.
+func (RaiseContentFilterError) CombineCapabilities(capabilities []Capability) (Capability, error) {
+	return MergeCapabilities(capabilities...)
+}
+
 // Setup implements Capability.
 func (RaiseContentFilterError) Setup(*CapabilityRegistry) error { return nil }
 

@@ -31,7 +31,7 @@ const (
 	EventToolCallEnd EventType = "TOOL_CALL_END"
 	// EventToolCallResult returns one local tool result.
 	EventToolCallResult EventType = "TOOL_CALL_RESULT"
-	// EventThinkingStart begins legacy reasoning output before AG-UI 0.1.13.
+	// EventThinkingStart begins legacy reasoning output before AG-UI 0.1.11.
 	EventThinkingStart EventType = "THINKING_START"
 	// EventThinkingEnd closes legacy reasoning output.
 	EventThinkingEnd EventType = "THINKING_END"
@@ -41,15 +41,15 @@ const (
 	EventThinkingTextMessageContent EventType = "THINKING_TEXT_MESSAGE_CONTENT"
 	// EventThinkingTextMessageEnd closes legacy reasoning text.
 	EventThinkingTextMessageEnd EventType = "THINKING_TEXT_MESSAGE_END"
-	// EventReasoningStart begins AG-UI 0.1.13+ reasoning output.
+	// EventReasoningStart begins AG-UI 0.1.11+ reasoning output.
 	EventReasoningStart EventType = "REASONING_START"
-	// EventReasoningEnd closes AG-UI 0.1.13+ reasoning output.
+	// EventReasoningEnd closes AG-UI 0.1.11+ reasoning output.
 	EventReasoningEnd EventType = "REASONING_END"
-	// EventReasoningMessageStart begins AG-UI 0.1.13+ reasoning text.
+	// EventReasoningMessageStart begins AG-UI 0.1.11+ reasoning text.
 	EventReasoningMessageStart EventType = "REASONING_MESSAGE_START"
-	// EventReasoningMessageContent appends AG-UI 0.1.13+ reasoning text.
+	// EventReasoningMessageContent appends AG-UI 0.1.11+ reasoning text.
 	EventReasoningMessageContent EventType = "REASONING_MESSAGE_CONTENT"
-	// EventReasoningMessageEnd closes AG-UI 0.1.13+ reasoning text.
+	// EventReasoningMessageEnd closes AG-UI 0.1.11+ reasoning text.
 	EventReasoningMessageEnd EventType = "REASONING_MESSAGE_END"
 	// EventReasoningEncryptedValue preserves opaque reasoning metadata.
 	EventReasoningEncryptedValue EventType = "REASONING_ENCRYPTED_VALUE"

@@ -69,6 +69,7 @@ type chatChunk struct {
 			Refusal          string             `json:"refusal"`
 			ReasoningContent string             `json:"reasoning_content"`
 			Reasoning        string             `json:"reasoning"`
+			ReasoningText    string             `json:"reasoning_text"`
 			ReasoningDetails []reasoningDetail  `json:"reasoning_details"`
 			Annotations      []map[string]any   `json:"annotations"`
 			ExecutedTools    []chatExecutedTool `json:"executed_tools"`
@@ -120,6 +121,10 @@ func (m *Model) eventStream(
 				continue
 			}
 			if data == "[DONE]" {
+				if m.chatCompatibility.RequireFinishReason && finishReason == "" && ctx.Err() == nil {
+					yield(nil, &APIError{Body: "stream ended without a finish_reason", ProviderName: m.providerName})
+					return
+				}
 				var timestamp time.Time
 				if created != 0 {
 					timestamp = time.Unix(created, 0).UTC()
@@ -250,6 +255,25 @@ func (m *Model) eventStream(
 						return
 					}
 				}
+				if m.chatCompatibility.ReasoningText && delta.ReasoningText != "" {
+					if !yield(ai.ThinkingDeltaEvent{
+						PartID: "thinking", Delta: delta.ReasoningText, ID: "reasoning_text",
+						ProviderName: m.providerName,
+					}, nil) {
+						return
+					}
+				}
+				if m.chatCompatibility.ReasoningFallback {
+					content, id := delta.Reasoning, "reasoning"
+					if content == "" {
+						content, id = delta.ReasoningContent, "reasoning_content"
+					}
+					if content != "" && !yield(ai.ThinkingDeltaEvent{
+						PartID: "thinking", Delta: content, ID: id, ProviderName: m.providerName,
+					}, nil) {
+						return
+					}
+				}
 			}
 			if m.chatCompatibility.ExtendedMetadata && len(delta.Annotations) > 0 {
 				annotations = append(annotations, delta.Annotations...)
@@ -318,6 +342,26 @@ func (m *Model) eventStream(
 			yield(nil, ai.NewModelTransportError(ctx, m, "read stream", err))
 			return
 		}
-		yield(nil, fmt.Errorf("openai: stream ended without [DONE]"))
+		if m.chatCompatibility.RequireFinishReason && finishReason == "" && ctx.Err() == nil {
+			yield(nil, &APIError{Body: "stream ended without a finish_reason", ProviderName: m.providerName})
+			return
+		}
+		var timestamp time.Time
+		if created != 0 {
+			timestamp = time.Unix(created, 0).UTC()
+			providerDetails["timestamp"] = timestamp
+		}
+		if finishReason != "" {
+			providerDetails["finish_reason"] = finishReason
+		}
+		if len(providerDetails) == 0 {
+			providerDetails = nil
+		}
+		yield(ai.FinishEvent{
+			Usage: usage, ModelName: modelName, Timestamp: timestamp,
+			ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
+			ProviderResponseID: responseID, FinishReason: m.chatFinishReason(finishReason),
+			State: ai.ModelResponseStateComplete,
+		}, nil)
 	}
 }

@@ -25,8 +25,8 @@ func TestFunctionModelDefaults(t *testing.T) {
 	model := fakes.NewFunctionModel(func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
 		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "hi"}}}, nil
 	})
-	if model.Name() != "function-model" {
-		t.Fatal("unexpected name")
+	if model.Name() != "function-model" || !model.ModelProfile().SupportsToolAvailabilityDelta {
+		t.Fatal("unexpected function model profile")
 	}
 	resp, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
 	if err != nil {
@@ -54,8 +54,9 @@ func TestFunctionModelPreservesUsageAndErrors(t *testing.T) {
 }
 
 func TestTestModelName(t *testing.T) {
-	if fakes.NewTestModel().Name() != "test-model" {
-		t.Fatal("unexpected name")
+	model := fakes.NewTestModel()
+	if model.Name() != "test-model" || !model.ModelProfile().SupportsToolAvailabilityDelta {
+		t.Fatal("unexpected test model profile")
 	}
 }
 

@@ -56,10 +56,16 @@ type CapabilityOrderingProvider interface {
 	CapabilityOrdering() CapabilityOrdering
 }
 
-func sortCapabilities(capabilities []Capability, available []Capability) ([]Capability, error) {
-	capabilities = slices.Clone(capabilities)
-	orderings := make([]CapabilityOrdering, len(capabilities))
-	for index, capability := range capabilities {
+type capabilityEntry struct {
+	capability Capability
+	rootID     string
+}
+
+func sortCapabilityEntries(entries []capabilityEntry, available []Capability) ([]capabilityEntry, error) {
+	entries = slices.Clone(entries)
+	orderings := make([]CapabilityOrdering, len(entries))
+	for index, entry := range entries {
+		capability := entry.capability
 		provider, ok := capability.(CapabilityOrderingProvider)
 		if !ok {
 			continue
@@ -73,17 +79,17 @@ func sortCapabilities(capabilities []Capability, available []Capability) ([]Capa
 	for index, ordering := range orderings {
 		for _, required := range ordering.Requires {
 			if !matchesAnyCapability(required, available) {
-				return nil, fmt.Errorf("capability %T requires %s, but it is not registered", capabilities[index], required)
+				return nil, fmt.Errorf("capability %T requires %s, but it is not registered", entries[index].capability, required)
 			}
 		}
 	}
-	if len(capabilities) < 2 {
-		return capabilities, nil
+	if len(entries) < 2 {
+		return entries, nil
 	}
 
-	edges := make([][]bool, len(capabilities))
+	edges := make([][]bool, len(entries))
 	for index := range edges {
-		edges[index] = make([]bool, len(capabilities))
+		edges[index] = make([]bool, len(entries))
 	}
 	for index, ordering := range orderings {
 		switch ordering.Position {
@@ -101,22 +107,22 @@ func sortCapabilities(capabilities []Capability, available []Capability) ([]Capa
 			}
 		}
 		for _, wrapped := range ordering.Wraps {
-			for other, capability := range capabilities {
-				if other != index && wrapped.matches(capability) {
+			for other, entry := range entries {
+				if other != index && wrapped.matches(entry.capability) {
 					edges[index][other] = true
 				}
 			}
 		}
 		for _, wrapper := range ordering.WrappedBy {
-			for other, capability := range capabilities {
-				if other != index && wrapper.matches(capability) {
+			for other, entry := range entries {
+				if other != index && wrapper.matches(entry.capability) {
 					edges[other][index] = true
 				}
 			}
 		}
 	}
 
-	indegree := make([]int, len(capabilities))
+	indegree := make([]int, len(entries))
 	for _, outgoing := range edges {
 		for target, edge := range outgoing {
 			if edge {
@@ -124,11 +130,11 @@ func sortCapabilities(capabilities []Capability, available []Capability) ([]Capa
 			}
 		}
 	}
-	ordered := make([]Capability, 0, len(capabilities))
-	used := make([]bool, len(capabilities))
-	for len(ordered) < len(capabilities) {
+	ordered := make([]capabilityEntry, 0, len(entries))
+	used := make([]bool, len(entries))
+	for len(ordered) < len(entries) {
 		next := -1
-		for index := range capabilities {
+		for index := range entries {
 			if !used[index] && indegree[index] == 0 {
 				next = index
 				break
@@ -138,7 +144,7 @@ func sortCapabilities(capabilities []Capability, available []Capability) ([]Capa
 			return nil, fmt.Errorf("circular capability ordering constraints")
 		}
 		used[next] = true
-		ordered = append(ordered, capabilities[next])
+		ordered = append(ordered, entries[next])
 		for target, edge := range edges[next] {
 			if edge {
 				indegree[target]--

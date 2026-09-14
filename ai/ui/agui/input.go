@@ -274,6 +274,7 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 			}
 			var content any
 			_ = json.Unmarshal(encoded, &content)
+			content = ai.NormalizeToolReturnContent(content)
 			toolName := toolNames[message.ToolCallID]
 			if toolName == "" {
 				toolName = message.Name

@@ -957,6 +957,7 @@ func TestResponsesPhaseReplayUsesModelProfileAndOverride(t *testing.T) {
 		{name: "gpt 5.4", modelName: "gpt-5.4", phase: "final_answer", wantPhase: true},
 		{name: "gpt 5.5", modelName: "gpt-5.5-mini", phase: "commentary", wantPhase: true},
 		{name: "gpt 5.6", modelName: "gpt-5.6-terra", phase: "final_answer", wantPhase: true},
+		{name: "gpt 6 Astra", modelName: "gpt-6-astra", phase: "final_answer", wantPhase: true},
 		{name: "Bedrock model ID", modelName: "openai.gpt-5.6-luna", phase: "final_answer", wantPhase: true},
 		{name: "unsupported", modelName: "gpt-5", phase: "commentary"},
 		{name: "enabled override", modelName: "gpt-5", options: []openai.Option{
@@ -1484,6 +1485,11 @@ func TestResponsesNativeDeferredToolSearch(t *testing.T) {
 	params := ai.ModelRequestParams{
 		Tools: []ai.ToolDefinition{search}, DeferredTools: []ai.ToolDefinition{first, second}, AllowText: true,
 	}
+	if !model.SupportsToolAvailabilityDelta(params) || model.SupportsToolAvailabilityDelta(ai.ModelRequestParams{
+		DeferredTools: []ai.ToolDefinition{first},
+	}) {
+		t.Fatal("unexpected deferred tool support")
+	}
 	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "find"}}}}
 	response, err := model.Request(t.Context(), messages, params)
 	if err != nil {
@@ -1894,6 +1900,26 @@ func TestRecordedResponsesToolRun(t *testing.T) {
 	}
 }
 
+func TestResponsesCompatibleReasoningContentHistory(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = response.Write([]byte(`{"id":"response","model":"compatible","status":"completed","output":[],"usage":{}}`))
+	}, openai.WithChatCompatibility(openai.ChatCompatibility{ResponsesReasoningContent: true}))
+	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "private", ID: "rs_1", ProviderName: "openai"},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	item := body["input"].([]any)[0].(map[string]any)
+	if item["content"].([]any)[0].(map[string]any)["text"] != "private" {
+		t.Fatalf("reasoning content was not replayed: %#v", body)
+	}
+}
+
 func TestResponsesAssistantHistoryWithThinking(t *testing.T) {
 	var gotBody map[string]any
 	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
@@ -1916,6 +1942,38 @@ func TestResponsesAssistantHistoryWithThinking(t *testing.T) {
 		input[0].(map[string]any)["encrypted_content"] != "signature" ||
 		input[1].(map[string]any)["role"] != "assistant" {
 		t.Fatalf("provider reasoning metadata was not round-tripped: %v", input)
+	}
+}
+
+func TestResponsesDoesNotReplaySyntheticChatReasoningID(t *testing.T) {
+	var gotBody map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"gpt-5","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"ok"}]}],"usage":{}}`))
+	})
+	history := []ai.ModelMessage{ai.ModelResponse{ProviderName: "openai", Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "thinking", ID: "reasoning", ProviderName: "openai"},
+	}}}
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	input := gotBody["input"].([]any)
+	if len(input) != 1 || input[0].(map[string]any)["id"] != nil ||
+		input[0].(map[string]any)["content"] != "<think>\nthinking\n</think>" {
+		t.Fatalf("synthetic reasoning ID reached Responses: %#v", input)
+	}
+	foreign := []ai.ModelMessage{ai.ModelResponse{ProviderName: "other", Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "private", ID: "reasoning", ProviderName: "other"},
+		ai.TextPart{Content: "visible"},
+	}}}
+	if _, err := model.Request(t.Context(), foreign, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	input = gotBody["input"].([]any)
+	if len(input) != 1 || input[0].(map[string]any)["content"] != "visible" {
+		t.Fatalf("foreign reasoning was replayed: %#v", input)
 	}
 }
 

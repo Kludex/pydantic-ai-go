@@ -239,7 +239,7 @@ func prepareDirectRequest(
 	if err != nil {
 		return nil, ModelRequestParams{}, err
 	}
-	messages, err = PrepareModelMessages(model, messages)
+	messages, err = prepareModelMessages(model, messages, &params)
 	if err != nil {
 		return nil, ModelRequestParams{}, err
 	}

@@ -200,6 +200,44 @@ func TestTransformToolResultChunks(t *testing.T) {
 	}
 }
 
+func TestTransformCustomEvents(t *testing.T) {
+	hidden := false
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.NewCustomEvent("progress", map[string]int{"done": 2}).ProjectForUI(func(data map[string]int) any {
+			return data["done"]
+		}), nil)
+		event := ai.NewCustomEvent("internal", "secret").SetUIVisible(hidden)
+		yield(event, nil)
+		yield(ai.NewCustomEvent("passthrough", "ignored").ProjectForUI(func(string) any {
+			return vercel.Chunk{Type: "data-status", ID: "status-1", Data: map[string]any{"ready": true}}
+		}), nil)
+		yield(ai.NewCustomEvent("pointer", "ignored").ProjectForUI(func(string) any {
+			return &vercel.Chunk{Type: "data-pointer", Data: true}
+		}), nil)
+		yield(ai.NewCustomEvent("nil-pointer", "ignored").ProjectForUI(func(string) any {
+			return (*vercel.Chunk)(nil)
+		}), nil)
+		yield(ai.NewCustomEvent("invalid", "ignored").ProjectForUI(func(string) any {
+			return vercel.Chunk{Type: vercel.ChunkStart}
+		}), nil)
+		yield(ai.NewCapabilityEvent("index", "status", 1), nil)
+	})
+	var custom []vercel.Chunk
+	for chunk, err := range vercel.TransformStream(stream, "") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.HasPrefix(string(chunk.Type), "data-") {
+			custom = append(custom, chunk)
+		}
+	}
+	if len(custom) != 5 || custom[0].Type != "data-progress" || custom[0].Data != 2 ||
+		custom[1].Type != "data-status" || custom[1].ID != "status-1" || custom[2].Type != "data-pointer" ||
+		custom[3].Type != "data-nil-pointer" || custom[4].Type != "data-invalid" {
+		t.Fatalf("unexpected custom chunks: %#v", custom)
+	}
+}
+
 func TestToolResultMetadataValidation(t *testing.T) {
 	tests := []vercel.Chunk{
 		{Type: vercel.ChunkStart},

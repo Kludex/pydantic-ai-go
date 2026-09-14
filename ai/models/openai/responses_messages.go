@@ -73,15 +73,16 @@ func prepareResponsesFunctionTool(definition ai.ToolDefinition, strictSupport bo
 }
 
 type responsesMessageConverter struct {
-	ctx                    context.Context
-	providerName           string
-	clientToolSearch       bool
-	serverToolSearch       bool
-	deferred               map[string]ai.ToolDefinition
-	rendered               map[string]struct{}
-	strictSupport          bool
-	phaseSupport           bool
-	promptCacheBreakpoints bool
+	ctx                       context.Context
+	providerName              string
+	clientToolSearch          bool
+	serverToolSearch          bool
+	deferred                  map[string]ai.ToolDefinition
+	rendered                  map[string]struct{}
+	strictSupport             bool
+	phaseSupport              bool
+	promptCacheBreakpoints    bool
+	responsesReasoningContent bool
 }
 
 func (c *responsesMessageConverter) convert(msg ai.ModelMessage) ([]responsesInput, error) {
@@ -297,11 +298,23 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				Type: "compaction", ID: part.ID, EncryptedContent: encryptedContent,
 			})
 		case ai.ThinkingPart:
-			if (part.ProviderName == "" || part.ProviderName == c.providerName) &&
-				(part.ID != "" || part.Signature != "") {
-				out = append(out, responsesInput{
-					Type: "reasoning", ID: part.ID, EncryptedContent: part.Signature,
-				})
+			if part.ProviderName != "" && part.ProviderName != c.providerName {
+				continue
+			}
+			syntheticChatID := part.ID == "content" || part.ID == "reasoning" || part.ID == "reasoning_content" ||
+				part.ID == "reasoning_text"
+			if syntheticChatID && part.Signature == "" {
+				if part.Content != "" {
+					out = append(out, responsesInput{Role: "assistant", Content: "<think>\n" + part.Content + "\n</think>"})
+				}
+				continue
+			}
+			if part.ID != "" || part.Signature != "" {
+				input := responsesInput{Type: "reasoning", ID: part.ID, EncryptedContent: part.Signature}
+				if c.responsesReasoningContent && part.ID != "" && part.Content != "" {
+					input.Content = []map[string]string{{"type": "reasoning_text", "text": part.Content}}
+				}
+				out = append(out, input)
 			}
 		case ai.ToolCallPart:
 			id := ""

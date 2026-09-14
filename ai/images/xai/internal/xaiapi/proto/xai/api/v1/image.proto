@@ -1,0 +1,115 @@
+// Source: xai-org/xai-sdk-python v1.18.0 (a2231b51520e590f1df3c497f99bd95cd893dc53).
+syntax = "proto3";
+
+package xai_api;
+
+import "google/protobuf/timestamp.proto";
+import "xai/api/v1/usage.proto";
+
+option go_package = "github.com/Kludex/pydantic-ai-go/ai/images/xai/internal/xaiapi";
+
+enum ImageDetail {
+  DETAIL_INVALID = 0;
+  DETAIL_AUTO = 1;
+  DETAIL_LOW = 2;
+  DETAIL_HIGH = 3;
+}
+
+enum ImageFormat {
+  IMG_FORMAT_INVALID = 0;
+  IMG_FORMAT_BASE64 = 1;
+  IMG_FORMAT_URL = 2;
+}
+
+enum ImageQuality {
+  IMG_QUALITY_INVALID = 0;
+  IMG_QUALITY_LOW = 1;
+  IMG_QUALITY_MEDIUM = 2;
+  IMG_QUALITY_HIGH = 3;
+}
+
+enum ImageAspectRatio {
+  IMG_ASPECT_RATIO_INVALID = 0;
+  IMG_ASPECT_RATIO_1_1 = 1;
+  IMG_ASPECT_RATIO_3_4 = 2;
+  IMG_ASPECT_RATIO_4_3 = 3;
+  IMG_ASPECT_RATIO_9_16 = 4;
+  IMG_ASPECT_RATIO_16_9 = 5;
+  IMG_ASPECT_RATIO_2_3 = 6;
+  IMG_ASPECT_RATIO_3_2 = 7;
+  IMG_ASPECT_RATIO_AUTO = 8;
+  IMG_ASPECT_RATIO_9_19_5 = 9;
+  IMG_ASPECT_RATIO_19_5_9 = 10;
+  IMG_ASPECT_RATIO_9_20 = 11;
+  IMG_ASPECT_RATIO_20_9 = 12;
+  IMG_ASPECT_RATIO_1_2 = 13;
+  IMG_ASPECT_RATIO_2_1 = 14;
+}
+
+enum ImageResolution {
+  IMG_RESOLUTION_INVALID = 0;
+  IMG_RESOLUTION_1K = 1;
+  IMG_RESOLUTION_2K = 2;
+}
+
+message GenerateImageRequest {
+  string prompt = 1;
+  string model = 2;
+  optional int32 n = 3;
+  string user = 4;
+  ImageUrlContent image = 5;
+  ImageFormat format = 11;
+  reserved 13;
+  optional ImageAspectRatio aspect_ratio = 14;
+  optional ImageResolution resolution = 15;
+  repeated ImageUrlContent images = 17;
+  optional StorageOptions storage_options = 19;
+}
+
+message StorageOptions {
+  string filename = 1;
+  optional int64 expires_after = 2;
+  optional PublicUrlOptions public_url = 3;
+}
+
+message PublicUrlOptions {
+  optional int64 expires_after = 1;
+}
+
+message FileOutput {
+  string file_id = 1;
+  string filename = 2;
+  reserved 3;
+  optional string public_url = 4;
+  optional google.protobuf.Timestamp public_url_expires_at = 5;
+  optional google.protobuf.Timestamp expires_at = 6;
+  optional string public_url_error = 7;
+}
+
+message ImageResponse {
+  repeated GeneratedImage images = 1;
+  string model = 2;
+  SamplingUsage usage = 3;
+}
+
+message GeneratedImage {
+  oneof image {
+    string base64 = 1;
+    string url = 3;
+  }
+  bool respect_moderation = 4;
+  optional FileOutput file_output = 8;
+  optional string storage_error = 9;
+}
+
+message ImageUrlContent {
+  oneof source {
+    string image_url = 1;
+    string file_id = 3;
+  }
+  ImageDetail detail = 2;
+}
+
+service Image {
+  rpc GenerateImage(GenerateImageRequest) returns (ImageResponse);
+}

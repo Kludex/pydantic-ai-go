@@ -211,11 +211,15 @@ The bundled providers use the same `ai.Model` interface.
 | --- | --- | --- |
 | OpenAI Chat Completions | `openai.NewModel("gpt-5-mini")` | `OPENAI_API_KEY` |
 | OpenAI Responses | `openai.NewResponsesModel("gpt-5-mini")` | `OPENAI_API_KEY` |
+| OpenAI Codex subscription | `openaicodex.NewModel("gpt-5.6-luna")` | Codex CLI or caller-owned credential source |
 | Azure OpenAI | `azure.NewModel("deployment", azure.Config{})` | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_KEY` |
 | Amazon Bedrock | `bedrock.NewModel("us.amazon.nova-lite-v1:0")` | Standard AWS SDK configuration |
 | Amazon Bedrock Mantle | `bedrockmantle.NewModel("openai.gpt-5.6-luna")` | `AWS_BEARER_TOKEN_BEDROCK` or standard AWS SDK configuration |
 | Anthropic | `anthropic.NewModel("claude-sonnet-4-5")` | `ANTHROPIC_API_KEY` |
 | Google Gemini | `google.NewModel("gemini-2.5-flash")` | `GOOGLE_API_KEY` |
+| DeepSeek Chat Completions | `deepseek.NewModel("deepseek-chat")` | `DEEPSEEK_API_KEY` |
+| DeepSeek Responses | `deepseek.NewResponsesModel("deepseek-v4-flash")` | `DEEPSEEK_API_KEY` |
+| GitHub Copilot | `githubcopilot.NewModel("claude-haiku-4.5")` | `GITHUB_COPILOT_API_KEY` |
 | Cohere | `cohere.NewModel("command-r7b-12-2024")` | `CO_API_KEY` |
 | Crusoe | `crusoe.NewModel("openai/gpt-oss-120b")` | `CRUSOE_API_KEY` |
 | Cerebras | `cerebras.NewModel("gpt-oss-120b")` | `CEREBRAS_API_KEY` |
@@ -225,10 +229,12 @@ The bundled providers use the same `ai.Model` interface.
 | Ollama | `ollama.NewModel("qwen3")` | `OLLAMA_BASE_URL`, `OLLAMA_API_KEY` |
 | OpenRouter | `openrouter.NewModel("anthropic/claude-sonnet-4.6")` | `OPENROUTER_API_KEY` |
 | Snowflake Cortex | `snowflake.NewModel("claude-sonnet-4-6")` | `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_TOKEN` |
+| Together AI | `together.NewModel("Qwen/Qwen3-32B")` | `TOGETHER_API_KEY` |
+| vLLM | `vllm.NewModel("Qwen/Qwen3-32B")` | `VLLM_BASE_URL`, `VLLM_API_KEY` |
 | xAI | `xai.NewModel("grok-4.3")` | `XAI_API_KEY` |
 | Z.AI | `zai.NewModel("glm-5.3-flash")` | `ZAI_API_KEY` |
 
-Provider options configure caller-owned clients, endpoints, credentials, and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints and Azure API versions. See [Amazon Bedrock](docs/bedrock.md) for AWS SDK configuration and Converse behavior.
+Provider options configure caller-owned clients, endpoints, credentials, and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints and Azure API versions. See [OpenAI Codex subscription](docs/openai-codex.md) for read-only CLI credentials, OAuth PKCE, and rotated credential storage. See [Amazon Bedrock](docs/bedrock.md) for AWS SDK configuration and Converse behavior.
 
 ## Test an agent without network calls
 
@@ -305,6 +311,7 @@ func TestAgent(t *testing.T) {
 | Add OpenTelemetry or send telemetry to Logfire | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |
 | Evaluate an agent | [`evals.NewTextTask` or `evals.NewTask`](docs/evals.md) |
 | Generate query or document vectors | [`embeddings.Embedder`](docs/embeddings.md) |
+| Generate or edit images directly | [`images.Generator`](docs/images.md) |
 | Call a model without an agent | `RequestModel` or `StreamModel` |
 | Drive a run one event at a time | `AgentRun` |
 

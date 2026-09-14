@@ -66,7 +66,7 @@ func suspendedRunOptions(history []ModelMessage, opts []RunOption) []RunOption {
 func (a *Agent[Deps, Output]) runPrompt(ctx context.Context, prompt UserPromptPart, deps Deps, opts []RunOption) (result *RunResult[Output], err error) {
 	cfg := buildRunConfig(opts)
 	capabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
-	if hasEventStreamCapability(capabilities) {
+	if hasEventStreamCapability(capabilities) || len(a.eventListeners) > 0 {
 		stream := a.runStreamPrompt(ctx, prompt, deps, opts, false)
 		for _, streamErr := range stream.Events() {
 			if streamErr != nil {
@@ -138,21 +138,66 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, fmt.Errorf("ai: run model, model ID, and model selector are mutually exclusive")
 	}
-	availableCapabilities := append(slices.Clone(a.capabilities), cfg.capabilities...)
-	runCapabilities, err := sortCapabilities(cfg.capabilities, availableCapabilities)
+	runRoots, err := combineCapabilityLayer(cfg.capabilities)
+	if err != nil {
+		cancellation.finish()
+		return nil, fmt.Errorf("ai: run capability composition: %w", err)
+	}
+	if err := validateCapabilityLayers(a.capabilityRoots, runRoots); err != nil {
+		cancellation.finish()
+		return nil, fmt.Errorf("ai: run capability composition: %w", err)
+	}
+	overridden := make(map[string]struct{}, len(runRoots))
+	for _, capability := range runRoots {
+		if id := capabilityIdentity(capability); id != "" {
+			overridden[id] = struct{}{}
+		}
+	}
+	var agentCapabilities []Capability
+	var setups []capabilitySetup
+	for index, capability := range a.capabilities {
+		if _, replaced := overridden[a.capabilityRootIDs[index]]; replaced && a.capabilityRootIDs[index] != "" {
+			continue
+		}
+		agentCapabilities = append(agentCapabilities, capability)
+		setups = append(setups, a.capabilitySetups[index])
+	}
+	runEntries, err := sortCapabilityEntries(
+		capabilityEntriesForRoots(runRoots), append(slices.Clone(agentCapabilities), flattenCapabilities(runRoots)...),
+	)
 	if err != nil {
 		cancellation.finish()
 		return nil, fmt.Errorf("ai: run capability ordering: %w", err)
 	}
-	capabilities := append(slices.Clone(a.capabilities), runCapabilities...)
-	runCapabilityInstructions := []InstructionPart(nil)
-	capSettings := slices.Clone(a.capSettings)
-	var runCapabilityTools []capabilityTool
-	var runCapabilityNativeTools []NativeTool
-	var runNativeOrLocal []any
-	capInstructionIDs := make(map[string]struct{}, len(a.capInstructionIDs)+len(runCapabilities))
-	for id := range a.capInstructionIDs {
-		capInstructionIDs[id] = struct{}{}
+	runCapabilities := make([]Capability, len(runEntries))
+	for index, entry := range runEntries {
+		runCapabilities[index] = entry.capability
+	}
+	capabilities := append(slices.Clone(agentCapabilities), runCapabilities...)
+	var capabilityInstructions []InstructionPart
+	var capSettings []capabilitySettingsLayer
+	var capabilityTools []capabilityTool
+	var capabilityNativeTools []NativeTool
+	var nativeOrLocal []any
+	capInstructionIDs := make(map[string]struct{}, len(capabilities))
+	appendSetup := func(capability Capability, setup capabilitySetup) {
+		capabilityInstructions = append(capabilityInstructions, cloneInstructionParts(setup.instructions)...)
+		capabilityIndex := len(capSettings) + 1
+		for _, tool := range setup.tools {
+			tool.capabilityIndex = capabilityIndex
+			capabilityTools = append(capabilityTools, tool)
+		}
+		capabilityNativeTools = append(capabilityNativeTools, CloneNativeTools(setup.nativeTools)...)
+		nativeOrLocal = append(nativeOrLocal, setup.nativeOrLocal...)
+		capSettings = append(capSettings, capabilitySettingsLayer{
+			static: cloneModelSettingsSlice(setup.settings), provider: capabilityModelSettingsProvider(capability),
+		})
+	}
+	for index, capability := range agentCapabilities {
+		if sourceID := setups[index].instructionSourceID; sourceID != "" {
+			capInstructionIDs[sourceID] = struct{}{}
+		}
+		appendSetup(capability, setups[index])
 	}
 	for _, capability := range runCapabilities {
 		registry := &CapabilityRegistry{}
@@ -160,31 +205,35 @@ func (a *Agent[Deps, Output]) newRun(
 			cancellation.finish()
 			return nil, fmt.Errorf("ai: run capability setup: %w", err)
 		}
-		source, err := capabilityInstructionSource(capability)
-		if err != nil {
-			cancellation.finish()
-			return nil, fmt.Errorf("ai: run capability instructions: %w", err)
+		var source *InstructionSource
+		if capabilityContributesInstructions(capability, registry.instructions) {
+			source, err = capabilityInstructionSource(capability)
+			if err != nil {
+				cancellation.finish()
+				return nil, fmt.Errorf("ai: run capability instructions: %w", err)
+			}
 		}
 		instructions, err := qualifyInstructionParts(registry.instructions, source)
 		if err != nil {
 			cancellation.finish()
 			return nil, fmt.Errorf("ai: run capability instructions: %w", err)
 		}
+		instructionSourceID := ""
 		if source != nil && capabilityContributesInstructions(capability, instructions) {
-			if _, duplicate := capInstructionIDs[source.ID]; duplicate {
+			instructionSourceID = source.ID
+			if _, duplicate := capInstructionIDs[instructionSourceID]; duplicate {
 				cancellation.finish()
 				return nil, fmt.Errorf(
-					"ai: capability ID %q is used by multiple capabilities that contribute instructions", source.ID,
+					"ai: run capability instructions: capability ID %q is used by multiple capabilities that contribute instructions",
+					instructionSourceID,
 				)
 			}
-			capInstructionIDs[source.ID] = struct{}{}
+			capInstructionIDs[instructionSourceID] = struct{}{}
 		}
-		runCapabilityInstructions = append(runCapabilityInstructions, instructions...)
-		runCapabilityTools = append(runCapabilityTools, registry.tools...)
-		runCapabilityNativeTools = append(runCapabilityNativeTools, CloneNativeTools(registry.nativeTools)...)
-		runNativeOrLocal = append(runNativeOrLocal, registry.nativeOrLocal...)
-		capSettings = append(capSettings, capabilitySettingsLayer{
-			static: registry.modelSettings, provider: capabilityModelSettingsProvider(capability),
+		appendSetup(capability, capabilitySetup{
+			instructionSourceID: instructionSourceID,
+			instructions:        instructions, tools: registry.tools, nativeTools: registry.nativeTools,
+			nativeOrLocal: registry.nativeOrLocal, settings: registry.modelSettings,
 		})
 	}
 	limits := a.usageLimits
@@ -204,11 +253,11 @@ func (a *Agent[Deps, Output]) newRun(
 			return fn(ctx, rc)
 		}})
 	}
-	for _, tool := range runCapabilityNativeTools {
+	for _, tool := range capabilityNativeTools {
 		nativeToolEntries = append(nativeToolEntries, nativeToolEntry[Deps]{tool: cloneNativeTool(tool)})
 	}
 	nativeToolEntries, runNativeOrLocalToolsets, err := registerNativeOrLocal(
-		nativeToolEntries, nil, runNativeOrLocal,
+		nativeToolEntries, nil, nativeOrLocal,
 	)
 	if err != nil {
 		cancellation.finish()
@@ -277,25 +326,25 @@ func (a *Agent[Deps, Output]) newRun(
 		r.tools = append(r.tools, entry)
 		toolNames[entry.def.Name] = struct{}{}
 	}
-	for _, tool := range runCapabilityTools {
+	for _, tool := range capabilityTools {
 		if _, exists := toolNames[tool.def.Name]; exists {
 			cancellation.finish()
 			return nil, fmt.Errorf("ai: duplicate run capability tool name %q", tool.def.Name)
 		}
 		call := tool.call
 		r.tools = append(r.tools, toolEntry[Deps]{
-			def: cloneToolDefinition(tool.def),
+			def: cloneToolDefinition(tool.def), capabilityIndex: tool.capabilityIndex,
 			validate: func(_ context.Context, _ *RunContext[Deps], rawArgs json.RawMessage) (any, error) {
 				return slices.Clone(rawArgs), nil
 			},
-			execute: func(ctx context.Context, _ *RunContext[Deps], validated any) (any, error) {
+			execute: func(ctx context.Context, rc *RunContext[Deps], validated any) (any, error) {
 				rawArgs, ok := validated.(json.RawMessage)
 				if !ok {
 					return nil, fmt.Errorf(
 						"validated arguments for tool %q have type %T, expected json.RawMessage", tool.def.Name, validated,
 					)
 				}
-				return call(ctx, rawArgs)
+				return call(ctx, rc.capabilityInfo(), rawArgs)
 			},
 		})
 		toolNames[tool.def.Name] = struct{}{}
@@ -369,12 +418,24 @@ func (a *Agent[Deps, Output]) newRun(
 			return r.configuredSystemPromptParts(ctx, r.rc)
 		},
 	}
+	r.rc.info = r.info
+	r.capabilityIDs = capabilityRunIDs(r.capabilities)
+	capabilityOffset := 0
+	if limits != (UsageLimits{}) {
+		capabilityOffset = 1
+	}
+	r.capabilityOffset = capabilityOffset
+	for index := range r.capSettings {
+		r.capSettings[index].capabilityID = r.capabilityIDs[index+capabilityOffset]
+	}
+	r.rc.emitEvent = r.emitEvent
+	r.info.emitEvent = r.emitEvent
 	if err := r.resolveMetadata(runCtx); err != nil {
 		cancellation.finish()
 		return nil, err
 	}
 	r.staticInstructions = a.staticInstructions(
-		cfg.instructions, cfg.instructionParts, runCapabilityInstructions,
+		cfg.instructions, cfg.instructionParts, capabilityInstructions,
 	)
 	outputMode := a.outputMode
 	if cfg.outputMode != nil {
@@ -693,7 +754,12 @@ type run[Deps, Output any] struct {
 	runStep                    int
 	// emit forwards stream events during streamed model execution.
 	emit                 func(StreamEvent) bool
-	emitMu               sync.Mutex
+	eventMu              sync.Mutex
+	eventQueue           []queuedStreamEvent
+	eventDispatching     bool
+	eventErr             error
+	capabilityIDs        []string
+	capabilityOffset     int
 	commitStreamedOutput bool
 	recordSelectedModel  func(string)
 	observeUsage         func(Usage)
@@ -820,12 +886,12 @@ func (r *run[Deps, Output]) selectModel(ctx context.Context) error {
 			return err
 		}
 	}
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		provider, ok := capability.(ModelSelectionProvider)
 		if !ok {
 			continue
 		}
-		selection, err := provider.SelectModel(ctx, r.info, r.modelSelectionInfo())
+		selection, err := provider.SelectModel(ctx, r.capabilityInfo(index), r.modelSelectionInfo())
 		if err != nil {
 			return fmt.Errorf("ai: select model: %w", err)
 		}
@@ -1001,12 +1067,12 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 			return model, nil
 		}
 	}
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		resolver, ok := capability.(ModelIDResolver)
 		if !ok {
 			continue
 		}
-		model, err := resolver.ResolveModelID(ctx, r.info, modelID)
+		model, err := resolver.ResolveModelID(ctx, r.capabilityInfo(index), modelID)
 		if err != nil {
 			return nil, fmt.Errorf("ai: resolve model ID %q: %w", modelID, err)
 		}
@@ -1041,7 +1107,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	}
 	inner := func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
 		var err error
-		msgs, err = PrepareModelMessages(r.model, msgs)
+		msgs, err = prepareModelMessages(r.model, msgs, &params)
 		if err != nil {
 			return nil, err
 		}
@@ -1075,8 +1141,9 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	for i := len(r.capabilities) - 1; i >= 0; i-- {
 		if wrapper, ok := r.capabilities[i].(ModelRequestWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(i)
 			next = func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
-				return wrapper.WrapModelRequest(ctx, r.info, msgs, params, innerNext)
+				return wrapper.WrapModelRequest(ctx, info, msgs, params, innerNext)
 			}
 		}
 	}
@@ -1117,14 +1184,14 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	request := ModelRequestContext{
 		Model: r.model, ModelID: r.rc.ModelID, Messages: requestMessages, Params: params, Streaming: r.emit != nil,
 	}.Clone()
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		hook, ok := capability.(BeforeModelRequestHook)
 		if !ok {
 			continue
 		}
 		previousInstructions := request.Params.Instructions
 		previousParts := cloneInstructionParts(request.Params.InstructionParts)
-		request, err = hook.BeforeModelRequest(ctx, r.info, request)
+		request, err = hook.BeforeModelRequest(ctx, r.capabilityInfo(index), request)
 		if err != nil {
 			return nil, err
 		}
@@ -1206,7 +1273,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			if !ok {
 				continue
 			}
-			response, err = hook.OnModelRequestError(ctx, r.info, request, err)
+			response, err = hook.OnModelRequestError(ctx, r.capabilityInfo(index), request, err)
 			if err == nil {
 				if response == nil {
 					return nil, &UnexpectedModelBehaviorError{Message: "model request error hook returned no response"}
@@ -1227,7 +1294,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 		if !ok {
 			continue
 		}
-		response, err = hook.AfterModelRequest(ctx, r.info, request, response)
+		response, err = hook.AfterModelRequest(ctx, r.capabilityInfo(index), request, response)
 		if err != nil {
 			return response, err
 		}
@@ -1473,12 +1540,12 @@ func (r *run[Deps, Output]) handleDeferredToolCalls(
 ) ([]RequestPart, *DeferredToolRequests, error) {
 	remaining := requests.Clone()
 	var parts []RequestPart
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
 		handler, ok := capability.(DeferredToolCallHandler)
 		if !ok {
 			continue
 		}
-		results, err := handler.HandleDeferredToolCalls(ctx, r.info, remaining.Clone())
+		results, err := handler.HandleDeferredToolCalls(ctx, r.capabilityInfo(index), remaining.Clone())
 		if err != nil {
 			return nil, nil, fmt.Errorf("ai: handle deferred tool calls: %w", err)
 		}
@@ -1742,12 +1809,15 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 	rc := r.rc.clone()
 	rc.Retry = r.outputRetryCount()
 	rc.MaxRetries = r.outputMaxRetries
+	rc.resolvedNativeTool = make(map[string]NativeTool, len(r.nativeToolEntries))
 	for _, entry := range r.nativeToolEntries {
 		if entry.requiredReason != "" {
 			params.nativeToolSupportRequired = true
 		}
 		if entry.fn == nil {
-			params.NativeTools = append(params.NativeTools, cloneNativeTool(entry.tool))
+			tool := cloneNativeTool(entry.tool)
+			params.NativeTools = append(params.NativeTools, tool)
+			rc.resolvedNativeTool[tool.UniqueID()] = cloneNativeTool(tool)
 			continue
 		}
 		tool, err := entry.fn(ctx, rc.clone())
@@ -1765,7 +1835,9 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		if entry.requiredReason != "" && tool.IsOptional() {
 			return ModelRequestParams{}, nativeRequiredOptionalError(entry.expectedID, entry.requiredReason)
 		}
-		params.NativeTools = append(params.NativeTools, cloneNativeTool(tool))
+		tool = cloneNativeTool(tool)
+		params.NativeTools = append(params.NativeTools, tool)
+		rc.resolvedNativeTool[tool.UniqueID()] = cloneNativeTool(tool)
 	}
 	if err := ValidateNativeTools(params.NativeTools); err != nil {
 		return ModelRequestParams{}, err
@@ -2419,7 +2491,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			if committed {
 				parts, err := r.executeCallsWithCommittedOutput(ctx, calls, winningCall)
 				if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
-					if len(parts) > 0 {
+					if len(calls) > 0 {
 						r.appendRequest(parts, RequestStateInterrupted)
 					}
 					return nil, ErrRunCancelled
@@ -2483,9 +2555,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 
 		parts, final, err := r.executeCalls(ctx, calls)
 		if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
-			if len(parts) > 0 {
-				r.appendRequest(parts, RequestStateInterrupted)
-			}
+			r.appendRequest(parts, RequestStateInterrupted)
 			return nil, ErrRunCancelled
 		}
 		if err != nil {
@@ -2600,14 +2670,244 @@ const (
 	toolSkipped          = "Tool not executed - a final result was already processed."
 )
 
+type queuedStreamEvent struct {
+	event      StreamEvent
+	dispatched bool
+}
+
 func (r *run[Deps, Output]) emitStreamEvent(event StreamEvent) bool {
 	_ = event.streamEventKind()
-	if r.emit == nil {
+	r.eventMu.Lock()
+	if r.eventErr != nil {
+		r.eventMu.Unlock()
+		return false
+	}
+	r.eventQueue = append(r.eventQueue, queuedStreamEvent{event: event})
+	if r.eventDispatching || r.emit == nil {
+		r.eventMu.Unlock()
 		return true
 	}
-	r.emitMu.Lock()
-	defer r.emitMu.Unlock()
-	return r.emit(event)
+	r.eventDispatching = true
+	r.eventMu.Unlock()
+	return r.drainStreamEvents()
+}
+
+func (r *run[Deps, Output]) streamEmitterActive() bool {
+	r.eventMu.Lock()
+	defer r.eventMu.Unlock()
+	return r.emit != nil
+}
+
+func (r *run[Deps, Output]) emitImmediateEvent(event StreamEvent) bool {
+	r.eventMu.Lock()
+	if r.eventErr != nil {
+		r.eventMu.Unlock()
+		return false
+	}
+	r.eventQueue = append(r.eventQueue, queuedStreamEvent{event: event, dispatched: true})
+	wasDispatching := r.eventDispatching
+	if !wasDispatching {
+		r.eventDispatching = true
+	}
+	r.eventMu.Unlock()
+
+	if err := r.dispatchStreamEvent(event); err != nil {
+		r.eventMu.Lock()
+		r.eventErr = err
+		r.eventQueue = nil
+		r.eventDispatching = false
+		r.eventMu.Unlock()
+		return false
+	}
+	if wasDispatching || r.emit == nil {
+		if !wasDispatching {
+			r.eventMu.Lock()
+			r.eventDispatching = false
+			r.eventMu.Unlock()
+		}
+		return true
+	}
+	return r.drainStreamEvents()
+}
+
+func (r *run[Deps, Output]) setEventEmitter(emit func(StreamEvent) bool) bool {
+	r.eventMu.Lock()
+	r.emit = emit
+	if r.eventDispatching || len(r.eventQueue) == 0 {
+		r.eventMu.Unlock()
+		return true
+	}
+	r.eventDispatching = true
+	r.eventMu.Unlock()
+	return r.drainStreamEvents()
+}
+
+func (r *run[Deps, Output]) drainStreamEvents() bool {
+	for {
+		r.eventMu.Lock()
+		if len(r.eventQueue) == 0 || r.emit == nil {
+			r.eventDispatching = false
+			r.eventMu.Unlock()
+			return true
+		}
+		queued := r.eventQueue[0]
+		r.eventQueue = r.eventQueue[1:]
+		emit := r.emit
+		r.eventMu.Unlock()
+
+		if !queued.dispatched {
+			if err := r.dispatchStreamEvent(queued.event); err != nil {
+				r.eventMu.Lock()
+				r.eventErr = err
+				r.eventQueue = nil
+				r.eventDispatching = false
+				r.eventMu.Unlock()
+				return false
+			}
+		}
+		if !emit(queued.event) {
+			r.eventMu.Lock()
+			r.eventQueue = nil
+			r.eventDispatching = false
+			r.eventMu.Unlock()
+			return false
+		}
+	}
+}
+
+func (r *run[Deps, Output]) capabilityInfo(index int) *RunInfo {
+	info := *r.info
+	info.capabilityID = r.capabilityIDs[index]
+	return &info
+}
+
+func capabilityIsInnermost(capability Capability) bool {
+	provider, ok := capability.(CapabilityOrderingProvider)
+	return ok && provider.CapabilityOrdering().Position == CapabilityInnermost
+}
+
+func (r *run[Deps, Output]) dispatchStreamEvent(event StreamEvent) error {
+	for index, capability := range r.capabilities {
+		if capabilityIsInnermost(capability) {
+			continue
+		}
+		if err := r.dispatchCapabilityEvent(index, capability, event); err != nil {
+			return err
+		}
+	}
+	for _, registered := range r.agent.eventListeners {
+		if err := callEventListener(
+			r.ctx, "agent", registered.timeout,
+			func(ctx context.Context) error { return registered.listener(ctx, r.rc.clone(), event) },
+		); err != nil {
+			return fmt.Errorf("ai: agent event listener: %w", err)
+		}
+	}
+	for index, capability := range r.capabilities {
+		if !capabilityIsInnermost(capability) {
+			continue
+		}
+		if err := r.dispatchCapabilityEvent(index, capability, event); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *run[Deps, Output]) dispatchCapabilityEvent(index int, capability Capability, event StreamEvent) error {
+	listener, ok := capability.(EventListener)
+	if !ok {
+		return nil
+	}
+	timeout := time.Duration(0)
+	if provider, ok := capability.(EventListenerTimeoutProvider); ok {
+		timeout = provider.EventListenerTimeout()
+		if timeout < 0 {
+			return fmt.Errorf("ai: capability event listener timeout must not be negative")
+		}
+	}
+	name := fmt.Sprintf("%T", capability)
+	if err := callEventListener(
+		r.ctx, name, timeout,
+		func(ctx context.Context) error { return listener.OnEvent(ctx, r.capabilityInfo(index), event) },
+	); err != nil {
+		return fmt.Errorf("ai: capability event listener: %w", err)
+	}
+	return nil
+}
+
+func callEventListener(
+	ctx context.Context, name string, timeout time.Duration, call func(context.Context) error,
+) error {
+	if timeout <= 0 {
+		return call(ctx)
+	}
+	listenerCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err := call(listenerCtx)
+	if errors.Is(listenerCtx.Err(), context.DeadlineExceeded) {
+		return &EventListenerTimeoutError{Listener: name, Duration: timeout}
+	}
+	return err
+}
+
+func (r *run[Deps, Output]) capabilityIDFor(index int) string {
+	if index == 0 {
+		return ""
+	}
+	return r.capabilityIDs[index-1+r.capabilityOffset]
+}
+
+func (r *run[Deps, Output]) emitEvent(
+	event StreamEvent, capabilityID, toolName, toolCallID string,
+) error {
+	if !r.cancellation.isActive() {
+		return fmt.Errorf("ai: agent run has ended")
+	}
+	if err := validateEmittedEvent(event); err != nil {
+		return err
+	}
+	immediate := false
+	queued := event
+	switch typed := event.(type) {
+	case customStreamEvent:
+		if capabilityID != "" {
+			return fmt.Errorf("ai: capabilities must emit capability events")
+		}
+		typed.stampTool(toolName, toolCallID)
+		if r.streamEmitterActive() {
+			queued = typed.cloneForStream()
+		}
+	case capabilityStreamEvent:
+		if capabilityID == "" {
+			return fmt.Errorf("ai: capability events may only be emitted by capabilities")
+		}
+		typed.stampCapability(capabilityID)
+		typed.stampTool(toolName, toolCallID)
+		immediate = typed.eventDispatch() == EventDispatchImmediate
+		if !immediate && r.streamEmitterActive() {
+			queued = typed.cloneForStream()
+		}
+	}
+	var emitted bool
+	if immediate {
+		emitted = r.emitImmediateEvent(queued)
+	} else {
+		emitted = r.emitStreamEvent(queued)
+	}
+	if emitted {
+		return nil
+	}
+	if err := r.streamEventError(); err != nil {
+		return err
+	}
+	return context.Cause(r.ctx)
+}
+
+func (r *run[Deps, Output]) streamEventError() error {
+	r.eventMu.Lock()
+	defer r.eventMu.Unlock()
+	return r.eventErr
 }
 
 func (r *run[Deps, Output]) emitToolCallEvents(calls []ToolCallPart) bool {
@@ -3119,6 +3419,7 @@ func (r *run[Deps, Output]) executeCall(
 	toolRC := r.rc.clone()
 	toolRC.ToolName = call.ToolName
 	toolRC.ToolCallID = call.ToolCallID
+	toolRC.capabilityID = r.capabilityIDFor(entry.capabilityIndex)
 	toolRC.ToolCallApproved = resolving && resolution.kind == deferredCallApproval
 	toolRC.ToolCallMetadata = cloneSchemaMap(resolution.metadata)
 	toolRC.Retry, toolRC.MaxRetries = r.toolRetryInfo(call.ToolName)
@@ -3318,18 +3619,25 @@ func (r *run[Deps, Output]) normalizeSuccessfulToolReturn(
 			})
 		}
 		if len(rich.Content) > 0 {
-			extraParts = append(extraParts, UserPromptPart{Contents: cloneUserContents(rich.Content)})
+			contents := cloneUserContents(rich.Content)
+			extraParts = append(extraParts, UserPromptPart{
+				Contents: frameToolReturnContent(call.ToolName, call.ToolCallID, contents),
+			})
 		}
 	} else if _, ok := content.(*ToolReturn); ok {
 		returnValue = nil
 	} else if binary, ok := content.(BinaryContent); ok {
 		binary = cloneBinaryContent(binary)
 		returnValue = binary
-		extraParts = append(extraParts, UserPromptPart{Contents: []UserContent{cloneBinaryContent(binary)}})
+		extraParts = append(extraParts, UserPromptPart{
+			Contents: frameToolReturnContent(call.ToolName, call.ToolCallID, []UserContent{cloneBinaryContent(binary)}),
+		})
 	} else if binary, ok := content.(*BinaryContent); ok && binary != nil {
 		cloned := cloneBinaryContent(*binary)
 		returnValue = cloned
-		extraParts = append(extraParts, UserPromptPart{Contents: []UserContent{cloneBinaryContent(cloned)}})
+		extraParts = append(extraParts, UserPromptPart{
+			Contents: frameToolReturnContent(call.ToolName, call.ToolCallID, []UserContent{cloneBinaryContent(cloned)}),
+		})
 	}
 	return ToolReturnPart{
 		ToolName: call.ToolName, Content: returnValue, ToolCallID: call.ToolCallID, ToolKind: call.ToolKind,
@@ -3703,17 +4011,16 @@ func (r *run[Deps, Output]) findTool(name string) (toolEntry[Deps], bool) {
 func (a *Agent[Deps, Output]) staticInstructions(
 	additional string,
 	additionalParts []InstructionPart,
-	runCapabilityInstructions []InstructionPart,
+	capabilityInstructions []InstructionPart,
 ) []InstructionPart {
 	parts := make([]InstructionPart, 0,
-		len(a.instructionParts)+len(a.capInstructions)+len(runCapabilityInstructions)+len(additionalParts)+2,
+		len(a.instructionParts)+len(capabilityInstructions)+len(additionalParts)+2,
 	)
 	if content := strings.TrimSpace(a.instructions); content != "" {
 		parts = append(parts, InstructionPart{Content: content, ID: AgentInstructionID()})
 	}
 	parts = append(parts, cloneInstructionParts(a.instructionParts)...)
-	parts = append(parts, cloneInstructionParts(a.capInstructions)...)
-	parts = append(parts, cloneInstructionParts(runCapabilityInstructions)...)
+	parts = append(parts, cloneInstructionParts(capabilityInstructions)...)
 	if content := strings.TrimSpace(additional); content != "" {
 		parts = append(parts, InstructionPart{Content: content})
 	}
@@ -3743,7 +4050,9 @@ func (r *run[Deps, Output]) prepareModelSettings(
 			settings = mergeModelSettings(settings, &layer.static[index])
 		}
 		if layer.provider != nil {
-			resolved, err := layer.provider.ModelSettings(ctx, r.info, settings)
+			info := *r.info
+			info.capabilityID = layer.capabilityID
+			resolved, err := layer.provider.ModelSettings(ctx, &info, settings)
 			if err != nil {
 				return ModelSettings{}, fmt.Errorf("ai: model settings: %w", err)
 			}
@@ -3882,13 +4191,19 @@ func (r *run[Deps, Output]) prepareInstructions(
 			parts = append(parts, part)
 		}
 	}
-	for _, capability := range r.capabilities {
+	for index, capability := range r.capabilities {
+		partsProvider, providesParts := capability.(InstructionPartsProvider)
+		textProvider, providesText := capability.(InstructionsProvider)
+		if !providesParts && !providesText {
+			continue
+		}
 		source, err := capabilityInstructionSource(capability)
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
-		if provider, ok := capability.(InstructionPartsProvider); ok {
-			provided, err := provider.InstructionParts(ctx, r.info)
+		if providesParts {
+			provider := partsProvider
+			provided, err := provider.InstructionParts(ctx, r.capabilityInfo(index))
 			if err != nil {
 				return nil, fmt.Errorf("ai: instructions: %w", err)
 			}
@@ -3899,11 +4214,7 @@ func (r *run[Deps, Output]) prepareInstructions(
 			parts = append(parts, qualified...)
 			continue
 		}
-		provider, ok := capability.(InstructionsProvider)
-		if !ok {
-			continue
-		}
-		instructions, err := provider.Instructions(ctx, r.info)
+		instructions, err := textProvider.Instructions(ctx, r.capabilityInfo(index))
 		if err != nil {
 			return nil, fmt.Errorf("ai: instructions: %w", err)
 		}
@@ -3973,9 +4284,9 @@ func newRunID() string {
 // first, before hooks run in order, and after and error hooks run in reverse.
 func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output], error) {
 	next := RunFunc(func(ctx context.Context) (RunOutcome, error) {
-		for _, capability := range r.capabilities {
+		for index, capability := range r.capabilities {
 			if hook, ok := capability.(BeforeRunHook); ok {
-				if err := hook.BeforeRun(ctx, r.info); err != nil {
+				if err := hook.BeforeRun(ctx, r.capabilityInfo(index)); err != nil {
 					return RunOutcome{}, err
 				}
 			}
@@ -3993,12 +4304,16 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(RunWrapper); ok {
 			innerNext := next
+			info := r.capabilityInfo(index)
 			next = func(ctx context.Context) (RunOutcome, error) {
-				return wrapper.WrapRun(ctx, r.info, innerNext)
+				return wrapper.WrapRun(ctx, info, innerNext)
 			}
 		}
 	}
 	outcome, err := next(ctx)
+	if eventErr := r.streamEventError(); eventErr != nil {
+		err = eventErr
+	}
 	detached := errors.Is(context.Cause(r.ctx), errStreamDetached)
 	if err != nil && !detached {
 		for index := len(r.capabilities) - 1; index >= 0; index-- {
@@ -4006,7 +4321,7 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 			if !ok {
 				continue
 			}
-			outcome, err = hook.OnRunError(ctx, r.info, err)
+			outcome, err = hook.OnRunError(ctx, r.capabilityInfo(index), err)
 			if err == nil {
 				break
 			}
@@ -4018,7 +4333,7 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 			if !ok {
 				continue
 			}
-			outcome, err = hook.AfterRun(ctx, r.info, outcome.Clone())
+			outcome, err = hook.AfterRun(ctx, r.capabilityInfo(index), outcome.Clone())
 			if err != nil {
 				break
 			}

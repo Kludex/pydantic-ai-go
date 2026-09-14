@@ -268,13 +268,19 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 
 		stopped := false
 		core := EventStream(func(yieldCore func(StreamEvent, error) bool) {
-			run.emit = func(event StreamEvent) bool {
+			if !run.setEventEmitter(func(event StreamEvent) bool {
 				if !yieldCore(event, nil) {
 					stopped = true
 					run.cancellation.stopStream()
 					return false
 				}
 				return true
+			}) {
+				if eventErr := run.streamEventError(); eventErr != nil {
+					runErr = eventErr
+					yieldCore(nil, eventErr)
+				}
+				return
 			}
 			result, err := run.wrappedLoop(run.ctx)
 			if stopped {
@@ -288,7 +294,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 			}
 			streamedRun.result = result
 		})
-		stream := wrapEventStream(run.ctx, run.info, core, run.capabilities)
+		stream := wrapEventStream(run.ctx, run.info, core, run.capabilities, run.capabilityIDs)
 		for event, err := range stream {
 			if err != nil {
 				runErr = err
@@ -335,19 +341,28 @@ func hasEventStreamCapability(capabilities []Capability) bool {
 		if _, ok := capability.(StreamEventProcessor); ok {
 			return true
 		}
+		if _, ok := capability.(EventListener); ok {
+			return true
+		}
 	}
 	return false
 }
 
 func wrapEventStream(
-	ctx context.Context, runInfo *RunInfo, stream EventStream, capabilities []Capability,
+	ctx context.Context,
+	runInfo *RunInfo,
+	stream EventStream,
+	capabilities []Capability,
+	capabilityIDs []string,
 ) EventStream {
 	for index := len(capabilities) - 1; index >= 0; index-- {
 		capability := capabilities[index]
+		info := *runInfo
+		info.capabilityID = capabilityIDs[index]
 		if wrapper, ok := capability.(RunEventStreamWrapper); ok {
-			stream = wrapper.WrapRunEventStream(ctx, runInfo, stream)
+			stream = wrapper.WrapRunEventStream(ctx, &info, stream)
 		} else if processor, ok := capability.(StreamEventProcessor); ok {
-			stream = processEventStream(ctx, runInfo, stream, processor)
+			stream = processEventStream(ctx, &info, stream, processor)
 		}
 	}
 	return stream

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
 	"google.golang.org/genai"
 )
@@ -140,11 +141,12 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsTextOutput = false
 	profile.SupportsSessionSeeding = true
 	profile.SupportsSeedingImages = true
-	profile.SupportsThinking = true
+	profile.SupportsThinking = strings.Contains(name, "native-audio") || !strings.HasPrefix(name, "gemini-live-2.5")
 	profile.SupportsAsyncToolCalls = strings.Contains(name, "native-audio")
 	profile.SupportsToolReturnSchema = true
 	profile.SupportedNativeTools = map[string]bool{"web_search": true}
 	profile.AudioInputSampleRate = 16000
+	profile.ContextWindow = contextwindow.Lookup(name, "google", "")
 	apiKey := os.Getenv("GOOGLE_API_KEY")
 	if apiKey == "" {
 		apiKey = os.Getenv("GEMINI_API_KEY")
@@ -403,6 +405,12 @@ func (connection *Connection) Send(_ context.Context, input realtime.Input) erro
 		})
 	case realtime.TextInput:
 		complete := true
+		return session.SendClientContent(genai.LiveClientContentInput{
+			Turns:        []*genai.Content{{Role: "user", Parts: []*genai.Part{genai.NewPartFromText(input.Text)}}},
+			TurnComplete: &complete,
+		})
+	case realtime.TextContext:
+		complete := false
 		return session.SendClientContent(genai.LiveClientContentInput{
 			Turns:        []*genai.Content{{Role: "user", Parts: []*genai.Part{genai.NewPartFromText(input.Text)}}},
 			TurnComplete: &complete,

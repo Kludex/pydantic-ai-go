@@ -2,9 +2,45 @@ package bedrockmantle
 
 import (
 	"iter"
+	"slices"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
+
+func restoreProviderToolCallIDs(messages []ai.ModelMessage) []ai.ModelMessage {
+	restored := slices.Clone(messages)
+	responseID := ""
+	for messageIndex, message := range messages {
+		switch message := message.(type) {
+		case ai.ModelResponse:
+			responseID = message.ProviderResponseID
+			message.Parts = slices.Clone(message.Parts)
+			for partIndex, part := range message.Parts {
+				call, ok := part.(ai.ToolCallPart)
+				if ok && responseID != "" {
+					call.ToolCallID = strings.TrimPrefix(call.ToolCallID, responseID+":")
+					message.Parts[partIndex] = call
+				}
+			}
+			restored[messageIndex] = message
+		case ai.ModelRequest:
+			message.Parts = slices.Clone(message.Parts)
+			for partIndex, part := range message.Parts {
+				switch part := part.(type) {
+				case ai.ToolReturnPart:
+					part.ToolCallID = strings.TrimPrefix(part.ToolCallID, responseID+":")
+					message.Parts[partIndex] = part
+				case ai.RetryPromptPart:
+					part.ToolCallID = strings.TrimPrefix(part.ToolCallID, responseID+":")
+					message.Parts[partIndex] = part
+				}
+			}
+			restored[messageIndex] = message
+		}
+	}
+	return restored
+}
 
 func qualifyResponseToolCallIDs(response *ai.ModelResponse) {
 	if response.ProviderResponseID == "" {

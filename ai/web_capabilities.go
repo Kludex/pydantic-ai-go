@@ -19,10 +19,10 @@ func NewWebSearchCapability[Deps any](
 	config WebSearchCapabilityConfig[Deps],
 ) *NativeOrLocalTool[Deps] {
 	reason := webSearchNativeRequirement(config.Native)
-	if toolsetIsNil(config.Local) {
-		reason = "no local web-search fallback was configured"
-	}
 	options := nativeRequirementOption(reason)
+	if toolsetIsNil(config.Local) {
+		options = nativeFallbackRequirementOption("no local web-search fallback was configured")
+	}
 	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
 }
 
@@ -80,10 +80,10 @@ func NewWebFetchCapability[Deps any](
 	config WebFetchCapabilityConfig[Deps],
 ) *NativeOrLocalTool[Deps] {
 	reason := webFetchNativeRequirement(config.Native)
-	if toolsetIsNil(config.Local) {
-		reason = "no local web-fetch fallback was configured"
-	}
 	options := nativeRequirementOption(reason)
+	if toolsetIsNil(config.Local) {
+		options = nativeFallbackRequirementOption("no local web-fetch fallback was configured")
+	}
 	return NewNativeOrLocalToolset(config.Native, config.Local, options...)
 }
 
@@ -166,6 +166,13 @@ func nativeRequirementOption(reason string) []NativeOrLocalOption {
 	return []NativeOrLocalOption{WithNativeRequired(reason)}
 }
 
+func nativeFallbackRequirementOption(reason string) []NativeOrLocalOption {
+	return []NativeOrLocalOption{func(config *nativeOrLocalConfig) {
+		config.requiredReason = reason
+		config.requiredWithoutFallback = true
+	}}
+}
+
 func dynamicWebConstraintError(kind string, reason string) error {
 	return fmt.Errorf(
 		"ai: dynamic web-%s returned native-only constraint(s) %s with a local fallback; use WithNativeRequired",
@@ -180,5 +187,5 @@ func nativeRequiredWithoutLocal[Deps any](
 		return options
 	}
 	cloned := append([]NativeOrLocalOption(nil), options...)
-	return append(cloned, WithNativeRequired(reason))
+	return append(cloned, nativeFallbackRequirementOption(reason)...)
 }

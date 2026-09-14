@@ -29,6 +29,8 @@ type ImageGenerationSubagentConfig[Deps any] struct {
 	ResolveModel ImageGenerationFallbackModelFunc[Deps]
 	// Native configures the subagent's provider-native image tool.
 	Native ImageGenerationTool
+	// ResolveNative resolves image settings from the outer tool-call context.
+	ResolveNative ImageGenerationFunc[Deps]
 	// Instructions overrides the default image-generation prompt.
 	Instructions string
 }
@@ -63,10 +65,18 @@ func NewImageGenerationSubagentTool[Deps any](config ImageGenerationSubagentConf
 				return BinaryContent{}, err
 			}
 		}
+		resolvedNative := native
+		if config.ResolveNative != nil {
+			var err error
+			resolvedNative, err = config.ResolveNative(ctx, rc.clone())
+			if err != nil {
+				return BinaryContent{}, err
+			}
+		}
 		agent := NewImageOutputAgent[struct{}](
 			model,
 			WithInstructions(instructions),
-			WithCapabilities(NewImageGenerationCapability(ImageGenerationCapabilityConfig[struct{}]{Native: native})),
+			WithCapabilities(NewImageGenerationCapability(ImageGenerationCapabilityConfig[struct{}]{Native: resolvedNative})),
 		)
 		result, err := agent.Run(ctx, args.Prompt, struct{}{})
 		if err != nil {

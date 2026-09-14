@@ -155,6 +155,60 @@ Reinjection changes only the request snapshot sent to the model. It does not rew
 
 Prefer `WithInstructions` for new applications. Instructions are prepared for every request and do not need reinjection.
 
+## Combine repeated capabilities
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+type SearchPolicy struct {
+	Domains []string
+}
+
+func (SearchPolicy) CapabilityID() string {
+	return "search_policy"
+}
+
+func (SearchPolicy) CombineCapabilities(capabilities []ai.Capability) (ai.Capability, error) {
+	return ai.MergeCapabilities(capabilities...)
+}
+
+func (policy SearchPolicy) Setup(registry *ai.CapabilityRegistry) error {
+	registry.AddInstructions(fmt.Sprintf("Search only these domains: %v", policy.Domains))
+	return nil
+}
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		fakes.NewTestModel(),
+		ai.WithCapabilities(
+			SearchPolicy{Domains: []string{"go.dev"}},
+			SearchPolicy{Domains: []string{"pkg.go.dev"}},
+		),
+	)
+	result, err := agent.Run(context.Background(), "Find the context package.", struct{}{})
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`CapabilityIDProvider` identifies one logical capability. Repeated IDs in the same agent or run layer require `CapabilityCombiner`. The default `MergeCapabilities` helper preserves a value stated by only one declaration. It unions maps and slices. Later scalar values win.
+
+The default merge accepts exported struct fields. It rejects unexported fields and incompatible collection types. Implement `CombineCapabilities` yourself when your capability caches derived state. Rebuild that state from the merged fields before you return.
+
+A run capability replaces an agent capability with the same ID. It does not merge with the agent configuration. The complete run wrapper subtree replaces the agent subtree, then each layer keeps its declared middleware order. A shared ID with a different capability type is always rejected.
+
+Leave `CapabilityID` empty when several independent instances are valid. Distinct non-empty IDs also keep instances separate.
+
 ## Implement one hook
 
 ```go
@@ -194,3 +248,56 @@ func main() {
 Use the narrowest hook that matches the behavior. Hooks receive detached values. Set `ModelRequestContext.ReplaceHistory` only when a request transformation must also replace durable history.
 
 Capability order is middleware order. Before hooks run from first to last. After and error hooks run in reverse order.
+
+## Emit typed events
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"time"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+type Progress struct {
+	Completed int `json:"completed"`
+	Total     int `json:"total"`
+}
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.OnEvent(agent, func(
+		_ context.Context,
+		_ *ai.RunContext[struct{}],
+		event *ai.CustomEvent[Progress],
+	) error {
+		fmt.Printf("%d/%d\n", event.Data.Completed, event.Data.Total)
+		return nil
+	}, ai.WithEventListenerTimeout(time.Second))
+
+	ai.AddTool(agent, "work", func(
+		_ context.Context,
+		run *ai.RunContext[struct{}],
+		_ struct{},
+	) (string, error) {
+		if err := run.Emit(ai.NewCustomEvent("progress", Progress{Completed: 1, Total: 1})); err != nil {
+			return "", err
+		}
+		return "done", nil
+	})
+
+	if _, err := agent.Run(context.Background(), "Run the work tool.", struct{}{}); err != nil {
+		panic(err)
+	}
+}
+```
+
+`CustomEvent` carries application data. It is visible to UI adapters by default. Use `SetUIVisible(false)` for server-only events. Use `ProjectForUI` when the frontend needs a smaller payload.
+
+A capability emits `CapabilityEvent` instead. `CapabilityRegistry.AddContextTool` gives a capability-owned tool a `RunInfo`, so emitted events include the capability ID, tool name, and tool call ID. Capability events stay server-side unless an application listener republishes them as custom events.
+
+Listeners normally run when an event reaches its stream position. Use `SetDispatch(ai.EventDispatchImmediate)` for a mutable capability decision that must settle before `RunInfo.Emit` returns. Agent listeners run after ordinary capability listeners and before capabilities in the `CapabilityInnermost` tier.

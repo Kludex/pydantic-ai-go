@@ -63,6 +63,25 @@ func (client *fakeClient) CountTokens(
 	return client.count(input, options...)
 }
 
+func TestAnthropicSamplingSettingsAreDropped(t *testing.T) {
+	temperature, topP := 0.5, 0.7
+	client := &fakeClient{converse: func(
+		input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		if input.InferenceConfig != nil && (input.InferenceConfig.Temperature != nil || input.InferenceConfig.TopP != nil) {
+			t.Fatalf("unsupported sampling settings were sent: %#v", input.InferenceConfig)
+		}
+		return completeOutput(types.StopReasonEndTurn), nil
+	}}
+	model := bedrock.NewModel("us.anthropic.claude-sonnet-5", bedrock.WithClient(client))
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		Temperature: &temperature, TopP: &topP,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestModelRequestAndCountTokens(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", request.URL.Query().Get("type"))

@@ -36,6 +36,8 @@ type ResponsesModel struct {
 	phaseSupport           *bool
 	codeExecutionOutputs   bool
 	fileSearchResults      bool
+	chatCompatibility      ChatCompatibility
+	contextWindow          int
 }
 
 // NewResponsesModel creates a ResponsesModel for the named OpenAI model.
@@ -57,6 +59,8 @@ func NewResponsesModel(name string, opts ...Option) *ResponsesModel {
 		phaseSupport:         phaseSupport,
 		codeExecutionOutputs: m.responsesCodeExecutionOutputs,
 		fileSearchResults:    m.responsesFileSearchResults,
+		chatCompatibility:    m.chatCompatibility,
+		contextWindow:        m.contextWindow,
 	}
 }
 
@@ -80,10 +84,31 @@ func (m *ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
 	}
 }
 
-// ModelProfile reports support for provider-generated image output.
-func (*ResponsesModel) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, SupportsImageOutput: true}
+// ModelProfile reports model behavior and the bundled context window when known.
+func (m *ResponsesModel) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{
+		DefaultOutputMode:             ai.OutputModeTool,
+		SupportsImageOutput:           true,
+		SupportsToolAvailabilityDelta: m.deferredToolSupport,
+		ContextWindow:                 m.contextWindow,
+	}
 }
+
+// SupportsToolAvailabilityDelta reports whether this request enables hosted tool search.
+func (m *ResponsesModel) SupportsToolAvailabilityDelta(params ai.ModelRequestParams) bool {
+	if !m.deferredToolSupport || len(params.DeferredTools) == 0 {
+		return false
+	}
+	for _, tool := range params.Tools {
+		if tool.Name == ai.ToolSearchName && tool.ToolKind == ai.ToolPartKindToolSearch {
+			return true
+		}
+	}
+	return false
+}
+
+// ContextWindow returns the bundled context window. Zero means unknown.
+func (m *ResponsesModel) ContextWindow() int { return m.contextWindow }
 
 // ProviderName returns the durable provider identity.
 func (m *ResponsesModel) ProviderName() string { return m.providerName }
@@ -141,6 +166,11 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
 	}
 	if resp.StatusCode != http.StatusOK {
+		if response := (&Model{
+			name: m.name, providerName: m.providerName, baseURL: m.baseURL,
+		}).azureContentFilterResponse(resp.StatusCode, data); response != nil {
+			return response, nil
+		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
 	response, err := parseResponsesResponse(data, payload.IncludeRawAnnotations)
@@ -738,7 +768,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		return nil, err
 	}
 	params.Settings = settings
-	reasoningEffort, err := openAIThinkingEffort(params.Settings.Thinking)
+	reasoningEffort, err := openAIThinkingEffortForModel(m.name, params.Settings.Thinking)
 	if err != nil {
 		return nil, err
 	}
@@ -768,7 +798,10 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if reasoningEffort != "" {
 		req.Reasoning = &responsesReasoning{Effort: reasoningEffort}
 	}
-	if openAIReasoningActive(reasoningEffort) {
+	reasoningActive := reasoningEffort != "none" &&
+		(reasoningEffort != "" || m.chatCompatibility.ReasoningEnabledByDefault ||
+			openAIModelReasoningActive(m.name, reasoningEffort))
+	if reasoningActive {
 		req.Temperature = nil
 		req.TopP = nil
 	}
@@ -818,15 +851,16 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 	}
 	converter := responsesMessageConverter{
-		ctx:                    ctx,
-		providerName:           m.providerName,
-		clientToolSearch:       activeToolSearch,
-		serverToolSearch:       serverToolSearch,
-		deferred:               deferred,
-		rendered:               make(map[string]struct{}),
-		strictSupport:          m.strictToolSupport,
-		phaseSupport:           responsesPhaseSupported(m.name, m.phaseSupport),
-		promptCacheBreakpoints: supportsOpenAIPromptCache(m.name),
+		ctx:                       ctx,
+		providerName:              m.providerName,
+		clientToolSearch:          activeToolSearch,
+		serverToolSearch:          serverToolSearch,
+		deferred:                  deferred,
+		rendered:                  make(map[string]struct{}),
+		strictSupport:             m.strictToolSupport,
+		phaseSupport:              responsesPhaseSupported(m.name, m.phaseSupport),
+		promptCacheBreakpoints:    supportsOpenAIPromptCache(m.name),
+		responsesReasoningContent: m.chatCompatibility.ResponsesReasoningContent,
 	}
 	for _, msg := range trimOpenAICompactionMessages(msgs, m.providerName) {
 		items, err := converter.convert(msg)
@@ -862,7 +896,12 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 		req.Tools = append(req.Tools, converted)
 		if !params.AllowText {
-			req.ToolChoice = "required"
+			if m.chatCompatibility.DisableRequiredToolChoice ||
+				(m.chatCompatibility.DisableForcedToolChoiceWithThinking && reasoningActive) {
+				req.ToolChoice = "auto"
+			} else {
+				req.ToolChoice = "required"
+			}
 		}
 	}
 	if clientToolSearch {
@@ -1000,7 +1039,8 @@ func responsesPhaseSupported(modelName string, override *bool) bool {
 	}
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
 	return strings.HasPrefix(modelName, "gpt-5.3-codex") || strings.HasPrefix(modelName, "gpt-5.4") ||
-		strings.HasPrefix(modelName, "gpt-5.5") || strings.HasPrefix(modelName, "gpt-5.6")
+		strings.HasPrefix(modelName, "gpt-5.5") || strings.HasPrefix(modelName, "gpt-5.6") ||
+		strings.HasPrefix(modelName, "gpt-6-astra")
 }
 
 func openAIResponsesFinishReason(reason string) ai.FinishReason {

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -386,6 +387,67 @@ func TestInputValidation(t *testing.T) {
 	}), ai.MessageSanitizationOptions{AllowedFileURLSchemes: []string{"bad scheme"}})
 	if err == nil {
 		t.Fatal("expected sanitization error")
+	}
+}
+
+func TestPrepareInputNormalizesClientToolReturnFiles(t *testing.T) {
+	input := requestWith(
+		vercel.UIMessage{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+			Type: "tool-files", ToolCallID: "call", State: "output-available", Input: json.RawMessage(`{}`),
+			Output: json.RawMessage(`[
+				{"kind":"binary","media_type":"application/octet-stream","data":{"0":0,"1":255}},
+				{"kind":"binary","media_type":"application/octet-stream","data":{"type":"Buffer","data":[1,2]}},
+				{"kind":"image-url","url":"https://example.com/image.png"},
+				{"kind":"binary","media_type":"text/plain","label":"application-data"},
+				{"kind":"document-url","url":"https://example.com/no-extension"},
+				{"kind":"video-url","url":"https://example.com/movie.mp4"},
+				{"kind":"audio-url","url":"https://example.com/sound.mp3"},
+				{"kind":"document-url","url":"https://example.com/report.pdf"},
+				{"kind":"binary","media_type":"application/octet-stream","data":"AAE="},
+				{"kind":"binary","media_type":"application/octet-stream","data":{}},
+				{"kind":"binary","media_type":"application/octet-stream","data":{"type":"Buffer","data":"bad"}},
+				{"kind":"binary","media_type":"application/octet-stream","data":{"0":1,"2":2}},
+				{"kind":"binary","media_type":"application/octet-stream","data":{"0":256}},
+				{"kind":"application-data","url":"https://example.com/value.txt"}
+			]`),
+		}}},
+		vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "continue"}}},
+	)
+	_, history, _, err := vercel.PrepareInput(input, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var content []any
+	for _, message := range history {
+		request, ok := message.(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		for _, part := range request.Parts {
+			if result, ok := part.(ai.ToolReturnPart); ok {
+				content = result.Content.([]any)
+			}
+		}
+	}
+	if len(content) != 14 {
+		t.Fatalf("unexpected tool output: %#v", content)
+	}
+	first, firstOK := content[0].(ai.BinaryContent)
+	second, secondOK := content[1].(ai.BinaryContent)
+	image, imageOK := content[2].(ai.ImageURL)
+	collision, collisionOK := content[3].(map[string]any)
+	unknownURL, unknownURLOK := content[4].(map[string]any)
+	video, videoOK := content[5].(ai.VideoURL)
+	audio, audioOK := content[6].(ai.AudioURL)
+	document, documentOK := content[7].(ai.DocumentURL)
+	stringBinary, stringBinaryOK := content[8].(ai.BinaryContent)
+	if !firstOK || !secondOK || !imageOK || !collisionOK || !unknownURLOK || !videoOK || !audioOK ||
+		!documentOK || !stringBinaryOK || !slices.Equal(first.Data, []byte{0, 255}) ||
+		!slices.Equal(second.Data, []byte{1, 2}) || !slices.Equal(stringBinary.Data, []byte{0, 1}) ||
+		image.MediaType != "image/png" || video.MediaType != "video/mp4" || audio.MediaType != "audio/mpeg" ||
+		document.MediaType != "application/pdf" || collision["label"] != "application-data" ||
+		unknownURL["url"] != "https://example.com/no-extension" {
+		t.Fatalf("client file shapes were not normalized safely: %#v", content)
 	}
 }
 

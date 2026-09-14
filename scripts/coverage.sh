@@ -11,8 +11,15 @@ packages=(
     ./ai/durable/dbos
     ./ai/durable/prefect
     ./ai/durable/temporal
+    ./ai/internal/contextwindow
     ./ai/internal/download
     ./ai/internal/schema
+    ./ai/images
+    ./ai/images/fakes
+    ./ai/images/google
+    ./ai/images/infer
+    ./ai/images/openai
+    ./ai/images/xai
     ./ai/retries
     ./ai/evals
     ./ai/embeddings
@@ -26,6 +33,7 @@ packages=(
     ./ai/embeddings/voyageai
     ./ai/models/fakes
     ./ai/models/openai
+    ./ai/models/openaicodex
     ./ai/models/openrouter
     ./ai/models/anthropic
     ./ai/models/azure
@@ -34,6 +42,8 @@ packages=(
     ./ai/models/cerebras
     ./ai/models/cohere
     ./ai/models/crusoe
+    ./ai/models/deepseek
+    ./ai/models/githubcopilot
     ./ai/models/google
     ./ai/models/groq
     ./ai/models/huggingface
@@ -41,6 +51,8 @@ packages=(
     ./ai/models/mistral
     ./ai/models/ollama
     ./ai/models/snowflake
+    ./ai/models/together
+    ./ai/models/vllm
     ./ai/models/xai
     ./ai/models/zai
     ./ai/mcp

@@ -90,7 +90,7 @@ func TestConnectionSendAndEvents(t *testing.T) {
 		t.Fatal(err)
 	}
 	if connection.ModelName() != "served" || !connection.InputTranscriptionEnabled() ||
-		!connection.ReconnectRestoresInFlightState() {
+		!connection.ReconnectRestoresInFlightState() || connection.InterruptsResponseOnSpeech() {
 		t.Fatal("connection info mismatch")
 	}
 	connection.SetMessageHistory(func() []ai.ModelMessage { return []ai.ModelMessage{ai.ModelRequest{}} })
@@ -98,7 +98,8 @@ func TestConnectionSendAndEvents(t *testing.T) {
 	for _, input := range []realtime.Input{
 		realtime.AudioInput{Data: []byte{1, 0}},
 		realtime.TextInput{Text: "hello"},
-		realtime.ImageInput{Content: ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"}},
+		realtime.TextContext{Text: "context"},
+		realtime.ImageInput{Content: ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"}, Respond: true},
 		realtime.ToolResult{ToolCallID: "call", Output: "result", Content: []ai.UserContent{
 			ai.TextContent{Text: "detail"}, ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"},
 			ai.CachePoint{}, nil,
@@ -174,6 +175,7 @@ func TestConnectionSendAndEvents(t *testing.T) {
 	}
 	for _, input := range []realtime.Input{
 		realtime.CommitAudio{}, realtime.TextInput{Text: "closed"}, realtime.CreateResponse{},
+		realtime.ImageInput{Content: ai.BinaryContent{MediaType: "image/png"}, Respond: true},
 		realtime.ToolResult{ToolCallID: "closed", Output: "closed"},
 	} {
 		if err := connection.Send(t.Context(), input); err == nil {
@@ -204,6 +206,35 @@ func TestConnectionSendAndEvents(t *testing.T) {
 	cloned["X-Test"][0] = "two"
 	if headers.Get("X-Test") != "one" {
 		t.Fatal("headers were not detached")
+	}
+}
+
+func TestInterruptsResponseOnSpeech(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		config   map[string]any
+		fallback bool
+		want     bool
+	}{
+		{name: "fallback", config: map[string]any{}, fallback: true, want: true},
+		{name: "disabled", config: map[string]any{"turn_detection": nil}, fallback: true},
+		{name: "provider default", config: map[string]any{"turn_detection": map[string]any{}}, fallback: true, want: true},
+		{name: "top level", config: map[string]any{"turn_detection": map[string]any{"interrupt_response": false}}, fallback: true},
+		{
+			name: "nested",
+			config: map[string]any{
+				"audio": map[string]any{
+					"input": map[string]any{"turn_detection": map[string]any{"interrupt_response": true}},
+				},
+			},
+			want: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := openaiprotocol.InterruptsResponseOnSpeech(test.config, test.fallback); got != test.want {
+				t.Fatalf("got %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 

@@ -58,6 +58,7 @@ type taggedSegment struct {
 type taggedSplitter struct {
 	pending  string
 	thinking bool
+	emitted  bool
 	group    int
 }
 
@@ -74,9 +75,11 @@ func (splitter *taggedSplitter) push(content string, final bool) []taggedSegment
 				segments = append(segments, taggedSegment{
 					content: splitter.pending[:index], thinking: splitter.thinking, group: splitter.group,
 				})
+				splitter.emitted = true
 			}
 			splitter.pending = splitter.pending[index+len(tag):]
 			splitter.thinking = !splitter.thinking
+			splitter.emitted = false
 			splitter.group++
 			continue
 		}
@@ -84,6 +87,7 @@ func (splitter *taggedSplitter) push(content string, final bool) []taggedSegment
 			segments = append(segments, taggedSegment{
 				content: splitter.pending, thinking: splitter.thinking, group: splitter.group,
 			})
+			splitter.emitted = true
 			splitter.pending = ""
 			break
 		}
@@ -97,9 +101,22 @@ func (splitter *taggedSplitter) push(content string, final bool) []taggedSegment
 			segments = append(segments, taggedSegment{
 				content: splitter.pending[:emit], thinking: splitter.thinking, group: splitter.group,
 			})
+			splitter.emitted = true
 			splitter.pending = splitter.pending[emit:]
 		}
 		break
+	}
+	return segments
+}
+
+func (splitter *taggedSplitter) separateTextAfterTool() []taggedSegment {
+	if splitter.thinking {
+		return nil
+	}
+	segments := splitter.push("", true)
+	if splitter.emitted {
+		splitter.emitted = false
+		splitter.group++
 	}
 	return segments
 }
@@ -153,6 +170,13 @@ func splitTaggedThinkingEvents(
 					return
 				}
 				continue
+			}
+			if _, ok := event.(ai.ToolCallStartEvent); ok {
+				for _, partID := range order {
+					if !emit(partID, providers[partID], splitters[partID].separateTextAfterTool()) {
+						return
+					}
+				}
 			}
 			if _, ok := event.(ai.FinishEvent); ok {
 				for _, partID := range order {

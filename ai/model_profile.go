@@ -1,8 +1,11 @@
 package ai
 
-// ModelProfile describes model-specific output and message-preparation behavior.
-// The zero value defaults reflected output to a function tool, uses the standard
-// prompted-output template, and converts realtime speech to transcripts.
+import "github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
+
+// ModelProfile describes model-specific output, message-preparation, and
+// context-window behavior. The zero value defaults reflected output to a
+// function tool, uses the standard prompted-output template, converts realtime
+// speech to transcripts, and leaves the context window unknown.
 type ModelProfile struct {
 	// DefaultOutputMode resolves OutputModeAuto for this model.
 	DefaultOutputMode OutputMode
@@ -15,11 +18,18 @@ type ModelProfile struct {
 	// SupportsAudioInput allows retained SpeechPart audio to replace its transcript
 	// when realtime history is prepared for a standard model.
 	SupportsAudioInput bool
+	// SupportsToolAvailabilityDelta lets the provider render tool reveals directly.
+	// Other models receive a provider-neutral tool-search call and result.
+	SupportsToolAvailabilityDelta bool
+	// ContextWindow is the maximum combined input and output token count.
+	// Zero means the limit is unknown.
+	ContextWindow int
 }
 
-// ModelProfiler is implemented by models that expose output and message-preparation defaults.
+// ModelProfiler is implemented by models that expose output, message-preparation,
+// and context-window defaults.
 type ModelProfiler interface {
-	// ModelProfile returns model-specific output and input behavior.
+	// ModelProfile returns model-specific output, input, and context behavior.
 	ModelProfile() ModelProfile
 }
 
@@ -56,6 +66,9 @@ func NewProfiledModel(model Model, profile ModelProfile) *ProfiledModel {
 // ModelProfile returns the configured profile.
 func (model *ProfiledModel) ModelProfile() ModelProfile { return model.profile }
 
+// ContextWindow returns the configured context window. Zero means unknown.
+func (model *ProfiledModel) ContextWindow() int { return model.profile.ContextWindow }
+
 // DispatchesOutputProfile reports that this explicit outer profile resolves before delegation.
 func (*ProfiledModel) DispatchesOutputProfile() bool { return false }
 
@@ -63,11 +76,17 @@ func (*ProfiledModel) DispatchesOutputProfile() bool { return false }
 func (*ProfiledModel) DispatchesMessageProfile() bool { return false }
 
 // ModelProfile delegates profile discovery to the wrapped model.
-func (wrapper *ModelWrapper) ModelProfile() ModelProfile {
-	if model, ok := wrapper.wrapped.(ModelProfiler); ok {
-		return model.ModelProfile()
+func (wrapper *ModelWrapper) ModelProfile() ModelProfile { return modelProfile(wrapper.wrapped) }
+
+// ContextWindow delegates context-window discovery to the wrapped model.
+func (wrapper *ModelWrapper) ContextWindow() int { return modelContextWindow(wrapper.wrapped) }
+
+// SupportsToolAvailabilityDelta delegates request-specific reveal support.
+func (wrapper *ModelWrapper) SupportsToolAvailabilityDelta(params ModelRequestParams) bool {
+	if model, ok := wrapper.wrapped.(ToolAvailabilityDeltaModel); ok {
+		return model.SupportsToolAvailabilityDelta(params)
 	}
-	return ModelProfile{DefaultOutputMode: OutputModeTool}
+	return modelProfile(wrapper.wrapped).SupportsToolAvailabilityDelta
 }
 
 // DispatchesOutputProfile reports whether the wrapped composite resolves profiles per child model.
@@ -83,10 +102,32 @@ func (wrapper *ModelWrapper) DispatchesMessageProfile() bool {
 }
 
 func modelProfile(model Model) ModelProfile {
+	profile := ModelProfile{DefaultOutputMode: OutputModeTool}
 	if profiled, ok := model.(ModelProfiler); ok {
-		return profiled.ModelProfile()
+		profile = profiled.ModelProfile()
 	}
-	return ModelProfile{DefaultOutputMode: OutputModeTool}
+	if profile.ContextWindow == 0 {
+		profile.ContextWindow = modelContextWindow(model)
+	}
+	return profile
+}
+
+func modelContextWindow(model Model) int {
+	if modelIsNil(model) {
+		return 0
+	}
+	if windowed, ok := model.(ModelContextWindow); ok {
+		return windowed.ContextWindow()
+	}
+	if profiled, ok := model.(ModelProfiler); ok {
+		if window := profiled.ModelProfile().ContextWindow; window != 0 {
+			return window
+		}
+	}
+	if identified, ok := model.(ModelProviderIdentity); ok {
+		return contextwindow.Lookup(model.Name(), identified.ProviderName(), identified.ProviderURL())
+	}
+	return 0
 }
 
 func validateModelProfile(profile ModelProfile) {
@@ -94,5 +135,8 @@ func validateModelProfile(profile ModelProfile) {
 	case OutputModeTool, OutputModeNative, OutputModePrompted:
 	default:
 		panic("ai: model profile default output mode must be tool, native, or prompted")
+	}
+	if profile.ContextWindow < 0 {
+		panic("ai: model profile context window must not be negative")
 	}
 }

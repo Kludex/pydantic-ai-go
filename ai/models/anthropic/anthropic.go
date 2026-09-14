@@ -1080,6 +1080,10 @@ func (m *Model) buildPayload(
 	}
 	container := anthropicContainerFromHistory(msgs)
 	containerFromHistory := container != nil
+	if container != nil && !hasAnthropicCodeExecutionTool(params.NativeTools) {
+		container = nil
+		containerFromHistory = false
+	}
 	if len(msgs) > 0 {
 		if response, ok := msgs[len(msgs)-1].(ai.ModelResponse); ok && response.State == ai.ModelResponseStateSuspended {
 			containerFromHistory = false
@@ -1308,6 +1312,16 @@ func hasAnthropicMemoryTool(nativeTools []ai.NativeTool) bool {
 	for _, nativeTool := range nativeTools {
 		switch nativeTool.(type) {
 		case ai.MemoryTool, *ai.MemoryTool:
+			return true
+		}
+	}
+	return false
+}
+
+func hasAnthropicCodeExecutionTool(nativeTools []ai.NativeTool) bool {
+	for _, nativeTool := range nativeTools {
+		switch nativeTool.(type) {
+		case ai.CodeExecutionTool, *ai.CodeExecutionTool:
 			return true
 		}
 	}

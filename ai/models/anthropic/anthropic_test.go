@@ -1728,6 +1728,13 @@ func TestAnthropicContainerAndCodeExecutionSettings(t *testing.T) {
 		t.Fatalf("fresh request reused a container: %#v", body)
 	}
 
+	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := body["container"]; exists {
+		t.Fatalf("a request without the code execution tool reused a container: %#v", body)
+	}
+
 	legacy := newNamedServer(t, "claude-haiku-4-5", func(http.ResponseWriter, *http.Request) {})
 	latest, err := (anthropic.Settings{
 		CodeExecutionToolVersion: anthropic.CodeExecutionToolVersion20260120,
@@ -2170,7 +2177,9 @@ func TestAnthropicStaleThinkingRecoveryEdges(t *testing.T) {
 		history := []ai.ModelMessage{ai.ModelResponse{ProviderName: "anthropic", ProviderDetails: map[string]any{
 			"container_id": "container",
 		}}}
-		if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err == nil || calls != 1 {
+		if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{
+			NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}},
+		}); err == nil || calls != 1 {
 			t.Fatalf("unexpected container retry: calls=%d err=%v", calls, err)
 		}
 	})

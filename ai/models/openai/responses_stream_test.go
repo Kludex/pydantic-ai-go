@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -1600,6 +1601,52 @@ func TestResponsesStreamServerManagedToolSearch(t *testing.T) {
 	}
 	if _, ok := finish.Parts[1].(ai.NativeToolReturnPart); !ok {
 		t.Fatalf("unexpected final return part %T", finish.Parts[1])
+	}
+}
+
+func TestResponsesStreamPairsServerManagedToolSearchesInOrder(t *testing.T) {
+	for _, test := range []struct {
+		name              string
+		firstCallID       string
+		firstOutputCallID string
+		expectedFirstID   string
+	}{
+		{name: "anonymous", firstCallID: "null", firstOutputCallID: "null", expectedFirstID: "ts-a"},
+		{name: "output ID only", firstCallID: "null", firstOutputCallID: `"ts-a"`, expectedFirstID: "ts-a"},
+		{name: "explicit", firstCallID: `"call-a"`, firstOutputCallID: `"call-a"`, expectedFirstID: "call-a"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			model := newResponsesServer(t, sseHandler(t, []string{
+				`{"type":"response.created","response":{"id":"response","model":"gpt-5.4","status":"in_progress","usage":{}}}`,
+				fmt.Sprintf(`{"type":"response.output_item.added","item":{"id":"ts-a","type":"tool_search_call","call_id":%s,"execution":"server","status":"in_progress","arguments":{}}}`, test.firstCallID),
+				fmt.Sprintf(`{"type":"response.output_item.done","item":{"id":"ts-a","type":"tool_search_call","call_id":%s,"execution":"server","status":"completed","arguments":{"paths":["a"]}}}`, test.firstCallID),
+				fmt.Sprintf(`{"type":"response.output_item.added","item":{"id":"tso-a","type":"tool_search_output","call_id":%s,"execution":"server","status":"in_progress","tools":[]}}`, test.firstOutputCallID),
+				fmt.Sprintf(`{"type":"response.output_item.done","item":{"id":"tso-a","type":"tool_search_output","call_id":%s,"execution":"server","status":"completed","tools":[{"type":"function","name":"a"}]}}`, test.firstOutputCallID),
+				`{"type":"response.output_item.added","item":{"id":"ts-b","type":"tool_search_call","call_id":null,"execution":"server","status":"in_progress","arguments":{}}}`,
+				`{"type":"response.output_item.done","item":{"id":"ts-b","type":"tool_search_call","call_id":null,"execution":"server","status":"completed","arguments":{"paths":["b"]}}}`,
+				`{"type":"response.output_item.added","item":{"id":"tso-b","type":"tool_search_output","call_id":null,"execution":"server","status":"in_progress","tools":[]}}`,
+				`{"type":"response.output_item.done","item":{"id":"tso-b","type":"tool_search_output","call_id":null,"execution":"server","status":"completed","tools":[{"type":"function","name":"b"}]}}`,
+				`{"type":"response.completed","response":{"id":"response","model":"gpt-5.4","status":"completed","output":[],"usage":{}}}`,
+				`[DONE]`,
+			}))
+			events, err := collect(t, model, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var callIDs, returnIDs []string
+			for _, event := range events {
+				switch event := event.(type) {
+				case ai.ToolCallStartEvent:
+					callIDs = append(callIDs, event.ToolCallID)
+				case ai.NativeToolReturnEvent:
+					returnIDs = append(returnIDs, event.Part.ToolCallID)
+				}
+			}
+			want := []string{test.expectedFirstID, "ts-b"}
+			if !slices.Equal(callIDs, want) || !slices.Equal(returnIDs, want) {
+				t.Fatalf("unexpected streamed pairing: calls=%v returns=%v", callIDs, returnIDs)
+			}
+		})
 	}
 }
 

@@ -106,6 +106,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Fixed
 
+- Forward blocked domains to OpenAI Responses web search and pair multiple anonymous hosted tool-search calls and results in provider order.
 - Keep realtime sessions open when automatic barge-in is enabled for a model without interruption support.
 - Let a realtime tool close its session without racing the connection pump into waiting on that tool.
 

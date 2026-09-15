@@ -160,7 +160,7 @@ func (m *ResponsesModel) responsesEventStream(
 		refusal := ""
 		hasRefusal := false
 		var responseTimestamp time.Time
-		nullServerSearchCalls := make([]string, 0)
+		pendingServerSearchCallIDs := make([]string, 0)
 		textPhases := make(map[string]string)
 		textAnnotations := make(map[string][]map[string]any)
 		imageFiles := make(map[string]bool)
@@ -423,8 +423,8 @@ func (m *ResponsesModel) responsesEventStream(
 						}
 					case "server":
 						callID := responsesEffectiveCallID(event.Item)
-						if responsesCallID(event.Item.CallID) == "" {
-							nullServerSearchCalls = append(nullServerSearchCalls, callID)
+						if event.Item.CallID == nil {
+							pendingServerSearchCallIDs = append(pendingServerSearchCallIDs, callID)
 						}
 						if !yield(ai.ToolCallStartEvent{
 							PartID: responsesToolPartID(event), ToolName: ai.ToolSearchName, ToolCallID: callID,
@@ -614,10 +614,12 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 				case event.Item.Type == "tool_search_output" && event.Item.Execution == "server":
 					emittedParts = true
-					callID := responsesEffectiveCallID(event.Item)
-					if responsesCallID(event.Item.CallID) == "" && len(nullServerSearchCalls) == 1 {
-						callID = nullServerSearchCalls[0]
-						nullServerSearchCalls = nil
+					callID, pending := matchResponsesToolSearchCallID(
+						responsesCallID(event.Item.CallID), pendingServerSearchCallIDs,
+					)
+					pendingServerSearchCallIDs = pending
+					if callID == "" {
+						callID = event.Item.ID
 					}
 					if !yield(ai.NativeToolReturnEvent{
 						PartID: "item:" + event.Item.ID,

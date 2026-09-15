@@ -548,7 +548,8 @@ type responsesWebSearchLocation struct {
 }
 
 type responsesWebSearchFilters struct {
-	AllowedDomains []string `json:"allowed_domains"`
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
 func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (responsesTool, bool, error) {
@@ -600,16 +601,16 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 			Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
 		}
 	}
-	if len(webSearch.AllowedDomains) > 0 {
-		if providerName == "xai" {
-			tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
-		} else {
-			tool.Filters = &responsesWebSearchFilters{AllowedDomains: slices.Clone(webSearch.AllowedDomains)}
-		}
-	}
 	if providerName == "xai" {
+		tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
 		tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
 		return tool, true, nil
+	}
+	if len(webSearch.AllowedDomains) > 0 || len(webSearch.BlockedDomains) > 0 {
+		tool.Filters = &responsesWebSearchFilters{
+			AllowedDomains: slices.Clone(webSearch.AllowedDomains),
+			BlockedDomains: slices.Clone(webSearch.BlockedDomains),
+		}
 	}
 	if webSearch.ExternalWebAccess != nil {
 		external := *webSearch.ExternalWebAccess
@@ -1491,45 +1492,57 @@ func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool
 }
 
 func pairResponsesToolSearchItems(items []responsesOutputItem) (map[int]int, map[int]bool) {
-	pairs := make(map[int]int)
-	pairedOutputs := make(map[int]bool)
-	outputsByCallID := make(map[string][]int)
-	var nullCalls, nullOutputs []int
-	for index, item := range items {
-		if item.Execution != "server" {
-			continue
-		}
-		switch item.Type {
-		case "tool_search_call":
-			if callID := responsesCallID(item.CallID); callID == "" {
-				nullCalls = append(nullCalls, index)
-			}
-		case "tool_search_output":
-			if callID := responsesCallID(item.CallID); callID != "" {
-				outputsByCallID[callID] = append(outputsByCallID[callID], index)
-			} else {
-				nullOutputs = append(nullOutputs, index)
-			}
-		}
-	}
+	serverCallIndexes := make(map[string]int)
+	pendingCallIDs := make([]string, 0)
 	for index, item := range items {
 		if item.Type != "tool_search_call" || item.Execution != "server" {
 			continue
 		}
-		callID := responsesCallID(item.CallID)
-		if len(outputsByCallID[callID]) == 0 || callID == "" {
+		callID := responsesEffectiveCallID(item)
+		serverCallIndexes[callID] = index
+		if item.CallID == nil {
+			pendingCallIDs = append(pendingCallIDs, callID)
+		}
+	}
+
+	outputsByCallID := make(map[string]int)
+	for index, item := range items {
+		if item.Type != "tool_search_output" || item.Execution != "server" {
 			continue
 		}
-		outputIndex := outputsByCallID[callID][0]
-		outputsByCallID[callID] = outputsByCallID[callID][1:]
-		pairs[index] = outputIndex
+		callID := responsesCallID(item.CallID)
+		if callID != "" {
+			if _, ok := serverCallIndexes[callID]; !ok {
+				continue
+			}
+		}
+		callID, pendingCallIDs = matchResponsesToolSearchCallID(callID, pendingCallIDs)
+		if callID != "" {
+			outputsByCallID[callID] = index
+		}
+	}
+
+	pairs := make(map[int]int)
+	pairedOutputs := make(map[int]bool)
+	for callID, outputIndex := range outputsByCallID {
+		callIndex := serverCallIndexes[callID]
+		pairs[callIndex] = outputIndex
 		pairedOutputs[outputIndex] = true
 	}
-	if len(nullCalls) == 1 && len(nullOutputs) == 1 {
-		pairs[nullCalls[0]] = nullOutputs[0]
-		pairedOutputs[nullOutputs[0]] = true
-	}
 	return pairs, pairedOutputs
+}
+
+func matchResponsesToolSearchCallID(outputCallID string, pendingCallIDs []string) (string, []string) {
+	if outputCallID == "" {
+		if len(pendingCallIDs) == 0 {
+			return "", pendingCallIDs
+		}
+		return pendingCallIDs[0], pendingCallIDs[1:]
+	}
+	if index := slices.Index(pendingCallIDs, outputCallID); index >= 0 {
+		pendingCallIDs = slices.Delete(pendingCallIDs, index, index+1)
+	}
+	return outputCallID, pendingCallIDs
 }
 
 func responsesToolSearchReturn(

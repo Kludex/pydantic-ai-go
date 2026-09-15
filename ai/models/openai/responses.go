@@ -548,7 +548,8 @@ type responsesWebSearchLocation struct {
 }
 
 type responsesWebSearchFilters struct {
-	AllowedDomains []string `json:"allowed_domains"`
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
 func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (responsesTool, bool, error) {
@@ -603,13 +604,24 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 	if len(webSearch.AllowedDomains) > 0 {
 		if providerName == "xai" {
 			tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
-		} else {
-			tool.Filters = &responsesWebSearchFilters{AllowedDomains: slices.Clone(webSearch.AllowedDomains)}
 		}
 	}
 	if providerName == "xai" {
 		tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
 		return tool, true, nil
+	}
+	// OpenAI Responses forwards domain filtering through `filters`. The wire field
+	// `blocked_domains` is newer than the upstream SDK type, so emit it together with
+	// `allowed_domains` in one place rather than two slices on the responseTool.
+	if len(webSearch.AllowedDomains) > 0 || len(webSearch.BlockedDomains) > 0 {
+		filters := &responsesWebSearchFilters{}
+		if len(webSearch.AllowedDomains) > 0 {
+			filters.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
+		}
+		if len(webSearch.BlockedDomains) > 0 {
+			filters.BlockedDomains = slices.Clone(webSearch.BlockedDomains)
+		}
+		tool.Filters = filters
 	}
 	if webSearch.ExternalWebAccess != nil {
 		external := *webSearch.ExternalWebAccess

@@ -126,17 +126,20 @@ func (session *Session) flushAudioTapLocked(tap *audioTap) {
 	}
 }
 
-// Enqueue adds text for delivery after an active response completes.
+// Enqueue adds text for delivery after an active response completes. It is
+// safe to call concurrently and returns an error after the session closes.
 func (session *Session) Enqueue(ctx context.Context, content ...any) (string, error) {
 	return session.EnqueueWithPriority(ctx, ai.PendingMessageASAP, content...)
 }
 
-// EnqueueWhenIdle adds text after active and ASAP work completes.
+// EnqueueWhenIdle adds text after active and ASAP work completes. It is safe
+// to call concurrently and returns an error after the session closes.
 func (session *Session) EnqueueWhenIdle(ctx context.Context, content ...any) (string, error) {
 	return session.EnqueueWithPriority(ctx, ai.PendingMessageWhenIdle, content...)
 }
 
-// EnqueueWithPriority queues plain text and system prompt parts for a later turn.
+// EnqueueWithPriority queues plain text and system prompt parts for a later
+// turn. It is safe to call concurrently and returns an error after close.
 func (session *Session) EnqueueWithPriority(
 	ctx context.Context, priority ai.PendingMessagePriority, content ...any,
 ) (string, error) {
@@ -153,14 +156,12 @@ func (session *Session) EnqueueWithPriority(
 	if text == "" {
 		return "", nil
 	}
-	session.mu.RLock()
-	closed := session.closed
-	session.mu.RUnlock()
-	if closed {
-		return "", fmt.Errorf("realtime: session is closed")
-	}
 	id := fmt.Sprintf("realtime-enqueue-%d", enqueueID.Add(1))
 	session.enqueueMu.Lock()
+	if session.enqueueClosed {
+		session.enqueueMu.Unlock()
+		return "", fmt.Errorf("realtime: session is closed")
+	}
 	session.enqueued = append(session.enqueued, queuedPrompt{id: id, priority: priority, text: text})
 	session.enqueueMu.Unlock()
 	go session.deliverEnqueued()
@@ -257,6 +258,12 @@ func (session *Session) deliverEnqueued() {
 		})
 		session.mu.Unlock()
 	}
+}
+
+func (session *Session) closeEnqueue() {
+	session.enqueueMu.Lock()
+	session.enqueueClosed = true
+	session.enqueueMu.Unlock()
 }
 
 func (session *Session) takeEnqueued(priority ai.PendingMessagePriority) []queuedPrompt {

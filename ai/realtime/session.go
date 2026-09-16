@@ -194,9 +194,10 @@ type Session struct {
 	interruptedAudioPartIndex int
 	hasInterruptedAudioPart   bool
 
-	enqueueMu  sync.Mutex
-	deliveryMu sync.Mutex
-	enqueued   []queuedPrompt
+	enqueueMu     sync.Mutex
+	deliveryMu    sync.Mutex
+	enqueued      []queuedPrompt
+	enqueueClosed bool
 }
 
 type audioTap struct {
@@ -714,6 +715,7 @@ func (session *Session) removeAudioTap(tap *audioTap) {
 
 // Close stops the pump, cancels tools, closes the transport, and waits for cleanup.
 func (session *Session) Close(ctx context.Context) error {
+	session.closeEnqueue()
 	current, fromTool := ctx.Value(toolContextKey{}).(toolContextValue)
 	fromOwnTool := fromTool && current.session == session
 	waitCtx := ctx
@@ -743,6 +745,7 @@ func (session *Session) Close(ctx context.Context) error {
 
 func (session *Session) pump() {
 	defer func() {
+		session.closeEnqueue()
 		session.cancel(nil)
 		_ = session.connection.Close(context.Background())
 		session.toolMu.Lock()

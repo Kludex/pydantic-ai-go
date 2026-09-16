@@ -39,20 +39,24 @@ type pendingMessage struct {
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending []pendingMessage
+	closed  bool
 }
 
-// Enqueue adds items for delivery before the next model request.
+// Enqueue adds items for delivery before the next model request. It is safe
+// to call concurrently and returns an error after the run ends.
 func (rc *RunContext[Deps]) Enqueue(items ...EnqueueItem) (string, error) {
 	return rc.EnqueueWithPriority(PendingMessageASAP, items...)
 }
 
 // EnqueueWhenIdle adds items for delivery when the run would otherwise end.
+// It is safe to call concurrently and returns an error after the run ends.
 func (rc *RunContext[Deps]) EnqueueWhenIdle(items ...EnqueueItem) (string, error) {
 	return rc.EnqueueWithPriority(PendingMessageWhenIdle, items...)
 }
 
 // EnqueueWithPriority adds model messages, request parts, or adjacent user
 // content to the current run. The assembled sequence must end in a request.
+// It is safe to call concurrently and returns an error after the run ends.
 func (rc *RunContext[Deps]) EnqueueWithPriority(
 	priority PendingMessagePriority, items ...EnqueueItem,
 ) (string, error) {
@@ -76,7 +80,9 @@ func enqueuePendingMessage(
 		return "", nil
 	}
 	id := newRunID()
-	queue.add(pendingMessage{id: id, priority: priority, messages: messages})
+	if err := queue.add(pendingMessage{id: id, priority: priority, messages: messages}); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 
@@ -124,10 +130,20 @@ func buildEnqueuedMessages(items []EnqueueItem) ([]ModelMessage, error) {
 	return messages, nil
 }
 
-func (q *pendingMessageQueue) add(message pendingMessage) {
+func (q *pendingMessageQueue) add(message pendingMessage) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.closed {
+		return fmt.Errorf("ai: enqueue is not available because the agent run has ended")
+	}
 	q.pending = append(q.pending, message)
+	return nil
+}
+
+func (q *pendingMessageQueue) close() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.closed = true
 }
 
 func (q *pendingMessageQueue) snapshot() []pendingMessage {
@@ -169,6 +185,9 @@ func (q *pendingMessageQueue) drainForRedirect() []pendingMessage {
 		}
 	}
 	q.pending = nil
+	if len(drained) == 0 {
+		q.closed = true
+	}
 	return drained
 }
 

@@ -359,7 +359,10 @@ func (a *Agent[Deps, Output]) newRun(
 		return nil, err
 	}
 	for _, pending := range restoredPending {
-		r.pendingMessages.add(pending)
+		if err := r.pendingMessages.add(pending); err != nil {
+			cancellation.finish()
+			return nil, err
+		}
 	}
 	var interruptedReturns []RequestPart
 	var resumeSeed *ModelResponse
@@ -847,6 +850,7 @@ func (r *run[Deps, Output]) closeModels(ctx context.Context) error {
 }
 
 func (r *run[Deps, Output]) closeRunResources(ctx context.Context) error {
+	r.pendingMessages.close()
 	return errors.Join(r.closeModels(ctx), r.closeToolsets(ctx))
 }
 

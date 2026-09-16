@@ -2,7 +2,7 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@1e79ff4a20592f757ba335bb99ca9795b3dc2a35`.
+Audited upstream baseline: `pydantic/pydantic-ai@c92e9c1e1915d071969a46900ba898f014a286d9`.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 
@@ -268,7 +268,7 @@ Status:
 - [x] Compatibility and semantic-versioning policy for public Go APIs, supported Go versions, persisted messages, providers, deprecations, and inspectable errors, plus an unreleased changelog.
 - [x] Public-API benchmarks cover loop overhead, streaming consumption, schema reflection, and eight-way parallel tool execution, with a reproducible `benchstat` comparison guide.
 - [x] Use the tagged `genai-prices` Go `v0.1.6` module release instead of a commit pseudo-version.
-- [x] Audited upstream through `1e79ff4a20592f757ba335bb99ca9795b3dc2a35`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6. Interactive agent runs and terminal chat sessions provide the upstream first-run banner behavior. The upstream enterprise-support sales page and unified-site navigation are product-site-only.
+- [x] Audited upstream through `c92e9c1e1915d071969a46900ba898f014a286d9`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6. Interactive agent runs and terminal chat sessions provide the upstream first-run banner behavior. Standard and realtime enqueue queues close atomically against concurrent submissions. The upstream enterprise-support sales pages, unified-site navigation, and Python migration skills are product-only.
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 
@@ -291,6 +291,10 @@ Status:
 - `f6afee204` is permanently inapplicable to the bundled durable backends. They register application-owned callbacks and do not implement Temporal tool activity opt-outs. Durable `OperationID` values already carry `ToolsetKind`, so no Go path imports MCP to identify an operation.
 - `fbd2beb0b` is implemented by the process-wide first-run banner and terminal chat startup banner. Python `rich`, package-distribution discovery, `pytest` blocker exemptions, and inherited thread-lock replacement after `fork` are language/runtime-specific; Go uses an atomic claim, build information, and `go test` detection.
 - `86b250f3d` adds comparisons for the Python library, Harness SDK, Pydantic Graph, and their combined product surface. Those pages and navigation redirects are product documentation, not portable library behavior, and would make incorrect claims if copied into the Go port.
+- `95c9890be` is implemented by atomically closing standard-run queues during the final drain, closing them on every cleanup path, and closing realtime queues with their sessions. Concurrent submissions are either delivered or rejected, and retained run contexts reject submissions after completion.
+- `d9d1f64ac`, `34a57eba7`, `a106675af`, `e369e0695`, and `c4dc5c6df` add Python-specific migration skills for Claude Agent SDK, Mastra, Google ADK, OpenAI Agents SDK, Vercel AI SDK, and Eve. This Go module does not distribute Python or Harness agent skills, so their 21 package-data files are permanently inapplicable.
+- `e208a4a9c` only corrects deferred-approval wording inside those Python migration skills. It is permanently inapplicable for the same reason.
+- `c92e9c1e1` changes Pydantic's enterprise-support sales page and coordinated vulnerability-response terms. This Go port neither sells Pydantic support nor ships that website, so the change is permanently inapplicable.
 
 ## Audit status
 

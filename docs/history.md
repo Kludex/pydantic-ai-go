@@ -1,5 +1,61 @@
 # Message history
 
+## Enqueue a message during a run
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+func main() {
+	model := fakes.NewFunctionModel(func(
+		_ context.Context,
+		messages []ai.ModelMessage,
+		_ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		request := messages[len(messages)-1].(ai.ModelRequest)
+		prompt := request.Parts[0].(ai.UserPromptPart)
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.TextPart{Content: "received: " + prompt.Content},
+		}}, nil
+	})
+	run, err := ai.NewAgent[struct{}, string](model).StartRun(
+		context.Background(), "Wait for the deployment.", struct{}{},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	queued := make(chan error, 1)
+	go func() {
+		_, err := run.Enqueue(ai.UserPromptPart{Content: "deployment finished"})
+		queued <- err
+	}()
+	if err := <-queued; err != nil {
+		log.Fatal(err)
+	}
+	for _, err := range run.Events() {
+		if err != nil {
+			log.Fatal(err)
+		}
+	}
+	fmt.Println(run.Result().Output)
+}
+```
+
+`RunContext.Enqueue` and `AgentRun.Enqueue` deliver content before the next model request. `EnqueueWhenIdle` waits until the run would otherwise finish. Both methods are safe to call from another goroutine.
+
+The final queue drain is atomic with run completion. A concurrent enqueue is either accepted and delivered or rejected because the run ended. A retained `RunContext` cannot enqueue after its run ends.
+
+Realtime sessions provide the same closed-session guarantee through `Session.Enqueue` and `Session.EnqueueWhenIdle`. See [Realtime agents](realtime.md).
+
 ## Sanitize untrusted history
 
 ```go

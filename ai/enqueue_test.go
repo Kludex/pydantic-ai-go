@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -203,6 +204,80 @@ func TestConcurrentToolEnqueueIsSafe(t *testing.T) {
 	result, err := agent.Run(t.Context(), "go", deps{})
 	if err != nil || result.Output != "done" || len(ids) != 2 || ids[0] == ids[1] {
 		t.Fatalf("unexpected concurrent enqueue result=%+v ids=%v err=%v", result, ids, err)
+	}
+}
+
+func TestRetainedRunContextRejectsEnqueueAfterRun(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		t.Run(fmt.Sprintf("fail=%t", fail), func(t *testing.T) {
+			request := 0
+			var retained *ai.RunContext[deps]
+			model := fakes.NewFunctionModel(func(
+				context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				request++
+				if request == 1 {
+					return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+						ToolName: "retain", ToolCallID: "retain", Args: json.RawMessage(`{}`),
+					}}}, nil
+				}
+				if fail {
+					return nil, errors.New("model failed")
+				}
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+			})
+			agent := ai.NewAgent[deps, string](model)
+			ai.AddTool(agent, "retain", func(
+				_ context.Context, rc *ai.RunContext[deps], _ struct{},
+			) (string, error) {
+				retained = rc
+				return "retained", nil
+			})
+
+			_, _ = agent.Run(t.Context(), "go", deps{})
+			if retained == nil {
+				t.Fatal("tool did not retain its run context")
+			}
+			if _, err := retained.Enqueue(ai.TextContent{Text: "too late"}); err == nil {
+				t.Fatal("expected enqueue after run end to fail")
+			}
+		})
+	}
+}
+
+func TestEnqueueRacingRunEndIsDeliveredOrRejected(t *testing.T) {
+	for range 100 {
+		requests := 0
+		enqueueResult := make(chan error, 1)
+		var start sync.Once
+		model := fakes.NewFunctionModel(func(
+			_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			requests++
+			if requests == 2 {
+				last := messages[len(messages)-1].(ai.ModelRequest)
+				if last.Parts[0].(ai.UserPromptPart).Contents[0].(ai.TextContent).Text != "racing" {
+					t.Fatalf("concurrent enqueue was not delivered: %+v", last)
+				}
+			}
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+		})
+		agent := ai.NewAgent[deps, string](model)
+		agent.AddOutputValidator(func(_ context.Context, rc *ai.RunContext[deps], _ string) error {
+			start.Do(func() {
+				go func() {
+					_, err := rc.Enqueue(ai.TextContent{Text: "racing"})
+					enqueueResult <- err
+				}()
+			})
+			return nil
+		})
+		if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+			t.Fatal(err)
+		}
+		if enqueueErr := <-enqueueResult; enqueueErr == nil && requests != 2 {
+			t.Fatalf("accepted enqueue was not delivered: requests=%d", requests)
+		}
 	}
 }
 

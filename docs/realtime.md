@@ -213,7 +213,7 @@ Tool calls execute concurrently with media streaming. A `RetryError` becomes mod
 
 A tool can call `session.Close(ctx)` to end the conversation. Closing from the running tool does not wait on itself. Its late result is not sent to the closed provider.
 
-Use `session.Enqueue(ctx, ...)` to add an out-of-band prompt after the current response. Use `EnqueueWhenIdle` to place work after queued ASAP prompts. Realtime enqueue accepts strings, `ai.TextContent`, `ai.UserPromptPart`, `ai.SystemPromptPart`, and matching `ai.ModelRequest` values. System prompt parts are wrapped in `<system>` tags because the live channel accepts only a user turn.
+Use `session.Enqueue(ctx, ...)` to add an out-of-band prompt after the current response. Use `EnqueueWhenIdle` to place work after queued ASAP prompts. Both methods are safe to call from another goroutine and return an error after the session closes. Realtime enqueue accepts strings, `ai.TextContent`, `ai.UserPromptPart`, `ai.SystemPromptPart`, and matching `ai.ModelRequest` values. System prompt parts are wrapped in `<system>` tags because the live channel accepts only a user turn.
 
 ## Use Gemini Live
 

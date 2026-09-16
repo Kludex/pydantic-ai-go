@@ -184,17 +184,20 @@ func (r *AgentRun[Deps, Output]) Events() EventStream {
 	}
 }
 
-// Enqueue adds content for delivery at the next model-request boundary.
+// Enqueue adds content for delivery at the next model-request boundary. It is
+// safe to call concurrently and returns an error after the run ends.
 func (r *AgentRun[Deps, Output]) Enqueue(items ...EnqueueItem) (string, error) {
 	return r.EnqueueWithPriority(PendingMessageASAP, items...)
 }
 
-// EnqueueWhenIdle adds content only when the run would otherwise finish.
+// EnqueueWhenIdle adds content only when the run would otherwise finish. It
+// is safe to call concurrently and returns an error after the run ends.
 func (r *AgentRun[Deps, Output]) EnqueueWhenIdle(items ...EnqueueItem) (string, error) {
 	return r.EnqueueWithPriority(PendingMessageWhenIdle, items...)
 }
 
-// EnqueueWithPriority adds content from outside tools and capability hooks.
+// EnqueueWithPriority adds content from outside tools and capability hooks. It
+// is safe to call concurrently and returns an error after the run ends.
 func (r *AgentRun[Deps, Output]) EnqueueWithPriority(
 	priority PendingMessagePriority, items ...EnqueueItem,
 ) (string, error) {

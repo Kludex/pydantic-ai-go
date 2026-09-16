@@ -1678,3 +1678,25 @@ func TestResponsesLiveServerSearchStreamCanStop(t *testing.T) {
 		})
 	}
 }
+
+func TestResponsesStreamServerSearchExplicitCallID(t *testing.T) {
+	events := []string{
+		`{"type":"response.output_item.added","item":{"id":"ts","type":"tool_search_call","call_id":null,"execution":"server","status":"in_progress"}}`,
+		`{"type":"response.output_item.done","item":{"id":"ts","type":"tool_search_call","call_id":null,"execution":"server","status":"completed","arguments":{}}}`,
+		`{"type":"response.output_item.done","item":{"id":"tso","type":"tool_search_output","call_id":"ts","execution":"server","status":"completed","tools":[{"type":"function","name":"weather"}]}}`,
+	}
+	model := newResponsesServer(t, sseHandler(t, append(events, `{"type":"response.completed","response":{"id":"response-1","model":"gpt-5.4","status":"completed","output":[],"usage":{}}}`, `[DONE]`)))
+	collected, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var returned *ai.NativeToolReturnEvent
+	for _, event := range collected {
+		if cast, ok := event.(ai.NativeToolReturnEvent); ok {
+			returned = &cast
+		}
+	}
+	if returned == nil || returned.Part.ToolCallID != "ts" {
+		t.Fatalf("explicit output on null call id was not paired: %#v", collected)
+	}
+}

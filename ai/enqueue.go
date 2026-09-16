@@ -39,6 +39,7 @@ type pendingMessage struct {
 type pendingMessageQueue struct {
 	mu      sync.Mutex
 	pending []pendingMessage
+	closed  bool
 }
 
 // Enqueue adds items for delivery before the next model request.
@@ -76,7 +77,9 @@ func enqueuePendingMessage(
 		return "", nil
 	}
 	id := newRunID()
-	queue.add(pendingMessage{id: id, priority: priority, messages: messages})
+	if err := queue.add(pendingMessage{id: id, priority: priority, messages: messages}); err != nil {
+		return "", err
+	}
 	return id, nil
 }
 
@@ -124,10 +127,14 @@ func buildEnqueuedMessages(items []EnqueueItem) ([]ModelMessage, error) {
 	return messages, nil
 }
 
-func (q *pendingMessageQueue) add(message pendingMessage) {
+func (q *pendingMessageQueue) add(message pendingMessage) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
+	if q.closed {
+		return fmt.Errorf("ai: enqueue is not available because the agent run has ended")
+	}
 	q.pending = append(q.pending, message)
+	return nil
 }
 
 func (q *pendingMessageQueue) snapshot() []pendingMessage {
@@ -169,6 +176,7 @@ func (q *pendingMessageQueue) drainForRedirect() []pendingMessage {
 		}
 	}
 	q.pending = nil
+	q.closed = true
 	return drained
 }
 

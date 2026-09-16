@@ -262,6 +262,40 @@ func TestResponsesWebSearchNativeTool(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSearchBlockedDomainsForwarded(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[
+				{"type":"message","id":"message","content":[{"type":"output_text","text":"done"}]}
+			]
+		}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{
+			BlockedDomains: []string{"spam.example", "ads.example"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	tool := body["tools"].([]any)[0].(map[string]any)
+	filters, ok := tool["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing filters when only blocked_domains are set: %#v", tool)
+	}
+	blocked, ok := filters["blocked_domains"].([]any)
+	if !ok || len(blocked) != 2 ||
+		blocked[0] != "spam.example" || blocked[1] != "ads.example" {
+		t.Fatalf("unexpected blocked_domains: %#v", filters)
+	}
+	if _, ok := filters["allowed_domains"]; ok {
+		t.Fatalf("allowed_domains leaked into filters: %#v", filters)
+	}
+}
+
 func TestResponsesCodeExecutionNativeTool(t *testing.T) {
 	var body map[string]any
 	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {
@@ -2244,7 +2278,7 @@ func TestResponsesRejectsNamedToolSearchStrategies(t *testing.T) {
 }
 
 func TestResponsesServerManagedToolSearchPairingEdges(t *testing.T) {
-	t.Run("ambiguous null IDs", func(t *testing.T) {
+	t.Run("ambiguous null IDs pair in FIFO order", func(t *testing.T) {
 		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{
 				"model":"gpt-5.4","status":"completed","output":[
@@ -2261,10 +2295,10 @@ func TestResponsesServerManagedToolSearchPairingEdges(t *testing.T) {
 		}
 		if len(response.Parts) != 4 ||
 			response.Parts[0].(ai.NativeToolCallPart).ToolCallID != "ts-a" ||
-			response.Parts[1].(ai.NativeToolReturnPart).ToolCallID != "tso-a" ||
+			response.Parts[1].(ai.NativeToolReturnPart).ToolCallID != "ts-a" ||
 			response.Parts[2].(ai.NativeToolCallPart).ToolCallID != "ts-b" ||
-			response.Parts[3].(ai.NativeToolReturnPart).ToolCallID != "tso-b" {
-			t.Fatalf("ambiguous null IDs were guessed: %+v", response.Parts)
+			response.Parts[3].(ai.NativeToolReturnPart).ToolCallID != "ts-b" {
+			t.Fatalf("ambiguous null IDs were not FIFO-paired: %+v", response.Parts)
 		}
 	})
 	t.Run("explicit output first", func(t *testing.T) {
@@ -2321,6 +2355,42 @@ func TestResponsesServerManagedToolSearchPairingEdges(t *testing.T) {
 		}
 		if len(response.Parts) != 1 || response.Parts[0].(ai.NativeToolReturnPart).ToolCallID != "server" {
 			t.Fatalf("unexpected unmatched outputs: %+v", response.Parts)
+		}
+	})
+	t.Run("explicit output on null call id", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"model":"gpt-5.4","status":"completed","output":[
+					{"id":"ts-1","type":"tool_search_call","call_id":null,"execution":"server","status":"completed","arguments":{"paths":["weather"]}},
+					{"id":"tso-1","type":"tool_search_output","call_id":"ts-1","execution":"server","status":"completed","tools":[{"type":"function","name":"weather"}]}
+				],"usage":{}
+			}`))
+		})
+		response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Parts) != 2 ||
+			response.Parts[0].(ai.NativeToolCallPart).ToolCallID != "ts-1" ||
+			response.Parts[1].(ai.NativeToolReturnPart).ToolCallID != "ts-1" {
+			t.Fatalf("explicit output on null call id was not paired: %+v", response.Parts)
+		}
+	})
+	t.Run("explicit output without a matching call", func(t *testing.T) {
+		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+			_, _ = w.Write([]byte(`{
+				"model":"gpt-5.4","status":"completed","output":[
+					{"id":"tso","type":"tool_search_output","call_id":"orphan","execution":"server","status":"completed","tools":[]}
+				],"usage":{}
+			}`))
+		})
+		response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(response.Parts) != 1 ||
+			response.Parts[0].(ai.NativeToolReturnPart).ToolCallID != "orphan" {
+			t.Fatalf("unexpected orphan pairing: %+v", response.Parts)
 		}
 	})
 }

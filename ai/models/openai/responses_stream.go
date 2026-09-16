@@ -615,9 +615,16 @@ func (m *ResponsesModel) responsesEventStream(
 				case event.Item.Type == "tool_search_output" && event.Item.Execution == "server":
 					emittedParts = true
 					callID := responsesEffectiveCallID(event.Item)
-					if responsesCallID(event.Item.CallID) == "" && len(nullServerSearchCalls) == 1 {
+					switch {
+					case responsesCallID(event.Item.CallID) == "" && len(nullServerSearchCalls) > 0:
 						callID = nullServerSearchCalls[0]
-						nullServerSearchCalls = nil
+						nullServerSearchCalls = nullServerSearchCalls[1:]
+					case responsesCallID(event.Item.CallID) != "":
+						if index := slices.Index(nullServerSearchCalls, callID); index >= 0 {
+							nullServerSearchCalls = append(
+								nullServerSearchCalls[:index], nullServerSearchCalls[index+1:]...,
+							)
+						}
 					}
 					if !yield(ai.NativeToolReturnEvent{
 						PartID: "item:" + event.Item.ID,

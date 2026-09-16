@@ -548,7 +548,8 @@ type responsesWebSearchLocation struct {
 }
 
 type responsesWebSearchFilters struct {
-	AllowedDomains []string `json:"allowed_domains"`
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
 func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (responsesTool, bool, error) {
@@ -600,15 +601,26 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 			Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
 		}
 	}
-	if len(webSearch.AllowedDomains) > 0 {
+	if len(webSearch.AllowedDomains) > 0 || len(webSearch.BlockedDomains) > 0 {
 		if providerName == "xai" {
-			tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
+			if len(webSearch.AllowedDomains) > 0 {
+				tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
+			}
+			if len(webSearch.BlockedDomains) > 0 {
+				tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
+			}
 		} else {
-			tool.Filters = &responsesWebSearchFilters{AllowedDomains: slices.Clone(webSearch.AllowedDomains)}
+			filters := &responsesWebSearchFilters{}
+			if len(webSearch.AllowedDomains) > 0 {
+				filters.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
+			}
+			if len(webSearch.BlockedDomains) > 0 {
+				filters.BlockedDomains = slices.Clone(webSearch.BlockedDomains)
+			}
+			tool.Filters = filters
 		}
 	}
 	if providerName == "xai" {
-		tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
 		return tool, true, nil
 	}
 	if webSearch.ExternalWebAccess != nil {
@@ -1493,41 +1505,53 @@ func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool
 func pairResponsesToolSearchItems(items []responsesOutputItem) (map[int]int, map[int]bool) {
 	pairs := make(map[int]int)
 	pairedOutputs := make(map[int]bool)
-	outputsByCallID := make(map[string][]int)
-	var nullCalls, nullOutputs []int
-	for index, item := range items {
-		if item.Execution != "server" {
-			continue
-		}
-		switch item.Type {
-		case "tool_search_call":
-			if callID := responsesCallID(item.CallID); callID == "" {
-				nullCalls = append(nullCalls, index)
-			}
-		case "tool_search_output":
-			if callID := responsesCallID(item.CallID); callID != "" {
-				outputsByCallID[callID] = append(outputsByCallID[callID], index)
-			} else {
-				nullOutputs = append(nullOutputs, index)
-			}
-		}
-	}
+	callIndexByID := make(map[string]int)
+	serverCallIDs := make(map[string]struct{})
+	var pendingNullCallIDs []string
 	for index, item := range items {
 		if item.Type != "tool_search_call" || item.Execution != "server" {
 			continue
 		}
 		callID := responsesCallID(item.CallID)
-		if len(outputsByCallID[callID]) == 0 || callID == "" {
+		if callID == "" {
+			callID = item.ID
+			pendingNullCallIDs = append(pendingNullCallIDs, callID)
+		}
+		callIndexByID[callID] = index
+		serverCallIDs[callID] = struct{}{}
+	}
+	matchedOutputs := make(map[int]bool)
+	removePending := func(callID string) {
+		for i, pending := range pendingNullCallIDs {
+			if pending == callID {
+				pendingNullCallIDs = append(pendingNullCallIDs[:i], pendingNullCallIDs[i+1:]...)
+				return
+			}
+		}
+	}
+	for index, item := range items {
+		if item.Type != "tool_search_output" || item.Execution != "server" || matchedOutputs[index] {
 			continue
 		}
-		outputIndex := outputsByCallID[callID][0]
-		outputsByCallID[callID] = outputsByCallID[callID][1:]
-		pairs[index] = outputIndex
-		pairedOutputs[outputIndex] = true
-	}
-	if len(nullCalls) == 1 && len(nullOutputs) == 1 {
-		pairs[nullCalls[0]] = nullOutputs[0]
-		pairedOutputs[nullOutputs[0]] = true
+		callID := responsesCallID(item.CallID)
+		if callID != "" {
+			if _, ok := serverCallIDs[callID]; !ok {
+				continue
+			}
+			removePending(callID)
+		} else if len(pendingNullCallIDs) == 0 {
+			continue
+		} else {
+			callID = pendingNullCallIDs[0]
+			pendingNullCallIDs = pendingNullCallIDs[1:]
+		}
+		matchedOutputs[index] = true
+		callIndex, ok := callIndexByID[callID]
+		if !ok {
+			continue
+		}
+		pairs[callIndex] = index
+		pairedOutputs[index] = true
 	}
 	return pairs, pairedOutputs
 }

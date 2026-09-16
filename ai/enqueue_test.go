@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -248,6 +249,47 @@ func TestEnqueueValidation(t *testing.T) {
 	_, err := agent.Run(t.Context(), "go", deps{})
 	if err == nil || err.Error() != `ai: tool "validate": validation complete` {
 		t.Fatalf("unexpected enqueue validation result: %v", err)
+	}
+}
+
+func TestEnqueueRejectedAfterRunEnds(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		if requests > 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "probe", ToolCallID: "probe", Args: json.RawMessage(`{}`),
+		}}}, nil
+	})
+	agent := ai.NewAgent[deps, string](model)
+	var lateErr error
+	var wg sync.WaitGroup
+	probeDone := make(chan struct{})
+	enqueueReady := make(chan struct{})
+	ai.AddTool(agent, "probe", func(_ context.Context, rc *ai.RunContext[deps], _ struct{}) (string, error) {
+		captured := rc
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-enqueueReady
+			_, lateErr = captured.Enqueue(ai.TextContent{Text: "after-end"})
+		}()
+		close(probeDone)
+		return "worked", nil
+	})
+	if _, err := agent.Run(t.Context(), "go", deps{}); err != nil {
+		t.Fatal(err)
+	}
+	<-probeDone
+	close(enqueueReady)
+	wg.Wait()
+	if lateErr == nil ||
+		!strings.Contains(lateErr.Error(), "agent run has ended") {
+		t.Fatalf("expected run-ended rejection, got %v", lateErr)
 	}
 }
 

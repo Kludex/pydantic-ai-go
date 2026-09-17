@@ -235,4 +235,9 @@ type Config struct {
 	ServerMessageID string
 	// MaxRequestBytes bounds an HTTP request body. Zero defaults to 10 MiB.
 	MaxRequestBytes int64
+	// AllowedContentTypes limits inbound HTTP Content-Type values, as a CSRF
+	// control. Empty defaults to [internal.DefaultAllowedContentTypes] (only
+	// application/json); pass an explicit slice to widen or nil to skip the
+	// check when the route is already covered by upstream CSRF protection.
+	AllowedContentTypes []string
 }

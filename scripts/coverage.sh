@@ -64,6 +64,7 @@ packages=(
     ./ai/realtime/openai
     ./ai/realtime/xai
     ./ai/ui/agui
+    ./ai/ui/internal
     ./ai/ui/vercel
     ./ai/webchat
 )

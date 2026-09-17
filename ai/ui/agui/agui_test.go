@@ -33,6 +33,7 @@ func TestHandlerStreamsTextAndToolEvents(t *testing.T) {
 		]
 	}`
 	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/event-stream" {
@@ -491,7 +492,9 @@ func TestHandlerValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(test.method, "/", strings.NewReader(test.body)))
+		request := httptest.NewRequest(test.method, "/", strings.NewReader(test.body))
+		request.Header.Set("Content-Type", "application/json")
+		handler.ServeHTTP(response, request)
 		if response.Code != test.want {
 			t.Fatalf("method=%s body=%q: got %d want %d", test.method, test.body, response.Code, test.want)
 		}
@@ -499,12 +502,15 @@ func TestHandlerValidation(t *testing.T) {
 
 	badJSON := agui.NewAdapter(agent, agui.Config{}).Handler(struct{}{})
 	response := httptest.NewRecorder()
-	badJSON.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{")))
+	badRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{"))
+	badRequest.Header.Set("Content-Type", "application/json")
+	badJSON.ServeHTTP(response, badRequest)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected malformed JSON status: %d", response.Code)
 	}
 
 	readRequest := httptest.NewRequest(http.MethodPost, "/", nil)
+	readRequest.Header.Set("Content-Type", "application/json")
 	readRequest.Body = failingBody{}
 	response = httptest.NewRecorder()
 	badJSON.ServeHTTP(response, readRequest)
@@ -513,11 +519,51 @@ func TestHandlerValidation(t *testing.T) {
 	}
 
 	writer := &failingResponseWriter{header: http.Header{}}
-	badJSON.ServeHTTP(writer, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+	badJSONWriterRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
 		`{"messages":[{"id":"user","role":"user","content":"hello"}]}`,
-	)))
+	))
+	badJSONWriterRequest.Header.Set("Content-Type", "application/json")
+	badJSON.ServeHTTP(writer, badJSONWriterRequest)
 	if writer.header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("stream headers were not written: %v", writer.header)
+	}
+}
+
+func TestHandlerRejectsNonJSONContentType(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	handler := agui.NewAdapter(agent, agui.Config{}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415, got %d", response.Code)
+	}
+}
+
+func TestHandlerSkipsContentTypeCheckWhenAllowedIsExplicitEmpty(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	handler := agui.NewAdapter(agent, agui.Config{AllowedContentTypes: []string{}}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"messages":[{"id":"user","role":"user","content":"hi"}]}`))
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("explicit empty allowlist should skip the check, got %d", response.Code)
+	}
+}
+
+func TestHandlerAppliesCustomAllowedContentTypes(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	handler := agui.NewAdapter(agent, agui.Config{
+		AllowedContentTypes: []string{"application/json; charset=utf-8"},
+	}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"messages":[{"id":"user","role":"user","content":"hi"}]}`))
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("custom allowlist should accept, got %d", response.Code)
 	}
 }
 

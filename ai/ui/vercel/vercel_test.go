@@ -30,6 +30,7 @@ func TestHandlerStreamsTextAndTools(t *testing.T) {
 			{"id":"user","role":"user","parts":[{"type":"text","text":"Weather?"}]}
 		]
 	}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	adapter.Handler(struct{}{}).ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Header().Get("x-vercel-ai-ui-message-stream") != "v1" {
@@ -481,12 +482,15 @@ func TestHandlerValidation(t *testing.T) {
 	}
 	for _, test := range tests {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(test.method, "/", strings.NewReader(test.body)))
+		request := httptest.NewRequest(test.method, "/", strings.NewReader(test.body))
+		request.Header.Set("Content-Type", "application/json")
+		handler.ServeHTTP(response, request)
 		if response.Code != test.want {
 			t.Fatalf("method=%s: got %d want %d", test.method, response.Code, test.want)
 		}
 	}
 	request := httptest.NewRequest(http.MethodPost, "/", nil)
+	request.Header.Set("Content-Type", "application/json")
 	request.Body = failingBody{}
 	response := httptest.NewRecorder()
 	vercel.NewAdapter(agent, vercel.Config{}).Handler(struct{}{}).ServeHTTP(response, request)
@@ -494,10 +498,12 @@ func TestHandlerValidation(t *testing.T) {
 		t.Fatalf("unexpected read status: %d", response.Code)
 	}
 	writer := &failingResponseWriter{header: http.Header{}}
+	streamRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+		`{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hello"}]}]}`,
+	))
+	streamRequest.Header.Set("Content-Type", "application/json")
 	vercel.NewAdapter(agent, vercel.Config{}).Handler(struct{}{}).ServeHTTP(
-		writer, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
-			`{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hello"}]}]}`,
-		)),
+		writer, streamRequest,
 	)
 	if writer.header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("stream headers missing: %v", writer.header)
@@ -509,13 +515,57 @@ func TestHandlerValidation(t *testing.T) {
 		return nil, errors.New("failed")
 	}))
 	response = httptest.NewRecorder()
+	failedRequest := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+		`{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hello"}]}]}`,
+	))
+	failedRequest.Header.Set("Content-Type", "application/json")
 	vercel.NewAdapter(failedAgent, vercel.Config{}).Handler(struct{}{}).ServeHTTP(
-		response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
-			`{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hello"}]}]}`,
-		)),
+		response, failedRequest,
 	)
 	if !strings.Contains(response.Body.String(), `"type":"error"`) {
 		t.Fatalf("handler did not encode model error: %s", response.Body.String())
+	}
+}
+
+func TestHandlerRejectsNonJSONContentType(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	handler := vercel.NewAdapter(agent, vercel.Config{}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("expected 415, got %d", response.Code)
+	}
+}
+
+func TestHandlerSkipsContentTypeCheckWhenAllowedIsExplicitEmpty(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	handler := vercel.NewAdapter(agent, vercel.Config{AllowedContentTypes: []string{}}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+		`{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hi"}]}]}`,
+	))
+	request.Header.Set("Content-Type", "text/plain")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("explicit empty allowlist should skip the check, got %d", response.Code)
+	}
+}
+
+func TestHandlerAppliesCustomAllowedContentTypes(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	handler := vercel.NewAdapter(agent, vercel.Config{
+		AllowedContentTypes: []string{"application/json; charset=utf-8"},
+	}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+		`{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hi"}]}]}`,
+	))
+	request.Header.Set("Content-Type", "application/json; charset=utf-8")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("custom allowlist should accept, got %d", response.Code)
 	}
 }
 

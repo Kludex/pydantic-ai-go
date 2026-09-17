@@ -7,16 +7,25 @@ import (
 	"net/http"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	uierr "github.com/Kludex/pydantic-ai-go/ai/ui/internal"
 )
 
 // Handler returns an HTTP handler for Vercel AI UI message stream requests.
 // Deps and options must be safe to reuse across requests.
 func (adapter *Adapter[Deps, Output]) Handler(deps Deps, options ...ai.RunOption) http.Handler {
 	options = append([]ai.RunOption(nil), options...)
+	allowed := adapter.config.AllowedContentTypes
+	if len(allowed) > 0 {
+		allowed = append([]string(nil), allowed...)
+	}
 	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodPost {
 			response.Header().Set("Allow", http.MethodPost)
 			http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if err := uierr.CheckContentType(request, allowed); err != nil {
+			http.Error(response, err.Error(), http.StatusUnsupportedMediaType)
 			return
 		}
 		maximum := adapter.config.MaxRequestBytes

@@ -62,6 +62,12 @@ func (connection *fakeConnection) ModelName() string         { return connection
 func (*fakeConnection) InputTranscriptionEnabled() bool      { return true }
 func (*fakeConnection) ReconnectRestoresInFlightState() bool { return true }
 
+type pricedFakeModel struct{ *fakeModel }
+
+func (*pricedFakeModel) Name() string         { return "gpt-4o-mini" }
+func (*pricedFakeModel) ProviderName() string { return "openai" }
+func (*pricedFakeModel) ProviderURL() string  { return "https://api.openai.com/v1" }
+
 type fakeModel struct {
 	connection realtime.Connection
 	profile    realtime.Profile
@@ -87,6 +93,28 @@ func fullProfile() realtime.Profile {
 	profile.AudioInputSampleRate = 24000
 	profile.AudioOutputSampleRate = 24000
 	return profile
+}
+
+func TestSessionPricesResponseUsage(t *testing.T) {
+	connection := newFakeConnection()
+	model := &pricedFakeModel{fakeModel: &fakeModel{connection: connection, profile: fullProfile()}}
+	session, err := realtime.Open(t.Context(), model, realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection.events <- realtime.SessionUsage{Usage: ai.Usage{InputTokens: 10, OutputTokens: 2}, ResponseScoped: true}
+	connection.events <- realtime.ResponseDone{}
+	deadline := time.Now().Add(time.Second)
+	for session.Usage().CostUSD == nil && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if session.Usage().CostUSD == nil {
+		t.Fatal("realtime usage was not priced")
+	}
+	connection.end()
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestSessionLifecycle(t *testing.T) {

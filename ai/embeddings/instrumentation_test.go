@@ -249,6 +249,12 @@ func TestInstrumentationErrorsAndIdempotency(t *testing.T) {
 	if len(spans) != 1 || spans[0].Status.Code != codes.Error || len(spans[0].Events) != 1 {
 		t.Fatalf("unexpected failed span: %#v", spans)
 	}
+	private := embeddings.NewInstrumentedModel(
+		base, embeddings.WithInstrumentationTracerProvider(provider), embeddings.WithInstrumentationContent(false),
+	)
+	if _, err := private.Embed(t.Context(), []string{"secret"}, embeddings.InputTypeQuery, embeddings.Settings{}); !errors.Is(err, requestErr) {
+		t.Fatalf("unexpected private request error: %v", err)
+	}
 	if embeddings.InstrumentModel(model) != model {
 		t.Fatal("instrumentation was not idempotent")
 	}

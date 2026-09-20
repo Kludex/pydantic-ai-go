@@ -13,6 +13,8 @@ type ModelProfile struct {
 	PromptedOutputTemplate string
 	// NativeOutputRequiresPrompt adds prompted guidance beside native schema enforcement.
 	NativeOutputRequiresPrompt bool
+	// SupportsTextOutput reports whether the model can produce text. Nil defaults to true.
+	SupportsTextOutput *bool
 	// SupportsImageOutput allows a FilePart with an image media type as final output.
 	SupportsImageOutput bool
 	// SupportsAudioInput allows retained SpeechPart audio to replace its transcript

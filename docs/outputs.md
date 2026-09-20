@@ -310,3 +310,35 @@ func main() {
 ```
 
 A retry is sent back to the model and consumes the output retry budget. Configure that budget with `WithRetryLimits` or `WithRunRetryLimits`.
+
+## Runtime choices
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "github.com/Kludex/pydantic-ai-go/ai"
+    "github.com/Kludex/pydantic-ai-go/ai/models/openai"
+)
+
+func main() {
+    choices := ai.NewStringChoices(
+        "customer_intent",
+        "What does the customer want?",
+        "refund",
+        "replace",
+        "escalate",
+    )
+    agent := ai.NewChoicesAgent[struct{}](openai.NewModel("gpt-5-mini"), choices)
+    result, err := agent.Run(context.Background(), "The blender is broken. Send another one.", struct{}{})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result.Output)
+}
+```
+
+Use `NewChoices` when the available values are known only at runtime. Each `Choice` can resolve to a typed value or run one action after the final selection. Use a regular Go type when the set is known at compile time.

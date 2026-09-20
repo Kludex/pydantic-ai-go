@@ -127,6 +127,15 @@ func TestFetchRejectsUnsafeURLs(t *testing.T) {
 	}
 }
 
+func TestFetchIPv6ZoneDomainPolicy(t *testing.T) {
+	_, err := FetchWithOptions(t.Context(), "http://[FE80::1%25ETH0]/", Options{
+		AllowLocal: true, BlockedDomains: []string{"fe80::1%ETH0"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "blocked") {
+		t.Fatalf("unexpected zoned-domain result: %v", err)
+	}
+}
+
 func TestFetchWithOptions(t *testing.T) {
 	var secondURL string
 	second := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

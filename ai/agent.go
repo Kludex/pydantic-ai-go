@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"slices"
@@ -915,11 +916,64 @@ type RunResult[Output any] struct {
 	// Output is the typed final value. It is the zero value for deferred runs.
 	Output Output
 
-	usage       Usage
-	messages    []ModelMessage
-	newMessages int
-	metadata    map[string]any
-	deferred    *DeferredToolRequests
+	usage          Usage
+	messages       []ModelMessage
+	newMessages    int
+	metadata       map[string]any
+	deferred       *DeferredToolRequests
+	runID          string
+	conversationID string
+}
+
+// MarshalJSON returns the stable persisted shape of a completed or deferred run.
+func (r RunResult[Output]) MarshalJSON() ([]byte, error) {
+	messages, err := MarshalMessages(r.messages)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(struct {
+		Output          Output                `json:"output"`
+		Messages        json.RawMessage       `json:"messages"`
+		NewMessageIndex int                   `json:"new_message_index"`
+		Usage           Usage                 `json:"usage"`
+		RunID           string                `json:"run_id,omitempty"`
+		ConversationID  string                `json:"conversation_id,omitempty"`
+		Metadata        map[string]any        `json:"metadata,omitempty"`
+		Deferred        *DeferredToolRequests `json:"deferred,omitempty"`
+	}{
+		Output: r.Output, Messages: messages, NewMessageIndex: r.newMessages, Usage: r.usage,
+		RunID: r.runID, ConversationID: r.conversationID, Metadata: r.metadata, Deferred: r.deferred,
+	})
+}
+
+// UnmarshalJSON restores a persisted run result and validates its message history.
+func (r *RunResult[Output]) UnmarshalJSON(data []byte) error {
+	var decoded struct {
+		Output          Output                `json:"output"`
+		Messages        json.RawMessage       `json:"messages"`
+		NewMessageIndex int                   `json:"new_message_index"`
+		Usage           Usage                 `json:"usage"`
+		RunID           string                `json:"run_id"`
+		ConversationID  string                `json:"conversation_id"`
+		Metadata        map[string]any        `json:"metadata"`
+		Deferred        *DeferredToolRequests `json:"deferred"`
+	}
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	messages, err := UnmarshalMessages(decoded.Messages)
+	if err != nil {
+		return err
+	}
+	if decoded.NewMessageIndex < 0 || decoded.NewMessageIndex > len(messages) {
+		return fmt.Errorf("ai: new message index %d is outside history of length %d", decoded.NewMessageIndex, len(messages))
+	}
+	*r = RunResult[Output]{
+		Output: decoded.Output, usage: decoded.Usage.Clone(), messages: messages,
+		newMessages: decoded.NewMessageIndex, metadata: cloneSchemaMap(decoded.Metadata),
+		deferred: decoded.Deferred, runID: decoded.RunID, conversationID: decoded.ConversationID,
+	}
+	return nil
 }
 
 // Metadata returns detached application metadata resolved after the run.
@@ -937,6 +991,12 @@ func (r *RunResult[Output]) Deferred() *DeferredToolRequests {
 
 // Usage returns the tokens and requests consumed by the run.
 func (r *RunResult[Output]) Usage() Usage { return r.usage.Clone() }
+
+// RunID returns this run's stable identifier.
+func (r *RunResult[Output]) RunID() string { return r.runID }
+
+// ConversationID returns the conversation identifier shared by related runs.
+func (r *RunResult[Output]) ConversationID() string { return r.conversationID }
 
 // Messages returns the full conversation, including any history passed in.
 func (r *RunResult[Output]) Messages() []ModelMessage { return r.messages }

@@ -4,7 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
+	"slices"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
@@ -18,6 +21,20 @@ func (adapter *Adapter[Deps, Output]) Handler(deps Deps, options ...ai.RunOption
 			response.Header().Set("Allow", http.MethodPost)
 			http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
 			return
+		}
+		if !adapter.config.DisableContentTypeCheck {
+			allowed := adapter.config.AllowedContentTypes
+			if allowed == nil {
+				allowed = []string{"application/json"}
+			}
+			mediaType, _, err := mime.ParseMediaType(request.Header.Get("Content-Type"))
+			mediaType = strings.ToLower(mediaType)
+			if err != nil || !slices.ContainsFunc(allowed, func(value string) bool {
+				return strings.EqualFold(strings.TrimSpace(value), mediaType)
+			}) {
+				http.Error(response, "unsupported content type", http.StatusUnsupportedMediaType)
+				return
+			}
 		}
 		maximum := adapter.config.MaxRequestBytes
 		if maximum == 0 {

@@ -235,4 +235,8 @@ type Config struct {
 	ServerMessageID string
 	// MaxRequestBytes bounds an HTTP request body. Zero defaults to 10 MiB.
 	MaxRequestBytes int64
+	// AllowedContentTypes lists accepted request media types. Nil accepts application/json.
+	AllowedContentTypes []string
+	// DisableContentTypeCheck skips the default JSON media-type check when another CSRF control protects the route.
+	DisableContentTypeCheck bool
 }

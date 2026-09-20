@@ -118,6 +118,9 @@ func buildConverseInput(
 		params.Settings.Temperature = nil
 		params.Settings.TopP = nil
 	}
+	if err := applyThinkingSettings(modelName, &params); err != nil {
+		return nil, err
+	}
 	input.InferenceConfig = inferenceConfiguration(params.Settings)
 	input.OutputConfig, err = outputConfiguration(params)
 	if err != nil {
@@ -128,6 +131,81 @@ func buildConverseInput(
 	}
 	input.ServiceTier = serviceTier(params.Settings.ServiceTier)
 	return input, nil
+}
+
+func applyThinkingSettings(modelName string, params *ai.ModelRequestParams) error {
+	thinking := params.Settings.Thinking
+	if thinking == nil || thinking.Level == "" {
+		return nil
+	}
+	extra := maps.Clone(params.Settings.ExtraBody)
+	if extra == nil {
+		extra = map[string]any{}
+	}
+	name := strings.ToLower(modelName)
+	if strings.Contains(name, "anthropic") || strings.Contains(name, "claude") {
+		if _, configured := extra["thinking"]; !configured {
+			adaptive := bedrockSupportsAdaptiveThinking(name)
+			switch {
+			case thinking.Level == ai.ThinkingLevelDisabled:
+				extra["thinking"] = map[string]any{"type": "disabled"}
+			case adaptive:
+				extra["thinking"] = map[string]any{"type": "adaptive"}
+				if bedrockSupportsEffort(name) {
+					effort := string(thinking.Level)
+					if effort == string(ai.ThinkingLevelEnabled) || effort == string(ai.ThinkingLevelMinimal) {
+						effort = "low"
+					}
+					if effort == string(ai.ThinkingLevelXHigh) && !bedrockSupportsXHigh(name) {
+						effort = "max"
+					}
+					if _, configured := extra["output_config"]; !configured {
+						extra["output_config"] = map[string]any{"effort": effort}
+					}
+				}
+			default:
+				budgets := map[ai.ThinkingLevel]int{
+					ai.ThinkingLevelEnabled: 10_000, ai.ThinkingLevelMinimal: 1_024,
+					ai.ThinkingLevelLow: 2_048, ai.ThinkingLevelMedium: 10_000,
+					ai.ThinkingLevelHigh: 16_384, ai.ThinkingLevelXHigh: 32_768,
+				}
+				budget, ok := budgets[thinking.Level]
+				if !ok {
+					return fmt.Errorf("bedrock: invalid thinking level %q", thinking.Level)
+				}
+				if thinking.TokenBudget != nil {
+					budget = *thinking.TokenBudget
+				}
+				extra["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
+			}
+		}
+		if params.OutputTool != nil && !params.AllowText && !bedrockSupportsAdaptiveThinking(name) {
+			return fmt.Errorf("bedrock: extended thinking cannot force an output tool; use native or prompted output")
+		}
+	} else if strings.Contains(name, "openai") && thinking.Level != ai.ThinkingLevelDisabled {
+		if _, configured := extra["reasoning_effort"]; !configured {
+			extra["reasoning_effort"] = string(thinking.Level)
+		}
+	}
+	params.Settings.ExtraBody = extra
+	return nil
+}
+
+func bedrockSupportsAdaptiveThinking(name string) bool {
+	return strings.Contains(name, "claude-sonnet-4-6") || strings.Contains(name, "claude-sonnet-5") ||
+		strings.Contains(name, "claude-opus-4-6") || strings.Contains(name, "claude-opus-4-7") ||
+		strings.Contains(name, "claude-opus-4-8") || strings.Contains(name, "claude-opus-5") ||
+		strings.Contains(name, "claude-fable-5") || strings.Contains(name, "claude-mythos-5")
+}
+
+func bedrockSupportsEffort(name string) bool {
+	return strings.Contains(name, "claude-opus-4-5") || bedrockSupportsAdaptiveThinking(name)
+}
+
+func bedrockSupportsXHigh(name string) bool {
+	return strings.Contains(name, "claude-opus-4-7") || strings.Contains(name, "claude-opus-4-8") ||
+		strings.Contains(name, "claude-opus-5") || strings.Contains(name, "claude-sonnet-5") ||
+		strings.Contains(name, "claude-fable-5") || strings.Contains(name, "claude-mythos-5")
 }
 
 func bedrockAnthropicDisallowsSampling(modelName string) bool {

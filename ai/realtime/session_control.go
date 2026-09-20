@@ -16,16 +16,54 @@ var enqueueID atomic.Uint64
 func (session *Session) PlayedAudioBytes() (int, error) {
 	session.tapMu.Lock()
 	defer session.tapMu.Unlock()
+	tap, err := session.singleAudioTapLocked("played audio")
+	if err != nil {
+		return 0, err
+	}
+	return tap.playedBytes, nil
+}
+
+// WaitForPlayback waits until the single active audio stream has accounted for all emitted audio.
+func (session *Session) WaitForPlayback(ctx context.Context) error {
+	session.tapMu.Lock()
+	tap, err := session.singleAudioTapLocked("wait for playback")
+	session.tapMu.Unlock()
+	if err != nil {
+		return err
+	}
+	for {
+		session.tapMu.Lock()
+		complete := tap.ended || len(tap.queue) == 0 &&
+			tap.subscribedAtBytes+tap.playedBytes+tap.droppedBytes+tap.pendingDroppedBytes >= session.emittedAudioBytes
+		session.tapMu.Unlock()
+		if complete {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-session.playbackProgress:
+		}
+	}
+}
+
+func (session *Session) singleAudioTapLocked(action string) (*audioTap, error) {
 	if len(session.audioTaps) != 1 {
-		return 0, fmt.Errorf(
-			"realtime: played audio requires exactly one active audio stream, got %d", len(session.audioTaps),
+		return nil, fmt.Errorf(
+			"realtime: %s requires exactly one active audio stream, got %d", action, len(session.audioTaps),
 		)
 	}
 	var tap *audioTap
 	for tap = range session.audioTaps {
-		break
 	}
-	return tap.playedBytes, nil
+	return tap, nil
+}
+
+func (session *Session) notifyPlaybackLocked() {
+	select {
+	case session.playbackProgress <- struct{}{}:
+	default:
+	}
 }
 
 // InterruptAtAudio flushes unheard audio and interrupts at a raw PCM playback position.
@@ -124,6 +162,7 @@ func (session *Session) flushAudioTapLocked(tap *audioTap) {
 	for len(tap.queue) > 0 {
 		tap.droppedBytes += len(<-tap.queue)
 	}
+	session.notifyPlaybackLocked()
 }
 
 // Enqueue adds text for delivery after an active response completes. It is
@@ -252,11 +291,11 @@ func (session *Session) deliverEnqueued() {
 			}
 			return
 		}
+		request := ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: prompt.text}}}
 		session.mu.Lock()
-		session.history = append(session.history, ai.ModelRequest{
-			Parts: []ai.RequestPart{ai.UserPromptPart{Content: prompt.text}},
-		})
+		session.history = append(session.history, request)
 		session.mu.Unlock()
+		session.publish(ai.EnqueuedMessagesEvent{EnqueueID: prompt.id, Messages: []ai.ModelMessage{request}})
 	}
 }
 

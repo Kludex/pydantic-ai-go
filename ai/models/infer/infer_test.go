@@ -24,6 +24,7 @@ func TestModels(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "token")
 	t.Setenv("GITHUB_COPILOT_API_KEY", "token")
 	t.Setenv("TOGETHER_API_KEY", "token")
+	t.Setenv("TYPESAFE_API_KEY", "token")
 	codexHome := t.TempDir()
 	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(
 		`{"tokens":{"access_token":"access","refresh_token":"refresh","account_id":"account"}}`,
@@ -55,6 +56,7 @@ func TestModels(t *testing.T) {
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},
 		{"snowflake:claude-sonnet-4-6", "snowflake"},
 		{"together:Qwen/Qwen3-32B", "together"},
+		{"typesafe:jev-latest", "typesafe"},
 		{"vllm:Qwen/Qwen3-32B", "vllm"},
 		{"xai:grok-4.3", "xai"},
 		{"zai:glm-5.3-flash", "zai"},

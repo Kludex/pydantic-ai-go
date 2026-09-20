@@ -242,3 +242,72 @@ func TestNativeOutputSchemaIsJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestThinkingSettings(t *testing.T) {
+	tests := []struct {
+		name, model, effort string
+		level               ai.ThinkingLevel
+	}{
+		{name: "xhigh", model: "us.anthropic.claude-opus-5", level: ai.ThinkingLevelXHigh, effort: "xhigh"},
+		{name: "max fallback", model: "us.anthropic.claude-sonnet-4-6", level: ai.ThinkingLevelXHigh, effort: "max"},
+		{name: "minimal", model: "us.anthropic.claude-sonnet-4-6", level: ai.ThinkingLevelMinimal, effort: "low"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeClient{converse: func(input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
+				encoded, err := input.AdditionalModelRequestFields.MarshalSmithyDocument()
+				if err != nil || !strings.Contains(string(encoded), `"type":"adaptive"`) || !strings.Contains(string(encoded), `"effort":"`+test.effort+`"`) {
+					t.Fatalf("unexpected thinking fields: %s err=%v", encoded, err)
+				}
+				return completeOutput(types.StopReasonEndTurn), nil
+			}}
+			model := bedrock.NewModel(test.model, bedrock.WithClient(client))
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: test.level}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	for _, test := range []struct {
+		name, model, contains string
+		thinking              ai.ThinkingSettings
+	}{
+		{name: "disabled", model: "anthropic.claude-3", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, contains: `"type":"disabled"`},
+		{name: "budget", model: "anthropic.claude-3", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, contains: `"budget_tokens":16384`},
+		{name: "openai", model: "openai.gpt-5.6-luna", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, contains: `"reasoning_effort":"high"`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &fakeClient{converse: func(input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
+				encoded, _ := input.AdditionalModelRequestFields.MarshalSmithyDocument()
+				if !strings.Contains(string(encoded), test.contains) {
+					t.Fatalf("unexpected fields: %s", encoded)
+				}
+				return completeOutput(types.StopReasonEndTurn), nil
+			}}
+			_, err := bedrock.NewModel(test.model, bedrock.WithClient(client)).Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Thinking: &test.thinking}})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+	budget := 123
+	client := &fakeClient{converse: func(input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
+		encoded, _ := input.AdditionalModelRequestFields.MarshalSmithyDocument()
+		if !strings.Contains(string(encoded), `"budget_tokens":123`) {
+			t.Fatalf("unexpected budget: %s", encoded)
+		}
+		return completeOutput(types.StopReasonEndTurn), nil
+	}}
+	_, err := bedrock.NewModel("anthropic.claude-3", bedrock.WithClient(client)).Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow, TokenBudget: &budget}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, params := range []ai.ModelRequestParams{
+		{Settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: "invalid"}}},
+		{OutputTool: &ai.ToolDefinition{Name: "answer"}, Settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}}},
+	} {
+		if _, err := bedrock.NewModel("anthropic.claude-3", bedrock.WithClient(client)).Request(t.Context(), nil, params); err == nil {
+			t.Fatal("expected incompatible thinking error")
+		}
+	}
+}

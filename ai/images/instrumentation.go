@@ -3,6 +3,7 @@ package images
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/url"
 	"strconv"
 
@@ -129,8 +130,7 @@ func (model *InstrumentedModel) Generate(
 	)
 	result, err := model.UnwrapModel().Generate(spanCtx, prompt, inputs, settings)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
+		recordImageError(span, err, model.includeContent)
 		span.End()
 		return nil, err
 	}
@@ -140,6 +140,16 @@ func (model *InstrumentedModel) Generate(
 	}
 	model.finish(spanCtx, span, result)
 	return result, nil
+}
+
+func recordImageError(span trace.Span, err error, includeContent bool) {
+	if includeContent {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		return
+	}
+	span.SetStatus(codes.Error, "")
+	span.AddEvent("exception", trace.WithAttributes(attribute.String("exception.type", fmt.Sprintf("%T", err))))
 }
 
 func telemetrySettings(settings Settings) string {

@@ -129,12 +129,20 @@ func telemetryToolDefinition(tool ToolDefinition) map[string]any {
 	return definition
 }
 
-func telemetryRequestParameters(params ModelRequestParams) string {
+func telemetryRequestParameters(params ModelRequestParams, includeContent bool) string {
+	var parts any = cloneInstructionParts(params.InstructionParts)
+	if !includeContent {
+		redacted := make([]map[string]any, len(params.InstructionParts))
+		for index, part := range params.InstructionParts {
+			redacted[index] = map[string]any{"dynamic": part.Dynamic, "name": part.Name, "id": part.ID}
+		}
+		parts = redacted
+	}
 	value := map[string]any{
 		"function_tools": params.Tools, "deferred_tools": params.DeferredTools,
 		"output_tool": params.OutputTool, "output_schema": params.OutputSchema,
 		"output_mode": params.OutputMode, "allow_text_output": params.AllowText,
-		"instruction_parts": params.InstructionParts,
+		"instruction_parts": parts,
 	}
 	return telemetryJSON(value)
 }

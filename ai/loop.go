@@ -358,12 +358,7 @@ func (a *Agent[Deps, Output]) newRun(
 		cancellation.finish()
 		return nil, err
 	}
-	for _, pending := range restoredPending {
-		if err := r.pendingMessages.add(pending); err != nil {
-			cancellation.finish()
-			return nil, err
-		}
-	}
+	r.pendingMessages.pending = append(r.pendingMessages.pending, restoredPending...)
 	var interruptedReturns []RequestPart
 	var resumeSeed *ModelResponse
 	if cfg.resumeSuspended {
@@ -4004,7 +3999,7 @@ func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
 	usage.ToolCalls += int(r.toolCalls.Load())
 	return &RunResult[Output]{
 		Output: out, usage: usage, messages: r.messages, newMessages: r.newMessages,
-		metadata: r.metadata.snapshot(),
+		metadata: r.metadata.snapshot(), runID: r.info.RunID, conversationID: r.info.ConversationID,
 	}
 }
 
@@ -4018,6 +4013,7 @@ func (r *run[Deps, Output]) deferredResult(requests DeferredToolRequests) (*RunR
 	return &RunResult[Output]{
 		usage: usage, messages: r.messages, newMessages: r.newMessages,
 		metadata: r.metadata.snapshot(), deferred: &requests,
+		runID: r.info.RunID, conversationID: r.info.ConversationID,
 	}, nil
 }
 

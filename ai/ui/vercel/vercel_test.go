@@ -30,6 +30,7 @@ func TestHandlerStreamsTextAndTools(t *testing.T) {
 			{"id":"user","role":"user","parts":[{"type":"text","text":"Weather?"}]}
 		]
 	}`))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	adapter.Handler(struct{}{}).ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Header().Get("x-vercel-ai-ui-message-stream") != "v1" {
@@ -468,7 +469,13 @@ func (*failingResponseWriter) WriteHeader(int)            {}
 
 func TestHandlerValidation(t *testing.T) {
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
-	adapter := vercel.NewAdapter(agent, vercel.Config{MaxRequestBytes: 4})
+	contentHandler := vercel.NewAdapter(agent, vercel.Config{}).Handler(struct{}{})
+	response := httptest.NewRecorder()
+	contentHandler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`)))
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("unexpected content-type status: %d", response.Code)
+	}
+	adapter := vercel.NewAdapter(agent, vercel.Config{MaxRequestBytes: 4, DisableContentTypeCheck: true})
 	handler := adapter.Handler(struct{}{})
 	tests := []struct {
 		method string
@@ -488,13 +495,13 @@ func TestHandlerValidation(t *testing.T) {
 	}
 	request := httptest.NewRequest(http.MethodPost, "/", nil)
 	request.Body = failingBody{}
-	response := httptest.NewRecorder()
-	vercel.NewAdapter(agent, vercel.Config{}).Handler(struct{}{}).ServeHTTP(response, request)
+	response = httptest.NewRecorder()
+	vercel.NewAdapter(agent, vercel.Config{DisableContentTypeCheck: true}).Handler(struct{}{}).ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected read status: %d", response.Code)
 	}
 	writer := &failingResponseWriter{header: http.Header{}}
-	vercel.NewAdapter(agent, vercel.Config{}).Handler(struct{}{}).ServeHTTP(
+	vercel.NewAdapter(agent, vercel.Config{DisableContentTypeCheck: true}).Handler(struct{}{}).ServeHTTP(
 		writer, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
 			`{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hello"}]}]}`,
 		)),
@@ -509,7 +516,7 @@ func TestHandlerValidation(t *testing.T) {
 		return nil, errors.New("failed")
 	}))
 	response = httptest.NewRecorder()
-	vercel.NewAdapter(failedAgent, vercel.Config{}).Handler(struct{}{}).ServeHTTP(
+	vercel.NewAdapter(failedAgent, vercel.Config{DisableContentTypeCheck: true}).Handler(struct{}{}).ServeHTTP(
 		response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
 			`{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hello"}]}]}`,
 		)),

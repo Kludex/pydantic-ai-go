@@ -25,6 +25,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
 	"github.com/Kludex/pydantic-ai-go/ai/models/snowflake"
 	"github.com/Kludex/pydantic-ai-go/ai/models/together"
+	"github.com/Kludex/pydantic-ai-go/ai/models/typesafe"
 	"github.com/Kludex/pydantic-ai-go/ai/models/vllm"
 	"github.com/Kludex/pydantic-ai-go/ai/models/xai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/zai"
@@ -81,6 +82,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"openrouter":  func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
 		"snowflake":   func(name string) (ai.Model, error) { return snowflake.NewModel(name), nil },
 		"together":    func(name string) (ai.Model, error) { return together.NewModel(name), nil },
+		"typesafe":    func(name string) (ai.Model, error) { return typesafe.NewModel(name), nil },
 		"vllm":        func(name string) (ai.Model, error) { return vllm.NewModel(name) },
 		"xai":         func(name string) (ai.Model, error) { return xai.NewModel(name), nil },
 		"zai":         func(name string) (ai.Model, error) { return zai.NewModel(name), nil },

@@ -133,8 +133,7 @@ func (instrumentation *Instrumentation) WrapRun(
 	ctx = instrumentationBaggage(ctx, name, info.RunID, info.ConversationID)
 	defer func() {
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			span.RecordError(err)
+			recordSpanError(span, err, instrumentation.runtime.includeContent)
 		}
 		usage := info.Usage()
 		span.SetAttributes(aggregatedUsageAttributes(usage, instrumentation.runtime.useAggregatedUsage)...)
@@ -249,15 +248,7 @@ func (instrumentation *Instrumentation) OnToolValidationError(
 	_, span := instrumentation.runtime.tracer.Start(
 		ctx, names.toolSpan(hook.Call.ToolName), trace.WithAttributes(attributes...),
 	)
-	span.SetStatus(codes.Error, validationErr.Error())
-	if instrumentation.runtime.includeContent {
-		span.RecordError(validationErr)
-	} else {
-		span.AddEvent("exception", trace.WithAttributes(
-			attribute.String("exception.type", fmt.Sprintf("%T", validationErr)),
-			attribute.String("exception.escaped", "true"),
-		))
-	}
+	recordSpanError(span, validationErr, instrumentation.runtime.includeContent)
 	span.End()
 	return nil, validationErr
 }
@@ -281,7 +272,6 @@ func (instrumentation *Instrumentation) WrapToolExecution(
 	ctx = context.WithValue(ctx, toolSpanContextKey{}, true)
 	defer func() {
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
 			if instrumentation.runtime.includeContent {
 				var retry *RetryError
 				var failed *ToolFailedError
@@ -292,7 +282,7 @@ func (instrumentation *Instrumentation) WrapToolExecution(
 					span.SetAttributes(attribute.String(names.toolResult, failed.Message))
 				}
 			}
-			span.RecordError(err)
+			recordSpanError(span, err, instrumentation.runtime.includeContent)
 		} else if deferralName, metadata, deferred := telemetryToolDeferral(result); deferred {
 			span.SetAttributes(attribute.String("pydantic_ai.tool.deferral.name", deferralName))
 			if instrumentation.runtime.includeContent && metadata != nil {
@@ -395,8 +385,7 @@ func (instrumentation *Instrumentation) WrapOutputProcessing(
 	ctx = context.WithValue(ctx, outputFunctionSpanContextKey{}, true)
 	defer func() {
 		if err != nil {
-			span.SetStatus(codes.Error, err.Error())
-			span.RecordError(err)
+			recordSpanError(span, err, instrumentation.runtime.includeContent)
 		} else if instrumentation.runtime.includeContent {
 			span.SetAttributes(attribute.String(
 				names.toolResult,

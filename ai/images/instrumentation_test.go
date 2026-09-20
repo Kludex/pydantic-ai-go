@@ -116,6 +116,13 @@ func TestInstrumentationErrorsPrivacyAndDefaults(t *testing.T) {
 	if _, exists := attributes["image_generation_settings"]; exists {
 		t.Fatal("disabled span included settings")
 	}
+	contentProvider := sdktrace.NewTracerProvider()
+	t.Cleanup(func() { _ = contentProvider.Shutdown(t.Context()) })
+	if _, err := images.NewInstrumentedModel(
+		failed, images.WithInstrumentationTracerProvider(contentProvider),
+	).Generate(t.Context(), "prompt", nil, images.Settings{}); !errors.Is(err, requestErr) {
+		t.Fatalf("unexpected content-enabled error: %v", err)
+	}
 
 	success := &model{name: "success", provider: "test", result: &images.Result{
 		Images: []images.GeneratedImage{{Content: ai.BinaryContent{Data: []byte("x"), MediaType: "image/png"}}},

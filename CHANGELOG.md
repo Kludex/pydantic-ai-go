@@ -8,6 +8,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- Require JSON request media types by default in AG-UI and Vercel handlers, redact telemetry errors and instruction content when content capture is disabled, and harden local web fetching against equivalent domain spellings and invalid charsets.
+- Add stable `RunResult` JSON, realtime enqueue delivery events, playback draining and automatic response pricing, and Bedrock adaptive and `xhigh` thinking behavior.
 - `images.NewImageGenerationCapability` now returns `*images.ImageGenerationCapability[Deps]` so repeated declarations merge direct settings and native configuration. Pass it through `ai.WithCapabilities` as before. If you passed its result to `Agent.AddNativeOrLocal`, use `ai.WithCapabilities` instead.
 - Preserve separate OpenAI Chat text parts when streamed tool calls appear between text chunks, including tagged thinking streams.
 - Capabilities with stable IDs now combine within one registration layer and are replaced as complete wrapper subtrees by matching run capabilities. Invalid collisions and unsafe default merges fail before execution.
@@ -17,6 +19,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Added
 
+- TypeSafe Jev generation through `ai/models/typesafe` and provider-prefixed model inference.
+- Runtime described output choices through `Choice`, `NewChoices`, `NewStringChoices`, and `NewChoicesAgent`.
 - A once-per-process interactive first-run banner with resolved agent, model, output, tool, and capability details; coding-agent detection; CI, test, environment, API, and instrumentation suppression; and terminal CLI placement.
 - Context-aware background pricing updates with immediate and hourly downloads, atomic last-good snapshots, shared workers, bounded responses, and caller-provided clients and error handling.
 - A typed agent loop with structured output, tools, retries, usage limits, cancellation, deferred execution, message enqueueing, manual runs, and synchronous or streamed results.

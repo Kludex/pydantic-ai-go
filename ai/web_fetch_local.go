@@ -107,13 +107,12 @@ func NewLocalWebFetchTool[Deps any](config LocalWebFetchConfig) Tool[Deps] {
 					}},
 				}, nil
 			}
-			text := string(result.Data)
-			decoded, decodingErr := charset.NewReader(bytes.NewReader(result.Data), result.ContentType)
-			if decodingErr == nil {
-				if decodedText, readErr := io.ReadAll(decoded); readErr == nil {
-					text = string(decodedText)
-				}
+			decoded, err := charset.NewReader(bytes.NewReader(result.Data), result.ContentType)
+			if err != nil {
+				return nil, Retryf("Failed to decode %s: %v", args.URL, err)
 			}
+			decodedText, _ := io.ReadAll(decoded)
+			text := string(decodedText)
 			title, content := "", text
 			switch {
 			case mediaType == "text/markdown" || mediaType == "text/x-markdown":

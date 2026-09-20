@@ -45,6 +45,43 @@ func TestPlayedAudioAndInterruptionValidation(t *testing.T) {
 	_ = session.Close(t.Context())
 }
 
+func TestWaitForPlayback(t *testing.T) {
+	session, connection := openSessionWithProfile(t, fullProfile())
+	if err := session.WaitForPlayback(t.Context()); err == nil {
+		t.Fatal("expected missing audio stream error")
+	}
+	audio := session.StreamAudio(t.Context())
+	done := make(chan struct{})
+	go func() {
+		first := true
+		for range audio {
+			if first {
+				close(done)
+				first = false
+			}
+		}
+	}()
+	connection.events <- realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "assistant"}
+	<-done
+	if err := session.WaitForPlayback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	connection.end()
+	_ = session.Close(t.Context())
+
+	session, connection = openSessionWithProfile(t, fullProfile())
+	_ = session.StreamAudio(t.Context())
+	connection.events <- realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "assistant"}
+	time.Sleep(time.Millisecond)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := session.WaitForPlayback(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected wait error: %v", err)
+	}
+	connection.end()
+	_ = session.Close(t.Context())
+}
+
 func TestInterruptAtAudioBranches(t *testing.T) {
 	t.Run("negative", func(t *testing.T) {
 		session, connection := openSessionWithProfile(t, fullProfile())

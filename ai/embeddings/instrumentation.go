@@ -2,6 +2,7 @@ package embeddings
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"strconv"
 
@@ -86,6 +87,16 @@ func InstrumentModel(model Model, options ...InstrumentationOption) Model {
 	return NewInstrumentedModel(model, options...)
 }
 
+func recordEmbeddingError(span trace.Span, err error, includeContent bool) {
+	if includeContent {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		return
+	}
+	span.SetStatus(codes.Error, "")
+	span.AddEvent("exception", trace.WithAttributes(attribute.String("exception.type", fmt.Sprintf("%T", err))))
+}
+
 // Embed instruments one embedding request.
 func (model *InstrumentedModel) Embed(
 	ctx context.Context, inputs []string, inputType InputType, settings Settings,
@@ -116,8 +127,7 @@ func (model *InstrumentedModel) Embed(
 	)
 	result, err := model.UnwrapModel().Embed(spanCtx, inputs, inputType, settings)
 	if err != nil {
-		span.SetStatus(codes.Error, err.Error())
-		span.RecordError(err)
+		recordEmbeddingError(span, err, model.includeContent)
 		span.End()
 		return nil, err
 	}

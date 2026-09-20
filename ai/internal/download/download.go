@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/idna"
 )
 
 const maxResponseBytes = 50 << 20
@@ -160,7 +162,7 @@ func validatedDestination(rawURL string, options Options) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
-	hostname := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	hostname := normalizeDomain(parsed.Hostname())
 	for _, blocked := range options.BlockedDomains {
 		if hostname == normalizeDomain(blocked) {
 			return nil, fmt.Errorf("download: domain %q is blocked", hostname)
@@ -196,7 +198,16 @@ func validateURL(rawURL string) (*url.URL, error) {
 }
 
 func normalizeDomain(domain string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	domain = strings.TrimSuffix(strings.TrimSpace(domain), ".")
+	address, zone, hasZone := strings.Cut(domain, "%")
+	address = strings.ToLower(address)
+	if encoded, err := idna.Lookup.ToASCII(address); err == nil {
+		address = strings.TrimSuffix(strings.ToLower(encoded), ".")
+	}
+	if hasZone {
+		return address + "%" + zone
+	}
+	return address
 }
 
 func mayForwardSensitiveHeaders(previous *url.URL, next *url.URL) bool {

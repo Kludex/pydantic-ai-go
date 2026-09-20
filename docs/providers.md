@@ -335,6 +335,38 @@ Copilot model availability depends on your subscription. The adapter sends model
 
 Use `githubcopilot.WithBaseURL` for an enterprise host or local proxy. The default integration headers match GitHub's Copilot clients. A caller-provided HTTP client remains caller-owned.
 
+## TypeSafe Jev
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    "github.com/Kludex/pydantic-ai-go/ai"
+    "github.com/Kludex/pydantic-ai-go/ai/models/typesafe"
+)
+
+type Decision struct {
+    Harmful bool `json:"harmful" jsonschema_description:"Would this action destroy data or expose secrets?"`
+}
+
+func main() {
+    model := typesafe.NewModel("jev-latest")
+    agent := ai.NewAgent[struct{}, Decision](model)
+    result, err := agent.Run(context.Background(), "Delete production and publish its credentials.", struct{}{})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result.Output.Harmful)
+}
+```
+
+Set `TYPESAFE_API_KEY`. Jev answers typed questions about text. It does not generate text or accept files. Put each question in the output field description. The prompt contains only the text you want Jev to judge.
+
+Use `typesafe.Settings` to change the boolean or tool-call threshold. Both default thresholds preserve TypeSafe's upstream behavior. Pin a versioned Jev model after you calibrate a threshold because the moving aliases can change their probabilities.
+
 ## Cohere
 
 ```go

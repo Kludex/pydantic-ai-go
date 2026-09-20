@@ -2,6 +2,7 @@ package ai
 
 import (
 	"context"
+	"fmt"
 	"iter"
 	"sync"
 	"time"
@@ -279,7 +280,9 @@ func (model *InstrumentedModel) startOperation(
 	}
 	properties := map[string]any{}
 	if model.includeModelRequestParameters {
-		attributes = append(attributes, attribute.String("model_request_parameters", telemetryRequestParameters(params)))
+		attributes = append(attributes, attribute.String(
+			"model_request_parameters", telemetryRequestParameters(params, model.includeContent),
+		))
 		properties["model_request_parameters"] = map[string]any{"type": "object"}
 	}
 	attributes = append(attributes, attribute.String(
@@ -304,8 +307,7 @@ func (request *instrumentedRequest) finish(
 ) {
 	request.once.Do(func() {
 		if requestErr != nil {
-			request.span.SetStatus(codes.Error, requestErr.Error())
-			request.span.RecordError(requestErr)
+			recordSpanError(request.span, requestErr, request.model.includeContent)
 		}
 		if response == nil {
 			request.span.End()
@@ -349,6 +351,19 @@ func (request *instrumentedRequest) finish(
 		request.span.End()
 		request.model.recordMetrics(ctx, response, firstChunk, request.operation)
 	})
+}
+
+func recordSpanError(span trace.Span, err error, includeContent bool) {
+	if includeContent {
+		span.SetStatus(codes.Error, err.Error())
+		span.RecordError(err)
+		return
+	}
+	span.SetStatus(codes.Error, "")
+	span.AddEvent("exception", trace.WithAttributes(
+		attribute.String("exception.type", fmt.Sprintf("%T", err)),
+		attribute.Bool("exception.escaped", true),
+	))
 }
 
 func hasInstrumentedModel(model Model) bool {

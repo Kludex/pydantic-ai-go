@@ -33,6 +33,7 @@ func TestHandlerStreamsTextAndToolEvents(t *testing.T) {
 		]
 	}`
 	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/json")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "text/event-stream" {
@@ -472,12 +473,26 @@ func (*failingResponseWriter) WriteHeader(int)            {}
 
 func TestHandlerValidation(t *testing.T) {
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	contentHandler := agui.NewAdapter(agent, agui.Config{}).Handler(struct{}{})
+	response := httptest.NewRecorder()
+	contentHandler.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`)))
+	if response.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("unexpected content-type status: %d", response.Code)
+	}
+	custom := agui.NewAdapter(agent, agui.Config{AllowedContentTypes: []string{"APPLICATION/CUSTOM"}}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/custom; charset=utf-8")
+	response = httptest.NewRecorder()
+	custom.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("custom content type was rejected: %d", response.Code)
+	}
 	assertPanic(t, func() { agui.NewAdapter[struct{}, string](nil, agui.Config{}) })
 	assertPanic(t, func() { agui.NewAdapter(agent, agui.Config{MaxRequestBytes: -1}) })
 	for _, version := range []string{"invalid", "0..1", "999999999999999999999999999999999"} {
 		assertPanic(t, func() { agui.NewAdapter(agent, agui.Config{Version: version}) })
 	}
-	adapter := agui.NewAdapter(agent, agui.Config{MaxRequestBytes: 4})
+	adapter := agui.NewAdapter(agent, agui.Config{MaxRequestBytes: 4, DisableContentTypeCheck: true})
 	handler := adapter.Handler(struct{}{})
 
 	tests := []struct {
@@ -497,8 +512,8 @@ func TestHandlerValidation(t *testing.T) {
 		}
 	}
 
-	badJSON := agui.NewAdapter(agent, agui.Config{}).Handler(struct{}{})
-	response := httptest.NewRecorder()
+	badJSON := agui.NewAdapter(agent, agui.Config{DisableContentTypeCheck: true}).Handler(struct{}{})
+	response = httptest.NewRecorder()
 	badJSON.ServeHTTP(response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{")))
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("unexpected malformed JSON status: %d", response.Code)

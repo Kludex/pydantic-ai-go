@@ -185,6 +185,7 @@ type Session struct {
 	closingFromTool bool
 
 	tapMu                     sync.Mutex
+	playbackProgress          chan struct{}
 	audioTaps                 map[*audioTap]struct{}
 	transcriptTaps            map[chan TranscriptUpdate]struct{}
 	emittedAudioBytes         int
@@ -206,6 +207,7 @@ type audioTap struct {
 	droppedBytes        int
 	pendingDroppedBytes int
 	playedBytes         int
+	ended               bool
 }
 
 type queuedPrompt struct {
@@ -266,8 +268,8 @@ func Open(ctx context.Context, model Model, params ConnectParams, options ...Ses
 		ctx: runCtx, cancel: cancel, done: make(chan struct{}), events: make(chan eventResult, 128),
 		seeded: params.Messages, userTurns: map[string]*activeSpeech{},
 		pendingToolResults: map[string]ai.ModelRequest{}, providerPartIndexes: map[string]int{},
-		toolCancels: map[string]context.CancelFunc{}, audioTaps: map[*audioTap]struct{}{},
-		transcriptTaps: map[chan TranscriptUpdate]struct{}{},
+		toolCancels: map[string]context.CancelFunc{}, playbackProgress: make(chan struct{}, 1),
+		audioTaps: map[*audioTap]struct{}{}, transcriptTaps: map[chan TranscriptUpdate]struct{}{},
 	}
 	if historyAware, ok := connection.(HistoryAwareConnection); ok {
 		historyAware.SetMessageHistory(session.Messages)
@@ -666,6 +668,7 @@ func (session *Session) StreamAudio(ctx context.Context) iter.Seq2[[]byte, error
 				}
 				session.tapMu.Lock()
 				tap.playedBytes += len(chunk)
+				session.notifyPlaybackLocked()
 				session.tapMu.Unlock()
 			}
 		}
@@ -709,7 +712,9 @@ func (session *Session) StreamTranscripts(ctx context.Context) iter.Seq2[Transcr
 
 func (session *Session) removeAudioTap(tap *audioTap) {
 	session.tapMu.Lock()
+	tap.ended = true
 	delete(session.audioTaps, tap)
+	session.notifyPlaybackLocked()
 	session.tapMu.Unlock()
 }
 
@@ -770,8 +775,12 @@ func (session *Session) pump() {
 			}
 			close(tap)
 		}
+		for tap := range session.audioTaps {
+			tap.ended = true
+		}
 		session.audioTaps = map[*audioTap]struct{}{}
 		session.transcriptTaps = map[chan TranscriptUpdate]struct{}{}
+		session.notifyPlaybackLocked()
 		session.tapMu.Unlock()
 		session.eventsMu.Lock()
 		close(session.events)
@@ -1073,6 +1082,16 @@ func (session *Session) finishResponse(event ResponseDone) {
 		ProviderResponseID: responseID, FinishReason: finish,
 		ProviderDetails: cloneAnyMap(event.ProviderDetails), Timestamp: time.Now().UTC(),
 	}
+	if identified, ok := session.model.(interface{ ProviderURL() string }); ok {
+		response.ProviderURL = identified.ProviderURL()
+	}
+	if response.Usage.CostUSD == nil {
+		if price, err := response.Price(); err == nil {
+			response.Usage.CostUSD = &price.TotalPrice
+			session.pendingUsage.CostUSD = &price.TotalPrice
+			session.usage.Add(ai.Usage{CostUSD: &price.TotalPrice})
+		}
+	}
 	if info, ok := session.connection.(ConnectionInfo); ok && info.ModelName() != "" {
 		response.ModelName = info.ModelName()
 	}
@@ -1327,6 +1346,7 @@ func (session *Session) publishAudio(partIndex int, data []byte) {
 			tap.queue <- chunk
 		}
 	}
+	session.notifyPlaybackLocked()
 }
 
 func (session *Session) publishTranscript(update TranscriptUpdate) {

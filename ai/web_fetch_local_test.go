@@ -190,6 +190,11 @@ func TestLocalWebFetchJSONAndContentLimit(t *testing.T) {
 
 func TestLocalWebFetchBinaryAndRetry(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if request.URL.Path == "/charset" {
+			response.Header().Set("Content-Type", "text/plain; charset=not-a-charset")
+			_, _ = response.Write([]byte("text"))
+			return
+		}
 		if request.URL.Path == "/octet" {
 			response.Header().Set("Content-Type", "application/octet-stream")
 			_, _ = response.Write([]byte("bytes"))
@@ -199,6 +204,9 @@ func TestLocalWebFetchBinaryAndRetry(t *testing.T) {
 		_, _ = response.Write([]byte("png"))
 	}))
 	t.Cleanup(server.Close)
+	if _, err := runLocalWebFetch(t, server.URL+"/charset", ai.LocalWebFetchConfig{AllowLocalURLs: true}); err == nil {
+		t.Fatal("expected invalid charset retry failure")
+	}
 	result, _ := runLocalWebFetch(t, server.URL, ai.LocalWebFetchConfig{AllowLocalURLs: true})
 	value, content := localWebFetchParts(t, result)
 	if value != "Fetched binary content from "+server.URL || len(content) != 3 {

@@ -230,6 +230,7 @@ The bundled providers use the same `ai.Model` interface.
 | OpenRouter | `openrouter.NewModel("anthropic/claude-sonnet-4.6")` | `OPENROUTER_API_KEY` |
 | Snowflake Cortex | `snowflake.NewModel("claude-sonnet-4-6")` | `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_TOKEN` |
 | Together AI | `together.NewModel("Qwen/Qwen3-32B")` | `TOGETHER_API_KEY` |
+| TypeSafe Jev | `typesafe.NewModel("jev-latest")` | `TYPESAFE_API_KEY` |
 | vLLM | `vllm.NewModel("Qwen/Qwen3-32B")` | `VLLM_BASE_URL`, `VLLM_API_KEY` |
 | xAI | `xai.NewModel("grok-4.3")` | `XAI_API_KEY` |
 | Z.AI | `zai.NewModel("glm-5.3-flash")` | `ZAI_API_KEY` |

@@ -27,6 +27,7 @@ func resolveHost(ctx context.Context, host string, allowLocal bool) ([]netip.Add
 }
 
 func validateAddress(address netip.Addr, allowLocal bool) error {
+	address = address.WithZone("")
 	if isCloudMetadataAddress(address) {
 		return fmt.Errorf("download: access to cloud metadata address %s is blocked", address)
 	}

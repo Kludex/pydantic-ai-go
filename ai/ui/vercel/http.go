@@ -5,9 +5,31 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
+
+// allowContentType reports whether request's media type is in allowed. A nil or
+// empty allowed list accepts every request. The match is case-insensitive and
+// ignores any media-type parameters (a request's "application/json; charset=utf-8"
+// still matches "application/json").
+func allowContentType(request *http.Request, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	media := request.Header.Get("Content-Type")
+	if i := strings.IndexByte(media, ';'); i >= 0 {
+		media = media[:i]
+	}
+	media = strings.TrimSpace(strings.ToLower(media))
+	for _, item := range allowed {
+		if strings.TrimSpace(strings.ToLower(item)) == media {
+			return true
+		}
+	}
+	return false
+}
 
 // Handler returns an HTTP handler for Vercel AI UI message stream requests.
 // Deps and options must be safe to reuse across requests.
@@ -17,6 +39,10 @@ func (adapter *Adapter[Deps, Output]) Handler(deps Deps, options ...ai.RunOption
 		if request.Method != http.MethodPost {
 			response.Header().Set("Allow", http.MethodPost)
 			http.Error(response, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		if !allowContentType(request, adapter.config.AllowedContentTypes) {
+			http.Error(response, "unsupported media type", http.StatusUnsupportedMediaType)
 			return
 		}
 		maximum := adapter.config.MaxRequestBytes

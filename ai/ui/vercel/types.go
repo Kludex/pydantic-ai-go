@@ -235,4 +235,10 @@ type Config struct {
 	ServerMessageID string
 	// MaxRequestBytes bounds an HTTP request body. Zero defaults to 10 MiB.
 	MaxRequestBytes int64
+	// AllowedContentTypes admits a request whose media type is in this list. The
+	// check is a CSRF control: requiring application/json forces a CORS preflight,
+	// so a cross-origin page cannot drive the endpoint with the CORS-safelisted
+	// types that would otherwise carry a JSON body without one. Nil or empty
+	// disables the check for callers protected by an upstream CSRF guard.
+	AllowedContentTypes []string
 }

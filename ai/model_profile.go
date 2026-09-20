@@ -18,6 +18,10 @@ type ModelProfile struct {
 	// SupportsAudioInput allows retained SpeechPart audio to replace its transcript
 	// when realtime history is prepared for a standard model.
 	SupportsAudioInput bool
+	// SupportsTextOutput allows the model to produce plain text as a final response.
+	// Zero value defaults to true; structured-only providers such as TypeSafe's Jev
+	// set it to false.
+	SupportsTextOutput bool
 	// SupportsToolAvailabilityDelta lets the provider render tool reveals directly.
 	// Other models receive a provider-neutral tool-search call and result.
 	SupportsToolAvailabilityDelta bool
@@ -102,7 +106,7 @@ func (wrapper *ModelWrapper) DispatchesMessageProfile() bool {
 }
 
 func modelProfile(model Model) ModelProfile {
-	profile := ModelProfile{DefaultOutputMode: OutputModeTool}
+	profile := ModelProfile{DefaultOutputMode: OutputModeTool, SupportsTextOutput: true}
 	if profiled, ok := model.(ModelProfiler); ok {
 		profile = profiled.ModelProfile()
 	}

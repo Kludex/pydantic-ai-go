@@ -517,6 +517,32 @@ func TestHandlerValidation(t *testing.T) {
 	if !strings.Contains(response.Body.String(), `"type":"error"`) {
 		t.Fatalf("handler did not encode model error: %s", response.Body.String())
 	}
+
+	restricted := vercel.NewAdapter(agent, vercel.Config{AllowedContentTypes: []string{"application/json"}}).Handler(struct{}{})
+	jsonBody := `{"trigger":"submit-message","id":"chat","messages":[{"id":"user","role":"user","parts":[{"type":"text","text":"hello"}]}]}`
+	contentTests := []struct {
+		name        string
+		contentType string
+		want        int
+	}{
+		{name: "json", contentType: "application/json", want: http.StatusOK},
+		{name: "json with charset", contentType: "application/json; charset=utf-8", want: http.StatusOK},
+		{name: "form url-encoded", contentType: "application/x-www-form-urlencoded", want: http.StatusUnsupportedMediaType},
+		{name: "text plain", contentType: "text/plain", want: http.StatusUnsupportedMediaType},
+		{name: "missing", contentType: "", want: http.StatusUnsupportedMediaType},
+		{name: "uppercase", contentType: "APPLICATION/JSON", want: http.StatusOK},
+	}
+	for _, test := range contentTests {
+		request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(jsonBody))
+		if test.contentType != "" {
+			request.Header.Set("Content-Type", test.contentType)
+		}
+		response := httptest.NewRecorder()
+		restricted.ServeHTTP(response, request)
+		if response.Code != test.want {
+			t.Fatalf("content-type=%q: got %d want %d", test.contentType, response.Code, test.want)
+		}
+	}
 }
 
 func TestApprovalRequestAndResume(t *testing.T) {

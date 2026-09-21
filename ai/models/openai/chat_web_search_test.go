@@ -69,10 +69,15 @@ func TestChatWebSearch(t *testing.T) {
 	first := bodies[0]["web_search_options"].(map[string]any)
 	firstLocation := first["user_location"].(map[string]any)
 	firstApproximate := firstLocation["approximate"].(map[string]any)
+	firstFilters := first["filters"].(map[string]any)
+	firstAllowed := firstFilters["allowed_domains"].([]any)
+	firstBlocked := firstFilters["blocked_domains"].([]any)
 	if first["search_context_size"] != "low" || firstLocation["type"] != "approximate" ||
 		firstApproximate["city"] != "Utrecht" || firstApproximate["country"] != "NL" ||
 		first["allowed_domains"] != nil || first["blocked_domains"] != nil || first["max_uses"] != nil ||
-		first["external_web_access"] != nil || bodies[0]["tools"] != nil {
+		first["external_web_access"] != nil || bodies[0]["tools"] != nil ||
+		len(firstAllowed) != 1 || firstAllowed[0] != "example.com" ||
+		len(firstBlocked) != 1 || firstBlocked[0] != "blocked.example" {
 		t.Fatalf("unexpected static web search options: %#v", bodies[0])
 	}
 	second := bodies[1]["web_search_options"].(map[string]any)

@@ -590,19 +590,8 @@ func (m *Model) buildPayload(
 				)
 			}
 			contextSize := webSearch.SearchContextSize
-			if contextSize == "" {
-				contextSize = ai.WebSearchContextMedium
-			}
-			webSearchOptions = &chatWebSearchOptions{SearchContextSize: contextSize}
-			if webSearch.UserLocation != nil {
-				webSearchOptions.UserLocation = &chatWebSearchUserLocation{
-					Type: "approximate",
-					Approximate: chatWebSearchUserLocationApproximate{
-						City: webSearch.UserLocation.City, Country: webSearch.UserLocation.Country,
-						Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
-					},
-				}
-			}
+			prepared := chatWebSearchOptionsFrom(webSearch, contextSize)
+			webSearchOptions = &prepared
 		}
 	}
 	reasoningEffort, err := openAIThinkingEffortForModel(m.name, params.Settings.Thinking)

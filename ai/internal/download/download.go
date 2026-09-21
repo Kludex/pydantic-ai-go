@@ -13,6 +13,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"golang.org/x/net/idna"
 )
 
 const maxResponseBytes = 50 << 20
@@ -160,19 +162,19 @@ func validatedDestination(rawURL string, options Options) (*url.URL, error) {
 	if err != nil {
 		return nil, err
 	}
-	hostname := strings.ToLower(strings.TrimSuffix(parsed.Hostname(), "."))
+	key := domainKey(parsed.Hostname())
 	for _, blocked := range options.BlockedDomains {
-		if hostname == normalizeDomain(blocked) {
-			return nil, fmt.Errorf("download: domain %q is blocked", hostname)
+		if key == domainKey(blocked) {
+			return nil, fmt.Errorf("download: domain %q is blocked", parsed.Hostname())
 		}
 	}
 	if options.AllowedDomains != nil {
 		for _, allowed := range options.AllowedDomains {
-			if hostname == normalizeDomain(allowed) {
+			if key == domainKey(allowed) {
 				return parsed, nil
 			}
 		}
-		return nil, fmt.Errorf("download: domain %q is not allowed", hostname)
+		return nil, fmt.Errorf("download: domain %q is not allowed", parsed.Hostname())
 	}
 	return parsed, nil
 }
@@ -195,8 +197,42 @@ func validateURL(rawURL string) (*url.URL, error) {
 	return parsed, nil
 }
 
-func normalizeDomain(domain string) string {
-	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+// ideographicStop codepoints idna.Lookup already maps to U+002E, but Go's idna
+// implementation rejects the input outright when any of them appear. Fold them
+// to ASCII dots ourselves so callers can block or allow the resolved form.
+var ideographicStops = strings.NewReplacer(
+	"。", ".", // ideographic full stop (RFC 3490 §3.1)
+	"．", ".", // fullwidth full stop
+	"｡", ".", // halfwidth ideographic full stop
+	"․", ".", // one dot leader (NFKC mapping in some encoders)
+	"﹒", ".", // small full stop (NFKC mapping in some encoders)
+)
+
+// domainKey returns the form callers compare hostname and domain-list entries
+// against. Both spellings collapse to one value: the trailing FQDN label, the
+// case, and the IDNA encoding the resolver will actually use. A zone identifier
+// names a link-local interface and is case-sensitive (eth0 vs ETH0), so only
+// the address part is lowercased before the IDNA pass.
+func domainKey(host string) string {
+	// Trim surrounding whitespace before any further normalization: callers
+	// pass domain-list entries that may carry it, and the IDNA codec rejects
+	// labels with embedded whitespace.
+	host = strings.TrimSpace(host)
+	host = ideographicStops.Replace(host)
+	address, zone, hasZone := strings.Cut(strings.TrimSuffix(host, "."), "%")
+	address = strings.ToLower(strings.TrimSpace(address))
+	encoded, err := idna.Lookup.ToASCII(address)
+	if err != nil || encoded == "" {
+		// A label the IDNA codec rejects (empty, or longer than 63 chars) is
+		// not a host DNS can resolve; the raw lowercased value is the only key
+		// it can have.
+		encoded = address
+	}
+	key := strings.TrimSuffix(encoded, ".")
+	if hasZone {
+		key += "%" + strings.TrimSpace(zone)
+	}
+	return key
 }
 
 func mayForwardSensitiveHeaders(previous *url.URL, next *url.URL) bool {

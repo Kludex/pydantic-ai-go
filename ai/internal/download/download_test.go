@@ -285,3 +285,26 @@ func TestResolveHostHonorsCancellation(t *testing.T) {
 		t.Fatal("cancelled resolution succeeded")
 	}
 }
+
+func TestDomainKeyCollapsesConfusableSpellings(t *testing.T) {
+	for name, test := range map[string]struct {
+		host1 string
+		host2 string
+		equal bool
+	}{
+		"trailing dot":         {"example.com", "example.com.", true},
+		"case":                 {"Example.Com", "example.com", true},
+		"whitespace":           {" example.com ", "example.com", true},
+		"ideographic stop":     {"evil。com", "evil.com", true},
+		"fullwidth characters": {"ｅｘａｍｐｌｅ.example.test", "example.example.test", true},
+		"zone case preserved":  {"fe80::1%eth0", "fe80::1%ETH0", false},
+		"zone address folded":  {"FE80::1%eth0", "fe80::1%eth0", true},
+		"different host":       {"example.com", "different.com", false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, want := domainKey(test.host1) == domainKey(test.host2), test.equal; got != want {
+				t.Fatalf("domainKey(%q) == domainKey(%q) = %t, want %t", test.host1, test.host2, got, want)
+			}
+		})
+	}
+}

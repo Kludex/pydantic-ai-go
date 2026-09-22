@@ -11,7 +11,6 @@ import (
 	"maps"
 	"net/http"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
@@ -226,7 +225,7 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 	if params.OutputTool != nil {
 		outputFields, err = schemaFields(params.OutputTool.Schema)
 		if err == nil {
-			outputQuestions, err = buildQuestions(outputFields, params.OutputTool.Description, instructions)
+			outputQuestions, err = buildQuestions(outputFields, params.OutputTool.Description, instructions, "")
 		}
 		if err != nil && len(params.Tools) == 0 {
 			return nil, err
@@ -236,10 +235,10 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 	if questions == nil {
 		questions = map[string]question{}
 	}
-	available := slices.Clone(params.Tools)
+	available := toolsLeft(messages, params.Tools)
 	routeKey := ""
 	if params.OutputTool != nil && len(available) > 0 {
-		criteria := map[string]any{params.OutputTool.Name: firstNonEmpty(params.OutputTool.Description, instructions)}
+		criteria := map[string]any{params.OutputTool.Name: outputPurpose(*params.OutputTool, outputFields, instructions)}
 		for _, tool := range available {
 			criteria[tool.Name] = tool.Description
 		}
@@ -256,21 +255,35 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 	usage := ai.Usage{Requests: 1, InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens}
 	selected := params.OutputTool
 	toolProbability := 1.0
+	var routeDetails map[string]any
 	if routeKey != "" {
 		choice := response.Answers[routeKey]
-		toolProbability = choice.Probabilities[choice.Choice]
+		var ok bool
+		toolProbability, ok = choice.Probabilities[choice.Choice]
+		if !ok || toolProbability < 0 || toolProbability > 1 {
+			return nil, fmt.Errorf("typesafe: invalid route answer %q", choice.Choice)
+		}
+		offered := make([]string, len(available))
+		matched := params.OutputTool != nil && choice.Choice == params.OutputTool.Name
 		for index := range available {
-			if available[index].Name == choice.Choice && toolProbability >= typed.toolThreshold() {
-				selected = &available[index]
-				break
+			offered[index] = available[index].Name
+			if available[index].Name == choice.Choice {
+				matched = true
+				if toolProbability >= typed.toolThreshold() {
+					selected = &available[index]
+				}
 			}
 		}
+		if !matched {
+			return nil, fmt.Errorf("typesafe: Jev selected unavailable route %q", choice.Choice)
+		}
+		routeDetails = map[string]any{"choice": choice.Choice, "probabilities": choice.Probabilities, "offered": offered}
 	}
 	if selected == nil {
 		return nil, fmt.Errorf("typesafe: Jev did not select an available output")
 	}
 	fields, fieldErr := schemaFields(selected.Schema)
-	selectedQuestions, questionErr := buildQuestions(fields, selected.Description, instructions)
+	selectedQuestions, questionErr := buildQuestions(fields, selected.Description, instructions, selected.Name)
 	if fieldErr != nil || questionErr != nil {
 		return nil, &ToolCallProposed{ModelName: model.name, ToolName: selected.Name, Probability: toolProbability}
 	}
@@ -294,12 +307,49 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 	if err != nil {
 		return nil, err
 	}
-	encoded, _ := json.Marshal(arguments)
+	if routeDetails != nil {
+		details["tool"] = routeDetails
+	}
+	if usage.Requests > 1 {
+		details["requests"] = usage.Requests
+	}
+	var output any = arguments
+	if selected.Schema["type"] != "object" && len(arguments) == 1 {
+		if scalar, exists := arguments["response"]; exists {
+			output = scalar
+		}
+	}
+	encoded, _ := json.Marshal(output)
 	return &ai.ModelResponse{
 		Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: selected.Name, ToolCallID: "typesafe-1", Args: encoded, ProviderName: model.providerName}},
 		Usage: usage, ModelName: response.Model, ProviderName: model.providerName, ProviderURL: model.baseURL,
 		ProviderDetails: details, FinishReason: ai.FinishReasonToolCall, State: ai.ModelResponseStateComplete, Timestamp: time.Now().UTC(),
 	}, nil
+}
+
+func toolsLeft(messages []ai.ModelMessage, tools []ai.ToolDefinition) []ai.ToolDefinition {
+	returned := map[string]bool{}
+	for _, message := range messages {
+		request, ok := message.(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		for _, part := range request.Parts {
+			switch part := part.(type) {
+			case ai.UserPromptPart:
+				clear(returned)
+			case ai.ToolReturnPart:
+				returned[part.ToolName] = true
+			}
+		}
+	}
+	available := make([]ai.ToolDefinition, 0, len(tools))
+	for _, tool := range tools {
+		if !returned[tool.Name] {
+			available = append(available, tool)
+		}
+	}
+	return available
 }
 
 func extractSettings(settings ai.ModelSettings) (ai.ModelSettings, typedSettings, error) {
@@ -379,6 +429,18 @@ func (model *Model) call(ctx context.Context, state any, questions map[string]qu
 		return responseBody{}, errors.New("typesafe: response omitted model")
 	}
 	return decoded, nil
+}
+
+func outputPurpose(tool ai.ToolDefinition, fields map[string]map[string]any, instructions string) string {
+	if tool.Description != "" && tool.Description != "The final result of the run." {
+		return tool.Description
+	}
+	if field := fields["response"]; field != nil {
+		if description, _ := field["description"].(string); description != "" {
+			return description
+		}
+	}
+	return firstNonEmpty(instructions, tool.Description)
 }
 
 func firstNonEmpty(values ...string) string {

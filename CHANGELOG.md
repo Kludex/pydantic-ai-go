@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- Extend TypeSafe Jev with bounded-number scaling, boolean option maps, ten-level rubric limits, recursive and fixed-array rejection, route descriptions and attribution, stable tool handoff history, and argument-bearing output functions.
 - Require JSON request media types by default in AG-UI and Vercel handlers, redact telemetry errors and instruction content when content capture is disabled, and harden local web fetching against equivalent domain spellings and invalid charsets.
 - Add stable `RunResult` JSON, realtime enqueue delivery events, playback draining and automatic response pricing, and Bedrock adaptive and `xhigh` thinking behavior.
 - `images.NewImageGenerationCapability` now returns `*images.ImageGenerationCapability[Deps]` so repeated declarations merge direct settings and native configuration. Pass it through `ai.WithCapabilities` as before. If you passed its result to `Agent.AddNativeOrLocal`, use `ai.WithCapabilities` instead.

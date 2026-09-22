@@ -1,6 +1,7 @@
 package typesafe
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"slices"
@@ -13,31 +14,43 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, error) {
 	definitions, _ := schema["$defs"].(map[string]any)
 	var resolve func(map[string]any) map[string]any
 	resolve = func(value map[string]any) map[string]any {
+		resolved := mapsClone(value)
 		if reference, ok := value["$ref"].(string); ok {
 			if target, ok := definitions[strings.TrimPrefix(reference, "#/$defs/")].(map[string]any); ok {
-				merged := resolve(target)
+				resolved = resolve(target)
 				for key, item := range value {
 					if key != "$ref" {
-						merged[key] = item
+						resolved[key] = item
 					}
 				}
-				value = merged
 			}
 		}
-		return value
-	}
-	if reference, ok := schema["$ref"].(string); ok {
-		if target, ok := definitions[strings.TrimPrefix(reference, "#/$defs/")].(map[string]any); ok {
-			schema = target
+		for _, key := range []string{"items", "propertyNames"} {
+			if nested, ok := resolved[key].(map[string]any); ok {
+				resolved[key] = resolve(nested)
+			}
 		}
+		if variants, ok := resolved["anyOf"].([]any); ok {
+			cloned := make([]any, len(variants))
+			for index, variant := range variants {
+				if nested, ok := variant.(map[string]any); ok {
+					cloned[index] = resolve(nested)
+				} else {
+					cloned[index] = variant
+				}
+			}
+			resolved["anyOf"] = cloned
+		}
+		return resolved
 	}
+	schema = resolve(schema)
 	properties, _ := schema["properties"].(map[string]any)
 	if properties == nil && schema["type"] != "object" {
 		return map[string]map[string]any{"response": schema}, nil
 	}
 	result := map[string]map[string]any{}
-	var flatten func(map[string]any, string) error
-	flatten = func(values map[string]any, prefix string) error {
+	var flatten func(map[string]any, string, map[string]bool) error
+	flatten = func(values map[string]any, prefix string, seen map[string]bool) error {
 		for name, raw := range values {
 			if strings.Contains(name, ".") {
 				return fmt.Errorf("typesafe: field %q contains a dot", prefix+name)
@@ -46,9 +59,20 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, error) {
 			if !ok {
 				return fmt.Errorf("typesafe: field %q has an invalid schema", prefix+name)
 			}
+			reference, _ := property["$ref"].(string)
 			property = resolve(property)
 			if nested, ok := property["properties"].(map[string]any); ok {
-				if err := flatten(nested, prefix+name+"."); err != nil {
+				if reference != "" && seen[reference] {
+					return fmt.Errorf("typesafe: output field %q contains itself", prefix+name)
+				}
+				next := make(map[string]bool, len(seen)+1)
+				for item := range seen {
+					next[item] = true
+				}
+				if reference != "" {
+					next[reference] = true
+				}
+				if err := flatten(nested, prefix+name+".", next); err != nil {
 					return err
 				}
 			} else {
@@ -57,18 +81,21 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, error) {
 		}
 		return nil
 	}
-	if err := flatten(properties, ""); err != nil {
+	if err := flatten(properties, "", map[string]bool{}); err != nil {
 		return nil, err
 	}
 	return result, nil
 }
 
-func buildQuestions(fields map[string]map[string]any, goal, instructions string) (map[string]question, error) {
+func buildQuestions(fields map[string]map[string]any, goal, instructions, chosen string) (map[string]question, error) {
 	questions := make(map[string]question, len(fields))
 	for name, property := range fields {
 		ask := map[string]any{"field": name}
 		if description, _ := property["description"].(string); description != "" {
 			ask["question"] = description
+		}
+		if chosen != "" {
+			ask["chosen"] = chosen
 		}
 		if goal != "" {
 			ask["goal"] = goal
@@ -84,33 +111,36 @@ func buildQuestions(fields map[string]map[string]any, goal, instructions string)
 			}
 			options[noneKey] = "None of these."
 		}
+		if labels := mappingOptions(property); labels != nil {
+			if len(labels) < 2 {
+				return nil, unsupportedField(name)
+			}
+			fanOut(questions, name, ask, labels)
+			continue
+		}
 		switch property["type"] {
 		case "array":
 			items, _ := property["items"].(map[string]any)
 			labels := propertyOptions(items)
-			if len(labels) < 2 {
+			if len(labels) < 2 || property["minItems"] != nil || property["maxItems"] != nil {
 				return nil, unsupportedField(name)
 			}
-			for key, description := range labels {
-				itemAsk := mapsClone(ask)
-				itemAsk["option"] = key
-				if description, _ := description.(string); description != "" {
-					itemAsk["option"] = key + ": " + description
-				}
-				questions[name+"."+key] = question{Type: "noul", Instructions: compactInstructions(itemAsk)}
-			}
+			fanOut(questions, name, ask, labels)
 		case "boolean":
 			if len(ask) == 1 {
 				return nil, fmt.Errorf("typesafe: output field %q asks no question", name)
 			}
 			questions[name] = question{Type: "noul", Instructions: compactInstructions(ask)}
 		case "number":
-			if number(property["minimum"]) != 0 || number(property["maximum"]) != 1 || len(ask) == 1 {
+			if _, ok := boundedNumber(property); !ok || len(ask) == 1 {
 				return nil, unsupportedField(name)
 			}
 			questions[name] = question{Type: "noul", Instructions: compactInstructions(ask)}
 		default:
 			if rubric := rubricCriteria(property); rubric != nil {
+				if len(rubric) > 10 {
+					return nil, fmt.Errorf("typesafe: output field %q has more than 10 rubric levels", name)
+				}
 				questions[name] = question{Type: "score", Instructions: compactInstructions(ask), Criteria: rubric}
 				continue
 			}
@@ -121,6 +151,37 @@ func buildQuestions(fields map[string]map[string]any, goal, instructions string)
 		}
 	}
 	return questions, nil
+}
+
+func fanOut(questions map[string]question, name string, ask map[string]any, labels map[string]any) {
+	for key, description := range labels {
+		itemAsk := mapsClone(ask)
+		itemAsk["option"] = key
+		if description, _ := description.(string); description != "" {
+			itemAsk["option"] = key + ": " + description
+		}
+		questions[name+"."+key] = question{Type: "noul", Instructions: compactInstructions(itemAsk)}
+	}
+}
+
+func boundedNumber(property map[string]any) (float64, bool) {
+	maximum := number(property["maximum"])
+	return maximum, property["type"] == "number" && number(property["minimum"]) == 0 && maximum > 0 &&
+		!math.IsNaN(maximum) && property["multipleOf"] == nil
+}
+
+func mappingOptions(property map[string]any) map[string]any {
+	properties, _ := property["properties"].(map[string]any)
+	if property["type"] != "object" || len(properties) > 0 || property["minProperties"] != nil ||
+		property["maxProperties"] != nil {
+		return nil
+	}
+	values, _ := property["additionalProperties"].(map[string]any)
+	if len(values) != 1 || values["type"] != "boolean" {
+		return nil
+	}
+	names, _ := property["propertyNames"].(map[string]any)
+	return propertyOptions(names)
 }
 
 func compactInstructions(values map[string]any) any {
@@ -138,13 +199,16 @@ func optionalProperty(property map[string]any) (map[string]any, string) {
 		return property, ""
 	}
 	var inner map[string]any
+	nulls := 0
 	for _, raw := range variants {
 		candidate, _ := raw.(map[string]any)
-		if candidate["type"] != "null" {
+		if candidate["type"] == "null" {
+			nulls++
+		} else {
 			inner = candidate
 		}
 	}
-	if inner == nil {
+	if inner == nil || nulls != 1 {
 		return property, ""
 	}
 	key := "none"
@@ -221,22 +285,29 @@ func decodeAnswers(answers map[string]answer, fields map[string]map[string]any, 
 	scores := map[string]float64{}
 	for name, property := range fields {
 		property, noneKey := optionalProperty(property)
+		if labels := mappingOptions(property); labels != nil {
+			selected := make(map[string]bool, len(labels))
+			values, sure, err := fanIn(answers, name, labels, threshold, func(label string, chosen bool) {
+				selected[label] = chosen
+			})
+			if err != nil {
+				return nil, nil, err
+			}
+			setNested(result, name, selected)
+			confidence[name] = sure
+			probabilities[name] = values
+			continue
+		}
 		if property["type"] == "array" {
 			labels := propertyOptions(property["items"].(map[string]any))
 			selected := make([]string, 0, len(labels))
-			sure := 1.0
-			values := map[string]float64{}
-			for label := range labels {
-				value := answers[name+"."+label]
-				if value.Noul == nil {
-					return nil, nil, fmt.Errorf("typesafe: invalid answer for %q", name+"."+label)
-				}
-				chosen, certainty := verdict(*value.Noul, threshold)
-				values[label] = *value.Noul
+			values, sure, err := fanIn(answers, name, labels, threshold, func(label string, chosen bool) {
 				if chosen {
 					selected = append(selected, label)
 				}
-				sure = min(sure, certainty)
+			})
+			if err != nil {
+				return nil, nil, err
 			}
 			slices.Sort(selected)
 			setNested(result, name, selected)
@@ -250,8 +321,8 @@ func decodeAnswers(answers map[string]answer, fields map[string]map[string]any, 
 			if value.Noul == nil {
 				return nil, nil, fmt.Errorf("typesafe: invalid answer for %q", name)
 			}
-			if property["type"] == "number" {
-				setNested(result, name, *value.Noul)
+			if maximum, ok := boundedNumber(property); ok {
+				setNested(result, name, *value.Noul*maximum)
 			} else {
 				chosen, sure := verdict(*value.Noul, threshold)
 				setNested(result, name, chosen)
@@ -279,6 +350,28 @@ func decodeAnswers(answers map[string]answer, fields map[string]map[string]any, 
 		}
 	}
 	return result, map[string]any{"confidence": confidence, "probabilities": probabilities, "scores": scores}, nil
+}
+
+func fanIn(
+	answers map[string]answer,
+	name string,
+	labels map[string]any,
+	threshold float64,
+	set func(string, bool),
+) (map[string]float64, float64, error) {
+	values := make(map[string]float64, len(labels))
+	sure := 1.0
+	for label := range labels {
+		value := answers[name+"."+label]
+		if value.Noul == nil {
+			return nil, 0, fmt.Errorf("typesafe: invalid answer for %q", name+"."+label)
+		}
+		chosen, certainty := verdict(*value.Noul, threshold)
+		values[label] = *value.Noul
+		set(label, chosen)
+		sure = min(sure, certainty)
+	}
+	return values, sure, nil
 }
 
 func verdict(probability, threshold float64) (bool, float64) {
@@ -361,7 +454,11 @@ func messageState(messages []ai.ModelMessage) (any, error) {
 				case ai.TextPart:
 					history = append(history, map[string]any{"assistant": part.Content})
 				case ai.ToolCallPart:
-					history = append(history, map[string]any{"tool_call": map[string]any{"name": part.ToolName, "args": string(part.Args)}})
+					var arguments any
+					if err := json.Unmarshal(part.Args, &arguments); err != nil {
+						arguments = string(part.Args)
+					}
+					history = append(history, map[string]any{"tool_call": map[string]any{"name": part.ToolName, "args": arguments}})
 				case ai.FilePart:
 					return nil, fmt.Errorf("typesafe: files are not supported")
 				}

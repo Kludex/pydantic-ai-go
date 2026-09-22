@@ -367,6 +367,22 @@ Set `TYPESAFE_API_KEY`. Jev answers typed questions about text. It does not gene
 
 Use `typesafe.Settings` to change the boolean or tool-call threshold. Both default thresholds preserve TypeSafe's upstream behavior. Pin a versioned Jev model after you calibrate a threshold because the moving aliases can change their probabilities.
 
+Jev supports these output field shapes:
+
+| Go schema | Jev question | Result |
+|---|---|---|
+| `bool` | Yes or no | The answer at the configured boolean threshold |
+| String `enum` with 2 to 255 values | Pick one | The selected string |
+| A slice of string `enum` values | One yes or no per value | Every selected value |
+| `float` with `minimum=0` and a positive `maximum` | Probability | The probability scaled to the field maximum |
+| A string-enum-keyed object with boolean values | One yes or no per key | Every key and its answer |
+| A rubric with 2 to 10 described integer levels starting at 0 | Score | The nearest level, with halves rounded up |
+| A nested object containing these fields | The flattened fields | The reconstructed object |
+
+Fixed-length arrays, collection size limits, stepped numbers, recursive required objects, and other field shapes fail before a request is sent. This prevents Jev from returning data that cannot satisfy the schema.
+
+`NewOutputFunctionAgent` uses the same field mapping. Jev fills the output function arguments before Go calls the function. When Jev selects a function tool, its arguments use a second request. Each question in that request names the selected tool so the route remains explicit.
+
 ## Cohere
 
 ```go

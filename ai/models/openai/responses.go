@@ -549,6 +549,7 @@ type responsesWebSearchLocation struct {
 
 type responsesWebSearchFilters struct {
 	AllowedDomains []string `json:"allowed_domains"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
 func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (responsesTool, bool, error) {
@@ -610,6 +611,12 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 	if providerName == "xai" {
 		tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
 		return tool, true, nil
+	}
+	if len(webSearch.BlockedDomains) > 0 {
+		if tool.Filters == nil {
+			tool.Filters = &responsesWebSearchFilters{}
+		}
+		tool.Filters.BlockedDomains = slices.Clone(webSearch.BlockedDomains)
 	}
 	if webSearch.ExternalWebAccess != nil {
 		external := *webSearch.ExternalWebAccess

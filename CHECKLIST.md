@@ -2,7 +2,7 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@f998089a30c03c8df9ed6da98353fa4c225a9770`.
+Audited upstream baseline: `pydantic/pydantic-ai@e8895d2905d78ccf570edc491a27ad505e8d4b5a`.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 

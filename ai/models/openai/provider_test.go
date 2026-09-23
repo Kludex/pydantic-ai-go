@@ -1323,19 +1323,21 @@ func TestOpenAIChatPromptCache(t *testing.T) {
 	if len(unsupported) != 1 || unsupported[0].(map[string]any)["cache_control"] != nil {
 		t.Fatalf("unsupported explicit cache point leaked: %#v", unsupported)
 	}
-	gpt := openai.NewModel("gpt-5.6", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
-	_, err = gpt.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
-		ai.UserPromptPart{Contents: []ai.UserContent{
-			ai.TextContent{Text: "cache me"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
-		}},
-	}}}, ai.ModelRequestParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	openAIPart := bodies[len(bodies)-1]["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
-	if openAIPart["prompt_cache_breakpoint"].(map[string]any)["mode"] != "explicit" ||
-		openAIPart["cache_control"] != nil {
-		t.Fatalf("unexpected OpenAI cache breakpoint: %#v", openAIPart)
+	for _, modelName := range []string{"gpt-5.6", "gpt-6-sol", "gpt-6-luna-2026-09-22"} {
+		gpt := openai.NewModel(modelName, openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+		_, err = gpt.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Contents: []ai.UserContent{
+				ai.TextContent{Text: "cache me"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+			}},
+		}}}, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		openAIPart := bodies[len(bodies)-1]["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+		if openAIPart["prompt_cache_breakpoint"].(map[string]any)["mode"] != "explicit" ||
+			openAIPart["cache_control"] != nil {
+			t.Fatalf("unexpected OpenAI cache breakpoint for %s: %#v", modelName, openAIPart)
+		}
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/cohere"
 	"github.com/Kludex/pydantic-ai-go/ai/models/deepseek"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/models/githubcopilot"
 	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
 	"github.com/Kludex/pydantic-ai-go/ai/models/mistral"
@@ -203,24 +204,34 @@ func TestBundledModelContextWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	copilotModel, err := githubcopilot.NewModel("gpt-5.4", githubcopilot.WithAPIKey("key"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	models := []struct {
 		model ai.Model
 		want  int
 	}{
 		{model: openai.NewModel("gpt-5"), want: 400_000},
 		{model: openai.NewResponsesModel("gpt-5.4"), want: 1_050_000},
+		{model: openai.NewResponsesModel("gpt-6-luna"), want: 1_050_000},
 		{model: anthropic.NewModel("claude-sonnet-4-5"), want: 200_000},
+		{model: anthropic.NewModel("claude-opus-5-5"), want: 1_000_000},
 		{model: azureModel, want: 16_384},
 		{model: azureFallbackModel, want: 400_000},
 		{model: bedrock.NewModel("amazon.nova-micro-v1:0"), want: 128_000},
+		{model: bedrock.NewModel("us.anthropic.claude-opus-5-5"), want: 1_000_000},
 		{model: bedrockmantle.NewModel("openai.gpt-5.6-luna", bedrockmantle.WithRegion("us-east-1")), want: 1_000_000},
 		{model: cerebras.NewModel("gpt-oss-120b"), want: 131_072},
 		{model: cohere.NewModel("command-light"), want: 4_096},
 		{model: deepseek.NewModel("deepseek-chat"), want: 64_000},
 		{model: google.NewModel("gemini-2.5-flash"), want: 1_048_576},
+		{model: google.NewModel("claude-opus-5-5"), want: 1_000_000},
 		{model: groq.NewModel("openai/gpt-oss-120b"), want: 131_072},
+		{model: copilotModel, want: 400_000},
 		{model: mistral.NewModel("codestral-latest"), want: 256_000},
 		{model: openrouter.NewModel("openai/gpt-5"), want: 400_000},
+		{model: openrouter.NewModel("anthropic/claude-opus-5.5"), want: 1_000_000},
 		{model: xai.NewModel("grok-4-0709"), want: 256_000},
 		{model: zai.NewModel("GLM-5.3"), want: 1_000_000},
 	}
@@ -251,7 +262,7 @@ func TestBundledModelContextWindows(t *testing.T) {
 	if profile := together.NewModel("openai/gpt-oss-120b").ModelProfile(); profile.ContextWindow != 0 {
 		t.Fatalf("provider metadata without a context window reported %d", profile.ContextWindow)
 	}
-	fallback := ai.NewFallbackModel(models[0].model, ai.WithFallbackModels(models[2].model, unknown))
+	fallback := ai.NewFallbackModel(models[0].model, ai.WithFallbackModels(models[3].model, unknown))
 	if fallback.ContextWindow() != 200_000 {
 		t.Fatalf("unexpected bundled fallback context window %d", fallback.ContextWindow())
 	}

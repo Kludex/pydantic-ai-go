@@ -25,11 +25,18 @@ func newServer(t *testing.T, handler http.HandlerFunc) *openai.Model {
 }
 
 func TestContextWindows(t *testing.T) {
-	if got := openai.NewModel("gpt-5").ContextWindow(); got != 400_000 {
-		t.Fatalf("unexpected Chat Completions context window %d", got)
-	}
-	if got := openai.NewResponsesModel("gpt-5.4").ContextWindow(); got != 1_050_000 {
-		t.Fatalf("unexpected Responses context window %d", got)
+	for _, test := range []struct {
+		model ai.ModelContextWindow
+		want  int
+	}{
+		{model: openai.NewModel("gpt-5"), want: 400_000},
+		{model: openai.NewModel("gpt-audio-mini"), want: 128_000},
+		{model: openai.NewResponsesModel("gpt-5.4"), want: 1_050_000},
+		{model: openai.NewResponsesModel("gpt-6-sol"), want: 1_050_000},
+	} {
+		if got := test.model.ContextWindow(); got != test.want {
+			t.Fatalf("unexpected context window: got %d want %d", got, test.want)
+		}
 	}
 }
 
@@ -126,6 +133,36 @@ func TestChatThinkingSettings(t *testing.T) {
 			t.Fatalf("GPT-6 Responses sent unsupported disabled thinking: body=%#v err=%v", body, err)
 		}
 	})
+
+	for _, name := range []string{"gpt-6-sol", "gpt-6-luna"} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				body = nil
+				_ = json.NewDecoder(request.Body).Decode(&body)
+				_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
+			}))
+			defer server.Close()
+			model := openai.NewModel(name, openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+			temperature := 0.5
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal}, Temperature: &temperature,
+			}})
+			if err != nil || body["reasoning_effort"] != "low" || body["temperature"] != nil {
+				t.Fatalf("unexpected GPT-6 request: body=%#v err=%v", body, err)
+			}
+			_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Temperature: &temperature}})
+			if err != nil || body["reasoning_effort"] != nil || body["temperature"] != nil {
+				t.Fatalf("GPT-6 default reasoning retained temperature: body=%#v err=%v", body, err)
+			}
+			_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, Temperature: &temperature,
+			}})
+			if err != nil || body["reasoning_effort"] != "none" || body["temperature"] != temperature {
+				t.Fatalf("GPT-6 disabled reasoning changed sampling: body=%#v err=%v", body, err)
+			}
+		})
+	}
 
 	model := openai.NewModel("gpt-5")
 	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{

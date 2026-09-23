@@ -256,7 +256,9 @@ func (model *Model) prepareParams(
 			ExplicitMarkerStyle: openai.ChatPromptCacheMarkerControl,
 		}
 	case "openai":
-		if strings.HasPrefix(strings.ToLower(routedModel), "gpt-5.6") {
+		routedModel = strings.ToLower(routedModel)
+		if strings.HasPrefix(routedModel, "gpt-5.6") || strings.HasPrefix(routedModel, "gpt-6-astra") ||
+			strings.HasPrefix(routedModel, "gpt-6-sol") || strings.HasPrefix(routedModel, "gpt-6-luna") {
 			cache.ExplicitMarkerStyle = openai.ChatPromptCacheMarkerBreakpoint
 		}
 	}

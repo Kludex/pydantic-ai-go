@@ -959,6 +959,8 @@ func TestResponsesPhaseReplayUsesModelProfileAndOverride(t *testing.T) {
 		{name: "gpt 5.5", modelName: "gpt-5.5-mini", phase: "commentary", wantPhase: true},
 		{name: "gpt 5.6", modelName: "gpt-5.6-terra", phase: "final_answer", wantPhase: true},
 		{name: "gpt 6 Astra", modelName: "gpt-6-astra", phase: "final_answer", wantPhase: true},
+		{name: "gpt 6 Sol", modelName: "gpt-6-sol", phase: "final_answer", wantPhase: true},
+		{name: "gpt 6 Luna snapshot", modelName: "gpt-6-luna-2026-09-22", phase: "commentary", wantPhase: true},
 		{name: "Bedrock model ID", modelName: "openai.gpt-5.6-luna", phase: "final_answer", wantPhase: true},
 		{name: "unsupported", modelName: "gpt-5", phase: "commentary"},
 		{name: "enabled override", modelName: "gpt-5", options: []openai.Option{

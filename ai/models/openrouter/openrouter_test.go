@@ -468,12 +468,14 @@ func TestOpenRouterPromptCaching(t *testing.T) {
 		t.Fatalf("unsupported cache settings leaked to OpenRouter: %s", encoded)
 	}
 
-	request("openai/gpt-5.6")
-	openAIMessages := bodies[3]["messages"].([]any)
-	openAIContent := openAIMessages[len(openAIMessages)-1].(map[string]any)["content"].([]any)
-	for _, item := range openAIContent {
-		if item.(map[string]any)["prompt_cache_breakpoint"].(map[string]any)["mode"] != "explicit" {
-			t.Fatalf("unexpected routed OpenAI cache breakpoint: %#v", openAIContent)
+	for _, modelName := range []string{"openai/gpt-5.6", "openai/gpt-6-sol", "openai/gpt-6-luna-20260922"} {
+		request(modelName)
+		openAIMessages := bodies[len(bodies)-1]["messages"].([]any)
+		openAIContent := openAIMessages[len(openAIMessages)-1].(map[string]any)["content"].([]any)
+		for _, item := range openAIContent {
+			if item.(map[string]any)["prompt_cache_breakpoint"].(map[string]any)["mode"] != "explicit" {
+				t.Fatalf("unexpected routed OpenAI cache breakpoint for %s: %#v", modelName, openAIContent)
+			}
 		}
 	}
 }

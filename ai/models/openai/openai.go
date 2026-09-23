@@ -789,7 +789,7 @@ func openAIThinkingEffortForModel(modelName string, settings *ai.ThinkingSetting
 	if strings.HasPrefix(modelName, "gpt-6-astra") && effort == "none" {
 		return "", nil
 	}
-	if effort == "minimal" && (strings.HasPrefix(modelName, "gpt-5.6") || strings.HasPrefix(modelName, "gpt-6-astra")) {
+	if effort == "minimal" && (strings.HasPrefix(modelName, "gpt-5.6") || openAIIsGPT6Model(modelName)) {
 		return "low", nil
 	}
 	return effort, nil
@@ -815,7 +815,16 @@ func openAIThinkingEffort(settings *ai.ThinkingSettings) (string, error) {
 func openAIModelReasoningActive(modelName, effort string) bool {
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
 	return effort != "none" && (effort != "" || strings.HasPrefix(modelName, "gpt-5.6") ||
-		strings.HasPrefix(modelName, "gpt-6-astra"))
+		openAIIsGPT6Model(modelName))
+}
+
+func openAIIsGPT6Model(modelName string) bool {
+	for _, prefix := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (model *Model) convertMessage(

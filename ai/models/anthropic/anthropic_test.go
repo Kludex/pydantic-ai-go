@@ -265,17 +265,6 @@ func TestThinkingSettings(t *testing.T) {
 			}
 		})
 	}
-
-	t.Run("forced output", func(t *testing.T) {
-		model := anthropic.NewModel("claude")
-		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
-			Settings:   ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled}},
-			OutputTool: &ai.ToolDefinition{Name: "final", Schema: map[string]any{"type": "object"}},
-		})
-		if err == nil || !strings.Contains(err.Error(), "extended thinking and forced output tools") {
-			t.Fatalf("unexpected forced output error: %v", err)
-		}
-	})
 }
 
 func TestServiceTierMapping(t *testing.T) {
@@ -703,22 +692,37 @@ func TestNativeDeferredToolRenderingEdgeCases(t *testing.T) {
 	}
 }
 
-func TestOutputToolForcesToolChoice(t *testing.T) {
-	var gotBody map[string]any
-	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Error(err)
-		}
-		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"tool_use","id":"tu1","name":"final_result","input":{}}],"usage":{}}`))
-	})
-	params := ai.ModelRequestParams{
-		OutputTool: &ai.ToolDefinition{Name: "final_result", Schema: map[string]any{"type": "object"}},
-	}
-	if _, err := model.Request(t.Context(), nil, params); err != nil {
-		t.Fatal(err)
-	}
-	if gotBody["tool_choice"].(map[string]any)["type"] != "any" {
-		t.Fatalf("expected tool_choice any, got %v", gotBody["tool_choice"])
+func TestOutputToolChoice(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		model    string
+		thinking *ai.ThinkingSettings
+		want     string
+	}{
+		{name: "forced", model: "claude", want: "any"},
+		{name: "extended thinking", model: "claude", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled}, want: "auto"},
+		{name: "Fable 5.1", model: "claude-fable-5-1", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled}, want: "auto"},
+		{name: "Opus 5.5", model: "claude-opus-5-5", want: "auto"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var body map[string]any
+			model := newNamedServer(t, test.model, func(response http.ResponseWriter, request *http.Request) {
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = response.Write([]byte(`{"model":"m","content":[{"type":"tool_use","id":"tu1","name":"final_result","input":{}}],"usage":{}}`))
+			})
+			params := ai.ModelRequestParams{
+				Settings:   ai.ModelSettings{Thinking: test.thinking},
+				OutputTool: &ai.ToolDefinition{Name: "final_result", Schema: map[string]any{"type": "object"}},
+			}
+			if _, err := model.Request(t.Context(), nil, params); err != nil {
+				t.Fatal(err)
+			}
+			if body["tool_choice"].(map[string]any)["type"] != test.want {
+				t.Fatalf("unexpected tool choice: %#v", body["tool_choice"])
+			}
+		})
 	}
 }
 
@@ -1831,6 +1835,7 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 		{name: "maximum fallback", model: "claude-opus-4-6", level: ai.ThinkingLevelXHigh, thinking: "adaptive", effort: "max"},
 		{name: "extended high", model: "claude-opus-4-7", level: ai.ThinkingLevelXHigh, thinking: "adaptive", effort: "xhigh", temperature: true},
 		{name: "unqualified adaptive", model: "claude-fable-5", level: ai.ThinkingLevelEnabled, thinking: "adaptive", temperature: true},
+		{name: "Opus 5.5", model: "claude-opus-5-5", level: ai.ThinkingLevelXHigh, thinking: "adaptive", effort: "xhigh", temperature: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1863,6 +1868,26 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("Opus 5.5 disabled thinking", func(t *testing.T) {
+		var body map[string]any
+		model := newNamedServer(t, "claude-opus-5-5", func(response http.ResponseWriter, request *http.Request) {
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+		})
+		settings := mustAnthropicSettings(t, anthropic.Settings{
+			Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}},
+			Effort: anthropic.EffortXHigh,
+		})
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: settings}); err != nil {
+			t.Fatal(err)
+		}
+		if body["thinking"] != nil || body["output_config"].(map[string]any)["effort"] != "xhigh" {
+			t.Fatalf("unexpected Opus 5.5 disabled-thinking request: %#v", body)
+		}
+	})
 
 	var body map[string]any
 	adaptive := newNamedServer(t, "claude-sonnet-4-6", func(response http.ResponseWriter, request *http.Request) {
@@ -1912,7 +1937,6 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 	for name, modelSettings := range map[string]struct {
 		model    string
 		settings ai.ModelSettings
-		params   ai.ModelRequestParams
 	}{
 		"budget": {model: "claude-opus-5", settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{
 			Level: ai.ThinkingLevelEnabled, TokenBudget: &budget,
@@ -1920,15 +1944,10 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 		"disabled maximum": {model: "claude-opus-5", settings: mustAnthropicSettings(t, anthropic.Settings{
 			Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}, Effort: anthropic.EffortMax,
 		})},
-		"forced fable 5.1 output": {model: "claude-fable-5-1", settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{
-			Level: ai.ThinkingLevelEnabled,
-		}}, params: ai.ModelRequestParams{OutputTool: outputTool}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			model := newNamedServer(t, modelSettings.model, func(http.ResponseWriter, *http.Request) {})
-			params := modelSettings.params
-			params.Settings = modelSettings.settings
-			if _, err := model.Request(t.Context(), nil, params); err == nil {
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: modelSettings.settings}); err == nil {
 				t.Fatal("unsupported thinking profile was accepted")
 			}
 		})
@@ -1999,46 +2018,50 @@ func TestAnthropicContainerUploadsAndRecovery(t *testing.T) {
 }
 
 func TestAnthropicStaleThinkingRecoveryPersists(t *testing.T) {
-	calls := 0
-	var bodies []map[string]any
-	var betas []string
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		calls++
-		var body map[string]any
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		bodies = append(bodies, body)
-		betas = append(betas, request.Header.Get("anthropic-beta"))
-		if calls == 1 {
-			response.WriteHeader(http.StatusBadRequest)
-			_, _ = response.Write([]byte(`{"error":{"message":"The block is bound to a different conversation"}}`))
-			return
-		}
-		_, _ = response.Write([]byte(`{"id":"response","model":"claude-fable-5-1","content":[{"type":"text","text":"done"}],"input_transformations":[{"type":"thinking_dropped","reason":"prefix_binding_mismatch"}],"usage":{}}`))
-	}))
-	defer server.Close()
-	model := anthropic.NewModel("claude-fable-5-1", anthropic.WithBaseURL(server.URL),
-		anthropic.WithHTTPClient(server.Client()))
-	response, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{ProviderName: "anthropic", Parts: []ai.ResponsePart{
-		ai.ThinkingPart{Content: "old", Signature: "signature", ProviderName: "anthropic"},
-	}}}, ai.ModelRequestParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls != 2 || bodies[0]["thinking"] != nil ||
-		bodies[1]["thinking"].(map[string]any)["block_binding"].(map[string]any)["prefix_mismatch_behavior"] != "drop_block" ||
-		!strings.Contains(betas[1], "thinking-binding-controls-2026-08-01") {
-		t.Fatalf("unexpected recovery requests: bodies=%#v betas=%#v", bodies, betas)
-	}
-	_, err = model.Request(t.Context(), []ai.ModelMessage{*response, ai.ModelRequest{Parts: []ai.RequestPart{
-		ai.UserPromptPart{Content: "continue"},
-	}}}, ai.ModelRequestParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if calls != 3 || bodies[2]["thinking"].(map[string]any)["block_binding"] == nil {
-		t.Fatalf("recovery was not preserved: %#v", bodies[2])
+	for _, modelName := range []string{"claude-fable-5-1", "claude-opus-5-5"} {
+		t.Run(modelName, func(t *testing.T) {
+			calls := 0
+			var bodies []map[string]any
+			var betas []string
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				calls++
+				var body map[string]any
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				bodies = append(bodies, body)
+				betas = append(betas, request.Header.Get("anthropic-beta"))
+				if calls == 1 {
+					response.WriteHeader(http.StatusBadRequest)
+					_, _ = response.Write([]byte(`{"error":{"message":"The block is bound to a different conversation"}}`))
+					return
+				}
+				_, _ = fmt.Fprintf(response, `{"id":"response","model":%q,"content":[{"type":"text","text":"done"}],"input_transformations":[{"type":"thinking_dropped","reason":"prefix_binding_mismatch"}],"usage":{}}`, modelName)
+			}))
+			defer server.Close()
+			model := anthropic.NewModel(modelName, anthropic.WithBaseURL(server.URL),
+				anthropic.WithHTTPClient(server.Client()))
+			response, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{ProviderName: "anthropic", Parts: []ai.ResponsePart{
+				ai.ThinkingPart{Content: "old", Signature: "signature", ProviderName: "anthropic"},
+			}}}, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 2 || bodies[0]["thinking"] != nil ||
+				bodies[1]["thinking"].(map[string]any)["block_binding"].(map[string]any)["prefix_mismatch_behavior"] != "drop_block" ||
+				!strings.Contains(betas[1], "thinking-binding-controls-2026-08-01") {
+				t.Fatalf("unexpected recovery requests: bodies=%#v betas=%#v", bodies, betas)
+			}
+			_, err = model.Request(t.Context(), []ai.ModelMessage{*response, ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Content: "continue"},
+			}}}, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if calls != 3 || bodies[2]["thinking"].(map[string]any)["block_binding"] == nil {
+				t.Fatalf("recovery was not preserved: %#v", bodies[2])
+			}
+		})
 	}
 }
 
@@ -2119,7 +2142,10 @@ func TestAnthropicStaleThinkingRecoveryEdges(t *testing.T) {
 		}
 	})
 
-	for name, modelName := range map[string]string{"wrong model": "claude-sonnet-5", "explicit binding": "claude-fable-5-1"} {
+	for name, modelName := range map[string]string{
+		"wrong model": "claude-sonnet-5", "explicit Fable binding": "claude-fable-5-1",
+		"explicit Opus binding": "claude-opus-5-5",
+	} {
 		t.Run(name, func(t *testing.T) {
 			calls := 0
 			model := newNamedServer(t, modelName, func(response http.ResponseWriter, _ *http.Request) {
@@ -2128,7 +2154,7 @@ func TestAnthropicStaleThinkingRecoveryEdges(t *testing.T) {
 				_, _ = response.Write([]byte(`{"error":{"message":"The block is bound to a different conversation"}}`))
 			})
 			settings := ai.ModelSettings{}
-			if name == "explicit binding" {
+			if name != "wrong model" {
 				settings.ExtraBody = map[string]any{"thinking": map[string]any{
 					"block_binding": map[string]any{"prefix_mismatch_behavior": "error"},
 				}}

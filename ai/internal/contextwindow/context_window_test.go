@@ -62,6 +62,7 @@ func TestContextWindowLookupForEveryMetadataProvider(t *testing.T) {
 		{providerID: "fireworks", model: "accounts/fireworks/models/deepseek-r1-0528", want: 160_000},
 		{providerID: "google", model: "claude-3-5-haiku", want: 200_000},
 		{providerID: "groq", model: "deepseek-r1-distill-llama-70b", want: 131_072},
+		{providerID: "github-copilot", model: "gpt-5.4", want: 400_000},
 		{providerID: "huggingface_fireworks-ai", model: "meta-llama/Llama-3.3-70B-Instruct", want: 131_072},
 		{providerID: "huggingface_groq", model: "Qwen/Qwen3-32B", want: 131_072},
 		{providerID: "huggingface_hyperbolic", model: "Qwen/Qwen2.5-VL-72B-Instruct", want: 32_768},

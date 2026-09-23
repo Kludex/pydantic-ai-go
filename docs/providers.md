@@ -32,7 +32,9 @@ Use `openai.NewResponsesModel` instead of `openai.NewModel` when you need the Re
 
 Chat Completions accepts provider-hosted documents as `ai.UploadedFile` values with `ProviderName: "openai"`. Uploaded image IDs are not valid Chat image inputs. Use an image URL, inline image data, or the Responses API instead.
 
-Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, `gpt-5.6`, and `gpt-6-astra` model families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
+Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, `gpt-5.6`, and the GPT-6 Astra, Sol, and Luna families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
+
+GPT-6 Sol and Luna reason at medium effort by default. Set `ThinkingLevelDisabled` to send `reasoning_effort: "none"` when you need Chat Completions function calling. Use the Responses API when you need reasoning and tools together.
 
 ### Predicted output
 
@@ -113,7 +115,7 @@ func main() {
 }
 ```
 
-`PromptCacheOptions` controls request-wide caching for GPT-5.6 and later models, including GPT-6 Astra, with Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolvePromptCacheRetention` reports the longest requested lifetime for durable backends without treating in-memory caching as durable.
+`PromptCacheOptions` controls request-wide caching for GPT-5.6 and GPT-6 models with Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolvePromptCacheRetention` reports the longest requested lifetime for durable backends without treating in-memory caching as durable.
 
 ## OpenAI Codex subscription
 
@@ -895,9 +897,13 @@ func main() {
 }
 ```
 
-Claude Sonnet 4.6+, Opus 4.6+, Fable 5 and 5.1, and Mythos 5 and 5.1 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budget, sampling, effort, and forced-tool combinations fail or are omitted according to the model profile.
+Claude Sonnet 4.6+, Opus 4.6+, Fable 5 and 5.1, and Mythos 5 and 5.1 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budgets and effort levels fail before transport. Sampling settings rejected by the selected model are omitted.
 
-Claude Fable 5.1 can reject a signed thinking block when the preceding instructions or tools changed. The adapter retries that request once with `prefix_mismatch_behavior: drop_block`. Anthropic reports the drop in `ModelResponse.ProviderDetails["input_transformations"]`, and later requests in the same normalized history preserve the recovery setting. Keep dynamic instructions and tool order stable when possible because the changed prefix also prevents prompt-cache reuse.
+Claude Opus 5.5 cannot disable thinking. `ThinkingLevelDisabled` omits the `thinking` field and preserves an explicit effort, so Anthropic uses adaptive thinking. Lower the effort when you need a faster response.
+
+Claude Fable 5.1 and Opus 5.5 reject forced tool choices. A required output tool falls back to `tool_choice: auto`. The model can ignore it, so output validation and retry limits still apply.
+
+Claude Fable 5.1 and Opus 5.5 can reject a signed thinking block when the preceding instructions or tools changed. The adapter retries that request once with `prefix_mismatch_behavior: drop_block`. Anthropic reports the drop in `ModelResponse.ProviderDetails["input_transformations"]`, and later requests in the same normalized history preserve the recovery setting. Keep dynamic instructions and tool order stable when possible because the changed prefix also prevents prompt-cache reuse.
 
 ### Prompt caching
 

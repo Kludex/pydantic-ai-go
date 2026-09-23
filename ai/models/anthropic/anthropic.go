@@ -888,12 +888,22 @@ func anthropicDisallowsSamplingSettings(modelName string) bool {
 }
 
 func anthropicSupportsForcedToolChoice(modelName string) bool {
-	for _, prefix := range []string{"claude-fable-5-1", "claude-mythos-5-1"} {
+	for _, prefix := range []string{"claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5-5"} {
 		if strings.HasPrefix(modelName, prefix) {
 			return false
 		}
 	}
 	return true
+}
+
+func anthropicBindsThinkingBlocks(modelName string) bool {
+	modelName = strings.ToLower(modelName)
+	for _, prefix := range []string{"claude-fable-5-1", "claude-opus-5-5"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func anthropicSupportsXHighEffort(modelName string) bool {
@@ -1259,10 +1269,6 @@ func (m *Model) buildPayload(
 		req.OutputConfig = &anthropicOutputConfig{Effort: effort}
 	}
 	if params.OutputTool != nil {
-		if thinking != nil && (thinking.Type == "enabled" || !anthropicSupportsForcedToolChoice(m.name)) &&
-			!params.AllowText {
-			return nil, fmt.Errorf("anthropic: extended thinking and forced output tools cannot be used together")
-		}
 		converted, err := prepareAnthropicTool(*params.OutputTool, m.strictToolSupport, m.schemaWarning)
 		if err != nil {
 			return nil, err
@@ -1270,7 +1276,11 @@ func (m *Model) buildPayload(
 		req.Tools = append(req.Tools, converted)
 		lastFunctionToolIndex = len(req.Tools) - 1
 		if !params.AllowText {
-			req.ToolChoice = &toolChoiceParam{Type: "any"}
+			choice := "any"
+			if (thinking != nil && thinking.Type == "enabled") || !anthropicSupportsForcedToolChoice(m.name) {
+				choice = "auto"
+			}
+			req.ToolChoice = &toolChoiceParam{Type: choice}
 		}
 	}
 	if cache.ToolDefinitions != "" && lastFunctionToolIndex >= 0 {
@@ -1371,7 +1381,7 @@ func messagesHaveContainerUploads(messages []messageParam) bool {
 }
 
 func anthropicStaleThinkingError(modelName string, statusCode int, data []byte, payload *messagesRequest) bool {
-	if !strings.HasPrefix(strings.ToLower(modelName), "claude-fable-5-1") || statusCode != http.StatusBadRequest ||
+	if !anthropicBindsThinkingBlocks(modelName) || statusCode != http.StatusBadRequest ||
 		payload.Thinking != nil && payload.Thinking.BlockBinding != nil {
 		return false
 	}
@@ -1407,7 +1417,7 @@ func enableAnthropicStaleThinkingDrop(payload *messagesRequest) {
 }
 
 func anthropicHistoryNeedsStaleThinkingDrop(modelName string, messages []ai.ModelMessage) bool {
-	if !strings.HasPrefix(strings.ToLower(modelName), "claude-fable-5-1") {
+	if !anthropicBindsThinkingBlocks(modelName) {
 		return false
 	}
 	for index := len(messages) - 1; index >= 0; index-- {
@@ -1480,7 +1490,8 @@ func anthropicThinking(
 	if settings == nil || settings.Level == ai.ThinkingLevelDisabled ||
 		settings.Level == "" && settings.TokenBudget == nil {
 		if settings != nil && settings.Level == ai.ThinkingLevelDisabled &&
-			(configuredEffort == EffortXHigh || configuredEffort == EffortMax) && strings.HasPrefix(modelName, "claude-opus-5") {
+			(configuredEffort == EffortXHigh || configuredEffort == EffortMax) &&
+			strings.HasPrefix(modelName, "claude-opus-5") && !strings.HasPrefix(modelName, "claude-opus-5-5") {
 			return nil, "", fmt.Errorf(
 				"anthropic: model %q does not support effort %q while thinking is disabled", modelName, configuredEffort,
 			)

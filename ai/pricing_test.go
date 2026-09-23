@@ -44,6 +44,29 @@ func TestModelResponsePrice(t *testing.T) {
 	}
 }
 
+func TestNewProviderPrices(t *testing.T) {
+	for _, test := range []struct {
+		provider string
+		model    string
+	}{
+		{provider: "github-copilot", model: "gpt-5.4"},
+		{provider: "typesafe", model: "jev-latest"},
+		{provider: "anthropic", model: "claude-opus-5-5"},
+		{provider: "openai", model: "gpt-6-sol"},
+	} {
+		calculation, err := (ai.ModelResponse{
+			ModelName: test.model, ProviderName: test.provider,
+			Usage: ai.Usage{InputTokens: 1_000, OutputTokens: 100},
+		}).Price()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if calculation.ProviderID != test.provider || calculation.TotalPrice <= 0 {
+			t.Fatalf("unexpected %s price: %+v", test.provider, calculation)
+		}
+	}
+}
+
 func TestRunCalculatesResponseCostAutomatically(t *testing.T) {
 	cost := 0.123
 	for name, response := range map[string]*ai.ModelResponse{

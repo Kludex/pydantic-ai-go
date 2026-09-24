@@ -18,7 +18,7 @@ const (
 	familyNova   family = "nova"
 )
 
-var geoPrefixes = []string{"us.", "eu.", "apac.", "jp.", "au.", "ca.", "global.", "us-gov."}
+var geoPrefixes = []string{"us.", "eu.", "apac.", "jp.", "au.", "ca.", "global.", "us-gov.", "in."}
 
 func normalizedModelName(modelName string) string {
 	for _, prefix := range geoPrefixes {

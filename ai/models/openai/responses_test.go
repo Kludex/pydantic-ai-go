@@ -219,7 +219,8 @@ func TestResponsesWebSearchNativeTool(t *testing.T) {
 		UserLocation: &ai.WebSearchUserLocation{
 			City: "Paris", Country: "FR", Region: "IDF", Timezone: "Europe/Paris",
 		},
-		AllowedDomains: []string{"go.dev"}, ExternalWebAccess: &external,
+		AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"spam.example"},
+		ExternalWebAccess: &external,
 	}}})
 	if err != nil {
 		t.Fatal(err)
@@ -229,7 +230,7 @@ func TestResponsesWebSearchNativeTool(t *testing.T) {
 	filters := tool["filters"].(map[string]any)
 	if tool["type"] != "web_search" || tool["search_context_size"] != "high" ||
 		tool["external_web_access"] != false || location["type"] != "approximate" || location["city"] != "Paris" ||
-		filters["allowed_domains"].([]any)[0] != "go.dev" {
+		filters["allowed_domains"].([]any)[0] != "go.dev" || filters["blocked_domains"].([]any)[0] != "spam.example" {
 		t.Fatalf("unexpected web search request: %#v", tool)
 	}
 	if len(response.Parts) != 3 {

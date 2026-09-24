@@ -5,6 +5,7 @@ import (
 	"errors"
 	"iter"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
@@ -207,6 +208,76 @@ func TestSessionWAVAndRetentionErrors(t *testing.T) {
 	}
 	connection.end()
 	for range session.Events(t.Context()) {
+	}
+}
+
+func TestClosedSessionSendPaths(t *testing.T) {
+	session, connection := openSessionWithProfile(t, fullProfile())
+	connection.end()
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SendAudioStream(t.Context(), func(yield func([]byte, error) bool) {
+		yield([]byte{0, 0}, nil)
+	}); err != nil {
+		t.Fatalf("closed audio stream should stop cleanly: %v", err)
+	}
+	if err := session.Send(t.Context(), ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"}, realtime.WithResponse(true)); err == nil {
+		t.Fatal("closed image send succeeded")
+	}
+	if err := session.CreateResponse(t.Context()); err == nil {
+		t.Fatal("closed response request succeeded")
+	}
+	if err := session.Send(t.Context(), "context", realtime.WithResponse(false)); err == nil {
+		t.Fatal("closed context send succeeded")
+	}
+	if err := session.WaitForReply(t.Context()); err == nil {
+		t.Fatal("closed reply wait succeeded")
+	}
+}
+
+func TestSessionTerminalErrorConsumerPaths(t *testing.T) {
+	for _, consumer := range []string{"audio", "transcript", "send", "wait", "close"} {
+		t.Run(consumer, func(t *testing.T) {
+			root := errors.New("read")
+			connection := &eventErrorConnection{fakeConnection: newFakeConnection(), eventErr: root}
+			session, err := realtime.Open(
+				t.Context(), &fakeModel{connection: connection, profile: fullProfile()}, realtime.ConnectParams{},
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			deadline := time.Now().Add(time.Second)
+			for session.Err() == nil && time.Now().Before(deadline) {
+				time.Sleep(time.Millisecond)
+			}
+			switch consumer {
+			case "audio":
+				for _, err = range session.StreamAudio(t.Context()) {
+				}
+			case "transcript":
+				for _, err = range session.StreamTranscripts(t.Context()) {
+				}
+			case "send":
+				err = session.Send(t.Context(), "hello", realtime.WithResponse(false))
+			case "wait":
+				err = session.WaitForReply(t.Context())
+			case "close":
+				err = session.Close(t.Context())
+			}
+			if !errors.Is(err, root) {
+				t.Fatalf("unexpected terminal error: %v", err)
+			}
+			if err := session.Send(t.Context(), "late", realtime.WithResponse(false)); err == nil {
+				t.Fatal("send after delivered terminal error succeeded")
+			}
+			if err := session.WaitForReply(t.Context()); err == nil {
+				t.Fatal("wait after delivered terminal error succeeded")
+			}
+			if closeErr := session.Close(t.Context()); closeErr != nil {
+				t.Fatalf("terminal error was delivered twice: %v", closeErr)
+			}
+		})
 	}
 }
 

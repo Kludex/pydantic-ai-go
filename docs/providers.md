@@ -333,6 +333,40 @@ func main() {
 
 Set `GITHUB_COPILOT_API_KEY`. `GITHUB_COPILOT_API_TOKEN` and `COPILOT_GITHUB_TOKEN` are fallback names. The provider deliberately ignores `GITHUB_TOKEN`, `GH_TOKEN`, and `GITHUB_API_KEY` so it cannot send a general GitHub credential to the Copilot inference service.
 
+Use GitHub's device flow when your application does not already have a token:
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "log"
+    "os"
+
+    "github.com/Kludex/pydantic-ai-go/ai/models/githubcopilot"
+)
+
+func main() {
+    flow, err := githubcopilot.NewOAuthFlow(os.Getenv("GITHUB_OAUTH_CLIENT_ID"))
+    if err != nil {
+        log.Fatal(err)
+    }
+    authorization, err := flow.Start(context.Background())
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Printf("Open %s and enter %s\n", authorization.VerificationURI, authorization.UserCode)
+    credentials, err := flow.WaitForAuthorization(context.Background())
+    if err != nil {
+        log.Fatal(err)
+    }
+    fmt.Println("Authorized:", credentials.TokenType)
+}
+```
+
+Register your own GitHub OAuth application and enable device flow. `NewOAuthFlow` requests no scopes by default. Use `WithOAuthScope` when your application needs GitHub permissions. The flow respects GitHub's polling interval and expiry, does not follow redirects, and leaves browser opening and credential storage to you. Only approve a device code shown by the application you are signing into. A GitHub OAuth token does not guarantee a Copilot subscription or API access.
+
 Copilot model availability depends on your subscription. The adapter sends model IDs unchanged and uses the Chat Completions endpoint. It resolves Claude, GPT, o-series, Gemini, Grok, Kimi, MAI, OSWE, Raptor, and exec-agent model families. It normalizes `reasoning_text` for Claude and Gemini models, drops sampling settings rejected by the affected Claude families, and removes thinking settings from unknown or known non-reasoning models. Responses-only models, realtime, and embeddings are not supported by the service. The embedding inference prefix remains available for upstream compatibility, but Copilot currently rejects `/embeddings` requests.
 
 Use `githubcopilot.WithBaseURL` for an enterprise host or local proxy. The default integration headers match GitHub's Copilot clients. A caller-provided HTTP client remains caller-owned.
@@ -374,12 +408,15 @@ Jev supports these output field shapes:
 | Go schema | Jev question | Result |
 |---|---|---|
 | `bool` | Yes or no | The answer at the configured boolean threshold |
-| String `enum` with 2 to 255 values | Pick one | The selected string |
+| A boolean `anyOf` with described `true` and `false` constants | Yes or no with criteria | The selected boolean |
+| String or whole-number `enum` with 2 to 255 values | Pick one | The selected value with its original type |
 | A slice of string `enum` values | One yes or no per value | Every selected value |
 | `float` with `minimum=0` and a positive `maximum` | Probability | The probability scaled to the field maximum |
 | A string-enum-keyed object with boolean values | One yes or no per key | Every key and its answer |
 | A rubric with 2 to 10 described integer levels starting at 0 | Score | The nearest level, with halves rounded up |
 | A nested object containing these fields | The flattened fields | The reconstructed object |
+
+Use `jsonschema:"schema={...}"` or `schemaOverride={...}` to attach descriptions to boolean constants when you need separate meanings for yes and no. An optional choice uses the null branch's description for its "none" option. If that option is selected, fields and nested objects with schema defaults are omitted so your decoder can apply those defaults.
 
 Fixed-length arrays, collection size limits, stepped numbers, recursive required objects, and other field shapes fail before a request is sent. This prevents Jev from returning data that cannot satisfy the schema.
 
@@ -1009,6 +1046,8 @@ func main() {
 Set `GOOGLE_API_KEY` or the legacy `GEMINI_API_KEY`. `GOOGLE_API_KEY` takes precedence. Use `google.WithBaseURL` and `google.WithHTTPClient` for a compatible Gemini Developer API gateway.
 
 Gemini accepts image, document, audio, and video content. Ordinary URLs are downloaded with SSRF protection. Gemini Files API URLs and YouTube videos are sent directly.
+
+Gemini 2.5 uses token budgets for portable thinking settings. Gemini 3 and unknown future model names use thinking levels. Known Gemini 2.0, Gemini 1.x, and Gemma models omit unsupported thinking settings. Future model names also receive the modern mixed native/function-tool and strict-tool behavior by default.
 
 ### Cached content
 

@@ -111,6 +111,10 @@ func WithHTTPClient(client *http.Client) Option {
 // WithBaseURL sets a custom official SDK endpoint.
 func WithBaseURL(baseURL string) Option { return func(model *Model) { model.baseURL = baseURL } }
 
+// WithAPIVersion selects the Google API version. Gemini Developer API
+// proactive audio requires v1alpha. The default is v1beta.
+func WithAPIVersion(version string) Option { return func(model *Model) { model.apiVersion = version } }
+
 // WithSettings adds model-level Gemini Live defaults.
 func WithSettings(settings Settings) Option { return func(model *Model) { model.settings = settings } }
 
@@ -127,6 +131,7 @@ type Model struct {
 	project    string
 	location   string
 	baseURL    string
+	apiVersion string
 	httpClient *http.Client
 	client     *genai.Client
 	connector  Connector
@@ -182,11 +187,20 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 	if model.name == "" {
 		return nil, fmt.Errorf("google realtime: model name must not be empty")
 	}
+	settings := model.resolveSettings(params.Settings)
+	apiVersion := model.apiVersion
+	if apiVersion == "" {
+		apiVersion = "v1beta"
+	}
+	if settings.ProactiveAudio != nil && *settings.ProactiveAudio && !model.vertex && apiVersion != "v1alpha" {
+		return nil, fmt.Errorf(
+			"google realtime: proactive audio requires Gemini Developer API v1alpha; use WithAPIVersion(\"v1alpha\")",
+		)
+	}
 	connector, err := model.resolveConnector(ctx)
 	if err != nil {
 		return nil, err
 	}
-	settings := model.resolveSettings(params.Settings)
 	config, err := model.liveConfig(params.Request, params.Settings, settings)
 	if err != nil {
 		return nil, err
@@ -231,6 +245,9 @@ func (model *Model) resolveConnector(ctx context.Context) (Connector, error) {
 	}
 	config.Backend = backend
 	config.HTTPOptions.BaseURL = model.baseURL
+	if model.apiVersion != "" {
+		config.HTTPOptions.APIVersion = model.apiVersion
+	}
 	client, err := genai.NewClient(ctx, config)
 	if err != nil {
 		return nil, fmt.Errorf("google realtime: create client: %w", err)

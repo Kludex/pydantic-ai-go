@@ -180,6 +180,40 @@ func (testNativeTool) UniqueID() string               { return "test" }
 func (testNativeTool) IsOptional() bool               { return false }
 func (testNativeTool) CloneNativeTool() ai.NativeTool { return testNativeTool{} }
 
+func TestDeferredToolSearchUsesCodexResponsesDialect(t *testing.T) {
+	var requestBody map[string]any
+	model := newModel(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		return codexSSE("done"), nil
+	}))
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	search := ai.ToolDefinition{
+		Name: ai.ToolSearchName, ToolKind: ai.ToolPartKindToolSearch,
+		ToolSearchStrategy: ai.ToolSearchStrategyAuto, Schema: schema,
+	}
+	deferred := ai.ToolDefinition{Name: "lookup", Description: "Look up a value.", Schema: schema, DeferLoading: true}
+	_, err := model.Request(t.Context(), []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "find it"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolAvailabilityDeltaPart{ToolsAdded: []string{"lookup"}}}},
+	}, ai.ModelRequestParams{Tools: []ai.ToolDefinition{search}, DeferredTools: []ai.ToolDefinition{deferred}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := requestBody["tools"].([]any)
+	if len(tools) != 2 || tools[0].(map[string]any)["name"] != "lookup" ||
+		tools[0].(map[string]any)["defer_loading"] != true || tools[1].(map[string]any)["type"] != "tool_search" {
+		t.Fatalf("unexpected deferred tools: %#v", tools)
+	}
+	input := requestBody["input"].([]any)
+	additional := input[len(input)-1].(map[string]any)
+	if additional["type"] != "additional_tools" || additional["role"] != "developer" ||
+		additional["tools"].([]any)[0].(map[string]any)["name"] != "lookup" {
+		t.Fatalf("unexpected revealed tools: %#v", additional)
+	}
+}
+
 func TestStreamSettingsAndConversationFallbacks(t *testing.T) {
 	var bodies []map[string]any
 	var headers []http.Header

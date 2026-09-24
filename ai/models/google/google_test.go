@@ -395,6 +395,14 @@ func TestThinkingSettings(t *testing.T) {
 			model: "gemini-3-pro", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelXHigh},
 			level: "HIGH", include: true, hasInclude: true,
 		},
+		"future model defaults to level": {
+			model: "gemini-9-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			level: "HIGH", include: true, hasInclude: true,
+		},
+		"latest alias defaults to level": {
+			model: "gemini-flash-latest", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			level: "MINIMAL",
+		},
 		"flash minimum snaps up": {
 			model: "gemini-3.8-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
 			level: "LOW", include: true, hasInclude: true,

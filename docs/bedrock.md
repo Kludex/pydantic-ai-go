@@ -217,7 +217,7 @@ Native output sends your reflected JSON Schema through Converse `outputConfig.te
 
 ## Portable settings
 
-Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and extra-header settings map to Converse fields. `ModelSettings.ExtraBody` maps to `additionalModelRequestFields` for model-specific Bedrock parameters.
+Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and extra-header settings map to Converse fields. Bedrock rejects temperature and top-p for its GPT-5.6 Sol/Luna/Terra and GPT-6 Sol/Luna/Astra Converse models, so the adapter omits those settings for these exact model families. GPT-OSS keeps them. `ModelSettings.ExtraBody` maps to `additionalModelRequestFields` for model-specific Bedrock parameters.
 
 `WithDefaultSettings` stores a detached copy. Agent and run settings override those defaults through the standard fieldwise merge.
 

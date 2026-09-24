@@ -4,13 +4,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
-func schemaFields(schema map[string]any) (map[string]map[string]any, error) {
+func schemaFields(schema map[string]any) (map[string]map[string]any, map[string]bool, error) {
 	definitions, _ := schema["$defs"].(map[string]any)
 	var resolve func(map[string]any) map[string]any
 	resolve = func(value map[string]any) map[string]any {
@@ -46,9 +48,10 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, error) {
 	schema = resolve(schema)
 	properties, _ := schema["properties"].(map[string]any)
 	if properties == nil && schema["type"] != "object" {
-		return map[string]map[string]any{"response": schema}, nil
+		return map[string]map[string]any{"response": schema}, nil, nil
 	}
 	result := map[string]map[string]any{}
+	defaulted := map[string]bool{}
 	var flatten func(map[string]any, string, map[string]bool) error
 	flatten = func(values map[string]any, prefix string, seen map[string]bool) error {
 		for name, raw := range values {
@@ -62,6 +65,9 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, error) {
 			reference, _ := property["$ref"].(string)
 			property = resolve(property)
 			if nested, ok := property["properties"].(map[string]any); ok {
+				if _, ok := property["default"]; ok {
+					defaulted[prefix+name] = true
+				}
 				if reference != "" && seen[reference] {
 					return fmt.Errorf("typesafe: output field %q contains itself", prefix+name)
 				}
@@ -82,9 +88,9 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, error) {
 		return nil
 	}
 	if err := flatten(properties, "", map[string]bool{}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return result, nil
+	return result, defaulted, nil
 }
 
 func buildQuestions(fields map[string]map[string]any, goal, instructions, chosen string) (map[string]question, error) {
@@ -103,13 +109,16 @@ func buildQuestions(fields map[string]map[string]any, goal, instructions, chosen
 		if instructions != "" {
 			ask["instructions"] = instructions
 		}
-		property, noneKey := optionalProperty(property)
+		property, noneOption := optionalProperty(property)
 		options := propertyOptions(property)
-		if noneKey != "" {
-			if options == nil {
+		if allBooleanOptions(options) && allOptionsUndescribed(options) {
+			options = nil
+		}
+		if len(noneOption) > 0 {
+			if options == nil || rubricCriteria(options) != nil || !pickableOptions(options) {
 				return nil, unsupportedField(name)
 			}
-			options[noneKey] = "None of these."
+			options = append(options, noneOption...)
 		}
 		if labels := mappingOptions(property); labels != nil {
 			if len(labels) < 2 {
@@ -118,36 +127,44 @@ func buildQuestions(fields map[string]map[string]any, goal, instructions, chosen
 			fanOut(questions, name, ask, labels)
 			continue
 		}
-		switch property["type"] {
-		case "array":
+		asked := compactInstructions(ask)
+		switch {
+		case property["type"] == "array":
 			items, _ := property["items"].(map[string]any)
-			labels := propertyOptions(items)
+			labels := stringOptions(propertyOptions(items))
 			if len(labels) < 2 || property["minItems"] != nil || property["maxItems"] != nil {
 				return nil, unsupportedField(name)
 			}
 			fanOut(questions, name, ask, labels)
-		case "boolean":
+		case options != nil:
+			switch rubric := rubricCriteria(options); {
+			case rubric != nil:
+				questions[name] = question{Type: "score", Instructions: asked, Criteria: rubric}
+			case allBooleanOptions(options) && len(options) == 2:
+				criteria := map[string]any{}
+				for _, option := range options {
+					if option.description != nil {
+						criteria[strconv.FormatBool(option.value.(bool))] = option.description
+					}
+				}
+				questions[name] = question{Type: "noul", Instructions: asked, Criteria: criteria}
+			case len(options) < 2 || len(options) > 255 || !pickableOptions(options):
+				return nil, unsupportedField(name)
+			default:
+				questions[name] = question{Type: "choice", Instructions: asked, Criteria: choiceCriteria(options)}
+			}
+		case property["type"] == "boolean":
 			if len(ask) == 1 {
 				return nil, fmt.Errorf("typesafe: output field %q asks no question", name)
 			}
-			questions[name] = question{Type: "noul", Instructions: compactInstructions(ask)}
-		case "number":
+			questions[name] = question{Type: "noul", Instructions: asked}
+		case property["type"] == "number":
 			if _, ok := boundedNumber(property); !ok || len(ask) == 1 {
 				return nil, unsupportedField(name)
 			}
-			questions[name] = question{Type: "noul", Instructions: compactInstructions(ask)}
+			questions[name] = question{Type: "noul", Instructions: asked}
 		default:
-			if rubric := rubricCriteria(property); rubric != nil {
-				if len(rubric) > 10 {
-					return nil, fmt.Errorf("typesafe: output field %q has more than 10 rubric levels", name)
-				}
-				questions[name] = question{Type: "score", Instructions: compactInstructions(ask), Criteria: rubric}
-				continue
-			}
-			if len(options) < 2 || len(options) > 255 {
-				return nil, unsupportedField(name)
-			}
-			questions[name] = question{Type: "choice", Instructions: compactInstructions(ask), Criteria: options}
+			return nil, unsupportedField(name)
 		}
 	}
 	return questions, nil
@@ -181,7 +198,7 @@ func mappingOptions(property map[string]any) map[string]any {
 		return nil
 	}
 	names, _ := property["propertyNames"].(map[string]any)
-	return propertyOptions(names)
+	return stringOptions(propertyOptions(names))
 }
 
 func compactInstructions(values map[string]any) any {
@@ -193,79 +210,171 @@ func compactInstructions(values map[string]any) any {
 	return values
 }
 
-func optionalProperty(property map[string]any) (map[string]any, string) {
+func optionalProperty(property map[string]any) (map[string]any, []schemaOption) {
 	variants, ok := property["anyOf"].([]any)
 	if !ok || len(variants) != 2 {
-		return property, ""
+		return property, nil
 	}
-	var inner map[string]any
-	nulls := 0
+	var inner, null map[string]any
 	for _, raw := range variants {
 		candidate, _ := raw.(map[string]any)
 		if candidate["type"] == "null" {
-			nulls++
+			if null != nil {
+				return property, nil
+			}
+			null = candidate
 		} else {
 			inner = candidate
 		}
 	}
-	if inner == nil || nulls != 1 {
-		return property, ""
+	if inner == nil || null == nil {
+		return property, nil
+	}
+	for key, value := range property {
+		if key != "anyOf" && key != "default" {
+			inner[key] = value
+		}
+	}
+	taken := map[string]bool{}
+	for _, option := range propertyOptions(inner) {
+		if value, ok := option.value.(string); ok {
+			taken[value] = true
+		}
 	}
 	key := "none"
-	options := propertyOptions(inner)
-	for {
-		if _, exists := options[key]; !exists {
-			break
-		}
+	for taken[key] {
 		key += "_"
 	}
-	return inner, key
+	description, _ := null["description"].(string)
+	if description == "" {
+		description = "None of these."
+	}
+	return inner, []schemaOption{{value: key, description: description, none: true}}
 }
 
-func propertyOptions(property map[string]any) map[string]any {
+type schemaOption struct {
+	value       any
+	description any
+	none        bool
+}
+
+func propertyOptions(property map[string]any) []schemaOption {
 	if values, ok := property["enum"].([]any); ok {
-		result := make(map[string]any, len(values))
-		for _, value := range values {
-			key, ok := value.(string)
-			if !ok {
-				return nil
-			}
-			result[key] = nil
+		result := make([]schemaOption, len(values))
+		for index, value := range values {
+			result[index] = schemaOption{value: value}
 		}
 		return result
 	}
 	if variants, ok := property["anyOf"].([]any); ok {
-		result := make(map[string]any, len(variants))
+		result := make([]schemaOption, 0, len(variants))
 		for _, raw := range variants {
 			variant, ok := raw.(map[string]any)
 			if !ok {
 				return nil
 			}
-			key, ok := variant["const"].(string)
+			value, ok := variant["const"]
 			if !ok {
 				return nil
 			}
-			result[key] = variant["description"]
+			result = append(result, schemaOption{value: value, description: variant["description"]})
 		}
 		return result
 	}
 	return nil
 }
 
-func rubricCriteria(property map[string]any) []any {
-	variants, ok := property["anyOf"].([]any)
-	if !ok || len(variants) < 2 {
-		return nil
-	}
-	criteria := make([]any, len(variants))
-	for _, raw := range variants {
-		variant, ok := raw.(map[string]any)
+func stringOptions(options []schemaOption) map[string]any {
+	result := make(map[string]any, len(options))
+	for _, option := range options {
+		value, ok := option.value.(string)
 		if !ok {
 			return nil
 		}
-		level := int(number(variant["const"]))
-		description, _ := variant["description"].(string)
-		if level < 0 || level >= len(variants) || description == "" || math.IsNaN(number(variant["const"])) {
+		result[value] = option.description
+	}
+	return result
+}
+
+func allBooleanOptions(options []schemaOption) bool {
+	if len(options) == 0 {
+		return false
+	}
+	for _, option := range options {
+		if _, ok := option.value.(bool); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func allOptionsUndescribed(options []schemaOption) bool {
+	for _, option := range options {
+		if description, _ := option.description.(string); description != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func pickableOptions(options []schemaOption) bool {
+	for _, option := range options {
+		if _, ok := option.value.(string); ok {
+			continue
+		}
+		if _, ok := wholeNumber(option.value); !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func labelledOptions(options []schemaOption) map[string]any {
+	taken := map[string]bool{}
+	for _, option := range options {
+		if value, ok := option.value.(string); ok {
+			taken[value] = true
+		}
+	}
+	result := make(map[string]any, len(options))
+	for _, option := range options {
+		label, ok := option.value.(string)
+		if !ok {
+			value, _ := wholeNumber(option.value)
+			label = strconv.FormatInt(value, 10)
+			for taken[label] {
+				label += " (number)"
+			}
+			taken[label] = true
+		}
+		result[label] = option.value
+	}
+	return result
+}
+
+func choiceCriteria(options []schemaOption) map[string]any {
+	values := labelledOptions(options)
+	criteria := make(map[string]any, len(values))
+	for label, value := range values {
+		for _, option := range options {
+			if reflect.DeepEqual(option.value, value) {
+				criteria[label] = option.description
+				break
+			}
+		}
+	}
+	return criteria
+}
+
+func rubricCriteria(options []schemaOption) []any {
+	if len(options) < 2 || len(options) > 10 {
+		return nil
+	}
+	criteria := make([]any, len(options))
+	for _, option := range options {
+		level, ok := wholeNumber(option.value)
+		description, described := option.description.(string)
+		if !ok || level < 0 || level >= int64(len(options)) || !described || description == "" {
 			return nil
 		}
 		criteria[level] = description
@@ -278,13 +387,41 @@ func rubricCriteria(property map[string]any) []any {
 	return criteria
 }
 
-func decodeAnswers(answers map[string]answer, fields map[string]map[string]any, questions map[string]question, threshold float64) (map[string]any, map[string]any, error) {
+func wholeNumber(value any) (int64, bool) {
+	if value, ok := value.(json.Number); ok {
+		parsed, err := value.Int64()
+		return parsed, err == nil
+	}
+	reflected := reflect.ValueOf(value)
+	switch reflected.Kind() {
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		return reflected.Int(), true
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		if unsigned := reflected.Uint(); unsigned <= math.MaxInt64 {
+			return int64(unsigned), true
+		}
+	case reflect.Float32, reflect.Float64:
+		floating := reflected.Float()
+		if floating >= math.MinInt64 && floating <= math.MaxInt64 && floating == math.Trunc(floating) {
+			return int64(floating), true
+		}
+	}
+	return 0, false
+}
+
+func decodeAnswers(
+	answers map[string]answer,
+	fields map[string]map[string]any,
+	questions map[string]question,
+	threshold float64,
+	defaulted map[string]bool,
+) (map[string]any, map[string]any, error) {
 	result := map[string]any{}
 	confidence := map[string]float64{}
 	probabilities := map[string]map[string]float64{}
 	scores := map[string]float64{}
-	for name, property := range fields {
-		property, noneKey := optionalProperty(property)
+	for name, originalProperty := range fields {
+		property, noneOption := optionalProperty(originalProperty)
 		if labels := mappingOptions(property); labels != nil {
 			selected := make(map[string]bool, len(labels))
 			values, sure, err := fanIn(answers, name, labels, threshold, func(label string, chosen bool) {
@@ -299,7 +436,7 @@ func decodeAnswers(answers map[string]answer, fields map[string]map[string]any, 
 			continue
 		}
 		if property["type"] == "array" {
-			labels := propertyOptions(property["items"].(map[string]any))
+			labels := stringOptions(propertyOptions(property["items"].(map[string]any)))
 			selected := make([]string, 0, len(labels))
 			values, sure, err := fanIn(answers, name, labels, threshold, func(label string, chosen bool) {
 				if chosen {
@@ -332,11 +469,19 @@ func decodeAnswers(answers map[string]answer, fields map[string]map[string]any, 
 			if value.Choice == "" {
 				return nil, nil, fmt.Errorf("typesafe: invalid answer for %q", name)
 			}
-			var chosen any = value.Choice
-			if value.Choice == noneKey {
-				chosen = nil
+			if isNoneChoice(value.Choice, noneOption) {
+				if _, hasDefault := originalProperty["default"]; hasDefault {
+					ensureNested(result, name)
+				} else {
+					setNested(result, name, nil)
+				}
+			} else {
+				chosen, exists := labelledOptions(propertyOptions(property))[value.Choice]
+				if !exists {
+					chosen = value.Choice
+				}
+				setNested(result, name, chosen)
 			}
-			setNested(result, name, chosen)
 			confidence[name] = value.Confidence
 			probabilities[name] = value.Probabilities
 		case "score":
@@ -349,6 +494,7 @@ func decodeAnswers(answers map[string]answer, fields map[string]map[string]any, 
 			scores[name] = *value.Score
 		}
 	}
+	leaveOutUnanswered(result, fields, defaulted, "")
 	return result, map[string]any{"confidence": confidence, "probabilities": probabilities, "scores": scores}, nil
 }
 
@@ -384,12 +530,18 @@ func verdict(probability, threshold float64) (bool, float64) {
 		}
 		return true, (probability - threshold) / (1 - threshold)
 	}
-	if threshold == 0 {
-		return false, 0
-	}
 	return false, (threshold - probability) / threshold
 }
-func setNested(result map[string]any, name string, value any) {
+func isNoneChoice(choice string, options []schemaOption) bool {
+	for _, option := range options {
+		if option.none && option.value == choice {
+			return true
+		}
+	}
+	return false
+}
+
+func ensureNested(result map[string]any, name string) {
 	parts := strings.Split(name, ".")
 	for _, part := range parts[:len(parts)-1] {
 		nested, _ := result[part].(map[string]any)
@@ -399,7 +551,35 @@ func setNested(result map[string]any, name string, value any) {
 		}
 		result = nested
 	}
+}
+
+func setNested(result map[string]any, name string, value any) {
+	ensureNested(result, name)
+	parts := strings.Split(name, ".")
+	for _, part := range parts[:len(parts)-1] {
+		result = result[part].(map[string]any)
+	}
 	result[parts[len(parts)-1]] = value
+}
+
+func leaveOutUnanswered(
+	result map[string]any, fields map[string]map[string]any, defaulted map[string]bool, prefix string,
+) bool {
+	answered := false
+	for name, value := range result {
+		path := prefix + name
+		if _, exists := fields[path]; exists {
+			answered = true
+			continue
+		}
+		nested, ok := value.(map[string]any)
+		if !ok || leaveOutUnanswered(nested, fields, defaulted, path+".") {
+			answered = true
+		} else if defaulted[path] {
+			delete(result, name)
+		}
+	}
+	return answered
 }
 func unsupportedField(name string) error {
 	return fmt.Errorf("typesafe: output field %q is not supported", name)

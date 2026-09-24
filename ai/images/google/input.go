@@ -20,16 +20,25 @@ func (model *Model) mapInput(ctx context.Context, input images.Input) (part, err
 		mapped.MediaResolution = input.VendorMetadata["media_resolution"]
 	case ai.UploadedFile:
 		if model.transport == modelgoogle.TransportVertexAI {
-			return part{}, fmt.Errorf("google images: Vertex AI does not accept uploaded file references")
-		}
-		if input.ProviderName != model.providerName && input.ProviderName != "google" &&
-			input.ProviderName != "google-gla" {
-			return part{}, fmt.Errorf(
-				"google images: uploaded file %q belongs to provider %q", input.FileID, input.ProviderName,
-			)
-		}
-		if !strings.HasPrefix(input.FileID, "https://") {
-			return part{}, fmt.Errorf("google images: uploaded file ID must be an HTTPS Files API URI")
+			if !strings.HasPrefix(input.FileID, "gs://") {
+				return part{}, fmt.Errorf("google images: Vertex AI uploaded file ID must be a gs:// URI")
+			}
+			if input.ProviderName != model.providerName && input.ProviderName != "google-cloud" &&
+				input.ProviderName != "google-vertex" {
+				return part{}, fmt.Errorf(
+					"google images: uploaded file %q belongs to provider %q", input.FileID, input.ProviderName,
+				)
+			}
+		} else {
+			if input.ProviderName != model.providerName && input.ProviderName != "google" &&
+				input.ProviderName != "google-gla" {
+				return part{}, fmt.Errorf(
+					"google images: uploaded file %q belongs to provider %q", input.FileID, input.ProviderName,
+				)
+			}
+			if !strings.HasPrefix(input.FileID, "https://") {
+				return part{}, fmt.Errorf("google images: uploaded file ID must be an HTTPS Files API URI")
+			}
 		}
 		mapped.FileData = &fileData{MIMEType: input.ResolvedMediaType(), FileURI: input.FileID}
 		mapped.MediaResolution = input.VendorMetadata["media_resolution"]
@@ -37,11 +46,13 @@ func (model *Model) mapInput(ctx context.Context, input images.Input) (part, err
 		if err := input.ForceDownload.Validate(); err != nil {
 			return part{}, err
 		}
-		if input.ForceDownload == ai.FileDownloadNever && model.transport != modelgoogle.TransportVertexAI &&
-			strings.HasPrefix(input.URL, "https://generativelanguage.googleapis.com/v1beta/files") {
+		providerHosted := model.transport == modelgoogle.TransportVertexAI && strings.HasPrefix(input.URL, "gs://") ||
+			model.transport != modelgoogle.TransportVertexAI &&
+				strings.HasPrefix(input.URL, "https://generativelanguage.googleapis.com/v1beta/files")
+		if input.ForceDownload == ai.FileDownloadNever && providerHosted {
 			mediaType, err := input.ResolvedMediaType()
 			if err != nil {
-				return part{}, fmt.Errorf("google images: Files API image URL needs an explicit media type: %w", err)
+				return part{}, fmt.Errorf("google images: provider-hosted image URL needs an explicit media type: %w", err)
 			}
 			mapped.FileData = &fileData{MIMEType: mediaType, FileURI: input.URL}
 		} else {

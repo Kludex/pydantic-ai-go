@@ -113,7 +113,7 @@ func buildConverseInput(
 		reservedCachePoints++
 	}
 	limitCachePoints(input.Messages, 4-reservedCachePoints)
-	if bedrockAnthropicDisallowsSampling(modelName) {
+	if bedrockAnthropicDisallowsSampling(modelName) || bedrockOpenAIDisallowsSampling(modelName) {
 		params.Settings = params.Settings.Clone()
 		params.Settings.Temperature = nil
 		params.Settings.TopP = nil
@@ -206,6 +206,18 @@ func bedrockSupportsXHigh(name string) bool {
 	return strings.Contains(name, "claude-opus-4-7") || strings.Contains(name, "claude-opus-4-8") ||
 		strings.Contains(name, "claude-opus-5") || strings.Contains(name, "claude-sonnet-5") ||
 		strings.Contains(name, "claude-fable-5") || strings.Contains(name, "claude-mythos-5")
+}
+
+func bedrockOpenAIDisallowsSampling(modelName string) bool {
+	name := strings.ToLower(modelName)
+	for _, model := range []string{
+		"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra",
+	} {
+		if strings.HasSuffix(name, "openai."+model) || name == model {
+			return true
+		}
+	}
+	return false
 }
 
 func bedrockAnthropicDisallowsSampling(modelName string) bool {

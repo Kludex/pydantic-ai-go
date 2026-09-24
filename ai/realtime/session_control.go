@@ -2,6 +2,7 @@ package realtime
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"sync/atomic"
@@ -43,6 +44,38 @@ func (session *Session) WaitForPlayback(ctx context.Context) error {
 		case <-ctx.Done():
 			return context.Cause(ctx)
 		case <-session.playbackProgress:
+		}
+	}
+}
+
+// WaitForReply waits until every requested model reply reaches a turn boundary.
+// It returns immediately when no reply is outstanding and also returns when the
+// session closes. It does not consume the event stream.
+func (session *Session) WaitForReply(ctx context.Context) error {
+	if err := session.nextError(); err != nil {
+		return err
+	}
+	session.mu.RLock()
+	closed := session.closed
+	session.mu.RUnlock()
+	if closed {
+		return errors.New("realtime: session is closed")
+	}
+	for {
+		session.mu.RLock()
+		closed = session.closed
+		outstanding := session.responseActive || session.pendingResponses > 0 || session.pendingToolCalls > 0
+		session.mu.RUnlock()
+		if err := session.nextError(); err != nil {
+			return err
+		}
+		if closed || !outstanding {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return context.Cause(ctx)
+		case <-session.replyProgress:
 		}
 	}
 }
@@ -94,7 +127,7 @@ func (session *Session) InterruptAtAudio(ctx context.Context, playedBytes int) (
 	session.tapMu.Unlock()
 
 	session.mu.RLock()
-	responseActive := session.responseActive
+	responseActive := session.responseActive || session.pendingResponses > 0
 	serverCancelling := session.serverCancelling
 	activeAssistant := session.activeAssistant
 	session.mu.RUnlock()
@@ -264,7 +297,7 @@ func (session *Session) deliverEnqueued() {
 	defer session.deliveryMu.Unlock()
 
 	session.mu.RLock()
-	active := session.responseActive
+	active := session.responseActive || session.pendingResponses > 0 || session.pendingToolCalls > 0
 	closed := session.closed
 	session.mu.RUnlock()
 	if active || closed {
@@ -280,11 +313,11 @@ func (session *Session) deliverEnqueued() {
 		var input Input = TextContext{Text: prompt.text}
 		if last {
 			input = TextInput{Text: prompt.text}
-			session.setResponseActive(true)
+			session.reserveResponse()
 		}
 		if err := session.send(session.ctx, input); err != nil {
 			if last {
-				session.setResponseActive(false)
+				session.releaseResponseReservation()
 			}
 			if ctxErr := context.Cause(session.ctx); ctxErr == nil {
 				session.fail(err)

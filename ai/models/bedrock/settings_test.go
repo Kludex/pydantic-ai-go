@@ -111,6 +111,48 @@ func TestTypedSettingsAndNativeOutput(t *testing.T) {
 	}
 }
 
+func TestOpenAIConverseDropsUnsupportedSampling(t *testing.T) {
+	for _, name := range []string{
+		"us.openai.gpt-5.6-sol", "us.openai.gpt-5.6-luna", "us.openai.gpt-5.6-terra",
+		"global.openai.gpt-6-sol", "global.openai.gpt-6-luna", "global.openai.gpt-6-astra",
+	} {
+		t.Run(name, func(t *testing.T) {
+			client := &fakeClient{converse: func(
+				input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+			) (*bedrockruntime.ConverseOutput, error) {
+				if input.InferenceConfig == nil || input.InferenceConfig.MaxTokens == nil || *input.InferenceConfig.MaxTokens != 64 ||
+					input.InferenceConfig.Temperature != nil || input.InferenceConfig.TopP != nil {
+					t.Fatalf("unexpected inference settings: %#v", input.InferenceConfig)
+				}
+				return completeOutput(types.StopReasonEndTurn), nil
+			}}
+			temperature, topP := float64(.2), float64(.3)
+			_, err := bedrock.NewModel(name, bedrock.WithClient(client)).Request(t.Context(), nil, ai.ModelRequestParams{
+				Settings: ai.ModelSettings{MaxTokens: 64, Temperature: &temperature, TopP: &topP},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+
+	client := &fakeClient{converse: func(
+		input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		if input.InferenceConfig == nil || input.InferenceConfig.Temperature == nil || input.InferenceConfig.TopP == nil {
+			t.Fatalf("GPT-OSS sampling settings were dropped: %#v", input.InferenceConfig)
+		}
+		return completeOutput(types.StopReasonEndTurn), nil
+	}}
+	temperature, topP := float64(.2), float64(.3)
+	_, err := bedrock.NewModel("openai.gpt-oss-120b-1:0", bedrock.WithClient(client)).Request(
+		t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Temperature: &temperature, TopP: &topP}},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBedrockSettingsValidation(t *testing.T) {
 	empty, err := (bedrock.Settings{}).Build()
 	if err != nil || empty.ExtraBody != nil {

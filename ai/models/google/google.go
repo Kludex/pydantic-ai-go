@@ -636,8 +636,7 @@ func (m *Model) buildPayload(
 		return nil, err
 	}
 	if (len(nativeTools) > 0 || generatedImageConfig != nil) &&
-		(len(params.Tools) > 0 || params.OutputTool != nil) &&
-		!strings.Contains(strings.ToLower(m.name), "gemini-3") {
+		(len(params.Tools) > 0 || params.OutputTool != nil) && !googleIsModernModel(m.name) {
 		return nil, fmt.Errorf("google: model %q does not support function and native tools together", m.name)
 	}
 	req := &generateRequest{Tools: nativeTools}
@@ -726,8 +725,7 @@ func (m *Model) buildPayload(
 	if len(declarations) > 0 {
 		req.Tools = append(req.Tools, toolsParam{FunctionDeclarations: declarations})
 	}
-	if m.transport == TransportGeminiAPI && strings.Contains(strings.ToLower(m.name), "gemini-3") &&
-		hasGoogleServerNativeTool(params.NativeTools) {
+	if m.transport == TransportGeminiAPI && googleIsModernModel(m.name) && hasGoogleServerNativeTool(params.NativeTools) {
 		if req.ToolConfig == nil {
 			req.ToolConfig = &toolConfig{}
 		}
@@ -764,17 +762,18 @@ func googleServiceTier(transport Transport, tier ai.ServiceTier) (string, error)
 }
 
 func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingConfig, error) {
-	if settings == nil || settings.Level == "" && settings.TokenBudget == nil && settings.IncludeThoughts == nil {
+	if settings == nil || settings.Level == "" && settings.TokenBudget == nil && settings.IncludeThoughts == nil ||
+		!googleSupportsThinking(modelName) {
 		return nil, nil
 	}
 	config := &thinkingConfig{}
-	gemini3 := strings.Contains(strings.ToLower(modelName), "gemini-3")
+	usesThinkingLevel := googleIsModernModel(modelName)
 	if settings.Level == ai.ThinkingLevelDisabled {
 		if settings.IncludeThoughts != nil {
 			include := *settings.IncludeThoughts
 			config.IncludeThoughts = &include
 		}
-		if gemini3 {
+		if usesThinkingLevel {
 			config.ThinkingLevel = googleThinkingLevel(modelName, "MINIMAL")
 		} else {
 			budget := 0
@@ -795,7 +794,7 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 	if settings.Level == ai.ThinkingLevelEnabled || settings.Level == "" {
 		return config, nil
 	}
-	if gemini3 {
+	if usesThinkingLevel {
 		levels := map[ai.ThinkingLevel]string{
 			ai.ThinkingLevelMinimal: "MINIMAL", ai.ThinkingLevelLow: "LOW",
 			ai.ThinkingLevelMedium: "MEDIUM", ai.ThinkingLevelHigh: "HIGH", ai.ThinkingLevelXHigh: "HIGH",
@@ -817,6 +816,16 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 	}
 	config.ThinkingBudget = &budget
 	return config, nil
+}
+
+func googleIsModernModel(modelName string) bool {
+	name := strings.ToLower(modelName)
+	return !strings.Contains(name, "gemma") && !strings.Contains(name, "gemini-1") &&
+		!strings.Contains(name, "gemini-2.")
+}
+
+func googleSupportsThinking(modelName string) bool {
+	return strings.Contains(strings.ToLower(modelName), "gemini-2.5") || googleIsModernModel(modelName)
 }
 
 func googleThinkingLevel(modelName, requested string) string {
@@ -1026,8 +1035,7 @@ func convertTool(def ai.ToolDefinition) functionDeclaration {
 }
 
 func supportsStrictTools(name string) bool {
-	return (strings.Contains(name, "gemini-2.5") || strings.Contains(name, "gemini-3")) &&
-		!strings.Contains(name, "image")
+	return googleSupportsThinking(name) && !strings.Contains(strings.ToLower(name), "image")
 }
 
 func transformSchema(source map[string]any) map[string]any {

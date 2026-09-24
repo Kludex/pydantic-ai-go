@@ -45,6 +45,106 @@ func TestPlayedAudioAndInterruptionValidation(t *testing.T) {
 	_ = session.Close(t.Context())
 }
 
+func TestWaitForReply(t *testing.T) {
+	session, connection := openSessionWithProfile(t, fullProfile())
+	if err := session.WaitForReply(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Send(t.Context(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	<-connection.sent
+	waited := make(chan error, 1)
+	go func() { waited <- session.WaitForReply(t.Context()) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("reply wait returned before the response boundary: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	connection.events <- realtime.ResponseStarted{ResponseID: "response"}
+	connection.events <- realtime.ResponseDone{}
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reply wait did not finish")
+	}
+	connection.end()
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	toolReady := make(chan struct{})
+	toolRelease := make(chan struct{})
+	session, connection = openSessionWithProfile(t, fullProfile(), realtime.WithToolExecutor(
+		realtime.ToolExecutorFunc(func(context.Context, ai.ToolCallPart) (any, error) {
+			close(toolReady)
+			<-toolRelease
+			return "done", nil
+		}),
+	))
+	if err := session.Send(t.Context(), "use the tool"); err != nil {
+		t.Fatal(err)
+	}
+	<-connection.sent
+	waited = make(chan error, 1)
+	go func() { waited <- session.WaitForReply(t.Context()) }()
+	connection.events <- realtime.ToolCall{ToolCallID: "call", ToolName: "tool", Arguments: `{}`}
+	connection.events <- realtime.ResponseDone{}
+	<-toolReady
+	select {
+	case err := <-waited:
+		t.Fatalf("reply wait returned while the tool call was pending: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	close(toolRelease)
+	<-connection.sent
+	connection.events <- realtime.ResponseDone{}
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reply wait did not include the response after the tool result")
+	}
+	connection.end()
+	_ = session.Close(t.Context())
+
+	session, connection = openSessionWithProfile(t, fullProfile())
+	if err := session.Send(t.Context(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	<-connection.sent
+	waited = make(chan error, 1)
+	go func() { waited <- session.WaitForReply(t.Context()) }()
+	root := errors.New("receive failed")
+	connection.events <- realtime.SessionError{Err: root}
+	select {
+	case err := <-waited:
+		if !errors.Is(err, root) {
+			t.Fatalf("unexpected receive error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("reply wait did not receive terminal error")
+	}
+	_ = session.Close(t.Context())
+
+	session, connection = openSessionWithProfile(t, fullProfile())
+	if err := session.Send(t.Context(), "hello"); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := session.WaitForReply(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatalf("unexpected wait cancellation: %v", err)
+	}
+	connection.end()
+	_ = session.Close(t.Context())
+}
+
 func TestWaitForPlayback(t *testing.T) {
 	session, connection := openSessionWithProfile(t, fullProfile())
 	if err := session.WaitForPlayback(t.Context()); err == nil {

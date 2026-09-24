@@ -3,6 +3,7 @@ package google_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -112,6 +113,7 @@ func TestGoogleRealtimeSession(t *testing.T) {
 	temperature := float32(0.5)
 	model := googlert.NewModel("gemini-2.5-flash-native-audio-latest",
 		googlert.WithConnector(connector),
+		googlert.WithAPIVersion("v1alpha"),
 		googlert.WithSettings(googlert.Settings{
 			Temperature: &temperature, Voice: "Puck", LanguageCode: "en-US",
 			InputTranscription: &inputTranscription, OutputTranscription: &outputTranscription,
@@ -247,6 +249,28 @@ func TestGoogleConnectionAndValidation(t *testing.T) {
 	}}); err == nil {
 		t.Fatal("expected manual turn error")
 	}
+	proactive := true
+	if _, err := googlert.NewModel("model", googlert.WithConnector(connector), googlert.WithSettings(
+		googlert.Settings{ProactiveAudio: &proactive},
+	)).Connect(t.Context(), realtime.ConnectParams{}); err == nil || !strings.Contains(err.Error(), "v1alpha") {
+		t.Fatalf("unexpected proactive audio error: %v", err)
+	}
+	cancelled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := googlert.NewModel(
+		"model", googlert.WithAPIKey("key"), googlert.WithAPIVersion("v1alpha"),
+	).Connect(cancelled, realtime.ConnectParams{}); err == nil {
+		t.Fatal("cancelled SDK connection succeeded")
+	}
+	if connection, err := googlert.NewModel(
+		"model", googlert.WithConnector(connector), googlert.WithAPIVersion("v1alpha"),
+		googlert.WithSettings(googlert.Settings{ProactiveAudio: &proactive}),
+	).Connect(t.Context(), realtime.ConnectParams{}); err != nil {
+		t.Fatal(err)
+	} else {
+		_ = connection.Close(t.Context())
+	}
+
 	no := false
 	if _, err := googlert.NewModel("model", googlert.WithConnector(connector), googlert.WithSettings(
 		googlert.Settings{EnableSessionResumption: &no},

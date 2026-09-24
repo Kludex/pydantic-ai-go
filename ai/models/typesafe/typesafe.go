@@ -222,8 +222,9 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 	instructions := params.Instructions
 	var outputQuestions map[string]question
 	var outputFields map[string]map[string]any
+	var outputDefaults map[string]bool
 	if params.OutputTool != nil {
-		outputFields, err = schemaFields(params.OutputTool.Schema)
+		outputFields, outputDefaults, err = schemaFields(params.OutputTool.Schema)
 		if err == nil {
 			outputQuestions, err = buildQuestions(outputFields, params.OutputTool.Description, instructions, "")
 		}
@@ -279,10 +280,7 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 		}
 		routeDetails = map[string]any{"choice": choice.Choice, "probabilities": choice.Probabilities, "offered": offered}
 	}
-	if selected == nil {
-		return nil, fmt.Errorf("typesafe: Jev did not select an available output")
-	}
-	fields, fieldErr := schemaFields(selected.Schema)
+	fields, defaults, fieldErr := schemaFields(selected.Schema)
 	selectedQuestions, questionErr := buildQuestions(fields, selected.Description, instructions, selected.Name)
 	if fieldErr != nil || questionErr != nil {
 		return nil, &ToolCallProposed{ModelName: model.name, ToolName: selected.Name, Probability: toolProbability}
@@ -301,9 +299,11 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 			usage.OutputTokens += response.Usage.OutputTokens
 			answers = response.Answers
 		}
-		outputFields, outputQuestions = fields, selectedQuestions
+		outputFields, outputQuestions, outputDefaults = fields, selectedQuestions, defaults
 	}
-	arguments, details, err := decodeAnswers(answers, outputFields, outputQuestions, typed.booleanThreshold())
+	arguments, details, err := decodeAnswers(
+		answers, outputFields, outputQuestions, typed.booleanThreshold(), outputDefaults,
+	)
 	if err != nil {
 		return nil, err
 	}

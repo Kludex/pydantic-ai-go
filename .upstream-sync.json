@@ -2,6 +2,6 @@
   "$comment": "Tracks the upstream pydantic_ai source this Go port is synced against. The agentic-ai-sync workflow diffs the upstream subpath between `commit` and pydantic-ai main, ports relevant changes, and bumps `commit` in the same PR.",
   "repo": "pydantic/pydantic-ai",
   "subpath": "pydantic_ai_slim/pydantic_ai",
-  "commit": "d587f154c93d0e2c88b2f9c459d26a8e1c052d33",
-  "synced_at": "2026-09-23"
+  "commit": "9ab7cc8df8037616b6d5b4372bd04b9ab560f096",
+  "synced_at": "2026-09-24"
 }

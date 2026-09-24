@@ -154,11 +154,12 @@ type Session struct {
 	events   chan eventResult
 	eventsMu sync.RWMutex
 
-	sendMu sync.Mutex
-	mu     sync.RWMutex
-	closed bool
-	err    error
-	usage  ai.Usage
+	sendMu       sync.Mutex
+	mu           sync.RWMutex
+	closed       bool
+	err          error
+	errDelivered bool
+	usage        ai.Usage
 
 	seeded              []ai.ModelMessage
 	history             []ai.ModelMessage
@@ -177,6 +178,9 @@ type Session struct {
 	pendingToolResults  map[string]ai.ModelRequest
 	providerPartIndexes map[string]int
 	responseActive      bool
+	pendingResponses    int
+	pendingToolCalls    int
+	replyProgress       chan struct{}
 	serverCancelling    bool
 
 	toolMu          sync.Mutex
@@ -269,7 +273,8 @@ func Open(ctx context.Context, model Model, params ConnectParams, options ...Ses
 		seeded: params.Messages, userTurns: map[string]*activeSpeech{},
 		pendingToolResults: map[string]ai.ModelRequest{}, providerPartIndexes: map[string]int{},
 		toolCancels: map[string]context.CancelFunc{}, playbackProgress: make(chan struct{}, 1),
-		audioTaps: map[*audioTap]struct{}{}, transcriptTaps: map[chan TranscriptUpdate]struct{}{},
+		replyProgress: make(chan struct{}, 1),
+		audioTaps:     map[*audioTap]struct{}{}, transcriptTaps: map[chan TranscriptUpdate]struct{}{},
 	}
 	if historyAware, ok := connection.(HistoryAwareConnection); ok {
 		historyAware.SetMessageHistory(session.Messages)
@@ -367,12 +372,18 @@ func (session *Session) Events(ctx context.Context) iter.Seq2[Event, error] {
 				return
 			case result, ok := <-session.events:
 				if !ok {
-					if err := session.Err(); err != nil {
+					if err := session.takeError(); err != nil {
 						yield(nil, err)
 					}
 					return
 				}
-				if !yield(result.event, result.err) || result.err != nil {
+				if result.err != nil {
+					if err := session.takeError(); err != nil {
+						yield(nil, err)
+					}
+					return
+				}
+				if !yield(result.event, nil) {
 					return
 				}
 			}
@@ -398,11 +409,11 @@ func (session *Session) Send(ctx context.Context, content any, options ...SendOp
 			input = TextContext{Text: value}
 		}
 		if respond {
-			session.setResponseActive(true)
+			session.reserveResponse()
 		}
 		if err := session.send(ctx, input); err != nil {
 			if respond {
-				session.setResponseActive(false)
+				session.releaseResponseReservation()
 			}
 			return err
 		}
@@ -480,6 +491,9 @@ func (session *Session) SendAudioStream(ctx context.Context, chunks iter.Seq2[[]
 		if err != nil {
 			return err
 		}
+		if session.Closed() {
+			return nil
+		}
 		if err := session.SendAudio(ctx, chunk, "audio/pcm"); err != nil {
 			return err
 		}
@@ -498,11 +512,11 @@ func (session *Session) sendImage(ctx context.Context, content ai.BinaryContent,
 		)
 	}
 	if respond {
-		session.setResponseActive(true)
+		session.reserveResponse()
 	}
 	if err := session.send(ctx, ImageInput{Content: content, Respond: respond}); err != nil {
 		if respond {
-			session.setResponseActive(false)
+			session.releaseResponseReservation()
 		}
 		return err
 	}
@@ -555,9 +569,9 @@ func (session *Session) CreateResponse(ctx context.Context) error {
 	if err := session.require(session.profile.SupportsManualTurnControl, "create response", "manual turn control"); err != nil {
 		return err
 	}
-	session.setResponseActive(true)
+	session.reserveResponse()
 	if err := session.send(ctx, CreateResponse{}); err != nil {
-		session.setResponseActive(false)
+		session.releaseResponseReservation()
 		return err
 	}
 	return nil
@@ -606,10 +620,67 @@ func (session *Session) require(supported bool, method, feature string) error {
 	return nil
 }
 
-func (session *Session) setResponseActive(active bool) {
+func (session *Session) beginResponseLocked() {
+	if !session.responseActive && session.pendingResponses > 0 {
+		session.pendingResponses--
+	}
+	session.responseActive = true
+	session.notifyReplyLocked()
+}
+
+func (session *Session) reserveResponse() {
 	session.mu.Lock()
-	session.responseActive = active
+	session.pendingResponses++
+	session.notifyReplyLocked()
 	session.mu.Unlock()
+}
+
+func (session *Session) releaseResponseReservation() {
+	session.mu.Lock()
+	if session.pendingResponses > 0 {
+		session.pendingResponses--
+	}
+	session.notifyReplyLocked()
+	session.mu.Unlock()
+}
+
+func (session *Session) finishPendingTool() {
+	session.mu.Lock()
+	if session.pendingToolCalls > 0 {
+		session.pendingToolCalls--
+	}
+	session.notifyReplyLocked()
+	session.mu.Unlock()
+}
+
+func (session *Session) notifyReplyLocked() {
+	select {
+	case session.replyProgress <- struct{}{}:
+	default:
+	}
+}
+
+func (session *Session) takeError() error {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.err == nil || session.errDelivered {
+		return nil
+	}
+	session.errDelivered = true
+	return session.err
+}
+
+func (session *Session) nextError() error {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.err == nil {
+		return nil
+	}
+	if !session.errDelivered {
+		session.errDelivered = true
+		return session.err
+	}
+	return errors.New("realtime: session is closed")
 }
 
 func (session *Session) send(ctx context.Context, input Input) error {
@@ -617,6 +688,9 @@ func (session *Session) send(ctx context.Context, input Input) error {
 }
 
 func (session *Session) sendInputs(ctx context.Context, inputs ...Input) error {
+	if err := session.nextError(); err != nil {
+		return err
+	}
 	session.mu.RLock()
 	closed := session.closed
 	session.mu.RUnlock()
@@ -657,6 +731,9 @@ func (session *Session) StreamAudio(ctx context.Context) iter.Seq2[[]byte, error
 				return
 			case chunk, ok := <-tap.queue:
 				if !ok {
+					if err := session.takeError(); err != nil {
+						yield(nil, err)
+					}
 					return
 				}
 				session.tapMu.Lock()
@@ -702,7 +779,14 @@ func (session *Session) StreamTranscripts(ctx context.Context) iter.Seq2[Transcr
 				yield(zero, context.Cause(ctx))
 				return
 			case update, ok := <-queue:
-				if !ok || !yield(update, nil) {
+				if !ok {
+					if err := session.takeError(); err != nil {
+						var zero TranscriptUpdate
+						yield(zero, err)
+					}
+					return
+				}
+				if !yield(update, nil) {
 					return
 				}
 			}
@@ -745,7 +829,7 @@ func (session *Session) Close(ctx context.Context) error {
 	case <-waitCtx.Done():
 		return errors.Join(closeErr, context.Cause(waitCtx))
 	}
-	return errors.Join(closeErr, session.Err())
+	return errors.Join(closeErr, session.takeError())
 }
 
 func (session *Session) pump() {
@@ -761,6 +845,10 @@ func (session *Session) pump() {
 		}
 		session.mu.Lock()
 		session.closed = true
+		session.responseActive = false
+		session.pendingResponses = 0
+		session.pendingToolCalls = 0
+		session.notifyReplyLocked()
 		session.mu.Unlock()
 		session.tapMu.Lock()
 		for tap := range session.audioTaps {
@@ -861,7 +949,7 @@ func (session *Session) handle(event CodecEvent) bool {
 	case ResponseStarted:
 		session.mu.Lock()
 		session.pendingResponseID = event.ResponseID
-		session.responseActive = true
+		session.beginResponseLocked()
 		session.serverCancelling = false
 		session.mu.Unlock()
 	case ConversationCreated, ConversationItemCreated:
@@ -881,7 +969,7 @@ func (session *Session) handle(event CodecEvent) bool {
 
 func (session *Session) handleAudio(event AudioDelta) {
 	session.mu.Lock()
-	session.responseActive = true
+	session.beginResponseLocked()
 	active := session.ensureAssistantLocked(false, event.ItemID)
 	active.audio = append(active.audio, event.Data...)
 	if session.config.audioRetention == AudioRetentionOutput || session.config.audioRetention == AudioRetentionAll {
@@ -897,7 +985,7 @@ func (session *Session) handleAudio(event AudioDelta) {
 
 func (session *Session) handleOutputTranscript(event OutputTranscript) {
 	session.mu.Lock()
-	session.responseActive = true
+	session.beginResponseLocked()
 	active := session.ensureAssistantLocked(event.OutputText, event.ItemID)
 	previous := active.transcript
 	transcript, delta := accumulateTranscript(previous, event.Text, event.Final)
@@ -1067,6 +1155,7 @@ func (session *Session) finishResponse(event ResponseDone) {
 		session.flushAudioTaps()
 	}
 	session.mu.Lock()
+	session.beginResponseLocked()
 	session.finishAssistantPartLocked()
 	responseID := event.ProviderResponseID
 	if responseID == "" {
@@ -1118,6 +1207,7 @@ func (session *Session) finishResponse(event ResponseDone) {
 	session.pendingResponseID = ""
 	session.pendingFinish = ""
 	session.responseActive = false
+	session.notifyReplyLocked()
 	session.serverCancelling = false
 	session.mu.Unlock()
 	session.publish(TurnCompleteEvent{Response: *cloneResponse(&response)})
@@ -1125,7 +1215,11 @@ func (session *Session) finishResponse(event ResponseDone) {
 }
 
 func (session *Session) handleToolCall(event ToolCall) {
-	session.setResponseActive(true)
+	session.mu.Lock()
+	session.beginResponseLocked()
+	session.pendingToolCalls++
+	session.notifyReplyLocked()
+	session.mu.Unlock()
 	call := ai.ToolCallPart{
 		ToolName: event.ToolName, ToolCallID: event.ToolCallID, Args: json.RawMessage(event.Arguments),
 	}
@@ -1202,15 +1296,20 @@ func normalizeToolResult(call ai.ToolCallPart, value any, err error) (ai.Request
 }
 
 func (session *Session) completeTool(call ai.ToolCallPart, part ai.RequestPart, extra []ai.UserContent) {
+	defer session.finishPendingTool()
 	output := renderToolPart(part)
+	session.reserveResponse()
 	if err := session.send(session.ctx, ToolResult{
 		ToolCallID: call.ToolCallID, Output: output, Content: slices.Clone(extra),
-	}); err != nil && !errors.Is(err, context.Canceled) {
-		session.mu.RLock()
-		closed := session.closed
-		session.mu.RUnlock()
-		if !closed {
-			session.fail(err)
+	}); err != nil {
+		session.releaseResponseReservation()
+		if !errors.Is(err, context.Canceled) {
+			session.mu.RLock()
+			closed := session.closed
+			session.mu.RUnlock()
+			if !closed {
+				session.fail(err)
+			}
 		}
 		return
 	}
@@ -1311,6 +1410,7 @@ func (session *Session) fail(err error) {
 	if session.err == nil {
 		session.err = err
 	}
+	session.notifyReplyLocked()
 	session.mu.Unlock()
 	session.eventsMu.RLock()
 	select {

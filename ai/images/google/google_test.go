@@ -111,14 +111,60 @@ func TestInputsVertexAndGeometryWarnings(t *testing.T) {
 		Transport: modelgoogle.TransportVertexAI, Name: "google-cloud", BaseURL: server.URL, HTTPClient: server.Client(),
 	}))
 	_, err = vertex.Generate(t.Context(), "draw", []images.Input{
-		ai.UploadedFile{FileID: "gs://bucket/image.png", ProviderName: "google-cloud", MediaType: "image/png"},
+		ai.UploadedFile{FileID: "https://generativelanguage.googleapis.com/v1beta/files/a", ProviderName: "google", MediaType: "image/png"},
 	}, images.Settings{})
-	if err == nil || !strings.Contains(err.Error(), "does not accept uploaded") {
+	if err == nil || !strings.Contains(err.Error(), "gs://") {
 		t.Fatalf("unexpected Vertex error: %v", err)
 	}
 	bad := images.Dimensions{Width: 1, Height: 1}
 	if _, err := model.Generate(t.Context(), "draw", nil, images.Settings{Dimensions: &bad}); err == nil {
 		t.Fatal("unsupported dimensions accepted")
+	}
+}
+
+func TestVertexCloudStorageInputs(t *testing.T) {
+	var requestBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = io.WriteString(response, `{"candidates":[{"content":{"parts":[{"inlineData":{"mimeType":"image/png","data":"aW1hZ2U="}}]}}]}`)
+	}))
+	defer server.Close()
+	model := imagegoogle.NewModel("gemini-3.1-flash-image", imagegoogle.WithProvider(modelgoogle.ProviderConfig{
+		Transport: modelgoogle.TransportVertexAI, Name: "google-cloud", BaseURL: server.URL, HTTPClient: server.Client(),
+	}))
+	_, err := model.Generate(t.Context(), "edit", []images.Input{
+		ai.ImageURL{URL: "gs://bucket/logo.png"},
+		ai.ImageURL{URL: "gs://bucket/no-extension", MediaType: "image/webp"},
+		ai.UploadedFile{FileID: "gs://bucket/product.jpg", ProviderName: "google-cloud", MediaType: "image/jpeg"},
+		ai.UploadedFile{FileID: "gs://bucket/hero.png", ProviderName: "google-vertex", MediaType: "image/png"},
+	}, images.Settings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := requestBody["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	for index, uri := range []string{
+		"gs://bucket/logo.png", "gs://bucket/no-extension", "gs://bucket/product.jpg", "gs://bucket/hero.png",
+	} {
+		file := parts[index+1].(map[string]any)["fileData"].(map[string]any)
+		if file["fileUri"] != uri {
+			t.Fatalf("unexpected file data: %#v", file)
+		}
+	}
+
+	for _, input := range []images.Input{
+		ai.UploadedFile{FileID: "https://example.com/image.png", ProviderName: "google-cloud", MediaType: "image/png"},
+		ai.UploadedFile{FileID: "gs://bucket/image.png", ProviderName: "openai", MediaType: "image/png"},
+	} {
+		if _, err := model.Generate(t.Context(), "edit", []images.Input{input}, images.Settings{}); err == nil {
+			t.Fatalf("invalid Vertex reference accepted: %#v", input)
+		}
+	}
+	if _, err := model.Generate(t.Context(), "edit", []images.Input{
+		ai.ImageURL{URL: "gs://bucket/no-extension"},
+	}, images.Settings{}); err == nil || !strings.Contains(err.Error(), "explicit media type") {
+		t.Fatalf("unexpected extensionless GCS error: %v", err)
 	}
 }
 

@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- Add GitHub Copilot device authorization, realtime `WaitForReply`, and terminal error delivery through every realtime consumer path.
+- Forward Vertex AI `gs://` image references, require Gemini Developer API `v1alpha` for proactive audio, and default future Gemini models to thinking-level behavior.
+- Extend TypeSafe Jev with described boolean criteria, whole-number choices, described null choices, and omission of selected optional defaults.
+- Omit unsupported sampling settings for Bedrock Converse GPT-5.6 Sol/Luna/Terra and GPT-6 Sol/Luna/Astra models.
 - Add GPT-6 Sol, GPT-6 Luna, and Claude Opus 5.5 model behavior, and upgrade `genai-prices` to v0.1.8.
 - Extend TypeSafe Jev with bounded-number scaling, boolean option maps, ten-level rubric limits, recursive and fixed-array rejection, route descriptions and attribution, stable tool handoff history, and argument-bearing output functions.
 - Require JSON request media types by default in AG-UI and Vercel handlers, redact telemetry errors and instruction content when content capture is disabled, and harden local web fetching against equivalent domain spellings and invalid charsets.

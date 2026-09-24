@@ -79,7 +79,7 @@ func main() {
 }
 ```
 
-OpenAI downloads URL references and sends PNG, JPEG, or WebP bytes to its edit endpoint. It does not accept `UploadedFile` IDs. The Gemini API accepts its HTTPS Files API URIs. Vertex AI does not accept hosted-file references for direct generation. xAI accepts hosted file IDs, URLs, and inline data. Put xAI uploaded files before URL or binary references so their order remains stable.
+OpenAI downloads URL references and sends PNG, JPEG, or WebP bytes to its edit endpoint. It does not accept `UploadedFile` IDs. The Gemini API accepts its HTTPS Files API URIs. Vertex AI accepts `gs://` Cloud Storage references in `ImageURL` and `UploadedFile`; uploaded files must use `ProviderName: "google-cloud"` or the legacy `"google-vertex"`. Set an explicit media type when the object name has no extension. A forced `gs://` download fails because the shared downloader only accepts HTTP and HTTPS. xAI accepts hosted file IDs, URLs, and inline data. Put xAI uploaded files before URL or binary references so their order remains stable.
 
 Forced downloads use the same SSRF protection and 50 MiB limit as multimodal model input. `FileDownloadAllowLocal` is intended for trusted local development and tests.
 

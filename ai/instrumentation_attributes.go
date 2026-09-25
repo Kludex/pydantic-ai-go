@@ -80,20 +80,25 @@ func usageTelemetryAttributes(usage Usage, prefix string) []attribute.KeyValue {
 	if usage.CacheReadTokens != 0 {
 		attributes = append(attributes, attribute.Int(prefix+"cache_read.input_tokens", usage.CacheReadTokens))
 	}
-	details := make(map[string]int, len(usage.Details)+7)
+	details := make(map[string]int, len(usage.Details)+11)
 	for key, value := range usage.Details {
 		details[key] = value
 	}
 	for key, value := range map[string]int{
-		"cache_write_tokens": usage.CacheWriteTokens, "cache_read_tokens": usage.CacheReadTokens,
-		"input_audio_tokens": usage.InputAudioTokens, "cache_audio_read_tokens": usage.CacheAudioReadTokens,
-		"output_audio_tokens": usage.OutputAudioTokens, "reasoning_tokens": usage.ReasoningTokens,
+		"cache_write_tokens": usage.CacheWriteTokens, "cache_write_1h_tokens": usage.CacheWrite1HTokens,
+		"cache_read_tokens": usage.CacheReadTokens, "input_audio_tokens": usage.InputAudioTokens,
+		"input_image_tokens": usage.InputImageTokens, "cache_audio_read_tokens": usage.CacheAudioReadTokens,
+		"cache_image_read_tokens": usage.CacheImageReadTokens,
+		"output_audio_tokens":     usage.OutputAudioTokens, "reasoning_tokens": usage.ReasoningTokens,
 		"accepted_prediction_tokens": usage.AcceptedPredictionTokens,
 		"rejected_prediction_tokens": usage.RejectedPredictionTokens,
 	} {
 		if value != 0 {
 			details[key] = value
 		}
+	}
+	if usage.AudioSeconds != 0 {
+		attributes = append(attributes, attribute.Float64(prefix+"details.audio_seconds", usage.AudioSeconds))
 	}
 	for key, value := range details {
 		if key == "input_tokens" || key == "output_tokens" {

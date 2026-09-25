@@ -64,7 +64,8 @@ func (session *Session) WaitForReply(ctx context.Context) error {
 	for {
 		session.mu.RLock()
 		closed = session.closed
-		outstanding := session.responseActive || session.pendingResponses > 0 || session.pendingToolCalls > 0
+		outstanding := session.responseActive || session.exchangeActive || session.pendingResponses > 0 ||
+			session.pendingToolCalls > 0
 		session.mu.RUnlock()
 		if err := session.nextError(); err != nil {
 			return err
@@ -193,7 +194,9 @@ func (session *Session) flushAudioTapLocked(tap *audioTap) {
 	tap.droppedBytes += tap.pendingDroppedBytes
 	tap.pendingDroppedBytes = 0
 	for len(tap.queue) > 0 {
-		tap.droppedBytes += len(<-tap.queue)
+		dropped := <-tap.queue
+		tap.droppedBytes += len(dropped)
+		tap.bufferedBytes -= len(dropped)
 	}
 	session.notifyPlaybackLocked()
 }

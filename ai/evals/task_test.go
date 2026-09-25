@@ -47,8 +47,9 @@ func TestTextTaskEvaluatesAgentOutputAndRecordsRunData(t *testing.T) {
 	cost := 0.25
 	model := &attributedModel{usage: ai.Usage{
 		Requests: 2, InputTokens: 4, OutputTokens: 5,
-		CacheWriteTokens: 6, CacheReadTokens: 7, InputAudioTokens: 8,
-		CacheAudioReadTokens: 9, OutputAudioTokens: 10, ReasoningTokens: 11,
+		CacheWriteTokens: 6, CacheWrite1HTokens: 3, CacheReadTokens: 7, InputAudioTokens: 8,
+		InputImageTokens: 4, CacheAudioReadTokens: 9, CacheImageReadTokens: 2,
+		OutputAudioTokens: 10, ReasoningTokens: 11, AudioSeconds: 1.5,
 		AcceptedPredictionTokens: 12, RejectedPredictionTokens: 13,
 		Details: map[string]int{"custom": 14}, CostUSD: &cost,
 	}}
@@ -74,8 +75,10 @@ func TestTextTaskEvaluatesAgentOutputAndRecordsRunData(t *testing.T) {
 		"pydantic_ai.requests":     2,
 		"pydantic_ai.input_tokens": 4, "pydantic_ai.output_tokens": 5,
 		"pydantic_ai.total_tokens": 9, "pydantic_ai.cache_write_tokens": 6,
-		"pydantic_ai.cache_read_tokens": 7, "pydantic_ai.input_audio_tokens": 8,
-		"pydantic_ai.cache_audio_read_tokens": 9, "pydantic_ai.output_audio_tokens": 10,
+		"pydantic_ai.cache_write_1h_tokens": 3, "pydantic_ai.cache_read_tokens": 7,
+		"pydantic_ai.input_audio_tokens": 8, "pydantic_ai.input_image_tokens": 4,
+		"pydantic_ai.cache_audio_read_tokens": 9, "pydantic_ai.cache_image_read_tokens": 2,
+		"pydantic_ai.output_audio_tokens": 10, "pydantic_ai.audio_seconds": 1.5,
 		"pydantic_ai.reasoning_tokens": 11, "pydantic_ai.accepted_prediction_tokens": 12,
 		"pydantic_ai.rejected_prediction_tokens": 13,
 		"pydantic_ai.usage.details.custom":       14, "pydantic_ai.cost_usd": 0.25,

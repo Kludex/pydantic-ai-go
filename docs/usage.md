@@ -102,6 +102,12 @@ func main() {
 
 Use `errors.Is(err, ai.ErrTokenCountingUnsupported)` when a model may not support counting.
 
+## Inspect usage categories
+
+`Usage` keeps provider token totals and the subsets needed for pricing. `InputImageTokens` and `CacheImageReadTokens` price realtime images at image rates. `CacheWrite1HTokens` prices one-hour Anthropic cache writes separately from five-minute writes. `AudioSeconds` prices voice models that bill by duration instead of tokens.
+
+Provider-specific integer counters remain in `Details`. The first-class fields are accumulated across requests and nested tool usage.
+
 ## Inspect context-window usage
 
 ```go

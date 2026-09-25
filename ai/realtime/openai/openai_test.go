@@ -133,7 +133,7 @@ func TestOpenAIRealtimeSession(t *testing.T) {
 		},
 		Settings: realtime.Settings{
 			MaxTokens: 100, ParallelToolCalls: &yes, ToolChoice: realtime.ToolChoiceAuto,
-			InputTranscriptionModel: &transcription, Thinking: ai.ThinkingLevelHigh,
+			InputTranscriptionModel: &transcription, Thinking: ai.ThinkingLevelDisabled,
 			Provider: map[string]any{
 				"openai_voice": "coral", "openai_input_noise_reduction": "far_field",
 				"openai_output_speed": 1.25, "openai_turn_detection": map[string]any{"type": "semantic_vad"},
@@ -194,7 +194,8 @@ func TestOpenAIRealtimeSession(t *testing.T) {
 	}
 	mutex.Lock()
 	defer mutex.Unlock()
-	if received[0]["type"] != "session.update" {
+	sessionConfig := received[0]["session"].(map[string]any)
+	if received[0]["type"] != "session.update" || sessionConfig["reasoning"].(map[string]any)["effort"] != "none" {
 		t.Fatalf("unexpected client frames: %+v", received)
 	}
 }
@@ -238,6 +239,62 @@ func TestOpenAIMapEvent(t *testing.T) {
 		if _, err := openairt.MapEvent([]byte(frame)); err == nil {
 			t.Fatalf("expected malformed frame error for %s", frame)
 		}
+	}
+}
+
+func TestOpenAIRejectedAndFailedEvents(t *testing.T) {
+	events, err := openairt.MapEvent([]byte(`{"type":"error","error":{"event_id":"pydantic_ai.response.2-3","message":"refused"}}`))
+	if err != nil || len(events) != 3 {
+		t.Fatalf("unexpected refusal: %+v err=%v", events, err)
+	}
+	for index, expected := range []int{2, 3} {
+		rejected, ok := events[index].(realtime.InputRejected)
+		if !ok || rejected.InputIndex != expected || !rejected.Response {
+			t.Fatalf("unexpected rejected input: %#v", events[index])
+		}
+	}
+	contentEvents, contentErr := openairt.MapEvent([]byte(`{"type":"error","error":{"event_id":"pydantic_ai.content.4","message":"refused"}}`))
+	contentRejected, contentOK := contentEvents[0].(realtime.InputRejected)
+	if contentErr != nil || !contentOK || contentRejected.Response || contentRejected.InputIndex != 4 {
+		t.Fatalf("unexpected content refusal: %+v err=%v", contentEvents, contentErr)
+	}
+	for _, eventID := range []string{
+		"foreign", "pydantic_ai.content", "pydantic_ai.other.1", "pydantic_ai.content.bad", "pydantic_ai.content.-1",
+	} {
+		events, err = openairt.MapEvent([]byte(`{"type":"error","error":{"event_id":"` + eventID + `","message":"refused"}}`))
+		if err != nil || len(events) != 1 {
+			t.Fatalf("foreign event ID was accepted: %+v err=%v", events, err)
+		}
+	}
+	events, err = openairt.MapEvent([]byte(`{"type":"response.done","response":{"id":"failed","status":"failed","status_details":{"error":{"type":"invalid_request_error","code":"image","message":"unsafe"}},"output":[]}}`))
+	if err != nil || len(events) != 2 {
+		t.Fatalf("unexpected failed response: %+v err=%v", events, err)
+	}
+	failure, ok := events[0].(realtime.SessionError)
+	done, doneOK := events[1].(realtime.ResponseDone)
+	if !ok || !failure.Recoverable || !strings.Contains(failure.Err.Error(), "unsafe") || !doneOK ||
+		done.ProviderDetails["error"] == nil {
+		t.Fatalf("failed response was not surfaced: %+v", events)
+	}
+	for _, frame := range []string{
+		`{"type":"response.done","response":{"status":"failed","output":[]}}`,
+		`{"type":"response.done","response":{"status":"failed","status_details":{"error":{"type":"server_error","code":"oops"}},"output":[]}}`,
+	} {
+		events, err = openairt.MapEvent([]byte(frame))
+		if err != nil || len(events) != 2 {
+			t.Fatalf("failed response fallback missing: %+v err=%v", events, err)
+		}
+	}
+}
+
+func TestOpenAIRealtimeImageUsage(t *testing.T) {
+	events, err := openairt.MapEvent([]byte(`{"type":"response.done","response":{"status":"completed","usage":{"input_tokens":10,"output_tokens":0,"input_token_details":{"image_tokens":8,"cached_tokens_details":{"image_tokens":3}}}}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := events[0].(realtime.SessionUsage).Usage
+	if usage.InputImageTokens != 8 || usage.CacheImageReadTokens != 3 {
+		t.Fatalf("unexpected image usage: %+v", usage)
 	}
 }
 

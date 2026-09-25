@@ -175,6 +175,8 @@ func (ToolCallCancelled) RealtimeCodecEventKind() string { return "tool-call-can
 type ResponseDone struct {
 	// Interrupted reports that generation was cancelled before completion.
 	Interrupted bool
+	// MoreExpected reports that the provider is still working on this exchange.
+	MoreExpected bool
 	// ProviderResponseID is the provider's response identifier.
 	ProviderResponseID string
 	// FinishReason is the normalized completion reason.
@@ -272,6 +274,17 @@ type ConversationItemCreated struct {
 
 // RealtimeCodecEventKind identifies a provider conversation item.
 func (ConversationItemCreated) RealtimeCodecEventKind() string { return "conversation-item-created" }
+
+// InputRejected reports that a provider refused one sent input.
+type InputRejected struct {
+	// InputIndex is the zero-based Connection.Send call index.
+	InputIndex int
+	// Response reports that the response request, rather than its content, was refused.
+	Response bool
+}
+
+// RealtimeCodecEventKind identifies a refused input.
+func (InputRejected) RealtimeCodecEventKind() string { return "input-rejected" }
 
 // PartStarted carries a complete provider-native response part.
 type PartStarted struct {

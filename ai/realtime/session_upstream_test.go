@@ -1,6 +1,7 @@
 package realtime_test
 
 import (
+	"bytes"
 	"context"
 	"slices"
 	"testing"
@@ -45,6 +46,104 @@ func TestSendResponseControl(t *testing.T) {
 	got, ok := input.(realtime.ImageInput)
 	if !ok || !got.Respond || !slices.Equal(got.Content.Data, image.Data) {
 		t.Fatalf("unexpected image input: %#v", input)
+	}
+}
+
+func TestResponseDoneCanKeepAnExchangeOpen(t *testing.T) {
+	connection := newFakeConnection()
+	session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: fullProfile()}, realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close(t.Context()) }()
+	if err := session.Send(t.Context(), "question"); err != nil {
+		t.Fatal(err)
+	}
+	connection.events <- realtime.OutputTranscript{Text: "Let me check.", Final: true}
+	connection.events <- realtime.ResponseDone{MoreExpected: true}
+	waited := make(chan error, 1)
+	go func() { waited <- session.WaitForReply(t.Context()) }()
+	select {
+	case err := <-waited:
+		t.Fatalf("wait returned during a stalled exchange: %v", err)
+	case <-time.After(10 * time.Millisecond):
+	}
+	connection.events <- realtime.OutputTranscript{Text: "Done.", Final: true}
+	connection.events <- realtime.ResponseDone{}
+	select {
+	case err := <-waited:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wait did not return after the exchange")
+	}
+}
+
+func TestRejectedRealtimeInputRollsBackState(t *testing.T) {
+	connection := newFakeConnection()
+	session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: fullProfile()}, realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close(t.Context()) }()
+	if err := session.Send(t.Context(), "refused"); err != nil {
+		t.Fatal(err)
+	}
+	connection.events <- realtime.InputRejected{InputIndex: 0}
+	connection.events <- realtime.InputRejected{InputIndex: 0, Response: true}
+	deadline := time.Now().Add(time.Second)
+	for len(session.NewMessages()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(session.NewMessages()) != 0 {
+		t.Fatalf("refused content remained in history: %+v", session.NewMessages())
+	}
+	image := ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"}
+	if err := session.Send(t.Context(), image); err != nil {
+		t.Fatal(err)
+	}
+	connection.events <- realtime.InputRejected{InputIndex: 1}
+	deadline = time.Now().Add(time.Second)
+	for len(session.NewMessages()) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if len(session.NewMessages()) != 0 {
+		t.Fatalf("refused image remained in history: %+v", session.NewMessages())
+	}
+	if err := session.WaitForReply(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAudioViewBuffersFiveMinutes(t *testing.T) {
+	connection := newFakeConnection()
+	profile := fullProfile()
+	profile.AudioOutputSampleRate = 1
+	session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: profile}, realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close(t.Context()) }()
+	stream := session.StreamAudio(t.Context())
+	chunks := make([][]byte, 6)
+	for index := range chunks {
+		chunks[index] = bytes.Repeat([]byte{byte(index)}, 120)
+		connection.events <- realtime.AudioDelta{Data: chunks[index]}
+	}
+	time.Sleep(10 * time.Millisecond)
+	var got [][]byte
+	for chunk, streamErr := range stream {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+		got = append(got, chunk)
+		if len(got) == 5 {
+			break
+		}
+	}
+	if !slices.EqualFunc(got, chunks[1:], slices.Equal) {
+		t.Fatalf("unexpected buffered audio: %d chunks", len(got))
 	}
 }
 

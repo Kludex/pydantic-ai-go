@@ -3,6 +3,7 @@ package xai_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -42,16 +43,18 @@ func TestXAIRealtimeSession(t *testing.T) {
 		_ = writeFrame(request.Context(), socket, map[string]any{
 			"type": "conversation.item.input_audio_transcription.completed", "transcript": "hello", "item_id": "user",
 		})
-		_ = writeFrame(request.Context(), socket, map[string]any{
-			"type": "response.done", "response": map[string]any{
-				"id": "response", "status": "completed", "output": []any{},
-				"usage": map[string]any{
-					"input_tokens": 2, "output_tokens": 1, "billable_audio_seconds": 3,
-					"input_token_details":  map[string]any{"grok_tokens": 4},
-					"output_token_details": map[string]any{"grok_tokens": 5},
+		for index, total := range []int{3, 4} {
+			_ = writeFrame(request.Context(), socket, map[string]any{
+				"type": "response.done", "response": map[string]any{
+					"id": fmt.Sprintf("response-%d", index), "status": "completed", "output": []any{},
+					"usage": map[string]any{
+						"input_tokens": 2, "output_tokens": 1, "billable_audio_seconds": total,
+						"input_token_details":  map[string]any{"grok_tokens": 4},
+						"output_token_details": map[string]any{"grok_tokens": 5},
+					},
 				},
-			},
-		})
+			})
+		}
 		<-request.Context().Done()
 	}))
 	defer server.Close()
@@ -83,15 +86,20 @@ func TestXAIRealtimeSession(t *testing.T) {
 		!session.ReconnectRestoresInFlightState() {
 		t.Fatalf("unexpected xAI profile")
 	}
+	turns := 0
 	for event, err := range session.Events(t.Context()) {
 		if err != nil {
 			t.Fatal(err)
 		}
 		if _, ok := event.(realtime.TurnCompleteEvent); ok {
-			break
+			turns++
+			if turns == 2 {
+				break
+			}
 		}
 	}
-	if session.Usage().Details["billable_audio_seconds"] != 3 || session.Usage().Details["input_grok_tokens"] != 4 {
+	if session.Usage().AudioSeconds != 4 || session.Usage().Details["billable_audio_seconds"] != 4 ||
+		session.Usage().Details["input_grok_tokens"] != 8 || session.Usage().CostUSD == nil {
 		t.Fatalf("xAI usage details missing: %+v", session.Usage())
 	}
 	_ = session.Close(t.Context())

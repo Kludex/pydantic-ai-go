@@ -12,7 +12,7 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
-func schemaFields(schema map[string]any) (map[string]map[string]any, map[string]bool, error) {
+func schemaFields(schema map[string]any) (map[string]map[string]any, map[string]bool, map[string][]string, error) {
 	definitions, _ := schema["$defs"].(map[string]any)
 	var resolve func(map[string]any) map[string]any
 	resolve = func(value map[string]any) map[string]any {
@@ -48,22 +48,23 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, map[string]
 	schema = resolve(schema)
 	properties, _ := schema["properties"].(map[string]any)
 	if properties == nil && schema["type"] != "object" {
-		return map[string]map[string]any{"response": schema}, nil, nil
+		return map[string]map[string]any{"response": schema}, nil, nil, nil
 	}
 	result := map[string]map[string]any{}
 	defaulted := map[string]bool{}
-	var flatten func(map[string]any, string, map[string]bool) error
-	flatten = func(values map[string]any, prefix string, seen map[string]bool) error {
+	contexts := map[string][]string{}
+	var flatten func(map[string]any, string, map[string]bool, []string) error
+	flatten = func(values map[string]any, prefix string, seen map[string]bool, ancestors []string) error {
 		for name, raw := range values {
 			if strings.Contains(name, ".") {
 				return fmt.Errorf("typesafe: field %q contains a dot", prefix+name)
 			}
-			property, ok := raw.(map[string]any)
+			rawProperty, ok := raw.(map[string]any)
 			if !ok {
 				return fmt.Errorf("typesafe: field %q has an invalid schema", prefix+name)
 			}
-			reference, _ := property["$ref"].(string)
-			property = resolve(property)
+			reference, _ := rawProperty["$ref"].(string)
+			property := resolve(rawProperty)
 			if nested, ok := property["properties"].(map[string]any); ok {
 				if _, ok := property["default"]; ok {
 					defaulted[prefix+name] = true
@@ -78,22 +79,42 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, map[string]
 				if reference != "" {
 					next[reference] = true
 				}
-				if err := flatten(nested, prefix+name+".", next); err != nil {
+				chain := slices.Clone(ancestors)
+				if description, _ := rawProperty["description"].(string); description != "" {
+					chain = append(chain, prefix+name+": "+description)
+				}
+				if reference != "" {
+					if definition, ok := definitions[strings.TrimPrefix(reference, "#/$defs/")].(map[string]any); ok {
+						if description, _ := definition["description"].(string); description != "" {
+							title, _ := definition["title"].(string)
+							if title == "" {
+								title = strings.TrimPrefix(reference, "#/$defs/")
+							}
+							chain = append(chain, title+": "+description)
+						}
+					}
+				}
+				if err := flatten(nested, prefix+name+".", next, chain); err != nil {
 					return err
 				}
 			} else {
 				result[prefix+name] = property
+				if len(ancestors) > 0 {
+					contexts[prefix+name] = slices.Clone(ancestors)
+				}
 			}
 		}
 		return nil
 	}
-	if err := flatten(properties, "", map[string]bool{}); err != nil {
-		return nil, nil, err
+	if err := flatten(properties, "", map[string]bool{}, nil); err != nil {
+		return nil, nil, nil, err
 	}
-	return result, defaulted, nil
+	return result, defaulted, contexts, nil
 }
 
-func buildQuestions(fields map[string]map[string]any, goal, instructions, chosen string) (map[string]question, error) {
+func buildQuestions(
+	fields map[string]map[string]any, contexts map[string][]string, goal, instructions, chosen string,
+) (map[string]question, error) {
 	questions := make(map[string]question, len(fields))
 	for name, property := range fields {
 		ask := map[string]any{"field": name}
@@ -101,13 +122,20 @@ func buildQuestions(fields map[string]map[string]any, goal, instructions, chosen
 			ask["question"] = description
 		}
 		if chosen != "" {
-			ask["chosen"] = chosen
+			premise := "If the user's request calls for " + chosen + "."
+			if goal != "" {
+				premise = "If the user's request calls for " + chosen + ": " + goal
+			}
+			ask["premise"] = premise
 		}
-		if goal != "" {
+		if context := contexts[name]; len(context) > 0 {
+			ask["context"] = context
+		}
+		if goal != "" && chosen == "" {
 			ask["goal"] = goal
 		}
 		if instructions != "" {
-			ask["instructions"] = instructions
+			ask["background"] = instructions
 		}
 		property, noneOption := optionalProperty(property)
 		options := propertyOptions(property)
@@ -603,59 +631,156 @@ func mapsClone(value map[string]any) map[string]any {
 }
 
 func messageState(messages []ai.ModelMessage) (any, error) {
-	history := make([]any, 0)
-	latest := ""
-	for index, message := range messages {
-		switch message := message.(type) {
-		case ai.ModelRequest:
-			for _, part := range message.Parts {
-				switch part := part.(type) {
-				case ai.SystemPromptPart:
-					history = append(history, map[string]any{"system": part.Content})
-				case ai.UserPromptPart:
-					text, err := promptText(part)
-					if err != nil {
-						return nil, err
-					}
-					if index == len(messages)-1 {
-						latest = strings.TrimSpace(strings.Join([]string{latest, text}, "\n\n"))
-					} else {
-						history = append(history, map[string]any{"user": text})
-					}
-				case ai.ToolReturnPart:
-					history = append(history, map[string]any{"tool_return": map[string]any{"name": part.ToolName, "content": fmt.Sprint(part.Content)}})
-				case ai.RetryPromptPart:
-					history = append(history, map[string]any{"retry": part.ModelResponse()})
-				}
-			}
-		case ai.ModelResponse:
-			for _, part := range message.Parts {
-				switch part := part.(type) {
-				case ai.TextPart:
-					history = append(history, map[string]any{"assistant": part.Content})
-				case ai.ToolCallPart:
-					var arguments any
-					if err := json.Unmarshal(part.Args, &arguments); err != nil {
-						arguments = string(part.Args)
-					}
-					history = append(history, map[string]any{"tool_call": map[string]any{"name": part.ToolName, "args": arguments}})
-				case ai.FilePart:
-					return nil, fmt.Errorf("typesafe: files are not supported")
-				}
+	latestMessage, latestPart := -1, -1
+	for messageIndex, message := range messages {
+		request, ok := message.(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		for partIndex, part := range request.Parts {
+			if _, ok := part.(ai.UserPromptPart); ok {
+				latestMessage, latestPart = messageIndex, partIndex
 			}
 		}
 	}
-	if latest == "" && len(history) == 0 {
-		return nil, fmt.Errorf("typesafe: request needs text to judge")
+	if latestMessage < 0 {
+		history := make([]any, 0)
+		for _, message := range messages {
+			switch message := message.(type) {
+			case ai.ModelRequest:
+				for _, part := range message.Parts {
+					entry, err := requestStateEntry(part)
+					if err != nil {
+						return nil, err
+					}
+					if entry != nil {
+						history = append(history, entry)
+					}
+				}
+			case ai.ModelResponse:
+				entries, err := responseStateEntries(message)
+				if err != nil {
+					return nil, err
+				}
+				history = append(history, entries...)
+			}
+		}
+		if len(history) == 0 {
+			return nil, fmt.Errorf("typesafe: request needs text to judge")
+		}
+		return map[string]any{"history": history}, nil
 	}
-	if len(history) == 0 {
-		return map[string]any{"prompt": latest}, nil
+	turn := false
+	for messageIndex := latestMessage; messageIndex < len(messages); messageIndex++ {
+		request, ok := messages[messageIndex].(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		for partIndex, part := range request.Parts {
+			if messageIndex == latestMessage && partIndex <= latestPart {
+				continue
+			}
+			if _, ok := part.(ai.ToolReturnPart); ok {
+				turn = true
+			}
+		}
 	}
-	state := map[string]any{"history": history}
-	if latest != "" {
-		state["prompt"] = latest
+	history := make([]any, 0)
+	done := make([]any, 0)
+	texts := make([]string, 0)
+	for messageIndex, message := range messages {
+		target := &history
+		if turn && messageIndex >= latestMessage {
+			target = &done
+		}
+		switch message := message.(type) {
+		case ai.ModelRequest:
+			for partIndex, part := range message.Parts {
+				if prompt, ok := part.(ai.UserPromptPart); ok && messageIndex == latestMessage {
+					text, err := promptText(prompt)
+					if err != nil {
+						return nil, err
+					}
+					texts = append(texts, text)
+					continue
+				}
+				entry, err := requestStateEntry(part)
+				if err != nil {
+					return nil, err
+				}
+				if turn && messageIndex == latestMessage && partIndex < latestPart {
+					history = append(history, entry)
+				} else if entry != nil {
+					*target = append(*target, entry)
+				}
+			}
+		case ai.ModelResponse:
+			entries, err := responseStateEntries(message)
+			if err != nil {
+				return nil, err
+			}
+			*target = append(*target, entries...)
+		}
+	}
+	text := strings.Join(texts, "\n\n")
+	if len(history) == 0 && !turn {
+		return text, nil
+	}
+	state := map[string]any{"text": text}
+	if len(history) > 0 {
+		state["history"] = history
+	}
+	if turn {
+		state["done"] = done
 	}
 	return state, nil
+}
+
+func requestStateEntry(part ai.RequestPart) (any, error) {
+	switch part := part.(type) {
+	case ai.SystemPromptPart:
+		return map[string]any{"system": part.Content}, nil
+	case ai.UserPromptPart:
+		text, err := promptText(part)
+		return map[string]any{"user": text}, err
+	case ai.ToolReturnPart:
+		return map[string]any{
+			"tool_return": map[string]any{"name": part.ToolName, "content": fmt.Sprint(part.Content)},
+		}, nil
+	case ai.RetryPromptPart:
+		return map[string]any{"retry": part.ModelResponse()}, nil
+	default:
+		return nil, nil
+	}
+}
+
+func responseStateEntries(message ai.ModelResponse) ([]any, error) {
+	entries := make([]any, 0, len(message.Parts))
+	for _, part := range message.Parts {
+		switch part := part.(type) {
+		case ai.TextPart:
+			entries = append(entries, map[string]any{"assistant": part.Content})
+		case ai.ThinkingPart:
+			if part.Content != "" {
+				entries = append(entries, map[string]any{"thinking": part.Content})
+			}
+		case ai.ToolCallPart:
+			var arguments any
+			if err := json.Unmarshal(part.Args, &arguments); err != nil {
+				arguments = string(part.Args)
+			}
+			entries = append(entries, map[string]any{
+				"tool_call": map[string]any{"name": part.ToolName, "args": arguments},
+			})
+		case ai.CompactionPart:
+			if part.Content != "" {
+				entries = append(entries, map[string]any{"summary": part.Content})
+			}
+		case ai.FilePart:
+			return nil, fmt.Errorf("typesafe: files are not supported")
+		}
+	}
+	return entries, nil
 }
 
 func promptText(part ai.UserPromptPart) (string, error) {

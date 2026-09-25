@@ -71,6 +71,8 @@ func TestConnectionSendAndEvents(t *testing.T) {
 			return []realtime.CodecEvent{realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "item"}}, nil
 		case "done":
 			return []realtime.CodecEvent{realtime.ResponseDone{}}, nil
+		case "rejected":
+			return []realtime.CodecEvent{realtime.InputRejected{InputIndex: 1, Response: true}}, nil
 		case "duplicate":
 			return []realtime.CodecEvent{
 				realtime.ToolCall{ToolCallID: "same", ToolName: "tool"},
@@ -135,7 +137,7 @@ func TestConnectionSendAndEvents(t *testing.T) {
 			if err == nil {
 				events = append(events, event)
 			}
-			if len(events) == 5 {
+			if len(events) == 6 {
 				break
 			}
 		}
@@ -145,14 +147,14 @@ func TestConnectionSendAndEvents(t *testing.T) {
 		kind websocket.MessageType
 		data string
 	}{websocket.MessageBinary, "ignored"}
-	for _, frame := range []string{"created", "audio", "bad", "duplicate", "done"} {
+	for _, frame := range []string{"created", "audio", "bad", "duplicate", "rejected", "done"} {
 		frames <- struct {
 			kind websocket.MessageType
 			data string
 		}{websocket.MessageText, frame}
 	}
 	events := <-eventDone
-	if len(events) != 5 {
+	if len(events) != 6 {
 		t.Fatalf("unexpected mapped events: %+v", events)
 	}
 	if err := connection.Send(t.Context(), realtime.TruncateOutput{AudioEndMilliseconds: 100}); err != nil {
@@ -206,6 +208,58 @@ func TestConnectionSendAndEvents(t *testing.T) {
 	cloned["X-Test"][0] = "two"
 	if headers.Get("X-Test") != "one" {
 		t.Fatal("headers were not detached")
+	}
+}
+
+func TestDeferredResponseWriteFailures(t *testing.T) {
+	for _, kind := range []string{"rejected", "done"} {
+		t.Run(kind, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+				socket, err := websocket.Accept(writer, request, nil)
+				if err != nil {
+					return
+				}
+				defer func() { _ = socket.CloseNow() }()
+				if _, _, err := socket.Read(request.Context()); err != nil {
+					return
+				}
+				_ = socket.Write(request.Context(), websocket.MessageText, []byte(kind))
+				<-request.Context().Done()
+			}))
+			defer server.Close()
+			socket, _, err := openaiprotocol.DialSocket(
+				t.Context(), websocketEndpoint(server.URL), http.Header{}, server.Client(),
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var connection *openaiprotocol.Connection
+			mapper := func(data []byte) ([]realtime.CodecEvent, error) {
+				_ = connection.Close(t.Context())
+				if string(data) == "rejected" {
+					return []realtime.CodecEvent{realtime.InputRejected{InputIndex: 0, Response: true}}, nil
+				}
+				return []realtime.CodecEvent{realtime.ResponseDone{}}, nil
+			}
+			connection, err = openaiprotocol.New(openaiprotocol.Config{Socket: socket, Mapper: mapper})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := connection.Send(t.Context(), realtime.CreateResponse{}); err != nil {
+				t.Fatal(err)
+			}
+			if err := connection.Send(t.Context(), realtime.CreateResponse{}); err != nil {
+				t.Fatal(err)
+			}
+			var eventErr error
+			for _, err := range connection.Events(t.Context()) {
+				eventErr = err
+				break
+			}
+			if eventErr == nil {
+				t.Fatal("expected deferred response write error")
+			}
+		})
 	}
 }
 

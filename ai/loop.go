@@ -909,25 +909,19 @@ func (r *run[Deps, Output]) selectModel(ctx context.Context) error {
 func (r *run[Deps, Output]) modelSelectionContext() ModelSelectionContext[Deps] {
 	return ModelSelectionContext[Deps]{
 		Deps: r.rc.Deps, Model: r.model, ModelID: r.rc.ModelID, Step: r.runStep,
-		Messages: r.modelSelectionMessages(), Usage: r.info.Usage(),
+		Prompt: cloneUserPromptPart(r.rc.Prompt), Messages: r.modelSelectionMessages(), Usage: r.info.Usage(),
 	}
 }
 
 func (r *run[Deps, Output]) modelSelectionInfo() ModelSelectionInfo {
 	return ModelSelectionInfo{
 		Model: r.model, ModelID: r.rc.ModelID, Step: r.runStep,
-		Messages: r.modelSelectionMessages(), Usage: r.info.Usage(),
+		Prompt: cloneUserPromptPart(r.rc.Prompt), Messages: r.modelSelectionMessages(), Usage: r.info.Usage(),
 	}
 }
 
 func (r *run[Deps, Output]) modelSelectionMessages() []ModelMessage {
-	messages := r.messages
-	if len(messages) > 0 {
-		if _, pending := messages[len(messages)-1].(ModelRequest); pending {
-			messages = messages[:len(messages)-1]
-		}
-	}
-	return cloneModelMessages(messages)
+	return cloneModelMessages(r.messages)
 }
 
 func cloneModelMessages(messages []ModelMessage) []ModelMessage {

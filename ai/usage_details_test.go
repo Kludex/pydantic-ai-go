@@ -37,9 +37,9 @@ func TestRichUsageAccumulatesAcrossRequestsAndTools(t *testing.T) {
 	) (*ai.ModelResponse, error) {
 		request++
 		usage := ai.Usage{
-			Requests: 1, InputTokens: 10, CacheWriteTokens: 2, CacheReadTokens: 4,
-			InputAudioTokens: 3, CacheAudioReadTokens: 1, OutputTokens: 8,
-			OutputAudioTokens: 2, ReasoningTokens: 5,
+			Requests: 1, InputTokens: 10, CacheWriteTokens: 2, CacheWrite1HTokens: 1, CacheReadTokens: 4,
+			InputAudioTokens: 3, InputImageTokens: 2, CacheAudioReadTokens: 1, CacheImageReadTokens: 1,
+			OutputTokens: 8, OutputAudioTokens: 2, ReasoningTokens: 5, AudioSeconds: 1.25,
 			AcceptedPredictionTokens: 2, RejectedPredictionTokens: 1,
 			Details: map[string]int{"provider_units": request + 1},
 		}
@@ -71,10 +71,11 @@ func TestRichUsageAccumulatesAcrossRequestsAndTools(t *testing.T) {
 	}
 	usage := result.Usage()
 	if usage.Requests != 2 || usage.ToolCalls != 1 || usage.InputTokens != 20 ||
-		usage.CacheWriteTokens != 4 || usage.CacheReadTokens != 8 || usage.InputAudioTokens != 6 ||
-		usage.CacheAudioReadTokens != 2 || usage.OutputTokens != 16 || usage.OutputAudioTokens != 4 ||
+		usage.CacheWriteTokens != 4 || usage.CacheWrite1HTokens != 2 || usage.CacheReadTokens != 8 ||
+		usage.InputAudioTokens != 6 || usage.InputImageTokens != 4 || usage.CacheAudioReadTokens != 2 ||
+		usage.CacheImageReadTokens != 2 || usage.OutputTokens != 16 || usage.OutputAudioTokens != 4 ||
 		usage.ReasoningTokens != 10 || usage.AcceptedPredictionTokens != 4 ||
-		usage.RejectedPredictionTokens != 2 || usage.Details["provider_units"] != 5 ||
+		usage.RejectedPredictionTokens != 2 || usage.AudioSeconds != 2.5 || usage.Details["provider_units"] != 5 ||
 		usage.CostUSD == nil || *usage.CostUSD != 1 {
 		t.Fatalf("unexpected accumulated usage: %+v", usage)
 	}

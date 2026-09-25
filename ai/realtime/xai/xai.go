@@ -98,6 +98,9 @@ func (model *Model) Name() string { return model.name }
 // ProviderName returns the durable provider identity.
 func (*Model) ProviderName() string { return "xai" }
 
+// ProviderURL returns the configured xAI API endpoint.
+func (model *Model) ProviderURL() string { return model.baseURL }
+
 // Profile returns detached realtime capabilities.
 func (model *Model) Profile() realtime.Profile {
 	return realtime.MergeProfile(model.profile, realtime.ProfileOverride{})
@@ -124,9 +127,12 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 		return nil, err
 	}
 	config := sessionConfig(params.Request, params.Settings, settings, model.profile)
+	tracker := &usageTracker{conversationID: state.get()}
 	return openaiprotocol.New(openaiprotocol.Config{
 		Provider: "xAI Grok Voice", Model: model.name, Socket: socket, ServerModel: serverModel,
-		Dial: dial, Mapper: MapEvent, Reconnect: params.Settings.Reconnect,
+		Dial: dial, Mapper: func(data []byte) ([]realtime.CodecEvent, error) {
+			return mapEvent(data, tracker, state.get())
+		}, Reconnect: params.Settings.Reconnect,
 		InputTranscriptionEnabled:  transcriptionEnabled(params.Settings),
 		RestoresInFlightState:      true,
 		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
@@ -303,8 +309,17 @@ func sessionConfig(
 	return config
 }
 
+type usageTracker struct {
+	conversationID string
+	billedSeconds  int
+}
+
 // MapEvent translates one xAI Grok Voice frame into provider-neutral codec events.
 func MapEvent(data []byte) ([]realtime.CodecEvent, error) {
+	return mapEvent(data, &usageTracker{}, "")
+}
+
+func mapEvent(data []byte, tracker *usageTracker, conversationID string) ([]realtime.CodecEvent, error) {
 	var frame map[string]any
 	if err := json.Unmarshal(data, &frame); err != nil {
 		return nil, fmt.Errorf("xai realtime: decode event: %w", err)
@@ -331,6 +346,13 @@ func MapEvent(data []byte) ([]realtime.CodecEvent, error) {
 		usageData := object(object(frame["response"])["usage"])
 		input := object(usageData["input_token_details"])
 		output := object(usageData["output_token_details"])
+		if tracker.conversationID != conversationID {
+			tracker.conversationID = conversationID
+			tracker.billedSeconds = 0
+		}
+		totalBilledSeconds := integer(usageData["billable_audio_seconds"])
+		billedSeconds := max(totalBilledSeconds-tracker.billedSeconds, 0)
+		tracker.billedSeconds = max(tracker.billedSeconds, totalBilledSeconds)
 		for index, event := range events {
 			usage, ok := event.(realtime.SessionUsage)
 			if !ok {
@@ -339,12 +361,13 @@ func MapEvent(data []byte) ([]realtime.CodecEvent, error) {
 			for key, value := range map[string]int{
 				"input_grok_tokens":      integer(input["grok_tokens"]),
 				"output_grok_tokens":     integer(output["grok_tokens"]),
-				"billable_audio_seconds": integer(usageData["billable_audio_seconds"]),
+				"billable_audio_seconds": billedSeconds,
 			} {
 				if value != 0 {
 					usage.Usage.Details[key] = value
 				}
 			}
+			usage.Usage.AudioSeconds = float64(billedSeconds)
 			events[index] = usage
 		}
 	}

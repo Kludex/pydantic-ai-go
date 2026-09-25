@@ -178,6 +178,7 @@ type Session struct {
 	pendingToolResults  map[string]ai.ModelRequest
 	providerPartIndexes map[string]int
 	responseActive      bool
+	exchangeActive      bool
 	pendingResponses    int
 	pendingToolCalls    int
 	replyProgress       chan struct{}
@@ -199,6 +200,9 @@ type Session struct {
 	interruptedAudioPartIndex int
 	hasInterruptedAudioPart   bool
 
+	inputsSent    int
+	inputRequests map[int]ai.ModelRequest
+
 	enqueueMu     sync.Mutex
 	deliveryMu    sync.Mutex
 	enqueued      []queuedPrompt
@@ -208,6 +212,8 @@ type Session struct {
 type audioTap struct {
 	queue               chan []byte
 	subscribedAtBytes   int
+	maxBufferedBytes    int
+	bufferedBytes       int
 	droppedBytes        int
 	pendingDroppedBytes int
 	playedBytes         int
@@ -275,6 +281,7 @@ func Open(ctx context.Context, model Model, params ConnectParams, options ...Ses
 		toolCancels: map[string]context.CancelFunc{}, playbackProgress: make(chan struct{}, 1),
 		replyProgress: make(chan struct{}, 1),
 		audioTaps:     map[*audioTap]struct{}{}, transcriptTaps: map[chan TranscriptUpdate]struct{}{},
+		inputRequests: map[int]ai.ModelRequest{},
 	}
 	if historyAware, ok := connection.(HistoryAwareConnection); ok {
 		historyAware.SetMessageHistory(session.Messages)
@@ -408,18 +415,22 @@ func (session *Session) Send(ctx context.Context, content any, options ...SendOp
 		if !respond {
 			input = TextContext{Text: value}
 		}
+		request := ai.ModelRequest{
+			Parts: []ai.RequestPart{ai.UserPromptPart{Content: value}}, Timestamp: time.Now().UTC(),
+		}
 		if respond {
 			session.reserveResponse()
 		}
-		if err := session.send(ctx, input); err != nil {
+		session.mu.Lock()
+		session.history = append(session.history, request)
+		session.mu.Unlock()
+		if _, err := session.sendRecorded(ctx, input, request); err != nil {
 			if respond {
 				session.releaseResponseReservation()
 			}
+			session.removeInputRequest(request)
 			return err
 		}
-		session.mu.Lock()
-		session.history = append(session.history, ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: value}}})
-		session.mu.Unlock()
 		return nil
 	case ai.BinaryContent:
 		if len(value.Data) == 0 {
@@ -514,7 +525,11 @@ func (session *Session) sendImage(ctx context.Context, content ai.BinaryContent,
 	if respond {
 		session.reserveResponse()
 	}
-	if err := session.send(ctx, ImageInput{Content: content, Respond: respond}); err != nil {
+	request := ai.ModelRequest{
+		Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{content}}}, Timestamp: time.Now().UTC(),
+	}
+	inputIndex, err := session.sendRecorded(ctx, ImageInput{Content: content, Respond: respond}, request)
+	if err != nil {
 		if respond {
 			session.releaseResponseReservation()
 		}
@@ -524,9 +539,9 @@ func (session *Session) sendImage(ctx context.Context, content ai.BinaryContent,
 	defer session.mu.Unlock()
 	session.imageCount++
 	if session.imageCount%session.config.retainImagesEvery != 0 {
+		delete(session.inputRequests, inputIndex)
 		return nil
 	}
-	request := ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{content}}}}
 	session.history = append(session.history, request)
 	session.retainedImages = append(session.retainedImages, request)
 	if session.config.retainImagesMax >= 0 && len(session.retainedImages) > session.config.retainImagesMax {
@@ -613,6 +628,24 @@ func sameImageRequest(message ai.ModelMessage, expected ai.ModelRequest) bool {
 	return reflect.DeepEqual(message, expected)
 }
 
+func (session *Session) removeInputRequest(expected ai.ModelRequest) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	for index := len(session.history) - 1; index >= 0; index-- {
+		request, ok := session.history[index].(ai.ModelRequest)
+		if ok && request.Timestamp.Equal(expected.Timestamp) {
+			session.history = append(session.history[:index], session.history[index+1:]...)
+			break
+		}
+	}
+	for index := len(session.retainedImages) - 1; index >= 0; index-- {
+		if session.retainedImages[index].Timestamp.Equal(expected.Timestamp) {
+			session.retainedImages = append(session.retainedImages[:index], session.retainedImages[index+1:]...)
+			break
+		}
+	}
+}
+
 func (session *Session) require(supported bool, method, feature string) error {
 	if !supported {
 		return fmt.Errorf("realtime: cannot %s: model %q does not support %s", method, session.model.Name(), feature)
@@ -687,30 +720,58 @@ func (session *Session) send(ctx context.Context, input Input) error {
 	return session.sendInputs(ctx, input)
 }
 
+func (session *Session) sendRecorded(ctx context.Context, input Input, request ai.ModelRequest) (int, error) {
+	indexes, err := session.sendGroup(ctx, &request, input)
+	if err != nil {
+		return 0, err
+	}
+	return indexes[0], nil
+}
+
 func (session *Session) sendInputs(ctx context.Context, inputs ...Input) error {
+	_, err := session.sendGroup(ctx, nil, inputs...)
+	return err
+}
+
+func (session *Session) sendGroup(ctx context.Context, request *ai.ModelRequest, inputs ...Input) ([]int, error) {
 	if err := session.nextError(); err != nil {
-		return err
+		return nil, err
 	}
 	session.mu.RLock()
 	closed := session.closed
 	session.mu.RUnlock()
 	if closed {
-		return fmt.Errorf("realtime: session is closed")
+		return nil, fmt.Errorf("realtime: session is closed")
 	}
 	session.sendMu.Lock()
 	defer session.sendMu.Unlock()
-	for _, input := range inputs {
+	indexes := make([]int, 0, len(inputs))
+	for position, input := range inputs {
 		_ = input.RealtimeInputKind()
+		session.mu.Lock()
+		index := session.inputsSent
+		session.inputsSent++
+		if position == 0 && request != nil {
+			session.inputRequests[index] = *request
+		}
+		session.mu.Unlock()
+		indexes = append(indexes, index)
 		if err := session.connection.Send(ctx, input); err != nil {
-			return &Error{Provider: session.model.ProviderName(), Model: session.model.Name(), Message: "send", Err: err}
+			session.mu.Lock()
+			delete(session.inputRequests, index)
+			session.mu.Unlock()
+			return indexes, &Error{Provider: session.model.ProviderName(), Model: session.model.Name(), Message: "send", Err: err}
 		}
 	}
-	return nil
+	return indexes, nil
 }
 
 // StreamAudio yields model PCM chunks. The bounded subscription starts when this method is called.
 func (session *Session) StreamAudio(ctx context.Context) iter.Seq2[[]byte, error] {
-	tap := &audioTap{queue: make(chan []byte, 32)}
+	const maxChunks = 30_000
+	tap := &audioTap{
+		queue: make(chan []byte, maxChunks), maxBufferedBytes: 300 * session.profile.AudioOutputSampleRate * 2,
+	}
 	session.tapMu.Lock()
 	tap.subscribedAtBytes = session.emittedAudioBytes
 	session.mu.RLock()
@@ -737,6 +798,7 @@ func (session *Session) StreamAudio(ctx context.Context) iter.Seq2[[]byte, error
 					return
 				}
 				session.tapMu.Lock()
+				tap.bufferedBytes -= len(chunk)
 				tap.droppedBytes += tap.pendingDroppedBytes
 				tap.pendingDroppedBytes = 0
 				session.tapMu.Unlock()
@@ -846,6 +908,7 @@ func (session *Session) pump() {
 		session.mu.Lock()
 		session.closed = true
 		session.responseActive = false
+		session.exchangeActive = false
 		session.pendingResponses = 0
 		session.pendingToolCalls = 0
 		session.notifyReplyLocked()
@@ -953,6 +1016,18 @@ func (session *Session) handle(event CodecEvent) bool {
 		session.serverCancelling = false
 		session.mu.Unlock()
 	case ConversationCreated, ConversationItemCreated:
+	case InputRejected:
+		session.mu.Lock()
+		request, tracked := session.inputRequests[event.InputIndex]
+		delete(session.inputRequests, event.InputIndex)
+		if event.Response && session.pendingResponses > 0 {
+			session.pendingResponses--
+			session.notifyReplyLocked()
+		}
+		session.mu.Unlock()
+		if tracked && !event.Response {
+			session.removeInputRequest(request)
+		}
 	case SessionError:
 		if event.Recoverable {
 			session.publish(SessionErrorEvent{Err: event.Err})
@@ -1207,11 +1282,15 @@ func (session *Session) finishResponse(event ResponseDone) {
 	session.pendingResponseID = ""
 	session.pendingFinish = ""
 	session.responseActive = false
+	session.exchangeActive = event.MoreExpected && !event.Interrupted
+	clear(session.inputRequests)
 	session.notifyReplyLocked()
 	session.serverCancelling = false
 	session.mu.Unlock()
-	session.publish(TurnCompleteEvent{Response: *cloneResponse(&response)})
-	go session.deliverEnqueued()
+	if !event.MoreExpected || event.Interrupted {
+		session.publish(TurnCompleteEvent{Response: *cloneResponse(&response)})
+		go session.deliverEnqueued()
+	}
 }
 
 func (session *Session) handleToolCall(event ToolCall) {
@@ -1435,16 +1514,14 @@ func (session *Session) publishAudio(partIndex int, data []byte) {
 	session.emittedAudioBytes += len(data)
 	for tap := range session.audioTaps {
 		chunk := slices.Clone(data)
-		select {
-		case tap.queue <- chunk:
-		default:
-			select {
-			case dropped := <-tap.queue:
-				tap.pendingDroppedBytes += len(dropped)
-			default:
-			}
-			tap.queue <- chunk
+		for len(tap.queue) > 0 &&
+			(tap.bufferedBytes+len(chunk) > tap.maxBufferedBytes || len(tap.queue) == cap(tap.queue)) {
+			dropped := <-tap.queue
+			tap.bufferedBytes -= len(dropped)
+			tap.pendingDroppedBytes += len(dropped)
 		}
+		tap.queue <- chunk
+		tap.bufferedBytes += len(chunk)
 	}
 	session.notifyPlaybackLocked()
 }

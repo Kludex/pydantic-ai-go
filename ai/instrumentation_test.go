@@ -60,6 +60,7 @@ func TestInstrumentedModelRequest(t *testing.T) {
 			},
 			Usage: ai.Usage{
 				InputTokens: 10, OutputTokens: 5, CacheReadTokens: 2, CacheWriteTokens: 1,
+				CacheWrite1HTokens: 1, InputImageTokens: 4, CacheImageReadTokens: 1, AudioSeconds: 2.5,
 				Details: map[string]int{"reasoning_tokens": 3}, CostUSD: &cost,
 			},
 			ModelName: "response-model", ProviderName: "provider",
@@ -129,12 +130,16 @@ func TestInstrumentedModelRequest(t *testing.T) {
 		"gen_ai.system": "provider", "server.address": "example.com", "server.port": int64(8443),
 		"gen_ai.response.id": "response-id", "gen_ai.usage.input_tokens": int64(10),
 		"gen_ai.usage.output_tokens": int64(5), "operation.cost": 0.25,
-		"gen_ai.usage.cache_creation.input_tokens": int64(1),
-		"gen_ai.usage.cache_read.input_tokens":     int64(2),
-		"gen_ai.usage.details.cache_write_tokens":  int64(1),
-		"gen_ai.usage.details.cache_read_tokens":   int64(2),
-		"gen_ai.usage.details.reasoning_tokens":    int64(3),
-		"gen_ai.request.max_tokens":                int64(100), "gen_ai.request.temperature": 0.5,
+		"gen_ai.usage.cache_creation.input_tokens":     int64(1),
+		"gen_ai.usage.cache_read.input_tokens":         int64(2),
+		"gen_ai.usage.details.cache_write_tokens":      int64(1),
+		"gen_ai.usage.details.cache_write_1h_tokens":   int64(1),
+		"gen_ai.usage.details.cache_read_tokens":       int64(2),
+		"gen_ai.usage.details.input_image_tokens":      int64(4),
+		"gen_ai.usage.details.cache_image_read_tokens": int64(1),
+		"gen_ai.usage.details.audio_seconds":           2.5,
+		"gen_ai.usage.details.reasoning_tokens":        int64(3),
+		"gen_ai.request.max_tokens":                    int64(100), "gen_ai.request.temperature": 0.5,
 	} {
 		if got := attributes[key]; got != want {
 			t.Fatalf("attribute %q = %#v, want %#v", key, got, want)

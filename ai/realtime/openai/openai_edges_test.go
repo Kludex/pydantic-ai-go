@@ -64,13 +64,14 @@ func TestOpenAIConnectValidationAndPortableSettings(t *testing.T) {
 		TurnDetection: &realtime.TurnDetection{
 			Enabled: true, Sensitivity: "high", PrefixPadding: time.Millisecond, SilenceDuration: 2 * time.Millisecond,
 		},
-		ParallelToolCalls: &no, ToolChoice: realtime.ToolChoiceRequired,
+		ParallelToolCalls: &no, ToolChoice: realtime.ToolChoiceRequired, Thinking: ai.ThinkingLevelHigh,
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	frame := <-updated
-	if frame["type"] != "session.update" {
+	if frame["type"] != "session.update" ||
+		frame["session"].(map[string]any)["reasoning"].(map[string]any)["effort"] != "high" {
 		t.Fatalf("unexpected update: %+v", frame)
 	}
 	_ = connection.Close(t.Context())

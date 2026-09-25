@@ -10,6 +10,8 @@ import (
 	"math/rand/v2"
 	"net/http"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -57,6 +59,9 @@ type Connection struct {
 	currentContentIndex int
 	generatedAudioBytes int
 	reconnects          int
+	inputsReceived      int
+	responseInputs      []int
+	deferredInputs      []int
 	seenToolCalls       map[string]struct{}
 }
 
@@ -107,6 +112,10 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	connection.stateMu.Lock()
+	inputIndex := connection.inputsReceived
+	connection.inputsReceived++
+	connection.stateMu.Unlock()
 	switch input := input.(type) {
 	case realtime.AudioInput:
 		if len(input.Data)%2 != 0 {
@@ -116,15 +125,15 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 			"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(input.Data),
 		})
 	case realtime.TextInput:
-		return connection.sendText(ctx, input.Text, true)
+		return connection.sendText(ctx, input.Text, true, inputIndex)
 	case realtime.TextContext:
-		return connection.sendText(ctx, input.Text, false)
+		return connection.sendText(ctx, input.Text, false, inputIndex)
 	case realtime.ImageInput:
 		if !connection.config.SupportsImages {
 			return fmt.Errorf("realtime: %s does not support image input", connection.config.Provider)
 		}
 		if err := connection.writeJSON(ctx, map[string]any{
-			"type": "conversation.item.create",
+			"type": "conversation.item.create", "event_id": clientEventID("content", []int{inputIndex}),
 			"item": map[string]any{
 				"type": "message", "role": "user",
 				"content": []any{map[string]any{
@@ -134,7 +143,7 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 		}); err != nil || !input.Respond {
 			return err
 		}
-		return connection.requestResponse(ctx)
+		return connection.requestResponse(ctx, []int{inputIndex})
 	case realtime.ToolResult:
 		parts, err := userContent(input.Content, connection.config.SupportsImages)
 		if err != nil {
@@ -154,17 +163,17 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 				"item": map[string]any{"type": "message", "role": "user", "content": parts},
 			})
 			if err == nil {
-				err = connection.requestResponse(ctx)
+				err = connection.requestResponse(ctx, []int{inputIndex})
 			}
 			return err
 		}
-		return connection.requestResponse(ctx)
+		return connection.requestResponse(ctx, []int{inputIndex})
 	case realtime.CommitAudio:
 		return connection.writeJSON(ctx, map[string]any{"type": "input_audio_buffer.commit"})
 	case realtime.ClearAudio:
 		return connection.writeJSON(ctx, map[string]any{"type": "input_audio_buffer.clear"})
 	case realtime.CreateResponse:
-		return connection.requestResponse(ctx)
+		return connection.requestResponse(ctx, []int{inputIndex})
 	case realtime.CancelResponse:
 		connection.stateMu.Lock()
 		active := connection.responseActive
@@ -192,9 +201,9 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 	}
 }
 
-func (connection *Connection) sendText(ctx context.Context, text string, respond bool) error {
+func (connection *Connection) sendText(ctx context.Context, text string, respond bool, inputIndex int) error {
 	if err := connection.writeJSON(ctx, map[string]any{
-		"type": "conversation.item.create",
+		"type": "conversation.item.create", "event_id": clientEventID("content", []int{inputIndex}),
 		"item": map[string]any{
 			"type": "message", "role": "user",
 			"content": []any{map[string]any{"type": "input_text", "text": text}},
@@ -202,10 +211,10 @@ func (connection *Connection) sendText(ctx context.Context, text string, respond
 	}); err != nil || !respond {
 		return err
 	}
-	return connection.requestResponse(ctx)
+	return connection.requestResponse(ctx, []int{inputIndex})
 }
 
-func (connection *Connection) requestResponse(ctx context.Context) error {
+func (connection *Connection) requestResponse(ctx context.Context, inputs []int) error {
 	connection.mu.RLock()
 	closed := connection.closed
 	connection.mu.RUnlock()
@@ -214,18 +223,33 @@ func (connection *Connection) requestResponse(ctx context.Context) error {
 	}
 	connection.stateMu.Lock()
 	if connection.responseActive {
+		connection.deferredInputs = append(connection.deferredInputs, inputs...)
 		connection.stateMu.Unlock()
 		return nil
 	}
 	connection.responseActive = true
+	connection.responseInputs = slices.Clone(inputs)
 	connection.stateMu.Unlock()
-	if err := connection.writeJSON(ctx, map[string]any{"type": "response.create"}); err != nil {
+	event := map[string]any{"type": "response.create"}
+	if len(inputs) > 0 {
+		event["event_id"] = clientEventID("response", inputs)
+	}
+	if err := connection.writeJSON(ctx, event); err != nil {
 		connection.stateMu.Lock()
 		connection.responseActive = false
+		connection.responseInputs = nil
 		connection.stateMu.Unlock()
 		return err
 	}
 	return nil
+}
+
+func clientEventID(kind string, inputs []int) string {
+	parts := make([]string, len(inputs))
+	for index, input := range inputs {
+		parts[index] = strconv.Itoa(input)
+	}
+	return "pydantic_ai." + kind + "." + strings.Join(parts, "-")
 }
 
 func (connection *Connection) writeJSON(ctx context.Context, value any) error {
@@ -286,7 +310,19 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 						continue
 					}
 				}
+				if rejected, ok := event.(realtime.InputRejected); ok && rejected.Response {
+					if err := connection.rejectResponse(ctx, rejected.InputIndex); err != nil {
+						yield(nil, err)
+						return
+					}
+				}
 				connection.observe(event)
+				if _, done := event.(realtime.ResponseDone); done {
+					if err := connection.sendDeferredResponse(ctx); err != nil {
+						yield(nil, err)
+						return
+					}
+				}
 				if !yield(event, nil) {
 					return
 				}
@@ -311,7 +347,34 @@ func (connection *Connection) observe(event realtime.CodecEvent) {
 	case realtime.ResponseDone:
 		connection.responseActive = false
 		connection.activeResponseID = ""
+		connection.responseInputs = nil
 	}
+}
+
+func (connection *Connection) rejectResponse(ctx context.Context, inputIndex int) error {
+	connection.stateMu.Lock()
+	matched := connection.responseActive && connection.activeResponseID == "" && slices.Contains(connection.responseInputs, inputIndex)
+	if matched {
+		connection.responseActive = false
+		connection.responseInputs = nil
+	}
+	connection.stateMu.Unlock()
+	if matched {
+		return connection.sendDeferredResponse(ctx)
+	}
+	return nil
+}
+
+func (connection *Connection) sendDeferredResponse(ctx context.Context) error {
+	connection.stateMu.Lock()
+	if connection.responseActive || len(connection.deferredInputs) == 0 {
+		connection.stateMu.Unlock()
+		return nil
+	}
+	inputs := slices.Clone(connection.deferredInputs)
+	connection.deferredInputs = nil
+	connection.stateMu.Unlock()
+	return connection.requestResponse(ctx, inputs)
 }
 
 func (connection *Connection) reconnect(ctx context.Context) (bool, error) {
@@ -369,6 +432,7 @@ func (connection *Connection) reconnect(ctx context.Context) (bool, error) {
 		if !connection.config.RestoresInFlightState {
 			connection.responseActive = false
 			connection.activeResponseID = ""
+			connection.responseInputs = nil
 			connection.currentItemID = ""
 			connection.generatedAudioBytes = 0
 		}

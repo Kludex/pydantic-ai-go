@@ -1997,6 +1997,7 @@ type anthropicUsage struct {
 	OutputTokens             int                       `json:"output_tokens"`
 	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
+	CacheCreation            *anthropicCacheCreation   `json:"cache_creation"`
 	Iterations               []anthropicIterationUsage `json:"iterations"`
 	ServerToolUse            *struct {
 		WebSearchRequests int `json:"web_search_requests"`
@@ -2004,11 +2005,16 @@ type anthropicUsage struct {
 }
 
 type anthropicIterationUsage struct {
-	Type                     string `json:"type"`
-	InputTokens              int    `json:"input_tokens"`
-	OutputTokens             int    `json:"output_tokens"`
-	CacheCreationInputTokens int    `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int    `json:"cache_read_input_tokens"`
+	Type                     string                  `json:"type"`
+	InputTokens              int                     `json:"input_tokens"`
+	OutputTokens             int                     `json:"output_tokens"`
+	CacheCreationInputTokens int                     `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int                     `json:"cache_read_input_tokens"`
+	CacheCreation            *anthropicCacheCreation `json:"cache_creation"`
+}
+
+type anthropicCacheCreation struct {
+	Ephemeral1HInputTokens int `json:"ephemeral_1h_input_tokens"`
 }
 
 func (u anthropicUsage) usage() ai.Usage {
@@ -2017,6 +2023,15 @@ func (u anthropicUsage) usage() ai.Usage {
 		"output_tokens":               u.OutputTokens,
 		"cache_creation_input_tokens": u.CacheCreationInputTokens,
 		"cache_read_input_tokens":     u.CacheReadInputTokens,
+	}
+	oneHourCacheWrites := 0
+	compactionInputTokens := 0
+	compactionOutputTokens := 0
+	compactionCacheWriteTokens := 0
+	compactionCacheReadTokens := 0
+	if u.CacheCreation != nil && u.CacheCreation.Ephemeral1HInputTokens > 0 {
+		oneHourCacheWrites = u.CacheCreation.Ephemeral1HInputTokens
+		details["ephemeral_1h_input_tokens"] = oneHourCacheWrites
 	}
 	if u.ServerToolUse != nil && u.ServerToolUse.WebSearchRequests > 0 {
 		details["web_search_requests"] = u.ServerToolUse.WebSearchRequests
@@ -2040,13 +2055,30 @@ func (u anthropicUsage) usage() ai.Usage {
 					details[prefix+"_"+name] += value
 				}
 			}
+			if prefix == "compaction" {
+				compactionInputTokens += iteration.InputTokens
+				compactionOutputTokens += iteration.OutputTokens
+				compactionCacheWriteTokens += iteration.CacheCreationInputTokens
+				compactionCacheReadTokens += iteration.CacheReadInputTokens
+			}
+			if iteration.CacheCreation != nil && iteration.CacheCreation.Ephemeral1HInputTokens > 0 {
+				value := iteration.CacheCreation.Ephemeral1HInputTokens
+				details[prefix+"_ephemeral_1h_input_tokens"] += value
+				if prefix == "compaction" {
+					oneHourCacheWrites += value
+				}
+			}
 		}
 	}
 	return ai.Usage{
-		Requests:         1,
-		InputTokens:      u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens,
-		CacheWriteTokens: u.CacheCreationInputTokens, CacheReadTokens: u.CacheReadInputTokens,
-		OutputTokens: u.OutputTokens, Details: details,
+		Requests: 1,
+		InputTokens: u.InputTokens + u.CacheCreationInputTokens + u.CacheReadInputTokens +
+			compactionInputTokens + compactionCacheWriteTokens + compactionCacheReadTokens,
+		CacheWriteTokens:   u.CacheCreationInputTokens + compactionCacheWriteTokens,
+		CacheWrite1HTokens: oneHourCacheWrites,
+		CacheReadTokens:    u.CacheReadInputTokens + compactionCacheReadTokens,
+		OutputTokens:       u.OutputTokens + compactionOutputTokens,
+		Details:            details,
 	}
 }
 

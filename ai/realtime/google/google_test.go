@@ -102,6 +102,79 @@ func TestThinkingProfileExcludesHalfCascadeLiveModel(t *testing.T) {
 	}
 }
 
+func TestGemini38LiveProfilesAndConfiguration(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		thinking      bool
+		behavior      genai.Behavior
+		thinkingLevel genai.ThinkingLevel
+		scheduling    genai.FunctionResponseScheduling
+	}{
+		{name: "gemini-3.8-live", behavior: genai.BehaviorBlocking},
+		{
+			name: "models/gemini-3.8-live-extended-thinking", thinking: true,
+			behavior: genai.BehaviorNonBlocking, thinkingLevel: genai.ThinkingLevelLow,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			live := newFakeSession()
+			connector := &fakeConnector{session: live}
+			model := googlert.NewModel(test.name, googlert.WithConnector(connector))
+			connection, err := model.Connect(t.Context(), realtime.ConnectParams{
+				Request: ai.ModelRequestParams{Tools: []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}}},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			declaration := connector.config.Tools[0].FunctionDeclarations[0]
+			if model.Profile().SupportsThinking != test.thinking || declaration.Behavior != test.behavior {
+				t.Fatalf("unexpected profile or tool behavior: %+v %+v", model.Profile(), declaration)
+			}
+			if test.thinkingLevel != "" && (connector.config.ThinkingConfig == nil ||
+				connector.config.ThinkingConfig.ThinkingLevel != test.thinkingLevel) {
+				t.Fatalf("unexpected thinking config: %+v", connector.config.ThinkingConfig)
+			}
+			if err := connection.Send(t.Context(), realtime.ToolResult{ToolCallID: "call", Output: "done"}); err != nil {
+				t.Fatal(err)
+			}
+			if got := live.tools[0].FunctionResponses[0].Scheduling; got != test.scheduling {
+				t.Fatalf("unexpected scheduling: %q", got)
+			}
+			_ = connection.Close(t.Context())
+		})
+	}
+}
+
+func TestGoogleConnectionHonorsTranscriptionAndInteractionStatus(t *testing.T) {
+	live := newFakeSession()
+	connector := &fakeConnector{session: live}
+	disabled := false
+	model := googlert.NewModel("gemini-3.8-live", googlert.WithConnector(connector),
+		googlert.WithSettings(googlert.Settings{InputTranscription: &disabled}))
+	connection, err := model.Connect(t.Context(), realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live.receive <- &genai.LiveServerMessage{ServerContent: &genai.LiveServerContent{
+		InputTranscription: &genai.Transcription{Text: "private", Finished: true}, TurnComplete: true,
+		InteractionStatus: genai.InteractionStatusInProgress,
+	}}
+	var events []realtime.CodecEvent
+	for event, eventErr := range connection.Events(t.Context()) {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		events = append(events, event)
+		if _, ok := event.(realtime.ResponseDone); ok {
+			break
+		}
+	}
+	if len(events) != 1 || !events[0].(realtime.ResponseDone).MoreExpected {
+		t.Fatalf("unexpected events: %+v", events)
+	}
+	_ = connection.Close(t.Context())
+}
+
 func TestGoogleRealtimeSession(t *testing.T) {
 	live := newFakeSession()
 	connector := &fakeConnector{session: live}

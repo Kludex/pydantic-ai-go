@@ -8,6 +8,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- Align TypeSafe Jev routing with decision-model behavior: named routes, speculative field questions, opt-in route thresholds, route handoffs, reasoning-aware history, route premises, and a 32,000-token context window. `typesafe.Settings.ToolCallThreshold` is deprecated and ignored; use `RouteThreshold` to hand low-confidence routes to a fallback model instead of silently selecting the output route.
+- Expose the current prompt and routed request to model selectors.
+- Price one-hour Anthropic cache writes, realtime image input, and duration-billed voice usage with dedicated usage counters.
+- Add Gemini 3.8 Live behavior, five-minute audio-view buffering, refused-input rollback, stalled-exchange tracking, and recoverable OpenAI realtime response failures.
 - Add GitHub Copilot device authorization, realtime `WaitForReply`, and terminal error delivery through every realtime consumer path.
 - Forward Vertex AI `gs://` image references, require Gemini Developer API `v1alpha` for proactive audio, and default future Gemini models to thinking-level behavior.
 - Extend TypeSafe Jev with described boolean criteria, whole-number choices, described null choices, and omission of selected optional defaults.

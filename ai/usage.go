@@ -16,12 +16,18 @@ type Usage struct {
 	InputTokens int `json:"input_tokens,omitempty"`
 	// CacheWriteTokens is the number of input tokens written to a provider cache.
 	CacheWriteTokens int `json:"cache_write_tokens,omitempty"`
+	// CacheWrite1HTokens is the subset written with a one-hour retention period.
+	CacheWrite1HTokens int `json:"cache_write_1h_tokens,omitempty"`
 	// CacheReadTokens is the number of input tokens read from a provider cache.
 	CacheReadTokens int `json:"cache_read_tokens,omitempty"`
 	// InputAudioTokens is the audio subset of input tokens.
 	InputAudioTokens int `json:"input_audio_tokens,omitempty"`
+	// InputImageTokens is the image subset of input tokens.
+	InputImageTokens int `json:"input_image_tokens,omitempty"`
 	// CacheAudioReadTokens is the audio subset read from a provider cache.
 	CacheAudioReadTokens int `json:"cache_audio_read_tokens,omitempty"`
+	// CacheImageReadTokens is the image subset read from a provider cache.
+	CacheImageReadTokens int `json:"cache_image_read_tokens,omitempty"`
 	// OutputTokens is the provider-reported output token count.
 	OutputTokens int `json:"output_tokens,omitempty"`
 	// OutputAudioTokens is the audio subset of output tokens.
@@ -32,6 +38,8 @@ type Usage struct {
 	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
 	// RejectedPredictionTokens counts rejected predicted-output tokens.
 	RejectedPredictionTokens int `json:"rejected_prediction_tokens,omitempty"`
+	// AudioSeconds is the billed duration for models priced by audio time.
+	AudioSeconds float64 `json:"audio_seconds,omitempty"`
 	// Details preserves provider-specific integer counters by name.
 	Details map[string]int `json:"details,omitempty"`
 	// CostUSD is the known request cost in US dollars. Nil means unknown.
@@ -77,9 +85,10 @@ func (u Usage) Clone() Usage {
 // IsZero reports whether usage contains no counts, details, or known cost.
 func (u Usage) IsZero() bool {
 	return u.Requests == 0 && u.ToolCalls == 0 && u.InputTokens == 0 && u.CacheWriteTokens == 0 &&
-		u.CacheReadTokens == 0 && u.InputAudioTokens == 0 && u.CacheAudioReadTokens == 0 &&
-		u.OutputTokens == 0 && u.OutputAudioTokens == 0 && u.ReasoningTokens == 0 &&
-		u.AcceptedPredictionTokens == 0 && u.RejectedPredictionTokens == 0 && len(u.Details) == 0 && u.CostUSD == nil
+		u.CacheWrite1HTokens == 0 && u.CacheReadTokens == 0 && u.InputAudioTokens == 0 && u.InputImageTokens == 0 &&
+		u.CacheAudioReadTokens == 0 && u.CacheImageReadTokens == 0 && u.OutputTokens == 0 &&
+		u.OutputAudioTokens == 0 && u.ReasoningTokens == 0 && u.AcceptedPredictionTokens == 0 &&
+		u.RejectedPredictionTokens == 0 && u.AudioSeconds == 0 && len(u.Details) == 0 && u.CostUSD == nil
 }
 
 // TotalTokens returns input plus output tokens.
@@ -99,14 +108,18 @@ func (u *Usage) Add(other Usage) {
 	u.ToolCalls += other.ToolCalls
 	u.InputTokens += other.InputTokens
 	u.CacheWriteTokens += other.CacheWriteTokens
+	u.CacheWrite1HTokens += other.CacheWrite1HTokens
 	u.CacheReadTokens += other.CacheReadTokens
 	u.InputAudioTokens += other.InputAudioTokens
+	u.InputImageTokens += other.InputImageTokens
 	u.CacheAudioReadTokens += other.CacheAudioReadTokens
+	u.CacheImageReadTokens += other.CacheImageReadTokens
 	u.OutputTokens += other.OutputTokens
 	u.OutputAudioTokens += other.OutputAudioTokens
 	u.ReasoningTokens += other.ReasoningTokens
 	u.AcceptedPredictionTokens += other.AcceptedPredictionTokens
 	u.RejectedPredictionTokens += other.RejectedPredictionTokens
+	u.AudioSeconds += other.AudioSeconds
 	if len(other.Details) > 0 {
 		if u.Details == nil {
 			u.Details = make(map[string]int, len(other.Details))

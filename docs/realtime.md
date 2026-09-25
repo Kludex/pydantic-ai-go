@@ -138,7 +138,7 @@ func main() {
 
 Raw audio is mono PCM16. Read the input and output rates from the model or session. OpenAI and xAI use 24 kHz input. Gemini Live uses 16 kHz input and 24 kHz output.
 
-Call `StreamAudio` or `StreamTranscripts` before starting the goroutine that consumes it. The subscription starts at the method call, so scheduler delay does not lose the first chunk. Each view uses a bounded buffer and drops its oldest item when a slow consumer falls behind. A terminal receive error is returned by the first event, audio, transcript, outbound, or close operation that observes it. `Err` keeps the terminal error available for inspection.
+Call `StreamAudio` or `StreamTranscripts` before starting the goroutine that consumes it. The subscription starts at the method call, so scheduler delay does not lose the first chunk. Each audio view buffers five minutes of PCM, up to 30,000 chunks. Each transcript view buffers 512 updates. A view drops its oldest item only when its consumer falls behind that bound. A terminal receive error is returned by the first event, audio, transcript, outbound, or close operation that observes it. `Err` keeps the terminal error available for inspection.
 
 Call `WaitForReply` after a responding send when you only need the model turn boundary. It does not consume `Events`, so another goroutine can continue handling events. `WaitForReply` returns immediately when no response is outstanding or when the session closes. Use `WaitForPlayback` separately when you also need buffered audio to finish playing.
 
@@ -253,7 +253,9 @@ func main() {
 }
 ```
 
-Gemini Live uses the official `google.golang.org/genai` SDK. Pass `google.WithClient` to reuse a configured SDK client. Use `google.WithVertex` for Vertex AI. Gemini supports image frames and Google Search, but it does not support manual turn control or text-only output on current speech models.
+Gemini Live uses the official `google.golang.org/genai` SDK. Pass `google.WithClient` to reuse a configured SDK client. Use `google.WithVertex` for Vertex AI. `gemini-3.8-live` defaults tool declarations to asynchronous, so the adapter declares blocking tools explicitly. `gemini-3.8-live-extended-thinking` always uses asynchronous tools and defaults to low reasoning when you do not set an effort. Gemini supports image frames and Google Search, but it does not support manual turn control or text-only output on current speech models.
+
+When you disable input transcription, Gemini 3.x can still send transcript frames. The adapter discards them so user speech stays out of portable history.
 
 Gemini Developer API proactive audio requires `google.WithAPIVersion("v1alpha")`. Pass the same API version when you also provide a preconfigured SDK client. The adapter rejects proactive audio on the default `v1beta` connection before opening the session. Vertex AI uses a different version line and does not apply this check.
 

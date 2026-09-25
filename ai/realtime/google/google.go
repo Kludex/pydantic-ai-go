@@ -146,8 +146,12 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsTextOutput = false
 	profile.SupportsSessionSeeding = true
 	profile.SupportsSeedingImages = true
-	profile.SupportsThinking = strings.Contains(name, "native-audio") || !strings.HasPrefix(name, "gemini-live-2.5")
-	profile.SupportsAsyncToolCalls = strings.Contains(name, "native-audio")
+	normalizedName := strings.TrimPrefix(name, "models/")
+	extendedThinking := normalizedName == "gemini-3.8-live-extended-thinking"
+	profile.SupportsThinking = extendedThinking || strings.Contains(normalizedName, "native-audio") ||
+		!strings.HasPrefix(normalizedName, "gemini-live-2.5") && normalizedName != "gemini-3.8-live"
+	profile.SupportsAsyncToolCalls = strings.Contains(normalizedName, "native-audio") ||
+		normalizedName == "gemini-3.8-live" || extendedThinking
 	profile.SupportsToolReturnSchema = true
 	profile.SupportedNativeTools = map[string]bool{"web_search": true}
 	profile.AudioInputSampleRate = 16000
@@ -216,6 +220,8 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 		session: session, connector: connector, config: config, reconnect: normalizedReconnect(params.Settings.Reconnect),
 		provider: model.ProviderName(), model: model.name,
 		inputTranscription: config.InputAudioTranscription != nil,
+		asyncToolCalls:     model.requiresAsyncToolCalls() || settings.AsyncToolCalls && model.profile.SupportsAsyncToolCalls,
+		supportsScheduling: !model.requiresAsyncToolCalls(),
 	}
 	if len(params.Messages) > 0 {
 		turns, err := seedTurns(params.Messages, model.profile)
@@ -312,7 +318,9 @@ func (model *Model) liveConfig(
 			AutomaticActivityDetection: googleVAD(*common.TurnDetection),
 		}
 	}
-	if common.Thinking != "" {
+	if model.requiresThinking() {
+		config.ThinkingConfig = requiredThinkingConfig(common.Thinking)
+	} else if common.Thinking != "" {
 		config.ThinkingConfig = thinkingConfig(common.Thinking)
 	}
 	if len(request.Tools) > 0 {
@@ -324,8 +332,10 @@ func (model *Model) liveConfig(
 			if tool.ReturnSchema != nil {
 				declaration.ResponseJsonSchema = tool.ReturnSchema
 			}
-			if settings.AsyncToolCalls && model.profile.SupportsAsyncToolCalls {
+			if model.requiresAsyncToolCalls() || settings.AsyncToolCalls && model.profile.SupportsAsyncToolCalls {
 				declaration.Behavior = genai.BehaviorNonBlocking
+			} else if model.asyncToolCallsByDefault() {
+				declaration.Behavior = genai.BehaviorBlocking
 			}
 			declarations[index] = declaration
 		}
@@ -362,6 +372,16 @@ func normalizedReconnect(policy *realtime.ReconnectPolicy) *realtime.ReconnectPo
 	return &resolved
 }
 
+func (model *Model) requiresThinking() bool {
+	return strings.TrimPrefix(model.name, "models/") == "gemini-3.8-live-extended-thinking"
+}
+
+func (model *Model) requiresAsyncToolCalls() bool { return model.requiresThinking() }
+
+func (model *Model) asyncToolCallsByDefault() bool {
+	return strings.HasPrefix(strings.TrimPrefix(model.name, "models/"), "gemini-3.8-live")
+}
+
 func (model *Model) resolveSettings(common realtime.Settings) Settings {
 	settings := model.settings
 	if value, ok := common.Provider["google_voice"].(string); ok {
@@ -386,6 +406,8 @@ type Connection struct {
 	provider           string
 	model              string
 	inputTranscription bool
+	asyncToolCalls     bool
+	supportsScheduling bool
 	resumptionHandle   string
 	reconnects         int
 	closed             bool
@@ -434,9 +456,13 @@ func (connection *Connection) Send(_ context.Context, input realtime.Input) erro
 		})
 	case realtime.ToolResult:
 		response := map[string]any{"output": input.Output}
-		return session.SendToolResponse(genai.LiveToolResponseInput{FunctionResponses: []*genai.FunctionResponse{{
-			ID: input.ToolCallID, Response: response,
-		}}})
+		functionResponse := &genai.FunctionResponse{ID: input.ToolCallID, Response: response}
+		if connection.asyncToolCalls && connection.supportsScheduling {
+			functionResponse.Scheduling = genai.FunctionResponseSchedulingInterrupt
+		}
+		return session.SendToolResponse(genai.LiveToolResponseInput{FunctionResponses: []*genai.FunctionResponse{
+			functionResponse,
+		}})
 	default:
 		return fmt.Errorf("google realtime: unsupported %T input", input)
 	}
@@ -498,7 +524,7 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 					continue
 				}
 			}
-			for _, event := range mapServerMessage(message, connection.provider) {
+			for _, event := range mapServerMessage(message, connection.provider, connection.inputTranscription) {
 				if !yield(event, nil) {
 					return
 				}
@@ -572,13 +598,15 @@ func (connection *Connection) Close(context.Context) error {
 	return connection.closeErr
 }
 
-func mapServerMessage(message *genai.LiveServerMessage, provider string) []realtime.CodecEvent {
+func mapServerMessage(
+	message *genai.LiveServerMessage, provider string, inputTranscriptionEnabled bool,
+) []realtime.CodecEvent {
 	var events []realtime.CodecEvent
 	if content := message.ServerContent; content != nil {
-		if transcript := content.InterimInputTranscription; transcript != nil {
+		if transcript := content.InterimInputTranscription; inputTranscriptionEnabled && transcript != nil {
 			events = append(events, realtime.InputTranscript{Text: transcript.Text, Cumulative: true})
 		}
-		if transcript := content.InputTranscription; transcript != nil {
+		if transcript := content.InputTranscription; inputTranscriptionEnabled && transcript != nil {
 			events = append(events, realtime.InputTranscript{
 				Text: transcript.Text, Final: transcript.Finished, Cumulative: true,
 			})
@@ -617,6 +645,7 @@ func mapServerMessage(message *genai.LiveServerMessage, provider string) []realt
 		if content.Interrupted || content.TurnComplete {
 			events = append(events, realtime.ResponseDone{
 				Interrupted:     content.Interrupted,
+				MoreExpected:    content.InteractionStatus == genai.InteractionStatusInProgress && !content.Interrupted,
 				ProviderDetails: map[string]any{"turn_complete_reason": content.TurnCompleteReason},
 			})
 		}
@@ -742,6 +771,17 @@ func thinkingConfig(level ai.ThinkingLevel) *genai.ThinkingConfig {
 		return &genai.ThinkingConfig{ThinkingBudget: ptr(int32(0))}
 	}
 	return &genai.ThinkingConfig{IncludeThoughts: true}
+}
+
+func requiredThinkingConfig(level ai.ThinkingLevel) *genai.ThinkingConfig {
+	resolved := map[ai.ThinkingLevel]genai.ThinkingLevel{
+		ai.ThinkingLevelEnabled: genai.ThinkingLevelMedium, ai.ThinkingLevelMedium: genai.ThinkingLevelMedium,
+		ai.ThinkingLevelHigh: genai.ThinkingLevelHigh, ai.ThinkingLevelXHigh: genai.ThinkingLevelHigh,
+	}[level]
+	if resolved == "" {
+		resolved = genai.ThinkingLevelLow
+	}
+	return &genai.ThinkingConfig{ThinkingLevel: resolved}
 }
 
 func jsonCompatible(value any) any {

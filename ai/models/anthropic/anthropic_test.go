@@ -2581,10 +2581,12 @@ func TestAnthropicAdvisorTool(t *testing.T) {
 				{"type":"advisor_tool_result","tool_use_id":"advisor-1","content":{"type":"advisor_result","text":"Use four.","stop_reason":"max_tokens"}},
 				{"type":"advisor_tool_result","tool_use_id":"advisor-2","content":{"type":"advisor_redacted_result","encrypted_content":"secret","stop_reason":"end_turn"}},
 				{"type":"advisor_tool_result","tool_use_id":"advisor-3","content":{"type":"advisor_tool_result_error","error_code":"max_uses_exceeded"}}
-			],"usage":{"input_tokens":100,"output_tokens":50,"iterations":[
+			],"usage":{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":3,
+				"cache_creation":{"ephemeral_1h_input_tokens":2},"iterations":[
 				{"type":"message","input_tokens":100,"output_tokens":50},
 				{"type":"advisor_message","input_tokens":500,"output_tokens":200,"cache_creation_input_tokens":10},
-				{"type":"compaction","input_tokens":20,"output_tokens":5}
+				{"type":"compaction","input_tokens":20,"output_tokens":5,"cache_creation_input_tokens":7,
+					"cache_creation":{"ephemeral_1h_input_tokens":5}}
 			]}
 		}`))
 	})
@@ -2617,7 +2619,9 @@ func TestAnthropicAdvisorTool(t *testing.T) {
 		t.Fatalf("unexpected advisor parts: %#v", response.Parts)
 	}
 	usage := response.Usage
-	if usage.InputTokens != 100 || usage.OutputTokens != 50 || usage.Details["message_iterations"] != 1 ||
+	if usage.InputTokens != 130 || usage.CacheWriteTokens != 10 || usage.CacheWrite1HTokens != 7 ||
+		usage.OutputTokens != 55 || usage.Details["ephemeral_1h_input_tokens"] != 2 ||
+		usage.Details["compaction_ephemeral_1h_input_tokens"] != 5 || usage.Details["message_iterations"] != 1 ||
 		usage.Details["advisor_iterations"] != 1 || usage.Details["advisor_input_tokens"] != 500 ||
 		usage.Details["advisor_output_tokens"] != 200 || usage.Details["advisor_cache_creation_input_tokens"] != 10 ||
 		usage.Details["compaction_iterations"] != 1 || usage.Details["compaction_input_tokens"] != 20 {

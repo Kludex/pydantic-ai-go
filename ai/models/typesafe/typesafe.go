@@ -11,10 +11,15 @@ import (
 	"maps"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const defaultBaseURL = "https://api.typesafe.ai"
@@ -22,8 +27,14 @@ const settingsKey = "typesafe_settings"
 
 // Settings combines portable settings with Jev decision thresholds.
 type Settings struct {
-	Common            ai.ModelSettings
-	BooleanThreshold  *float64
+	Common ai.ModelSettings
+	// BooleanThreshold controls the probability required for a true answer.
+	BooleanThreshold *float64
+	// RouteThreshold hands a route below this probability to a fallback model.
+	RouteThreshold *float64
+	// ToolCallThreshold is retained for source compatibility.
+	//
+	// Deprecated: ignored; use RouteThreshold.
 	ToolCallThreshold *float64
 }
 
@@ -31,7 +42,7 @@ type Settings struct {
 func (settings Settings) Build() (ai.ModelSettings, error) {
 	common := settings.Common.Clone()
 	for name, value := range map[string]*float64{
-		"boolean threshold": settings.BooleanThreshold, "tool-call threshold": settings.ToolCallThreshold,
+		"boolean threshold": settings.BooleanThreshold, "route threshold": settings.RouteThreshold,
 	} {
 		if value != nil && (*value < 0 || *value > 1) {
 			return ai.ModelSettings{}, fmt.Errorf("typesafe: %s must be between 0 and 1", name)
@@ -44,14 +55,16 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	if _, exists := extra[settingsKey]; exists {
 		return ai.ModelSettings{}, fmt.Errorf("typesafe: extra body field %q is reserved", settingsKey)
 	}
-	extra[settingsKey] = typedSettings{BooleanThreshold: settings.BooleanThreshold, ToolCallThreshold: settings.ToolCallThreshold}
+	extra[settingsKey] = typedSettings{
+		BooleanThreshold: settings.BooleanThreshold, RouteThreshold: settings.RouteThreshold,
+	}
 	common.ExtraBody = extra
 	return common, nil
 }
 
 type typedSettings struct {
-	BooleanThreshold  *float64
-	ToolCallThreshold *float64
+	BooleanThreshold *float64
+	RouteThreshold   *float64
 }
 
 // RequestPreparationFunc prepares a request after provider headers and before per-request headers.
@@ -141,29 +154,75 @@ func NewModel(name string, options ...Option) *Model {
 	return model
 }
 
-func (model *Model) Name() string                           { return model.name }
-func (model *Model) ProviderName() string                   { return model.providerName }
-func (model *Model) ProviderURL() string                    { return model.baseURL }
-func (model *Model) ContextWindow() int                     { return 64_000 }
+func (model *Model) Name() string         { return model.name }
+func (model *Model) ProviderName() string { return model.providerName }
+func (model *Model) ProviderURL() string  { return model.baseURL }
+func (model *Model) ContextWindow() int {
+	return contextwindow.Lookup(model.name, "typesafe", model.baseURL)
+}
 func (model *Model) DefaultModelSettings() ai.ModelSettings { return model.defaultSettings.Clone() }
 
 // ModelProfile reports that Jev produces tool output but cannot generate text.
 func (model *Model) ModelProfile() ai.ModelProfile {
 	unsupported := false
-	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, SupportsTextOutput: &unsupported, ContextWindow: 64_000}
+	return ai.ModelProfile{
+		DefaultOutputMode: ai.OutputModeTool, SupportsTextOutput: &unsupported, ContextWindow: model.ContextWindow(),
+	}
 }
 
-// ToolCallProposed reports a selected route whose arguments Jev cannot express.
+// DecisionHandOff is a route Jev could not safely complete. Fallback models can match this interface.
+type DecisionHandOff interface {
+	error
+	IsModelAPIError() bool
+	DecisionRoute() (route string, probability float64)
+}
+
+// ToolCallProposed reports a selected route whose fields Jev cannot express.
+//
+// Deprecated: use UnfillableRoute.
 type ToolCallProposed struct {
 	ModelName   string
 	ToolName    string
+	Route       string
 	Probability float64
 }
 
 func (err *ToolCallProposed) Error() string {
-	return fmt.Sprintf("Jev proposed calling %q (probability %.2f) but cannot fill its arguments", err.ToolName, err.Probability)
+	route := err.Route
+	if route == "" {
+		route = err.ToolName
+	}
+	return fmt.Sprintf("Jev picked %q (probability %.2f) but cannot fill it", route, err.Probability)
 }
 func (*ToolCallProposed) IsModelAPIError() bool { return true }
+func (err *ToolCallProposed) DecisionRoute() (string, float64) {
+	if err.Route != "" {
+		return err.Route, err.Probability
+	}
+	return err.ToolName, err.Probability
+}
+
+// UnfillableRoute reports a selected route whose fields Jev cannot express.
+type UnfillableRoute = ToolCallProposed
+
+// UnsureRoute reports a selected route below the configured route threshold.
+type UnsureRoute struct {
+	ModelName     string
+	Route         string
+	Probability   float64
+	Probabilities map[string]float64
+	Threshold     float64
+}
+
+func (err *UnsureRoute) Error() string {
+	return fmt.Sprintf(
+		"Jev picked %q with probability %.2f, below route threshold %.2f", err.Route, err.Probability, err.Threshold,
+	)
+}
+func (*UnsureRoute) IsModelAPIError() bool { return true }
+func (err *UnsureRoute) DecisionRoute() (string, float64) {
+	return err.Route, err.Probability
+}
 
 // APIError reports a non-successful TypeSafe response.
 type APIError struct {
@@ -219,32 +278,108 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 	if err != nil {
 		return nil, err
 	}
-	instructions := params.Instructions
-	var outputQuestions map[string]question
-	var outputFields map[string]map[string]any
-	var outputDefaults map[string]bool
-	if params.OutputTool != nil {
-		outputFields, outputDefaults, err = schemaFields(params.OutputTool.Schema)
-		if err == nil {
-			outputQuestions, err = buildQuestions(outputFields, params.OutputTool.Description, instructions, "")
-		}
-		if err != nil && len(params.Tools) == 0 {
-			return nil, err
-		}
-	}
-	questions := maps.Clone(outputQuestions)
-	if questions == nil {
-		questions = map[string]question{}
+	type routeShape struct {
+		tool      *ai.ToolDefinition
+		fields    map[string]map[string]any
+		defaults  map[string]bool
+		contexts  map[string][]string
+		questions map[string]question
+		scoped    map[string]string
+		included  bool
+		err       error
 	}
 	available := toolsLeft(messages, params.Tools)
-	routeKey := ""
-	if params.OutputTool != nil && len(available) > 0 {
-		criteria := map[string]any{params.OutputTool.Name: outputPurpose(*params.OutputTool, outputFields, instructions)}
-		for _, tool := range available {
-			criteria[tool.Name] = tool.Description
+	routes := make(map[string]routeShape, len(available)+1)
+	labels := make([]string, 0, len(available)+1)
+	addRoute := func(label string, tool *ai.ToolDefinition, purpose string) {
+		for routes[label].tool != nil {
+			label += " (output)"
 		}
-		routeKey = freeQuestionName(questions, "tool")
-		questions[routeKey] = question{Type: "choice", Instructions: "Which of these does this call for?", Criteria: criteria}
+		fields, defaults, contexts, shapeErr := schemaFields(tool.Schema)
+		var questions map[string]question
+		if shapeErr == nil {
+			questions, shapeErr = buildQuestions(fields, contexts, purpose, params.Instructions, label)
+		}
+		routes[label] = routeShape{
+			tool: tool, fields: fields, defaults: defaults, contexts: contexts, questions: questions, err: shapeErr,
+		}
+		labels = append(labels, label)
+	}
+	if params.OutputTool != nil {
+		label := outputRouteLabel(*params.OutputTool)
+		for slices.ContainsFunc(available, func(tool ai.ToolDefinition) bool { return tool.Name == label }) {
+			label += " (output)"
+		}
+		addRoute(label, params.OutputTool, outputPurpose(*params.OutputTool, nil, params.Instructions))
+	}
+	for index := range available {
+		addRoute(available[index].Name, &available[index], available[index].Description)
+	}
+	if len(routes) == 0 {
+		return nil, fmt.Errorf("typesafe: request has no typed question")
+	}
+	selectedLabel := labels[0]
+	probability := 1.0
+	var routeDetails map[string]any
+	questions := map[string]question{}
+	if len(routes) == 1 {
+		shape := routes[selectedLabel]
+		if shape.err != nil {
+			return nil, shape.err
+		}
+		shape.questions, shape.err = buildQuestions(
+			shape.fields, shape.contexts, shape.tool.Description, params.Instructions, "",
+		)
+		if shape.err != nil {
+			return nil, shape.err
+		}
+		routes[selectedLabel] = shape
+		maps.Copy(questions, shape.questions)
+	} else {
+		criteria := make(map[string]any, len(routes))
+		questionBytes := 0
+		smallestQuestionBytes := 0
+		allFillable := true
+		for _, label := range labels {
+			shape := routes[label]
+			if shape.err != nil {
+				allFillable = false
+				continue
+			}
+			encoded, _ := json.Marshal(shape.questions)
+			questionBytes += len(encoded)
+			if smallestQuestionBytes == 0 || len(encoded) < smallestQuestionBytes {
+				smallestQuestionBytes = len(encoded)
+			}
+		}
+		stateJSON, _ := json.Marshal(state)
+		unpickedBytes := questionBytes
+		if allFillable {
+			unpickedBytes -= smallestQuestionBytes
+		}
+		speculateAll := unpickedBytes/4 <= 260+len(stateJSON)/6 && len(stateJSON)/6+questionBytes/4 <= 16_000
+		for _, label := range labels {
+			shape := routes[label]
+			criteria[label] = outputPurpose(*shape.tool, shape.fields, params.Instructions)
+			if shape.tool != params.OutputTool {
+				criteria[label] = shape.tool.Description
+			}
+			if shape.err == nil && (speculateAll || shape.tool == params.OutputTool) {
+				shape.included = true
+				shape.scoped = make(map[string]string, len(shape.questions))
+				for name, value := range shape.questions {
+					scoped := freeQuestionName(questions, label+"."+name)
+					shape.scoped[name] = scoped
+					questions[scoped] = value
+				}
+				routes[label] = shape
+			}
+		}
+		questions["route"] = question{
+			Type: "choice", Instructions: map[string]any{
+				"question": "Which of these does this call for?", "background": params.Instructions,
+			}, Criteria: criteria,
+		}
 	}
 	if len(questions) == 0 {
 		return nil, fmt.Errorf("typesafe: request has no typed question")
@@ -253,77 +388,75 @@ func (model *Model) Request(ctx context.Context, messages []ai.ModelMessage, par
 	if err != nil {
 		return nil, err
 	}
+	if len(routes) > 1 {
+		choice := response.Answers["route"]
+		selectedLabel = choice.Choice
+		_, ok := routes[selectedLabel]
+		probability, answered := choice.Probabilities[selectedLabel]
+		if !ok || !answered || probability < 0 || probability > 1 {
+			return nil, fmt.Errorf("typesafe: invalid route answer %q", selectedLabel)
+		}
+		if probability < typed.routeThreshold() {
+			return nil, &UnsureRoute{
+				ModelName: model.name, Route: selectedLabel, Probability: probability,
+				Probabilities: maps.Clone(choice.Probabilities), Threshold: typed.routeThreshold(),
+			}
+		}
+		routeDetails = map[string]any{
+			"choice": selectedLabel, "probabilities": maps.Clone(choice.Probabilities), "offered": labels,
+		}
+	}
+	selected := routes[selectedLabel]
+	if selected.err != nil {
+		return nil, &UnfillableRoute{
+			ModelName: model.name, ToolName: selected.tool.Name, Route: selectedLabel, Probability: probability,
+		}
+	}
 	usage := ai.Usage{Requests: 1, InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens}
-	selected := params.OutputTool
-	toolProbability := 1.0
-	var routeDetails map[string]any
-	if routeKey != "" {
-		choice := response.Answers[routeKey]
-		var ok bool
-		toolProbability, ok = choice.Probabilities[choice.Choice]
-		if !ok || toolProbability < 0 || toolProbability > 1 {
-			return nil, fmt.Errorf("typesafe: invalid route answer %q", choice.Choice)
-		}
-		offered := make([]string, len(available))
-		matched := params.OutputTool != nil && choice.Choice == params.OutputTool.Name
-		for index := range available {
-			offered[index] = available[index].Name
-			if available[index].Name == choice.Choice {
-				matched = true
-				if toolProbability >= typed.toolThreshold() {
-					selected = &available[index]
-				}
-			}
-		}
-		if !matched {
-			return nil, fmt.Errorf("typesafe: Jev selected unavailable route %q", choice.Choice)
-		}
-		routeDetails = map[string]any{"choice": choice.Choice, "probabilities": choice.Probabilities, "offered": offered}
-	}
-	fields, defaults, fieldErr := schemaFields(selected.Schema)
-	selectedQuestions, questionErr := buildQuestions(fields, selected.Description, instructions, selected.Name)
-	if fieldErr != nil || questionErr != nil {
-		return nil, &ToolCallProposed{ModelName: model.name, ToolName: selected.Name, Probability: toolProbability}
-	}
 	answers := response.Answers
-	if params.OutputTool == nil || selected.Name != params.OutputTool.Name {
-		if len(selectedQuestions) == 0 {
-			answers = map[string]answer{}
-		} else {
-			response, err = model.call(ctx, state, selectedQuestions, settings)
-			if err != nil {
-				return nil, fmt.Errorf("typesafe: selected %q but failed to fill arguments: %w", selected.Name, err)
-			}
-			usage.Requests++
-			usage.InputTokens += response.Usage.InputTokens
-			usage.OutputTokens += response.Usage.OutputTokens
-			answers = response.Answers
+	if len(routes) > 1 && selected.included {
+		unscoped := make(map[string]answer, len(selected.questions))
+		for name := range selected.questions {
+			unscoped[name] = answers[selected.scoped[name]]
 		}
-		outputFields, outputQuestions, outputDefaults = fields, selectedQuestions, defaults
+		answers = unscoped
+	} else if len(routes) > 1 && len(selected.questions) > 0 {
+		response, err = model.call(ctx, state, selected.questions, settings)
+		if err != nil {
+			return nil, fmt.Errorf("typesafe: selected %q but failed to fill its fields: %w", selectedLabel, err)
+		}
+		usage.Requests++
+		usage.InputTokens += response.Usage.InputTokens
+		usage.OutputTokens += response.Usage.OutputTokens
+		answers = response.Answers
 	}
 	arguments, details, err := decodeAnswers(
-		answers, outputFields, outputQuestions, typed.booleanThreshold(), outputDefaults,
+		answers, selected.fields, selected.questions, typed.booleanThreshold(), selected.defaults,
 	)
 	if err != nil {
 		return nil, err
 	}
 	if routeDetails != nil {
-		details["tool"] = routeDetails
+		details["route"] = routeDetails
 	}
 	if usage.Requests > 1 {
 		details["requests"] = usage.Requests
 	}
 	var output any = arguments
-	if selected.Schema["type"] != "object" && len(arguments) == 1 {
+	if selected.tool.Schema["type"] != "object" && len(arguments) == 1 {
 		if scalar, exists := arguments["response"]; exists {
 			output = scalar
 		}
 	}
 	encoded, _ := json.Marshal(output)
 	return &ai.ModelResponse{
-		Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: selected.Name, ToolCallID: "typesafe-1", Args: encoded, ProviderName: model.providerName}},
-		Usage: usage, ModelName: response.Model, ProviderName: model.providerName, ProviderURL: model.baseURL,
-		ProviderDetails: details, FinishReason: ai.FinishReasonToolCall, State: ai.ModelResponseStateComplete, Timestamp: time.Now().UTC(),
+		Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: selected.tool.Name, ToolCallID: "typesafe-1", Args: encoded, ProviderName: model.providerName,
+		}},
+		Usage:     usage,
+		ModelName: response.Model, ProviderName: model.providerName, ProviderURL: model.baseURL,
+		ProviderDetails: details, FinishReason: ai.FinishReasonToolCall,
+		State: ai.ModelResponseStateComplete, Timestamp: time.Now().UTC(),
 	}, nil
 }
 
@@ -363,7 +496,7 @@ func extractSettings(settings ai.ModelSettings) (ai.ModelSettings, typedSettings
 		}
 		delete(settings.ExtraBody, settingsKey)
 	}
-	for _, threshold := range []*float64{typed.BooleanThreshold, typed.ToolCallThreshold} {
+	for _, threshold := range []*float64{typed.BooleanThreshold, typed.RouteThreshold} {
 		if threshold != nil && (*threshold < 0 || *threshold > 1) {
 			return settings, typed, fmt.Errorf("typesafe: thresholds must be between 0 and 1")
 		}
@@ -376,14 +509,36 @@ func (settings typedSettings) booleanThreshold() float64 {
 	}
 	return .5
 }
-func (settings typedSettings) toolThreshold() float64 {
-	if settings.ToolCallThreshold != nil {
-		return *settings.ToolCallThreshold
+func (settings typedSettings) routeThreshold() float64 {
+	if settings.RouteThreshold != nil {
+		return *settings.RouteThreshold
 	}
-	return .6
+	return 0
 }
 
-func (model *Model) call(ctx context.Context, state any, questions map[string]question, settings ai.ModelSettings) (responseBody, error) {
+func (model *Model) call(
+	ctx context.Context, state any, questions map[string]question, settings ai.ModelSettings,
+) (result responseBody, err error) {
+	tracer := trace.SpanFromContext(ctx).TracerProvider().Tracer("github.com/Kludex/pydantic-ai-go/ai")
+	ctx, span := tracer.Start(ctx, "decide "+model.name, trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(
+		attribute.String("gen_ai.operation.name", "decide"),
+		attribute.String("gen_ai.request.model", model.name),
+		attribute.String("gen_ai.provider.name", model.providerName),
+		attribute.Int("pydantic_ai.decision.question_count", len(questions)),
+	))
+	defer func() {
+		if err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+		} else {
+			span.SetAttributes(
+				attribute.String("gen_ai.response.model", result.Model),
+				attribute.Int("gen_ai.usage.input_tokens", result.Usage.InputTokens),
+				attribute.Int("gen_ai.usage.output_tokens", result.Usage.OutputTokens),
+			)
+		}
+		span.End()
+	}()
 	body, err := json.Marshal(requestBody{State: state, Questions: questions, Model: model.name})
 	if err != nil {
 		return responseBody{}, err
@@ -429,6 +584,16 @@ func (model *Model) call(ctx context.Context, state any, questions map[string]qu
 		return responseBody{}, errors.New("typesafe: response omitted model")
 	}
 	return decoded, nil
+}
+
+func outputRouteLabel(tool ai.ToolDefinition) string {
+	if title, _ := tool.Schema["title"].(string); title != "" {
+		return title
+	}
+	if tool.Name != "" && tool.Name != "final_result" {
+		return strings.TrimPrefix(tool.Name, "final_result_")
+	}
+	return "output"
 }
 
 func outputPurpose(tool ai.ToolDefinition, fields map[string]map[string]any, instructions string) string {

@@ -1072,6 +1072,9 @@ var contextWindows = map[string]map[string]int{
 		"qwen3.8-27b":            1000000,
 		"qwen3.8-max":            1048576,
 	},
+	"typesafe": {
+		"jev-1.13.0": 32000,
+	},
 	"x-ai": {
 		"grok-2-1212":                 32768,
 		"grok-2-vision-1212":          32768,

@@ -4,6 +4,8 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
@@ -86,7 +88,9 @@ func MapEvent(data []byte) ([]realtime.CodecEvent, error) {
 		if message == "" {
 			message = "provider reported an unknown error"
 		}
-		return []realtime.CodecEvent{realtime.SessionError{Err: fmt.Errorf("openai realtime: %s", message)}}, nil
+		events := rejectedInputs(stringValue(details["event_id"]))
+		events = append(events, realtime.SessionError{Err: fmt.Errorf("openai realtime: %s", message), Recoverable: true})
+		return events, nil
 	case "session.created", "session.updated", "rate_limits.updated", "response.output_item.added",
 		"response.output_item.done", "response.content_part.added", "response.content_part.done",
 		"input_audio_buffer.committed", "input_audio_buffer.cleared":
@@ -117,11 +121,29 @@ func mapResponseDone(frame map[string]any) []realtime.CodecEvent {
 		})
 	}
 	status := stringValue(response["status"])
+	statusDetails := object(response["status_details"])
+	providerDetails := map[string]any{"status": status, "status_details": response["status_details"]}
+	if status == "failed" {
+		errorDetails := object(statusDetails["error"])
+		message := stringValue(errorDetails["message"])
+		if message == "" {
+			if len(errorDetails) > 0 {
+				data, _ := json.Marshal(errorDetails)
+				message = string(data)
+			} else {
+				message = "the realtime response failed"
+			}
+		}
+		if len(errorDetails) > 0 {
+			providerDetails["error"] = errorDetails
+		}
+		result = append(result, realtime.SessionError{
+			Err: fmt.Errorf("openai realtime: %s", message), Recoverable: true,
+		})
+	}
 	result = append(result, realtime.ResponseDone{
 		Interrupted: status == "cancelled", ProviderResponseID: responseID, FinishReason: finish,
-		ProviderDetails: map[string]any{
-			"status": status, "status_details": response["status_details"],
-		},
+		ProviderDetails: providerDetails,
 	})
 	return result
 }
@@ -151,8 +173,9 @@ func mapUsage(usage map[string]any) ai.Usage {
 	cached := object(input["cached_tokens_details"])
 	result := ai.Usage{
 		Requests: 1, InputTokens: integer(usage["input_tokens"]), OutputTokens: integer(usage["output_tokens"]),
-		InputAudioTokens: integer(input["audio_tokens"]), CacheReadTokens: integer(input["cached_tokens"]),
-		CacheAudioReadTokens: integer(cached["audio_tokens"]), OutputAudioTokens: integer(output["audio_tokens"]),
+		InputAudioTokens: integer(input["audio_tokens"]), InputImageTokens: integer(input["image_tokens"]),
+		CacheReadTokens: integer(input["cached_tokens"]), CacheAudioReadTokens: integer(cached["audio_tokens"]),
+		CacheImageReadTokens: integer(cached["image_tokens"]), OutputAudioTokens: integer(output["audio_tokens"]),
 		ReasoningTokens: integer(output["reasoning_tokens"]), Details: map[string]int{},
 	}
 	for key, value := range map[string]int{
@@ -185,4 +208,25 @@ func stringValue(value any) string {
 func integer(value any) int {
 	number, _ := value.(float64)
 	return int(number)
+}
+
+func rejectedInputs(eventID string) []realtime.CodecEvent {
+	encodedID, ok := strings.CutPrefix(eventID, "pydantic_ai.")
+	if !ok {
+		return nil
+	}
+	refusal, encoded, ok := strings.Cut(encodedID, ".")
+	if !ok || refusal != "content" && refusal != "response" {
+		return nil
+	}
+	parts := strings.Split(encoded, "-")
+	result := make([]realtime.CodecEvent, 0, len(parts))
+	for _, part := range parts {
+		index, err := strconv.Atoi(part)
+		if err != nil || index < 0 {
+			return nil
+		}
+		result = append(result, realtime.InputRejected{InputIndex: index, Response: refusal == "response"})
+	}
+	return result
 }

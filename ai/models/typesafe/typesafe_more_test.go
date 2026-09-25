@@ -19,8 +19,18 @@ func TestCompositeSchemaAndHistory(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
 			t.Error(err)
 		}
-		if body["state"].(map[string]any)["prompt"] != "latest" {
+		state := body["state"].(map[string]any)
+		if state["text"] != "latest" {
 			t.Errorf("unexpected state: %#v", body["state"])
+		}
+		history := state["history"].([]any)
+		if history[len(history)-1].(map[string]any)["thinking"] != "considered" {
+			t.Errorf("thinking missing from state: %#v", state)
+		}
+		questions := body["questions"].(map[string]any)
+		instructions := questions["nested.flag"].(map[string]any)["instructions"].(map[string]any)
+		if !reflect.DeepEqual(instructions["context"], []any{"nested: Decision details."}) {
+			t.Errorf("nested context missing: %#v", instructions)
 		}
 		_, _ = response.Write([]byte(`{"answers":{
 			"nested.flag":{"type":"noul","noul":0.1},
@@ -36,7 +46,10 @@ func TestCompositeSchemaAndHistory(t *testing.T) {
 	schema := map[string]any{"type": "object", "$defs": map[string]any{
 		"areas": map[string]any{"type": "string", "enum": []any{"a", "b"}},
 	}, "properties": map[string]any{
-		"nested":       map[string]any{"type": "object", "properties": map[string]any{"flag": map[string]any{"type": "boolean", "description": "Flag?"}}},
+		"nested": map[string]any{
+			"type": "object", "description": "Decision details.",
+			"properties": map[string]any{"flag": map[string]any{"type": "boolean", "description": "Flag?"}},
+		},
 		"tags":         map[string]any{"type": "array", "description": "Tags?", "items": map[string]any{"type": "string", "enum": []any{"a", "b"}}},
 		"applies":      map[string]any{"type": "object", "description": "Applies?", "additionalProperties": map[string]any{"type": "boolean"}, "propertyNames": map[string]any{"$ref": "#/$defs/areas"}},
 		"optional":     map[string]any{"description": "Optional?", "anyOf": []any{map[string]any{"type": "string", "enum": []any{"a", "b"}}, map[string]any{"type": "null", "description": "Neither"}}},
@@ -49,7 +62,10 @@ func TestCompositeSchemaAndHistory(t *testing.T) {
 	}}
 	messages := []ai.ModelMessage{
 		ai.ModelRequest{Parts: []ai.RequestPart{ai.SystemPromptPart{Content: "system"}, ai.UserPromptPart{Content: "old"}, ai.ToolReturnPart{ToolName: "tool", Content: "done"}, ai.RetryPromptPart{Content: "retry"}}},
-		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "answer"}, ai.ToolCallPart{ToolName: "tool", Args: []byte(`{}`)}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.TextPart{Content: "answer"}, ai.ToolCallPart{ToolName: "tool", Args: []byte(`{}`)},
+			ai.ThinkingPart{Content: "considered"},
+		}},
 		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{ai.TextContent{Text: "latest"}, ai.CachePoint{}}}}},
 	}
 	response, err := typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client())).Request(
@@ -208,11 +224,7 @@ func TestToolRouting(t *testing.T) {
 			t.Error(err)
 		}
 		requests = append(requests, body)
-		if calls == 1 {
-			_, _ = response.Write([]byte(`{"answers":{"result":{"type":"noul","noul":0.2},"tool":{"type":"choice","choice":"act","confidence":0.9,"probabilities":{"result":0.1,"act":0.9}}},"model":"jev","usage":{}}`))
-		} else {
-			_, _ = response.Write([]byte(`{"answers":{"ok":{"type":"noul","noul":0.9}},"model":"jev","usage":{}}`))
-		}
+		_, _ = response.Write([]byte(`{"answers":{"result.result":{"type":"noul","noul":0.2},"act.ok":{"type":"noul","noul":0.9},"route":{"type":"choice","choice":"act","confidence":0.9,"probabilities":{"result":0.1,"act":0.9}}},"model":"jev","usage":{}}`))
 	}))
 	defer server.Close()
 	model := typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client()))
@@ -220,12 +232,11 @@ func TestToolRouting(t *testing.T) {
 		Instructions: "decide", OutputTool: &ai.ToolDefinition{Name: "result", Description: "Answer", Schema: map[string]any{"type": "object", "properties": map[string]any{"result": map[string]any{"type": "boolean", "description": "Done?"}}}},
 		Tools: []ai.ToolDefinition{{Name: "act", Description: "Act", Schema: map[string]any{"type": "object", "properties": map[string]any{"ok": map[string]any{"type": "boolean", "description": "Proceed?"}}}}},
 	})
-	toolDetails, _ := response.ProviderDetails["tool"].(map[string]any)
-	secondQuestions := requests[1]["questions"].(map[string]any)
-	okInstructions := secondQuestions["ok"].(map[string]any)["instructions"].(map[string]any)
-	if err != nil || calls != 2 || response.Parts[0].(ai.ToolCallPart).ToolName != "act" || response.Usage.Requests != 2 ||
-		response.ProviderDetails["requests"] != 2 || toolDetails["choice"] != "act" ||
-		okInstructions["chosen"] != "act" {
+	routeDetails, _ := response.ProviderDetails["route"].(map[string]any)
+	questions := requests[0]["questions"].(map[string]any)
+	okInstructions := questions["act.ok"].(map[string]any)["instructions"].(map[string]any)
+	if err != nil || calls != 1 || response.Parts[0].(ai.ToolCallPart).ToolName != "act" || response.Usage.Requests != 1 ||
+		routeDetails["choice"] != "act" || !strings.Contains(okInstructions["premise"].(string), "act") {
 		t.Fatalf("unexpected route: %+v calls=%d requests=%#v err=%v", response, calls, requests, err)
 	}
 }
@@ -237,11 +248,11 @@ func TestReturnedToolIsNotOfferedAgain(t *testing.T) {
 			t.Error(err)
 		}
 		questions := body["questions"].(map[string]any)
-		if _, exists := questions["tool"]; exists {
+		if _, exists := questions["route"]; exists {
 			t.Fatalf("returned tool was offered again: %#v", questions)
 		}
-		history := body["state"].(map[string]any)["history"].([]any)
-		toolCall := history[1].(map[string]any)["tool_call"].(map[string]any)
+		done := body["state"].(map[string]any)["done"].([]any)
+		toolCall := done[0].(map[string]any)["tool_call"].(map[string]any)
 		if toolCall["args"].(map[string]any) == nil {
 			t.Fatalf("tool arguments were not preserved as JSON: %#v", toolCall)
 		}
@@ -298,11 +309,11 @@ func TestChoicesDescriptionNamesOutputRoute(t *testing.T) {
 			t.Error(err)
 		}
 		questions := body["questions"].(map[string]any)
-		criteria := questions["tool"].(map[string]any)["criteria"].(map[string]any)
+		criteria := questions["route"].(map[string]any)["criteria"].(map[string]any)
 		if criteria["intent"] != "Triage the ticket." {
 			t.Fatalf("unexpected route description: %#v", criteria)
 		}
-		_, _ = response.Write([]byte(`{"answers":{"response":{"type":"choice","choice":"urgent","confidence":0.9,"probabilities":{"urgent":0.9,"normal":0.1}},"tool":{"type":"choice","choice":"intent","confidence":0.9,"probabilities":{"intent":0.9,"act":0.1}}},"model":"jev","usage":{}}`))
+		_, _ = response.Write([]byte(`{"answers":{"intent.response":{"type":"choice","choice":"urgent","confidence":0.9,"probabilities":{"urgent":0.9,"normal":0.1}},"route":{"type":"choice","choice":"intent","confidence":0.9,"probabilities":{"intent":0.9,"act":0.1}}},"model":"jev","usage":{}}`))
 	}))
 	defer server.Close()
 	model := typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client()))

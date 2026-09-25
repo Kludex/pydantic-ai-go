@@ -266,7 +266,9 @@ type ModelSelectionInfo struct {
 	ModelID string
 	// Step is the one-based logical model request number.
 	Step int
-	// Messages is a detached snapshot before the request.
+	// Prompt is the detached user prompt that started or resumed the run.
+	Prompt UserPromptPart
+	// Messages is a detached snapshot ending with the request being routed.
 	Messages []ModelMessage
 	// Usage is detached usage accumulated before the request.
 	Usage Usage

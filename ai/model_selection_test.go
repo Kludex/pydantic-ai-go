@@ -115,10 +115,12 @@ func TestAgentSelectsModelBeforeEveryRequest(t *testing.T) {
 		t.Fatalf("unexpected adaptive result=%+v contexts=%+v", result, contexts)
 	}
 	if contexts[0].Step != 1 || contexts[0].Model.Name() != defaultModel.Name() || contexts[0].ModelID != "" ||
-		len(contexts[0].Messages) != 0 || contexts[0].Usage.Requests != 0 || contexts[0].Deps.Location != "tenant" {
+		contexts[0].Prompt.Content != "go" || len(contexts[0].Messages) != 1 || contexts[0].Usage.Requests != 0 ||
+		contexts[0].Deps.Location != "tenant" {
 		t.Fatalf("unexpected first selection context: %+v", contexts[0])
 	}
-	if contexts[1].Step != 2 || contexts[1].Model.Name() != "first" || len(contexts[1].Messages) != 2 ||
+	if contexts[1].Step != 2 || contexts[1].Model.Name() != "first" || contexts[1].Prompt.Content != "go" ||
+		len(contexts[1].Messages) != 3 ||
 		contexts[1].Usage.Requests != 1 {
 		t.Fatalf("unexpected second selection context: %+v", contexts[1])
 	}

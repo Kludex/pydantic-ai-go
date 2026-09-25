@@ -95,13 +95,19 @@ func recordResult[Output any](ctx context.Context, result *ai.RunResult[Output])
 	recordMetric(ctx, "pydantic_ai.output_tokens", usage.OutputTokens)
 	recordMetric(ctx, "pydantic_ai.total_tokens", usage.TotalTokens())
 	recordMetric(ctx, "pydantic_ai.cache_write_tokens", usage.CacheWriteTokens)
+	recordMetric(ctx, "pydantic_ai.cache_write_1h_tokens", usage.CacheWrite1HTokens)
 	recordMetric(ctx, "pydantic_ai.cache_read_tokens", usage.CacheReadTokens)
 	recordMetric(ctx, "pydantic_ai.input_audio_tokens", usage.InputAudioTokens)
+	recordMetric(ctx, "pydantic_ai.input_image_tokens", usage.InputImageTokens)
 	recordMetric(ctx, "pydantic_ai.cache_audio_read_tokens", usage.CacheAudioReadTokens)
+	recordMetric(ctx, "pydantic_ai.cache_image_read_tokens", usage.CacheImageReadTokens)
 	recordMetric(ctx, "pydantic_ai.output_audio_tokens", usage.OutputAudioTokens)
 	recordMetric(ctx, "pydantic_ai.reasoning_tokens", usage.ReasoningTokens)
 	recordMetric(ctx, "pydantic_ai.accepted_prediction_tokens", usage.AcceptedPredictionTokens)
 	recordMetric(ctx, "pydantic_ai.rejected_prediction_tokens", usage.RejectedPredictionTokens)
+	if usage.AudioSeconds != 0 {
+		pydanticevals.IncrementMetric(ctx, "pydantic_ai.audio_seconds", usage.AudioSeconds)
+	}
 	if usage.CostUSD != nil {
 		pydanticevals.IncrementMetric(ctx, "pydantic_ai.cost_usd", *usage.CostUSD)
 	}

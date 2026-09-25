@@ -44,6 +44,24 @@ func TestModelResponsePrice(t *testing.T) {
 	}
 }
 
+func TestDurationAndImageUsagePrices(t *testing.T) {
+	audio, err := (ai.ModelResponse{
+		ModelName: "grok-voice-latest", ProviderName: "x-ai", Usage: ai.Usage{AudioSeconds: 2.5},
+	}).Price()
+	if err != nil || audio.TotalPrice <= 0 {
+		t.Fatalf("unexpected audio price: %+v err=%v", audio, err)
+	}
+	image, err := (ai.ModelResponse{
+		ModelName: "gpt-realtime", ProviderName: "openai",
+		Usage: ai.Usage{
+			InputTokens: 1_000, InputImageTokens: 800, CacheReadTokens: 100, CacheImageReadTokens: 100,
+		},
+	}).Price()
+	if err != nil || image.TotalPrice <= 0 {
+		t.Fatalf("unexpected image price: %+v err=%v", image, err)
+	}
+}
+
 func TestNewProviderPrices(t *testing.T) {
 	for _, test := range []struct {
 		provider string

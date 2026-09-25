@@ -261,8 +261,8 @@ func TestTypeSafeRoutingEdges(t *testing.T) {
 	tool := ai.ToolDefinition{Name: "act", Description: "Act.", Schema: map[string]any{"type": "object"}}
 
 	for _, responseBody := range []string{
-		`{"answers":{"tool_":{"type":"choice","choice":"missing","probabilities":{"missing":1}}},"model":"jev","usage":{}}`,
-		`{"answers":{"tool_":{"type":"choice","choice":"act","probabilities":{"act":2}}},"model":"jev","usage":{}}`,
+		`{"answers":{"route":{"type":"choice","choice":"missing","probabilities":{"missing":1}}},"model":"jev","usage":{}}`,
+		`{"answers":{"route":{"type":"choice","choice":"act","probabilities":{"act":2}}},"model":"jev","usage":{}}`,
 	} {
 		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
 			_, _ = response.Write([]byte(responseBody))
@@ -280,11 +280,11 @@ func TestTypeSafeRoutingEdges(t *testing.T) {
 	}
 
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		_, _ = response.Write([]byte(`{"answers":{"tool":{"type":"choice","choice":"act","confidence":1,"probabilities":{"out":0,"act":1}}},"model":"jev","usage":{}}`))
+		_, _ = response.Write([]byte(`{"answers":{"route":{"type":"choice","choice":"act","confidence":1,"probabilities":{"out":0,"act":1}}},"model":"jev","usage":{}}`))
 	}))
 	model := typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client()))
-	toolThreshold := 0.5
-	routeSettings, err := (typesafe.Settings{ToolCallThreshold: &toolThreshold}).Build()
+	routeThreshold := 0.5
+	routeSettings, err := (typesafe.Settings{RouteThreshold: &routeThreshold}).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -294,12 +294,12 @@ func TestTypeSafeRoutingEdges(t *testing.T) {
 	})
 	server.Close()
 	if err != nil || string(response.Parts[0].(ai.ToolCallPart).Args) != `{}` ||
-		response.ProviderDetails["tool"] == nil {
+		response.ProviderDetails["route"] == nil {
 		t.Fatalf("unexpected empty tool route: %#v err=%v", response, err)
 	}
 
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		_, _ = response.Write([]byte(`{"answers":{"value":{"type":"noul","noul":0.9},"tool":{"type":"choice","choice":"act","confidence":1,"probabilities":{"out":0,"act":1}}},"model":"jev","usage":{}}`))
+		_, _ = response.Write([]byte(`{"answers":{"out.value":{"type":"noul","noul":0.9},"route":{"type":"choice","choice":"act","confidence":1,"probabilities":{"out":0,"act":1}}},"model":"jev","usage":{}}`))
 	}))
 	model = typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client()))
 	_, err = model.Request(t.Context(), messages, ai.ModelRequestParams{
@@ -312,23 +312,63 @@ func TestTypeSafeRoutingEdges(t *testing.T) {
 		t.Fatalf("unexpected proposed tool error: %v", err)
 	}
 
-	calls := 0
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
-		calls++
-		if calls == 1 {
-			_, _ = response.Write([]byte(`{"answers":{"value":{"type":"noul","noul":0.9},"tool":{"type":"choice","choice":"act","confidence":1,"probabilities":{"out":0,"act":1}}},"model":"jev","usage":{}}`))
-			return
-		}
-		response.WriteHeader(http.StatusBadGateway)
+		_, _ = response.Write([]byte(`{"answers":{"out.value":{"type":"noul","noul":0.1},"act.argument":{"type":"noul","noul":0.9},"route":{"type":"choice","choice":"act","confidence":1,"probabilities":{"out":0,"act":1}}},"model":"jev","usage":{}}`))
 	}))
 	model = typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client()))
-	_, err = model.Request(t.Context(), messages, ai.ModelRequestParams{
+	response, err = model.Request(t.Context(), messages, ai.ModelRequestParams{
 		OutputTool: &ai.ToolDefinition{Name: "out", Schema: objectSchema("value", map[string]any{"type": "boolean", "description": "Value?"})},
 		Tools:      []ai.ToolDefinition{{Name: "act", Schema: objectSchema("argument", map[string]any{"type": "boolean", "description": "Argument?"})}},
 	})
 	server.Close()
-	if err == nil || !strings.Contains(err.Error(), "failed to fill arguments") {
-		t.Fatalf("unexpected second request error: %v", err)
+	if err != nil || response.Parts[0].(ai.ToolCallPart).ToolName != "act" {
+		t.Fatalf("unexpected speculative route: %#v err=%v", response, err)
+	}
+}
+
+func TestTypeSafeRouteThresholdAndLargeFill(t *testing.T) {
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "judge"}}}}
+	threshold := .8
+	settings, err := (typesafe.Settings{RouteThreshold: &threshold}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"answers":{"route":{"type":"choice","choice":"act","probabilities":{"out":0.3,"act":0.7}}},"model":"jev","usage":{}}`))
+	}))
+	model := typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client()))
+	_, err = model.Request(t.Context(), messages, ai.ModelRequestParams{
+		OutputTool: &ai.ToolDefinition{Name: "out", Description: "Answer", Schema: objectSchema("value", map[string]any{"type": "boolean", "description": "Value?"})},
+		Tools: []ai.ToolDefinition{{Name: "act", Description: "Act", Schema: objectSchema("ok", map[string]any{
+			"type": "boolean", "description": "Proceed?",
+		})}}, Settings: settings,
+	})
+	server.Close()
+	var unsure *typesafe.UnsureRoute
+	if !errors.As(err, &unsure) || unsure.Route != "act" || unsure.Threshold != threshold {
+		t.Fatalf("unexpected unsure route: %v", err)
+	}
+
+	calls := 0
+	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		calls++
+		if calls == 1 {
+			_, _ = response.Write([]byte(`{"answers":{"route":{"type":"choice","choice":"act","probabilities":{"out":0.1,"act":0.9}}},"model":"jev","usage":{"input_tokens":1}}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"answers":{"ok":{"type":"noul","noul":0.9}},"model":"jev","usage":{"input_tokens":2}}`))
+	}))
+	model = typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client()))
+	response, err := model.Request(t.Context(), messages, ai.ModelRequestParams{
+		OutputTool: &ai.ToolDefinition{Name: "out", Description: "Answer", Schema: objectSchema("value", map[string]any{"type": "boolean", "description": "Value?"})},
+		Tools: []ai.ToolDefinition{{Name: "act", Description: "Act", Schema: objectSchema("ok", map[string]any{
+			"type": "boolean", "description": strings.Repeat("Proceed? ", 2_000),
+		})}},
+	})
+	server.Close()
+	if err != nil || calls != 2 || response.Usage.Requests != 2 || response.Usage.InputTokens != 3 ||
+		response.ProviderDetails["requests"] != 2 {
+		t.Fatalf("unexpected large route fill: %#v calls=%d err=%v", response, calls, err)
 	}
 }
 
@@ -440,7 +480,7 @@ func TestTypeSafeHistoryAndRouteFallbacks(t *testing.T) {
 		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
 			t.Error(err)
 		}
-		_, _ = response.Write([]byte(`{"answers":{"value":{"type":"noul","noul":0.9},"tool":{"type":"choice","choice":"out","confidence":1,"probabilities":{"out":1,"act":0}}},"model":"jev","usage":{}}`))
+		_, _ = response.Write([]byte(`{"answers":{"out.value":{"type":"noul","noul":0.9},"route":{"type":"choice","choice":"out","confidence":1,"probabilities":{"out":1,"act":0}}},"model":"jev","usage":{}}`))
 	}))
 	defer server.Close()
 	model = typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client()))
@@ -453,7 +493,7 @@ func TestTypeSafeHistoryAndRouteFallbacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	criteria := requestBody["questions"].(map[string]any)["tool"].(map[string]any)["criteria"].(map[string]any)
+	criteria := requestBody["questions"].(map[string]any)["route"].(map[string]any)["criteria"].(map[string]any)
 	if criteria["out"] != "Structured output" {
 		t.Fatalf("unexpected default output purpose: %#v", criteria)
 	}

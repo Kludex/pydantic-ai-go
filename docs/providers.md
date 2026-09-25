@@ -401,7 +401,7 @@ func main() {
 
 Set `TYPESAFE_API_KEY`. Jev answers typed questions about text. It does not generate text or accept files. Put each question in the output field description. The prompt contains only the text you want Jev to judge.
 
-Use `typesafe.Settings` to change the boolean or tool-call threshold. Both default thresholds preserve TypeSafe's upstream behavior. Pin a versioned Jev model after you calibrate a threshold because the moving aliases can change their probabilities.
+Use `typesafe.Settings` to change the boolean threshold or set a route threshold. Jev takes the likeliest route by default. A route below `RouteThreshold` returns `UnsureRoute`. A route with unsupported fields returns `UnfillableRoute`. Both implement `DecisionHandOff`, so a fallback model can handle only those steps. Pin a versioned Jev model after you calibrate a threshold because the moving aliases can change their probabilities.
 
 Jev supports these output field shapes:
 
@@ -420,7 +420,9 @@ Use `jsonschema:"schema={...}"` or `schemaOverride={...}` to attach descriptions
 
 Fixed-length arrays, collection size limits, stepped numbers, recursive required objects, and other field shapes fail before a request is sent. This prevents Jev from returning data that cannot satisfy the schema.
 
-`NewOutputFunctionAgent` uses the same field mapping. Jev fills the output function arguments before Go calls the function. When Jev selects a function tool, its arguments use a second request. Each question in that request names the selected tool so the route remains explicit.
+`NewOutputFunctionAgent` uses the same field mapping. Jev fills the output function arguments before Go calls the function. Route fields are asked with the route question when the request stays small. Large routes use a second request after selection. Each field question names its route as a premise.
+
+Jev's context window is 32,000 tokens. The value comes from `genai-prices`, so context-window history processors compact before a growing conversation reaches Jev's state limit.
 
 ## Cohere
 

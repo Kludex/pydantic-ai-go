@@ -12,6 +12,8 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/infer"
 	"github.com/Kludex/pydantic-ai-go/ai/models/typesafe"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
 type decision struct {
@@ -45,11 +47,11 @@ func TestModel(t *testing.T) {
 		t.Fatalf("unexpected result=%+v err=%v", result, err)
 	}
 	if request["model"] != "jev-latest" || model.ProviderName() != "typesafe" || model.ProviderURL() != server.URL ||
-		model.ContextWindow() != 64_000 || model.DefaultModelSettings().ExtraHeaders["X-Test"] != "yes" {
+		model.ContextWindow() != 32_000 || model.DefaultModelSettings().ExtraHeaders["X-Test"] != "yes" {
 		t.Fatalf("unexpected model or request: %#v", request)
 	}
 	profile := model.ModelProfile()
-	if profile.SupportsTextOutput == nil || *profile.SupportsTextOutput || profile.ContextWindow != 64_000 {
+	if profile.SupportsTextOutput == nil || *profile.SupportsTextOutput || profile.ContextWindow != 32_000 {
 		t.Fatalf("unexpected profile: %+v", profile)
 	}
 	resolved, err := infer.Model("typesafe:jev-preview", infer.WithProvider("typesafe", func(name string) (ai.Model, error) {
@@ -87,6 +89,45 @@ func TestModelErrors(t *testing.T) {
 	proposed := &typesafe.ToolCallProposed{ModelName: "jev", ToolName: "tool", Probability: .7}
 	if !proposed.IsModelAPIError() || !strings.Contains(proposed.Error(), "tool") {
 		t.Fatal(proposed)
+	}
+	unsure := &typesafe.UnsureRoute{ModelName: "jev", Route: "tool", Probability: .4, Threshold: .5}
+	if !unsure.IsModelAPIError() || !strings.Contains(unsure.Error(), "below") {
+		t.Fatal(unsure)
+	}
+	var handOff typesafe.DecisionHandOff = unsure
+	if route, probability := handOff.DecisionRoute(); route != "tool" || probability != .4 {
+		t.Fatalf("unexpected handoff: %q %g", route, probability)
+	}
+	if route, probability := proposed.DecisionRoute(); route != "tool" || probability != .7 {
+		t.Fatalf("unexpected proposed route: %q %g", route, probability)
+	}
+}
+
+func TestDecisionRequestSpan(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"answers":{"ok":{"type":"noul","noul":0.9}},"model":"jev-1","usage":{"input_tokens":3,"output_tokens":1}}`))
+	}))
+	defer server.Close()
+	exporter := tracetest.NewInMemoryExporter()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	model := ai.NewInstrumentedModel(
+		typesafe.NewModel("jev", typesafe.WithBaseURL(server.URL), typesafe.WithHTTPClient(server.Client())),
+		ai.WithInstrumentationTracerProvider(tracerProvider),
+	)
+	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: "judge"},
+	}}}, ai.ModelRequestParams{OutputTool: &ai.ToolDefinition{Name: "out", Schema: map[string]any{
+		"type": "object", "properties": map[string]any{
+			"ok": map[string]any{"type": "boolean", "description": "Is it okay?"},
+		},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 2 || spans[0].Name != "decide jev" || spans[1].Name != "chat jev" ||
+		spans[0].Parent.SpanID() != spans[1].SpanContext.SpanID() {
+		t.Fatalf("unexpected decision spans: %+v", spans)
 	}
 }
 

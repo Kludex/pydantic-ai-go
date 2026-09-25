@@ -408,8 +408,14 @@ func sessionConfig(
 	if settings.OpenAI.Truncation != nil {
 		config["truncation"] = settings.OpenAI.Truncation
 	}
-	if common.Thinking != "" && profile.SupportsThinking && common.Thinking != ai.ThinkingLevelDisabled {
-		config["reasoning"] = map[string]any{"effort": common.Thinking}
+	if common.Thinking != "" && profile.SupportsThinking {
+		effort := map[ai.ThinkingLevel]string{
+			ai.ThinkingLevelDisabled: "none", ai.ThinkingLevelEnabled: "medium",
+		}[common.Thinking]
+		if effort == "" {
+			effort = string(common.Thinking)
+		}
+		config["reasoning"] = map[string]any{"effort": effort}
 	}
 	return config, nil
 }

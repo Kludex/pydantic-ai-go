@@ -137,12 +137,18 @@ func usageForPricing(usage Usage) genaiprices.Usage {
 	}
 	setPricingUsage(priced, genaiprices.UsageInputTokens, usage.InputTokens)
 	setPricingUsage(priced, genaiprices.UsageCacheWriteTokens, usage.CacheWriteTokens)
+	setPricingUsage(priced, genaiprices.UsageCacheWrite1HTokens, usage.CacheWrite1HTokens)
 	setPricingUsage(priced, genaiprices.UsageCacheReadTokens, usage.CacheReadTokens)
 	setPricingUsage(priced, genaiprices.UsageOutputTokens, usage.OutputTokens)
 	setPricingUsage(priced, genaiprices.UsageInputAudioTokens, usage.InputAudioTokens)
+	setPricingUsage(priced, genaiprices.UsageInputImageTokens, usage.InputImageTokens)
 	setPricingUsage(priced, genaiprices.UsageCacheAudioReadTokens, usage.CacheAudioReadTokens)
+	setPricingUsage(priced, genaiprices.UsageCacheImageReadTokens, usage.CacheImageReadTokens)
 	setPricingUsage(priced, genaiprices.UsageOutputAudioTokens, usage.OutputAudioTokens)
 	setPricingUsage(priced, genaiprices.UsageOutputReasoningTokens, usage.ReasoningTokens)
+	if usage.AudioSeconds != 0 {
+		priced[genaiprices.UsageAudioSeconds] = usage.AudioSeconds
+	}
 	return priced
 }
 

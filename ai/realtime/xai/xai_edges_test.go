@@ -189,8 +189,12 @@ func TestXAIReconnectUsesConversationID(t *testing.T) {
 			"type": "session.created", "event_id": "event", "session": map[string]any{"model": "served"},
 		})
 		_, _, _ = socket.Read(request.Context())
+		conversationID := "conversation"
+		if call == 2 {
+			conversationID = "conversation-2"
+		}
 		_ = writeFrame(request.Context(), socket, map[string]any{
-			"type": "conversation.created", "conversation": map[string]any{"id": "conversation"},
+			"type": "conversation.created", "conversation": map[string]any{"id": conversationID},
 		})
 		_ = writeFrame(request.Context(), socket, map[string]any{"type": "session.updated", "session": map[string]any{}})
 		if call == 1 {
@@ -199,7 +203,11 @@ func TestXAIReconnectUsesConversationID(t *testing.T) {
 		}
 		defer func() { _ = socket.CloseNow() }()
 		_ = writeFrame(request.Context(), socket, map[string]any{
-			"type": "response.done", "response": map[string]any{"status": "completed"},
+			"type": "response.done", "response": map[string]any{
+				"status": "completed", "usage": map[string]any{
+					"input_tokens": 1, "output_tokens": 1, "billable_audio_seconds": 1,
+				},
+			},
 		})
 		<-request.Context().Done()
 	}))
@@ -212,13 +220,20 @@ func TestXAIReconnectUsesConversationID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	billedSeconds := 0.0
 	for event, err := range connection.Events(t.Context()) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		if usage, ok := event.(realtime.SessionUsage); ok {
+			billedSeconds = usage.Usage.AudioSeconds
+		}
 		if _, ok := event.(realtime.ResponseDone); ok {
 			break
 		}
+	}
+	if billedSeconds != 1 {
+		t.Fatalf("new conversation did not reset billed seconds: %g", billedSeconds)
 	}
 	if !<-seenResume {
 		t.Fatal("reconnect omitted conversation ID")

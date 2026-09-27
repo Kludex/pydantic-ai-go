@@ -262,6 +262,41 @@ func TestResponsesWebSearchNativeTool(t *testing.T) {
 	}
 }
 
+func TestResponsesWebSearchBlockedDomains(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{
+			"id":"response","model":"gpt-5","created_at":100,"status":"completed","output":[
+				{"type":"message","id":"message","content":[{"type":"output_text","text":"done"}]}
+			]
+		}`))
+	})
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{BlockedDomains: []string{"spam.example"}}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	filters := body["tools"].([]any)[0].(map[string]any)["filters"].(map[string]any)
+	if filters["blocked_domains"].([]any)[0] != "spam.example" || filters["allowed_domains"] != nil {
+		t.Fatalf("unexpected blocked-only web search filters: %#v", filters)
+	}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{
+			AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"spam.example"},
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	filters = body["tools"].([]any)[0].(map[string]any)["filters"].(map[string]any)
+	if filters["allowed_domains"].([]any)[0] != "go.dev" ||
+		filters["blocked_domains"].([]any)[0] != "spam.example" {
+		t.Fatalf("unexpected combined web search filters: %#v", filters)
+	}
+}
+
 func TestResponsesCodeExecutionNativeTool(t *testing.T) {
 	var body map[string]any
 	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {

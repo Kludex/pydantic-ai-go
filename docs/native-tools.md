@@ -56,7 +56,7 @@ OpenAI Responses omits raw provider annotations by default. Set `Settings.Includ
 | `ExternalWebAccess` | Allow or forbid live web access where supported. `nil` uses the provider default. |
 | `Optional` | Omit the tool instead of failing when the selected provider does not support it. |
 
-Providers support different subsets of these fields. OpenAI Responses sends context size, location, allowed domains, and external web access. Anthropic sends location, allowed and blocked domains, and maximum uses. It selects `web_search_20260209` for models with dynamic filtering and `web_search_20250305` otherwise. Gemini currently sends only the native `googleSearch` declaration. Unsupported portable fields are left out of each request.
+Providers support different subsets of these fields. OpenAI Responses sends context size, location, allowed and blocked domains, and external web access. Anthropic sends location, allowed and blocked domains, and maximum uses. It selects `web_search_20260209` for models with dynamic filtering and `web_search_20250305` otherwise. Gemini currently sends only the native `googleSearch` declaration. Unsupported portable fields are left out of each request.
 
 Gemini 3 can combine provider-native tools with function tools. Earlier Gemini models reject that combination before the HTTP request. Grounded Gemini responses retain complete `grounding_metadata` provider details while exposing search queries and returned web sources through normalized native-tool parts.
 

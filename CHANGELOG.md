@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+### Fixed
+
+- Forward `WebSearchTool.BlockedDomains` to the OpenAI Responses web-search `filters` object instead of dropping it.
+
 ## [0.4.0] - 2026-09-14
 
 ### Added

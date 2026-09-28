@@ -28,6 +28,10 @@ type Usage struct {
 	OutputAudioTokens int `json:"output_audio_tokens,omitempty"`
 	// ReasoningTokens is the reasoning subset of output tokens.
 	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
+	// AudioSeconds is the duration of audio billed for models priced per second
+	// rather than per token (xAI Grok Voice and similar). Reported separately from
+	// token counts so duration-billed calls can price even when token totals are zero.
+	AudioSeconds float64 `json:"audio_seconds,omitempty"`
 	// AcceptedPredictionTokens counts accepted predicted-output tokens.
 	AcceptedPredictionTokens int `json:"accepted_prediction_tokens,omitempty"`
 	// RejectedPredictionTokens counts rejected predicted-output tokens.
@@ -79,6 +83,7 @@ func (u Usage) IsZero() bool {
 	return u.Requests == 0 && u.ToolCalls == 0 && u.InputTokens == 0 && u.CacheWriteTokens == 0 &&
 		u.CacheReadTokens == 0 && u.InputAudioTokens == 0 && u.CacheAudioReadTokens == 0 &&
 		u.OutputTokens == 0 && u.OutputAudioTokens == 0 && u.ReasoningTokens == 0 &&
+		u.AudioSeconds == 0 &&
 		u.AcceptedPredictionTokens == 0 && u.RejectedPredictionTokens == 0 && len(u.Details) == 0 && u.CostUSD == nil
 }
 
@@ -105,6 +110,7 @@ func (u *Usage) Add(other Usage) {
 	u.OutputTokens += other.OutputTokens
 	u.OutputAudioTokens += other.OutputAudioTokens
 	u.ReasoningTokens += other.ReasoningTokens
+	u.AudioSeconds += other.AudioSeconds
 	u.AcceptedPredictionTokens += other.AcceptedPredictionTokens
 	u.RejectedPredictionTokens += other.RejectedPredictionTokens
 	if len(other.Details) > 0 {

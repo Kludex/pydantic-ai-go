@@ -91,7 +91,7 @@ func TestXAIRealtimeSession(t *testing.T) {
 			break
 		}
 	}
-	if session.Usage().Details["billable_audio_seconds"] != 3 || session.Usage().Details["input_grok_tokens"] != 4 {
+	if session.Usage().AudioSeconds != 3 || session.Usage().Details["input_grok_tokens"] != 4 {
 		t.Fatalf("xAI usage details missing: %+v", session.Usage())
 	}
 	_ = session.Close(t.Context())

@@ -337,13 +337,15 @@ func MapEvent(data []byte) ([]realtime.CodecEvent, error) {
 				continue
 			}
 			for key, value := range map[string]int{
-				"input_grok_tokens":      integer(input["grok_tokens"]),
-				"output_grok_tokens":     integer(output["grok_tokens"]),
-				"billable_audio_seconds": integer(usageData["billable_audio_seconds"]),
+				"input_grok_tokens":  integer(input["grok_tokens"]),
+				"output_grok_tokens": integer(output["grok_tokens"]),
 			} {
 				if value != 0 {
 					usage.Usage.Details[key] = value
 				}
+			}
+			if seconds := floatValue(usageData["billable_audio_seconds"]); seconds != 0 {
+				usage.Usage.AudioSeconds = seconds
 			}
 			events[index] = usage
 		}
@@ -465,6 +467,11 @@ func stringValue(value any) string {
 func integer(value any) int {
 	number, _ := value.(float64)
 	return int(number)
+}
+
+func floatValue(value any) float64 {
+	number, _ := value.(float64)
+	return number
 }
 
 var _ realtime.Model = (*Model)(nil)

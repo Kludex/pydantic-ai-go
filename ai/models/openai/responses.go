@@ -548,7 +548,8 @@ type responsesWebSearchLocation struct {
 }
 
 type responsesWebSearchFilters struct {
-	AllowedDomains []string `json:"allowed_domains"`
+	AllowedDomains []string `json:"allowed_domains,omitempty"`
+	BlockedDomains []string `json:"blocked_domains,omitempty"`
 }
 
 func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (responsesTool, bool, error) {
@@ -600,15 +601,18 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 			Region: webSearch.UserLocation.Region, Timezone: webSearch.UserLocation.Timezone,
 		}
 	}
-	if len(webSearch.AllowedDomains) > 0 {
+	if len(webSearch.AllowedDomains) > 0 || len(webSearch.BlockedDomains) > 0 {
 		if providerName == "xai" {
 			tool.AllowedDomains = slices.Clone(webSearch.AllowedDomains)
+			tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
 		} else {
-			tool.Filters = &responsesWebSearchFilters{AllowedDomains: slices.Clone(webSearch.AllowedDomains)}
+			tool.Filters = &responsesWebSearchFilters{
+				AllowedDomains: slices.Clone(webSearch.AllowedDomains),
+				BlockedDomains: slices.Clone(webSearch.BlockedDomains),
+			}
 		}
 	}
 	if providerName == "xai" {
-		tool.ExcludedDomains = slices.Clone(webSearch.BlockedDomains)
 		return tool, true, nil
 	}
 	if webSearch.ExternalWebAccess != nil {

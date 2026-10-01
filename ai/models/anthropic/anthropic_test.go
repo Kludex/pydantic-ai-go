@@ -61,6 +61,71 @@ func TestContextWindow(t *testing.T) {
 	}
 }
 
+func TestDefaultMaxTokensPerModelFamily(t *testing.T) {
+	for name, test := range map[string]struct {
+		model string
+		want  int
+	}{
+		"modern sonnet 4-5": {"claude-sonnet-4-5", 16384},
+		"modern opus 4-5":   {"claude-opus-4-5", 16384},
+		"modern opus 4-6":   {"claude-opus-4-6", 16384},
+		"modern sonnet 4-6": {"claude-sonnet-4-6", 16384},
+		"modern opus 5":     {"claude-opus-5", 16384},
+		"modern haiku 4-5":  {"claude-haiku-4-5", 16384},
+		"modern fable 5":    {"claude-fable-5", 16384},
+		"modern mythos 5":   {"claude-mythos-5", 16384},
+		"legacy sonnet 4":   {"claude-sonnet-4", 4096},
+		"legacy opus 4":     {"claude-opus-4", 4096},
+		"legacy sonnet 4-0": {"claude-sonnet-4-0", 4096},
+		"legacy opus 4-0":   {"claude-opus-4-0", 4096},
+		"legacy sonnet 4-2": {"claude-sonnet-4-2", 4096},
+		"legacy opus 4-2":   {"claude-opus-4-2", 4096},
+		"legacy 3-5 sonnet": {"claude-3-5-sonnet-20241022", 4096},
+		"legacy 3 opus":     {"claude-3-opus-20240229", 4096},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			model := newNamedServer(t, test.model, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+			})
+			if _, err := model.Request(t.Context(), []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}},
+			}, ai.ModelRequestParams{AllowText: true}); err != nil {
+				t.Fatal(err)
+			}
+			if got := body["max_tokens"].(float64); int(got) != test.want {
+				t.Fatalf("model %q default max_tokens = %d, want %d", test.model, int(got), test.want)
+			}
+		})
+	}
+}
+
+func TestDefaultMaxTokensRaisesAboveThinkingBudget(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}},
+	}, ai.ModelRequestParams{
+		AllowText: true,
+		Settings:  ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// claude-sonnet-4-5 with ThinkingLevelHigh budget 16384 → max_tokens must exceed
+	// budget + 4096 = 20480, so the response has room after extended thinking.
+	if got := body["max_tokens"].(float64); int(got) < 16384+4096 {
+		t.Fatalf("modern default did not raise above thinking budget: got %d", int(got))
+	}
+}
+
 func TestAnthropicCountTokens(t *testing.T) {
 	var body map[string]any
 	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
@@ -372,7 +437,7 @@ func TestRequestTextResponse(t *testing.T) {
 	if gotBody["system"] != "be brief" {
 		t.Fatalf("system prompt not sent: %v", gotBody)
 	}
-	if gotBody["max_tokens"].(float64) != 4096 || gotBody["service_tier"] != "standard_only" ||
+	if gotBody["max_tokens"].(float64) != 16384 || gotBody["service_tier"] != "standard_only" ||
 		gotBody["container"] != "test-container" {
 		t.Fatalf("default settings not applied: %v", gotBody)
 	}

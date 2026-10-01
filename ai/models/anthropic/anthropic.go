@@ -20,7 +20,72 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 )
 
-const defaultMaxTokens = 4096
+const (
+	// legacyDefaultMaxTokens keeps the older 4096 default for models that reject
+	// a request when input + max_tokens would exceed their context window. Older
+	// Claude 3 and Claude 4 (without a "-5" suffix) fall here.
+	legacyDefaultMaxTokens = 4096
+	// modernDefaultMaxTokens is the default for Claude Sonnet 4.5 and later
+	// generations that accept a request sized above their context window and
+	// stop at the window boundary.
+	modernDefaultMaxTokens = 16384
+	// minTokensAfterThinkingBudget is the room the default max_tokens leaves
+	// beyond an extended thinking budget, so the model has space to answer.
+	minTokensAfterThinkingBudget = 4096
+)
+
+func anthropicDefaultMaxTokens(modelName string, thinkingBudget int) int {
+	if anthropicModelRejectsMaxTokensBeyondContextWindow(modelName) {
+		return legacyDefaultMaxTokens
+	}
+	return max(modernDefaultMaxTokens, thinkingBudget+minTokensAfterThinkingBudget)
+}
+
+// anthropicModelRejectsMaxTokensBeyondContextWindow reports whether the named
+// model answers a request with a 400 when input + max_tokens would exceed its
+// context window. Claude 3 and Claude Sonnet/Opus 4 (without a "-5" suffix) do;
+// Claude Sonnet/Opus 4.5 and later generations accept the request and stop at
+// the window boundary.
+//
+// Reference: pydantic/pydantic-ai profiles/anthropic.py at the audit pin.
+func anthropicModelRejectsMaxTokensBeyondContextWindow(modelName string) bool {
+	name := anthropicNormalizeBedrockModelID(modelName)
+	switch name {
+	case "claude-opus-4", "claude-sonnet-4":
+		return true
+	}
+	legacyPrefixes := []string{
+		"claude-3-",
+		"claude-3@",
+		"claude-opus-4-0",
+		"claude-opus-4-1",
+		"claude-opus-4-2",
+		"claude-opus-4@",
+		"claude-sonnet-4-0",
+		"claude-sonnet-4-2",
+		"claude-sonnet-4@",
+	}
+	for _, prefix := range legacyPrefixes {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// anthropicNormalizeBedrockModelID extracts the Claude model family from a
+// Bedrock model id (e.g. "us.anthropic.claude-sonnet-4-v1:0" → "claude-sonnet-4").
+// It accepts non-prefix inputs unchanged.
+func anthropicNormalizeBedrockModelID(name string) string {
+	const vendor = ".anthropic."
+	if idx := strings.Index(name, vendor); idx >= 0 {
+		name = name[idx+len(vendor):]
+	}
+	if dash := strings.Index(name, "-v"); dash > 0 {
+		name = name[:dash]
+	}
+	return name
+}
 
 // Model calls the Anthropic Messages API. Create one with NewModel.
 type Model struct {
@@ -1146,7 +1211,11 @@ func (m *Model) buildPayload(
 		req.System = blocks
 	}
 	if req.MaxTokens == 0 {
-		req.MaxTokens = defaultMaxTokens
+		thinkingBudget := 0
+		if thinking != nil && thinking.Type == "enabled" {
+			thinkingBudget = thinking.BudgetTokens
+		}
+		req.MaxTokens = anthropicDefaultMaxTokens(m.name, thinkingBudget)
 	}
 	trimmedMessages, compaction := trimAnthropicCompactionMessages(msgs)
 	var searchTool *ai.ToolDefinition

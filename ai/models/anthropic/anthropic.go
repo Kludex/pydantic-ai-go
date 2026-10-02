@@ -20,7 +20,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 )
 
-const defaultMaxTokens = 4096
+const defaultMaxTokens = 16384
 
 // Model calls the Anthropic Messages API. Create one with NewModel.
 type Model struct {

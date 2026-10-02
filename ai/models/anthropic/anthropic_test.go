@@ -372,7 +372,7 @@ func TestRequestTextResponse(t *testing.T) {
 	if gotBody["system"] != "be brief" {
 		t.Fatalf("system prompt not sent: %v", gotBody)
 	}
-	if gotBody["max_tokens"].(float64) != 4096 || gotBody["service_tier"] != "standard_only" ||
+	if gotBody["max_tokens"].(float64) != 16384 || gotBody["service_tier"] != "standard_only" ||
 		gotBody["container"] != "test-container" {
 		t.Fatalf("default settings not applied: %v", gotBody)
 	}

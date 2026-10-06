@@ -2,7 +2,7 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@f998089a30c03c8df9ed6da98353fa4c225a9770`.
+Audited upstream baseline: `pydantic/pydantic-ai@541592d7cbe5deed3a3204488689c784f1a2e511`.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 
@@ -267,7 +267,7 @@ Status:
 - [x] Compatibility and semantic-versioning policy for public Go APIs, supported Go versions, persisted messages, providers, deprecations, and inspectable errors, plus an unreleased changelog.
 - [x] Public-API benchmarks cover loop overhead, streaming consumption, schema reflection, and eight-way parallel tool execution, with a reproducible `benchstat` comparison guide.
 - [x] Use the tagged `genai-prices` Go `v0.1.6` module release instead of a commit pseudo-version.
-- [x] Audited upstream through `f998089a30c03c8df9ed6da98353fa4c225a9770`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6.
+- [x] Audited upstream through `541592d7cbe5deed3a3204488689c784f1a2e511`. Provider behavior includes DeepSeek, Together, vLLM, GitHub Copilot, OpenAI Codex, Anthropic container and stale-thinking recovery, Bedrock sampling filtering, Azure content filters, OpenAI Responses IDs and terminal finish reasons, Gemini thinking-level snapping, GPT-6 Astra gates, Anthropic web-search usage, and preserved OpenAI Chat text boundaries after tool calls. The Google/Cohere embedding error-helper and Google overload commits are implementation-language-only. Background price updates use immutable calculator snapshots from `genai-prices` v0.1.6.
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 
@@ -281,6 +281,8 @@ Status:
 - `ba121fcab1` automatic realtime barge-in stands down when interruption is unsupported. Supported models retain playback-aware flushing, truncation, and cancellation.
 - `04c31e937` is implemented through the dedicated OpenAI Codex subscription package, including OAuth, credential rotation, the narrower Responses wire dialect, and model inference.
 - Anthropic token counting retries stale thinking blocks for the current call. Unlike Python's mutable message objects, Go's public model boundary receives value messages and does not mutate caller-owned history to persist count-only recovery state. Generated response metadata preserves recovery across ordinary, serialized, and normalized history.
+- The `541592d7..f998089a` window subsumes `durable_exec/{temporal,dbos,prefect}` runtime ports, the entire `workspaces` subsystem, `_cache_health.py`, `_history_mirroring.py`, `_display.py`, the `_cli` package, `models/decision.py`, `models/typesafe.py`, `models/system_one.py`, `web_fetch` rewrite, expanded `realtime/*` lifecycle, and the `Conversation` API. Each is explicitly documented as Python-only or out of Go scope in `PLAN.md` (graph layer excluded, bundled durable-execution runtimes excluded, on-demand capability loading excluded, harness features excluded), so they advance the pin without code changes and remain tracked in upstream audit notes rather than re-litigated here.
+- Provider-only differences carried into the Go audit include new model name recognition (Claude Sonnet/Opus 5.5, GPT-6.x family variants, gpt-rosalind-research), Anthropic Sonnet 4.5+ default `max_tokens` bump from 4096 to 16384, and Bedrock `temperature`/`top_p` omission for GPT-5.6/GPT-6; these are deferred to the next audit pass when provider cassettes can be re-recorded against the new defaults.
 
 ## Audit status
 

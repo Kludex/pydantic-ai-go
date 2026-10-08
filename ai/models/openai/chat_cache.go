@@ -79,7 +79,9 @@ func addChatMessageCache(message *chatMessage, ttl string, includeTTL bool) {
 		}
 		message.Content = []contentPart{{Type: "text", Text: content, CacheControl: control}}
 	case []contentPart:
-		content[len(content)-1].CacheControl = control
+		if content[len(content)-1].CacheControl == nil {
+			content[len(content)-1].CacheControl = control
+		}
 		message.Content = content
 	}
 }

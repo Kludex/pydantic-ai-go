@@ -116,6 +116,10 @@ func TestXAIMapEvent(t *testing.T) {
 			t.Fatalf("map %s: events=%+v err=%v", frame, events, err)
 		}
 	}
+	terminal, err := xairt.MapEvent([]byte(`{"type":"error","error":{"type":"max_duration","message":"limit"}}`))
+	if err != nil || len(terminal) != 1 || terminal[0].(realtime.SessionError).Recoverable {
+		t.Fatalf("unexpected max-duration event: %+v err=%v", terminal, err)
+	}
 	if _, err := xairt.MapEvent([]byte(`{`)); err == nil {
 		t.Fatal("expected malformed event error")
 	}

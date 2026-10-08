@@ -109,6 +109,8 @@ type ModelResponse struct {
 	Metadata map[string]any
 	// State reports the response lifecycle state.
 	State ModelResponseState
+	// WorkspaceRef records the environment used by this run, for trusted continuation.
+	WorkspaceRef *WorkspaceRef
 
 	pricingAttempted bool
 }

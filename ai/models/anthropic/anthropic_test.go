@@ -302,6 +302,46 @@ func TestServiceTierMapping(t *testing.T) {
 	}
 }
 
+func TestDefaultMaxTokens(t *testing.T) {
+	for _, test := range []struct {
+		model    string
+		settings ai.ModelSettings
+		want     float64
+	}{
+		{model: "claude-sonnet-4-20250514", want: 4096},
+		{model: "claude-sonnet-4", want: 4096},
+		{model: "claude-opus-4", want: 4096},
+		{model: "claude-sonnet-4-20250514", settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+		}, want: 20480},
+		{model: "claude-unknown", want: 16384},
+		{model: "claude-sonnet-4-5", want: 64000},
+		{model: "claude-opus-5", want: 128000},
+	} {
+		t.Run(test.model, func(t *testing.T) {
+			var body map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = response.Write([]byte(`{"content":[{"type":"text","text":"done"}]}`))
+			}))
+			defer server.Close()
+			model := anthropic.NewModel(
+				test.model, anthropic.WithBaseURL(server.URL), anthropic.WithHTTPClient(server.Client()),
+			)
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+				AllowText: true, Settings: test.settings,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			if body["max_tokens"] != test.want {
+				t.Fatalf("max_tokens = %v, want %v", body["max_tokens"], test.want)
+			}
+		})
+	}
+}
+
 func TestExtraBodyRejectsConflictsAndInvalidValues(t *testing.T) {
 	model := anthropic.NewModel("claude")
 	for name, body := range map[string]map[string]any{
@@ -361,7 +401,7 @@ func TestRequestTextResponse(t *testing.T) {
 	if gotBody["system"] != "be brief" {
 		t.Fatalf("system prompt not sent: %v", gotBody)
 	}
-	if gotBody["max_tokens"].(float64) != 4096 || gotBody["service_tier"] != "standard_only" ||
+	if gotBody["max_tokens"].(float64) != 64000 || gotBody["service_tier"] != "standard_only" ||
 		gotBody["container"] != "test-container" {
 		t.Fatalf("default settings not applied: %v", gotBody)
 	}
@@ -1268,11 +1308,11 @@ func TestAnthropicPromptCacheSettings(t *testing.T) {
 		t.Fatalf("unexpected count result: %+v bodies=%d", counted, len(bodies))
 	}
 	for _, body := range bodies {
-		automatic := body["cache_control"].(map[string]any)
+		automatic := body["cache_control"]
 		system := body["system"].([]any)
 		tools := body["tools"].([]any)
 		blocks := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
-		if automatic["ttl"] != "1h" || body["custom"] != true ||
+		if automatic != nil || body["custom"] != true ||
 			system[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" ||
 			system[1].(map[string]any)["cache_control"] != nil ||
 			tools[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
@@ -1280,12 +1320,12 @@ func TestAnthropicPromptCacheSettings(t *testing.T) {
 		}
 		for index, block := range blocks {
 			cache := block.(map[string]any)["cache_control"]
-			if (index == len(blocks)-1) != (cache != nil) {
-				t.Fatalf("automatic cache budget kept wrong message point: %#v", blocks)
+			if (index >= len(blocks)-2) != (cache != nil) {
+				t.Fatalf("explicit cache budget kept wrong message point: %#v", blocks)
 			}
 		}
 	}
-	if duration, ok := ai.ResolvePromptCacheRetention(model, &settings); !ok || duration != time.Hour {
+	if duration, ok := ai.ResolveCacheRetention(model, &settings); !ok || duration != time.Hour {
 		t.Fatalf("unexpected Anthropic cache retention: %s %v", duration, ok)
 	}
 	if duration, ok := model.PromptCacheRetention(ai.ModelSettings{}); ok || duration != 0 {
@@ -1307,7 +1347,7 @@ func TestAnthropicPromptCacheSettings(t *testing.T) {
 	if blocks[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
 		t.Fatalf("message caching replaced an explicit marker: %#v", blocks)
 	}
-	if duration, ok := ai.ResolvePromptCacheRetention(model, &messageSettings); !ok || duration != 5*time.Minute {
+	if duration, ok := ai.ResolveCacheRetention(model, &messageSettings); !ok || duration != 5*time.Minute {
 		t.Fatalf("unexpected message-cache retention: %s %v", duration, ok)
 	}
 }

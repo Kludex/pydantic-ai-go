@@ -63,6 +63,36 @@ func TestRunPlainText(t *testing.T) {
 	}
 }
 
+func TestRunRejectsDuplicateToolCallIDsBeforeExecution(t *testing.T) {
+	for _, callID := range []string{"duplicate", ""} {
+		t.Run(callID, func(t *testing.T) {
+			model := fakes.NewFunctionModel(func(
+				context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{
+					ai.ToolCallPart{ToolName: "first", ToolCallID: callID, Args: json.RawMessage(`{}`)},
+					ai.ToolCallPart{ToolName: "second", ToolCallID: callID, Args: json.RawMessage(`{}`)},
+				}}, nil
+			})
+			agent := ai.NewAgent[deps, string](model)
+			executed := 0
+			ai.AddSimpleTool(agent, "first", func(context.Context, struct{}) (string, error) {
+				executed++
+				return "first", nil
+			})
+			ai.AddSimpleTool(agent, "second", func(context.Context, struct{}) (string, error) {
+				executed++
+				return "second", nil
+			})
+			_, err := agent.Run(t.Context(), "go", deps{})
+			var unexpected *ai.UnexpectedModelBehaviorError
+			if !errors.As(err, &unexpected) || executed != 0 {
+				t.Fatalf("unexpected duplicate call result: executions=%d error=%v", executed, err)
+			}
+		})
+	}
+}
+
 func TestRunCallsTools(t *testing.T) {
 	agent := ai.NewAgent[deps, string](fakes.NewTestModel(),
 		ai.WithInstructions("You are a weather assistant."),

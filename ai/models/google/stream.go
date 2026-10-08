@@ -93,7 +93,7 @@ func (m *Model) eventStream(
 			}
 			var chunk generateResponse
 			if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &chunk); err != nil {
-				yield(nil, fmt.Errorf("google: parse stream chunk: %w", err))
+				yield(nil, ai.NewModelTransportError(ctx, m, "parse stream chunk", err))
 				return
 			}
 			received = true
@@ -103,8 +103,15 @@ func (m *Model) eventStream(
 			if chunk.ModelVersion != "" {
 				modelName = chunk.ModelVersion
 			}
+			chunkUsage := chunk.usage(modelName)
 			if chunk.UsageMetadata.hasTokens() {
-				usage = chunk.UsageMetadata.usage()
+				usage = chunkUsage
+			} else if count, ok := chunkUsage.Details["web_search_requests"]; ok {
+				if usage.Details == nil {
+					usage.Details = map[string]int{}
+				}
+				usage.Details["web_search_requests"] = count
+				usage.Details["web_searches"] = chunkUsage.Details["web_searches"]
 			}
 			if chunk.UsageMetadata.TrafficType != "" {
 				trafficType = chunk.UsageMetadata.TrafficType

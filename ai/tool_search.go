@@ -102,12 +102,13 @@ func WithToolSearch[Deps any](toolset Toolset[Deps], config ToolSearchConfig[Dep
 		retries := *config.MaxRetries
 		config.MaxRetries = &retries
 	}
-	return toolSearchToolset[Deps]{toolset: toolset, config: config}
+	return toolSearchToolset[Deps]{toolset: toolset, config: config, keywords: &keywordToolSearch{}}
 }
 
 type toolSearchToolset[Deps any] struct {
-	toolset Toolset[Deps]
-	config  ToolSearchConfig[Deps]
+	toolset  Toolset[Deps]
+	config   ToolSearchConfig[Deps]
+	keywords *keywordToolSearch
 }
 
 func (toolSearchToolset[Deps]) relaysToolsetInstructions() bool { return true }
@@ -184,7 +185,7 @@ func (t toolSearchToolset[Deps]) searchTool(corpus []ToolDefinition) Tool[Deps] 
 		var names []string
 		var err error
 		if t.config.Search == nil {
-			names = defaultToolSearch(args.Queries, definitions, rc.RevealedTools())
+			names = t.keywords.search(args.Queries, definitions, rc.RevealedTools())
 		} else {
 			names, err = t.config.Search(ctx, rc, slices.Clone(args.Queries), definitions)
 			if err != nil {

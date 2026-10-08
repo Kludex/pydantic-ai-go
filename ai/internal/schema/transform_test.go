@@ -7,6 +7,23 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
+func TestTransformDraft7TupleItems(t *testing.T) {
+	source := map[string]any{"items": []any{map[string]any{"marker": "first"}, true, map[string]any{"marker": "second"}}}
+	var visited []string
+	result := schema.Transform(source, func(node map[string]any) {
+		if marker, ok := node["marker"].(string); ok {
+			visited = append(visited, marker)
+		}
+	})
+	if !reflect.DeepEqual(visited, []string{"first", "second"}) {
+		t.Fatalf("draft-7 tuple items were not visited: %v", visited)
+	}
+	result["items"].([]any)[0].(map[string]any)["new"] = true
+	if source["items"].([]any)[0].(map[string]any)["new"] != nil {
+		t.Fatal("draft-7 tuple items were not cloned")
+	}
+}
+
 func TestTransformVisitsOnlySchemaNodes(t *testing.T) {
 	source := map[string]any{
 		"marker": "root",

@@ -230,6 +230,7 @@ The bundled providers use the same `ai.Model` interface.
 | OpenRouter | `openrouter.NewModel("anthropic/claude-sonnet-4.6")` | `OPENROUTER_API_KEY` |
 | Snowflake Cortex | `snowflake.NewModel("claude-sonnet-4-6")` | `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_TOKEN` |
 | Together AI | `together.NewModel("Qwen/Qwen3-32B")` | `TOGETHER_API_KEY` |
+| [System One decision models](docs/system-one.md) | `systemone.NewModel("clm-latest")` | `SYSTEM_ONE_BASE_URL`, optional `SYSTEM_ONE_API_KEY` |
 | TypeSafe Jev | `typesafe.NewModel("jev-latest")` | `TYPESAFE_API_KEY` |
 | vLLM | `vllm.NewModel("Qwen/Qwen3-32B")` | `VLLM_BASE_URL`, `VLLM_API_KEY` |
 | xAI | `xai.NewModel("grok-4.3")` | `XAI_API_KEY` |
@@ -288,6 +289,7 @@ func TestAgent(t *testing.T) {
 | Address and rewrite instruction blocks | [Stable instruction IDs](docs/instructions.md) |
 | Reuse or combine tools | `NewTool`, `NewFunctionToolset`, and the toolset wrappers |
 | Delegate work to another agent | [`ToolReturn.Usage` and shared dependencies](docs/delegation.md) |
+| Give tools an environment for files and commands | [`Workspace` and `LocalWorkspace`](docs/workspaces.md) |
 | Require approval or external execution | [`WithApprovalRequired` and `DeferredToolResults`](docs/deferred-execution.md) |
 | Connect an MCP server | [`mcp.NewStreamableHTTPToolset`, `Connect`, or `LoadToolsets`](docs/mcp.md) |
 | Expose an agent through MCP | [An official SDK server with a typed agent tool](docs/mcp-server.md) |
@@ -307,6 +309,7 @@ func TestAgent(t *testing.T) {
 | Retry transient provider HTTP failures | [`retries.Transport`](docs/retries.md) |
 | Add fallback models | `NewFallbackModel` |
 | Limit concurrency | `NewConcurrencyLimiter` |
+| Enable portable prompt caching | [`Caching`, retention tiers, and stable-prefix configuration](docs/caching.md) |
 | Add agent middleware | [`Capability` and its focused hook interfaces](docs/capabilities.md) |
 | Wrap one model | [`ModelWrapper` and built-in decorators](docs/model-wrappers.md) |
 | Add OpenTelemetry or send telemetry to Logfire | [`NewInstrumentation` or `NewInstrumentedModel`](docs/observability.md) |

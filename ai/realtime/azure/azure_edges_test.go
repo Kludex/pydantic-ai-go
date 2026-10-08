@@ -28,6 +28,19 @@ type errorReader struct{}
 func (errorReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 func (errorReader) Close() error             { return nil }
 
+func TestAzureRejectsForcedToolChoiceBeforeDial(t *testing.T) {
+	model, err := azurert.NewModel("deployment", azurert.Config{Endpoint: "https://example.com", APIKey: "key"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{
+		ToolChoice: realtime.ToolChoiceRequired,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "required tool choice") {
+		t.Fatalf("unexpected forced tool error: %v", err)
+	}
+}
+
 func TestAzureConfigurationValidation(t *testing.T) {
 	t.Setenv("AZURE_OPENAI_ENDPOINT", "")
 	t.Setenv("AZURE_OPENAI_API_KEY", "")
@@ -116,7 +129,8 @@ func TestAzureSessionSettings(t *testing.T) {
 			name: "voice overrides", model: "gpt-realtime",
 			settings: azurert.Settings{VoiceLive: true, OpenAI: openairt.Settings{Voice: "alloy"}},
 			common: realtime.Settings{
-				OutputModality: realtime.OutputModalityText, MaxTokens: 10, ToolChoice: realtime.ToolChoiceRequired,
+				OutputModality: realtime.OutputModalityText, MaxTokens: 10, ToolChoice: realtime.ToolChoiceAuto,
+				ParallelToolCalls:       ptr(false),
 				InputTranscriptionModel: ptr("auto"),
 				Provider: map[string]any{
 					"azure_voice_live":                true,

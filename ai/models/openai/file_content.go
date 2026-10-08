@@ -130,7 +130,8 @@ func isTextLikeMediaType(mediaType string) bool {
 	mediaType = strings.ToLower(mediaType)
 	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" ||
 		strings.HasSuffix(mediaType, "+json") || mediaType == "application/xml" ||
-		strings.HasSuffix(mediaType, "+xml") || mediaType == "application/x-yaml" || mediaType == "application/yaml"
+		strings.HasSuffix(mediaType, "+xml") || mediaType == "application/x-yaml" ||
+		mediaType == "application/yaml" || mediaType == "application/toml"
 }
 
 func isImageMediaType(mediaType string) bool {

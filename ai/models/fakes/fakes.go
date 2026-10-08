@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
@@ -121,40 +123,62 @@ func calledTools(msgs []ai.ModelMessage) map[string]bool {
 	return called
 }
 
-func argsFromSchema(s map[string]any) json.RawMessage {
+func argsFromSchema(schema map[string]any) json.RawMessage {
 	args := map[string]any{}
-	properties, _ := s["properties"].(map[string]any)
-	for name, prop := range properties {
-		args[name] = valueFromSchema(prop)
+	properties, _ := schema["properties"].(map[string]any)
+	for name, property := range properties {
+		args[name] = valueFromSchema(property, schema, map[string]bool{})
 	}
-	b, _ := json.Marshal(args) // generated values are always marshallable
-	return b
+	data, _ := json.Marshal(args)
+	return data
 }
 
-func valueFromSchema(prop any) any {
-	p, ok := prop.(map[string]any)
+func valueFromSchema(value any, root map[string]any, resolving map[string]bool) any {
+	if allowed, ok := value.(bool); ok {
+		if allowed {
+			return "a"
+		}
+		return nil
+	}
+	schema, ok := value.(map[string]any)
 	if !ok {
 		return "a"
 	}
-	switch enum := p["enum"].(type) {
+	if constant, exists := schema["const"]; exists {
+		return constant
+	}
+	switch values := schema["enum"].(type) {
 	case []string:
-		if len(enum) > 0 {
-			return enum[0]
+		if len(values) > 0 {
+			return values[0]
 		}
 	case []any:
-		if len(enum) > 0 {
-			return enum[0]
+		if len(values) > 0 {
+			return values[0]
 		}
 	}
-	if alternatives, ok := p["anyOf"].([]any); ok && len(alternatives) > 0 {
-		return valueFromSchema(alternatives[0])
+	if ref, _ := schema["$ref"].(string); ref != "" {
+		if resolving[ref] {
+			return map[string]any{}
+		}
+		if resolved := resolveLocalRef(root, ref); resolved != nil {
+			resolving[ref] = true
+			result := valueFromSchema(resolved, root, resolving)
+			delete(resolving, ref)
+			return result
+		}
 	}
-	switch p["type"] {
+	for _, key := range []string{"anyOf", "oneOf"} {
+		if alternatives, ok := schema[key].([]any); ok && len(alternatives) > 0 {
+			return valueFromSchema(alternatives[0], root, resolving)
+		}
+	}
+	switch schema["type"] {
 	case "string":
-		if p["format"] == "date-time" {
+		if schema["format"] == "date-time" {
 			return "2000-01-01T00:00:00Z"
 		}
-		if p["contentEncoding"] == "base64" {
+		if schema["contentEncoding"] == "base64" {
 			return "YQ=="
 		}
 		return "a"
@@ -165,17 +189,76 @@ func valueFromSchema(prop any) any {
 	case "boolean":
 		return false
 	case "array":
-		return []any{}
-	case "object":
-		if nested, ok := p["properties"].(map[string]any); ok {
-			out := map[string]any{}
-			for name, np := range nested {
-				out[name] = valueFromSchema(np)
+		prefix, _ := schema["prefixItems"].([]any)
+		items := schema["items"]
+		if legacy, ok := items.([]any); ok {
+			if len(prefix) == 0 {
+				prefix = legacy
 			}
-			return out
+			items = nil
 		}
-		return map[string]any{}
+		maximum, hasMaximum := schemaLimit(schema["maxItems"])
+		minimum, _ := schemaLimit(schema["minItems"])
+		result := make([]any, 0, len(prefix))
+		for index, item := range prefix {
+			if hasMaximum && float64(index) >= maximum && float64(index) >= minimum {
+				break
+			}
+			result = append(result, valueFromSchema(item, root, resolving))
+		}
+		for float64(len(result)) < minimum {
+			result = append(result, valueFromSchema(items, root, resolving))
+		}
+		if items != nil && len(prefix) == 0 && (!hasMaximum || maximum > 0) && len(result) == 0 {
+			result = append(result, valueFromSchema(items, root, resolving))
+		}
+		return result
+	case "object":
+		result := map[string]any{}
+		if properties, ok := schema["properties"].(map[string]any); ok {
+			for name, property := range properties {
+				result[name] = valueFromSchema(property, root, resolving)
+			}
+		}
+		return result
 	default:
 		return nil
 	}
+}
+
+func schemaLimit(value any) (float64, bool) {
+	switch value := value.(type) {
+	case int:
+		return float64(value), true
+	case float64:
+		return value, true
+	default:
+		return 0, false
+	}
+}
+
+func resolveLocalRef(root map[string]any, ref string) any {
+	if ref == "#" {
+		return root
+	}
+	if !strings.HasPrefix(ref, "#/") {
+		return nil
+	}
+	var current any = root
+	for _, raw := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+		token := strings.ReplaceAll(strings.ReplaceAll(raw, "~1", "/"), "~0", "~")
+		switch value := current.(type) {
+		case map[string]any:
+			current = value[token]
+		case []any:
+			index, err := strconv.Atoi(token)
+			if err != nil || strconv.Itoa(index) != token || index < 0 || index >= len(value) {
+				return nil
+			}
+			current = value[index]
+		default:
+			return nil
+		}
+	}
+	return current
 }

@@ -19,17 +19,34 @@ func cachePointBlock(point ai.CachePoint) (types.ContentBlock, error) {
 
 func providerCachePoint(ttl CacheTTL) types.CachePointBlock {
 	cacheTTL := types.CacheTTLFiveMinutes
+	if ttl == "default" {
+		cacheTTL = ""
+	}
 	if ttl == CacheTTL1Hour {
 		cacheTTL = types.CacheTTLOneHour
 	}
 	return types.CachePointBlock{Type: types.CachePointTypeDefault, Ttl: cacheTTL}
 }
 
-func attachCachePoint(messages []types.Message, point types.ContentBlock) error {
+func attachCachePoint(messages []types.Message, point types.ContentBlock, preserveExisting bool) error {
 	for index := len(messages) - 1; index >= 0; index-- {
 		message := &messages[index]
 		if message.Role != types.ConversationRoleUser || len(message.Content) == 0 {
 			continue
+		}
+		if preserveExisting {
+			end := len(message.Content)
+			for end > 0 {
+				if _, document := message.Content[end-1].(*types.ContentBlockMemberDocument); !document {
+					break
+				}
+				end--
+			}
+			if end > 0 {
+				if _, explicit := message.Content[end-1].(*types.ContentBlockMemberCachePoint); explicit {
+					return nil
+				}
+			}
 		}
 		content, _ := insertCachePoint(message.Content, point, true)
 		message.Content = content

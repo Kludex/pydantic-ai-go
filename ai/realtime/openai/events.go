@@ -27,22 +27,29 @@ func MapEvent(data []byte) ([]realtime.CodecEvent, error) {
 		if err != nil {
 			return nil, fmt.Errorf("openai realtime: decode audio delta: %w", err)
 		}
-		return []realtime.CodecEvent{realtime.AudioDelta{Data: decoded, ItemID: stringValue(frame["item_id"])}}, nil
+		return []realtime.CodecEvent{realtime.AudioDelta{
+			Data: decoded, ResponseID: stringValue(frame["response_id"]), ItemID: stringValue(frame["item_id"]),
+			ContentIndex: integer(frame["content_index"]),
+		}}, nil
 	case "response.output_audio_transcript.delta", "response.audio_transcript.delta":
 		return []realtime.CodecEvent{realtime.OutputTranscript{
-			Text: stringValue(frame["delta"]), ItemID: stringValue(frame["item_id"]),
+			Text: stringValue(frame["delta"]), ResponseID: stringValue(frame["response_id"]),
+			ItemID: stringValue(frame["item_id"]),
 		}}, nil
 	case "response.output_audio_transcript.done", "response.audio_transcript.done":
 		return []realtime.CodecEvent{realtime.OutputTranscript{
-			Text: stringValue(frame["transcript"]), Final: true, ItemID: stringValue(frame["item_id"]),
+			Text: stringValue(frame["transcript"]), Final: true, ResponseID: stringValue(frame["response_id"]),
+			ItemID: stringValue(frame["item_id"]),
 		}}, nil
 	case "response.output_text.delta", "response.text.delta":
 		return []realtime.CodecEvent{realtime.OutputTranscript{
-			Text: stringValue(frame["delta"]), OutputText: true, ItemID: stringValue(frame["item_id"]),
+			Text: stringValue(frame["delta"]), OutputText: true, ResponseID: stringValue(frame["response_id"]),
+			ItemID: stringValue(frame["item_id"]),
 		}}, nil
 	case "response.output_text.done", "response.text.done":
 		return []realtime.CodecEvent{realtime.OutputTranscript{
-			Text: stringValue(frame["text"]), Final: true, OutputText: true, ItemID: stringValue(frame["item_id"]),
+			Text: stringValue(frame["text"]), Final: true, OutputText: true,
+			ResponseID: stringValue(frame["response_id"]), ItemID: stringValue(frame["item_id"]),
 		}}, nil
 	case "conversation.item.input_audio_transcription.delta":
 		return []realtime.CodecEvent{realtime.InputTranscript{
@@ -69,7 +76,8 @@ func MapEvent(data []byte) ([]realtime.CodecEvent, error) {
 	case "response.function_call_arguments.done":
 		return []realtime.CodecEvent{realtime.ToolCall{
 			ToolCallID: stringValue(frame["call_id"]), ToolName: stringValue(frame["name"]),
-			Arguments: stringValue(frame["arguments"]), ItemID: stringValue(frame["item_id"]),
+			ResponseID: stringValue(frame["response_id"]),
+			Arguments:  stringValue(frame["arguments"]), ItemID: stringValue(frame["item_id"]),
 			ResponseUsageFollows: true,
 		}}, nil
 	case "response.done":
@@ -114,6 +122,12 @@ func mapResponseDone(frame map[string]any) []realtime.CodecEvent {
 		}
 	}
 	responseID := stringValue(response["id"])
+	for index, event := range result {
+		if call, ok := event.(realtime.ToolCall); ok {
+			call.ResponseID = responseID
+			result[index] = call
+		}
+	}
 	finish := finishReason(response)
 	if usageData := object(response["usage"]); len(usageData) > 0 {
 		result = append(result, realtime.SessionUsage{

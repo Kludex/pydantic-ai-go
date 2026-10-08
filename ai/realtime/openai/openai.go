@@ -71,13 +71,14 @@ func WithProfile(override realtime.ProfileOverride) Option {
 
 // Model opens OpenAI Realtime sessions.
 type Model struct {
-	name     string
-	apiKey   string
-	baseURL  string
-	client   *http.Client
-	headers  http.Header
-	settings Settings
-	profile  realtime.Profile
+	name         string
+	apiKey       string
+	baseURL      string
+	client       *http.Client
+	headers      http.Header
+	settings     Settings
+	liveSettings LiveSettings
+	profile      realtime.Profile
 }
 
 // NewModel creates an OpenAI Realtime model.
@@ -92,6 +93,7 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsSeedingImages = true
 	profile.SupportsSeedingAudio = true
 	profile.SupportsAsyncToolCalls = true
+	profile.AsyncToolCallMode = realtime.AsyncToolCallsAlways
 	profile.EmitsInputSpeechEvents = true
 	profile.SupportsThinking = supportsThinking(name)
 	profile.ContextWindow = contextwindow.Lookup(name, "openai", defaultBaseURL)
@@ -118,6 +120,9 @@ func (model *Model) Profile() realtime.Profile {
 
 // Connect opens and configures an OpenAI Realtime websocket.
 func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) (realtime.Connection, error) {
+	if err := validateToolChoice(params.Settings.ToolChoice); err != nil {
+		return nil, err
+	}
 	if model.name == "" {
 		return nil, fmt.Errorf("openai realtime: model name must not be empty")
 	}
@@ -393,6 +398,9 @@ func configureSocket(
 func sessionConfig(
 	request ai.ModelRequestParams, common realtime.Settings, settings Settings, profile realtime.Profile,
 ) (map[string]any, error) {
+	if err := validateToolChoice(common.ToolChoice); err != nil {
+		return nil, err
+	}
 	config := map[string]any{
 		"type": "realtime", "instructions": request.Instructions,
 		"output_modalities": []string{string(common.OutputModality)},
@@ -410,7 +418,7 @@ func sessionConfig(
 	if common.ToolChoice != "" {
 		config["tool_choice"] = common.ToolChoice
 	}
-	if len(request.Tools) > 0 {
+	if len(request.Tools) > 0 && common.ToolChoice != realtime.ToolChoiceNone {
 		tools := make([]any, len(request.Tools))
 		for index, tool := range request.Tools {
 			tools[index] = map[string]any{
@@ -489,6 +497,16 @@ func (model *Model) resolveSettings(common realtime.Settings) Settings {
 		settings.Truncation = value
 	}
 	return settings
+}
+
+func validateToolChoice(choice realtime.ToolChoice) error {
+	if choice == realtime.ToolChoiceRequired {
+		return fmt.Errorf("openai realtime: required tool choice is not supported for persistent sessions")
+	}
+	if choice != "" && choice != realtime.ToolChoiceAuto && choice != realtime.ToolChoiceNone {
+		return fmt.Errorf("openai realtime: invalid tool choice %q", choice)
+	}
+	return nil
 }
 
 func portableTurnDetection(settings realtime.TurnDetection) map[string]any {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,6 +20,19 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return function(request)
+}
+
+func TestXAIRejectsForcedToolChoiceBeforeDial(t *testing.T) {
+	model := xairt.NewModel("grok-voice", xairt.WithAPIKey("key"))
+	_, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{
+		ToolChoice: realtime.ToolChoiceRequired,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "required tool choice") {
+		t.Fatalf("unexpected forced tool error: %v", err)
+	}
+	if _, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{ToolChoice: "invalid"}}); err == nil {
+		t.Fatal("accepted invalid tool choice")
+	}
 }
 
 func TestXAISettingsVariants(t *testing.T) {
@@ -40,7 +54,7 @@ func TestXAISettingsVariants(t *testing.T) {
 			_ = writeFrame(ctx, socket, map[string]any{"type": "session.updated", "session": map[string]any{}})
 		})
 		model := xairt.NewModel("grok-voice-latest",
-			xairt.WithAPIKey("key"), xairt.WithBaseURL(server.URL+"/v1"), xairt.WithHTTPClient(server.Client()),
+			xairt.WithAPIKey("key"), xairt.WithBaseURL("ws"+strings.TrimPrefix(server.URL, "http")+"/v1"), xairt.WithHTTPClient(server.Client()),
 		)
 		connection, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: settings})
 		if err != nil {

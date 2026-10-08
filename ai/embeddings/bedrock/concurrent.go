@@ -2,7 +2,6 @@ package bedrock
 
 import (
 	"context"
-	"fmt"
 	"maps"
 
 	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
@@ -45,9 +44,7 @@ func (model *Model) embedConcurrent(
 					ModelID: modelID(model.modelName, settings), Body: body, Headers: maps.Clone(settings.headers),
 				})
 				if err != nil {
-					results <- indexedEmbedding{index: job.index, err: fmt.Errorf(
-						"bedrock embeddings: invoke %q: %w", model.modelName, err,
-					)}
+					results <- indexedEmbedding{index: job.index, err: model.invokeError(ctx, err)}
 					continue
 				}
 				vectors, _, err := model.parseResponse(response.Body)

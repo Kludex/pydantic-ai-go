@@ -8,7 +8,7 @@ import (
 
 // MessageSanitizationOptions controls which values from untrusted message history are retained.
 // The zero value strips system prompts, allows HTTP and HTTPS URLs, resets forced downloads,
-// rejects uploaded-file references, and strips unresolved trailing tool calls.
+// rejects uploaded-file and workspace references, and strips unresolved trailing tool calls.
 type MessageSanitizationOptions struct {
 	// AllowSystemPrompts trusts the client to own the model's highest-priority instructions.
 	AllowSystemPrompts bool
@@ -21,6 +21,8 @@ type MessageSanitizationOptions struct {
 	AllowedFileDownloadModes []FileDownloadMode
 	// AllowUploadedFiles trusts provider-hosted references supplied by the client.
 	AllowUploadedFiles bool
+	// AllowWorkspaceRefs trusts client-supplied environment identities. Defaults to false.
+	AllowWorkspaceRefs bool
 	// ResolvedToolCallIDs retains trailing local calls that the server is resuming in this request.
 	ResolvedToolCallIDs []string
 }
@@ -37,6 +39,8 @@ type MessageSanitizationToolCall struct {
 type MessageSanitizationReport struct {
 	// StrippedSystemPrompts counts removed untrusted system parts.
 	StrippedSystemPrompts int
+	// StrippedWorkspaceRefs counts discarded environment identities.
+	StrippedWorkspaceRefs int
 	// StrippedCompactionParts counts removed durable provider boundaries.
 	StrippedCompactionParts int
 	// DroppedFileURLSchemes lists rejected URL schemes in encounter order.
@@ -51,7 +55,7 @@ type MessageSanitizationReport struct {
 
 // Changed reports whether sanitization changed the supplied history.
 func (report MessageSanitizationReport) Changed() bool {
-	return report.StrippedSystemPrompts > 0 || report.StrippedCompactionParts > 0 ||
+	return report.StrippedSystemPrompts > 0 || report.StrippedWorkspaceRefs > 0 || report.StrippedCompactionParts > 0 ||
 		len(report.DroppedFileURLSchemes) > 0 || len(report.ResetFileDownloadModes) > 0 ||
 		len(report.DroppedUploadedFileProviders) > 0 || len(report.StrippedToolCalls) > 0
 }
@@ -93,18 +97,20 @@ func SanitizeMessages(
 }
 
 type messageSanitizer struct {
-	allowSystemPrompts   bool
-	stripCompactionParts bool
-	allowUploadedFiles   bool
-	allowedSchemes       map[string]struct{}
-	allowedModes         map[FileDownloadMode]struct{}
-	resolvedToolCallIDs  map[string]struct{}
-	strippedSystems      int
-	strippedCompactions  int
-	droppedSchemes       map[string]struct{}
-	resetModes           map[FileDownloadMode]struct{}
-	droppedProviders     map[string]struct{}
-	strippedToolCalls    []MessageSanitizationToolCall
+	allowSystemPrompts    bool
+	stripCompactionParts  bool
+	allowUploadedFiles    bool
+	allowWorkspaceRefs    bool
+	strippedWorkspaceRefs int
+	allowedSchemes        map[string]struct{}
+	allowedModes          map[FileDownloadMode]struct{}
+	resolvedToolCallIDs   map[string]struct{}
+	strippedSystems       int
+	strippedCompactions   int
+	droppedSchemes        map[string]struct{}
+	resetModes            map[FileDownloadMode]struct{}
+	droppedProviders      map[string]struct{}
+	strippedToolCalls     []MessageSanitizationToolCall
 }
 
 func newMessageSanitizer(options MessageSanitizationOptions) (*messageSanitizer, error) {
@@ -114,6 +120,7 @@ func newMessageSanitizer(options MessageSanitizationOptions) (*messageSanitizer,
 	}
 	state := &messageSanitizer{
 		allowSystemPrompts: options.AllowSystemPrompts, stripCompactionParts: options.StripCompactionParts,
+		allowWorkspaceRefs: options.AllowWorkspaceRefs,
 		allowUploadedFiles: options.AllowUploadedFiles, allowedSchemes: make(map[string]struct{}, len(schemes)),
 		allowedModes:        make(map[FileDownloadMode]struct{}, len(options.AllowedFileDownloadModes)),
 		resolvedToolCallIDs: make(map[string]struct{}, len(options.ResolvedToolCallIDs)),

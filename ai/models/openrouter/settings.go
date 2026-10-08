@@ -36,6 +36,8 @@ const (
 	ProviderSortThroughput ProviderSort = "throughput"
 	// ProviderSortLatency prioritizes request latency.
 	ProviderSortLatency ProviderSort = "latency"
+	// ProviderSortExacto prioritizes OpenRouter's quality-oriented provider score.
+	ProviderSortExacto ProviderSort = "exacto"
 )
 
 // Quantization identifies an upstream model's numeric representation.
@@ -58,6 +60,12 @@ const (
 	QuantizationBF16 Quantization = "bf16"
 	// QuantizationFP32 selects 32-bit floating-point weights.
 	QuantizationFP32 Quantization = "fp32"
+	// QuantizationMXFP4 selects microscaling 4-bit floating-point weights.
+	QuantizationMXFP4 Quantization = "mxfp4"
+	// QuantizationNVFP4 selects NVIDIA 4-bit floating-point weights.
+	QuantizationNVFP4 Quantization = "nvfp4"
+	// QuantizationMXFP8 selects microscaling 8-bit floating-point weights.
+	QuantizationMXFP8 Quantization = "mxfp8"
 	// QuantizationUnknown permits providers without reported quantization.
 	QuantizationUnknown Quantization = "unknown"
 )
@@ -308,6 +316,9 @@ func extractCacheSettings(settings ai.ModelSettings) (ai.ModelSettings, map[stri
 			continue
 		}
 		delete(extra, name)
+		if disabled, ok := value.(bool); ok && !disabled {
+			continue
+		}
 		var ttl CacheTTL
 		switch value := value.(type) {
 		case CacheTTL:
@@ -351,14 +362,15 @@ func validateProviderRouting(provider ProviderRouting) error {
 		return fmt.Errorf("openrouter: invalid data collection policy %q", provider.DataCollection)
 	}
 	switch provider.Sort {
-	case "", ProviderSortPrice, ProviderSortThroughput, ProviderSortLatency:
+	case "", ProviderSortPrice, ProviderSortThroughput, ProviderSortLatency, ProviderSortExacto:
 	default:
 		return fmt.Errorf("openrouter: invalid provider sort %q", provider.Sort)
 	}
 	for _, quantization := range provider.Quantizations {
 		switch quantization {
 		case QuantizationInt4, QuantizationInt8, QuantizationFP4, QuantizationFP6, QuantizationFP8,
-			QuantizationFP16, QuantizationBF16, QuantizationFP32, QuantizationUnknown:
+			QuantizationFP16, QuantizationBF16, QuantizationFP32, QuantizationMXFP4, QuantizationNVFP4,
+			QuantizationMXFP8, QuantizationUnknown:
 		default:
 			return fmt.Errorf("openrouter: invalid quantization %q", quantization)
 		}

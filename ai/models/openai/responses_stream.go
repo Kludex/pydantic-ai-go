@@ -163,6 +163,7 @@ func (m *ResponsesModel) responsesEventStream(
 		pendingServerSearchCallIDs := make([]string, 0)
 		textPhases := make(map[string]string)
 		textAnnotations := make(map[string][]map[string]any)
+		textStarted := make(map[string]bool)
 		imageFiles := make(map[string]bool)
 		mcpListReturns := make(map[string]struct{})
 		if seed != nil {
@@ -188,7 +189,7 @@ func (m *ResponsesModel) responsesEventStream(
 			}
 			var event responsesStreamEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				yield(nil, fmt.Errorf("openai: parse Responses stream event: %w", err))
+				yield(nil, ai.NewModelTransportError(ctx, m, "parse Responses stream event", err))
 				return
 			}
 			if event.SequenceNumber != nil {
@@ -207,10 +208,7 @@ func (m *ResponsesModel) responsesEventStream(
 			}
 			if metadataResponse != nil && event.Type != "response.completed" &&
 				event.Type != "response.failed" && event.Type != "response.incomplete" {
-				rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
-					metadataResponse.Status, metadataResponse.IncompleteDetails,
-					metadataResponse.CreatedAt, metadataResponse.Background,
-				)
+				rawFinishReason, providerDetails, timestamp, state := metadataResponse.metadata()
 				if lastSequence != nil {
 					if providerDetails == nil {
 						providerDetails = map[string]any{}
@@ -223,7 +221,7 @@ func (m *ResponsesModel) responsesEventStream(
 				}
 				responseTimestamp = timestamp
 				if !yield(ai.ResponseMetadataEvent{
-					Usage: metadataResponse.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					Usage: metadataResponse.usage(), ModelName: modelName, Timestamp: timestamp,
 					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: metadataResponse.ID,
 					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
@@ -241,8 +239,12 @@ func (m *ResponsesModel) responsesEventStream(
 					refusal = event.Refusal
 				}
 			case "response.output_text.delta":
+				if event.Delta == "" {
+					continue
+				}
 				emittedParts = true
 				partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
+				textStarted[partID] = true
 				providerName := ""
 				if event.ItemID != "" {
 					providerName = m.providerName
@@ -263,6 +265,11 @@ func (m *ResponsesModel) responsesEventStream(
 					textAnnotations[event.ItemID] = append(textAnnotations[event.ItemID], event.Annotation)
 				}
 			case "response.output_text.done":
+				partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
+				if !textStarted[partID] {
+					continue
+				}
+				delete(textStarted, partID)
 				providerDetails := map[string]any{}
 				if annotations := textAnnotations[event.ItemID]; len(annotations) > 0 {
 					providerDetails["annotations"] = annotations
@@ -276,7 +283,6 @@ func (m *ResponsesModel) responsesEventStream(
 				}
 				if len(providerDetails) > 0 {
 					emittedParts = true
-					partID := fmt.Sprintf("output:%d:content:%d:text", event.OutputIndex, event.ContentIndex)
 					if !yield(ai.TextDeltaEvent{
 						PartID: partID, ID: event.ItemID, ProviderName: m.providerName,
 						ProviderDetails: providerDetails,
@@ -631,10 +637,7 @@ func (m *ResponsesModel) responsesEventStream(
 			case "response.completed":
 				mcpTimestamp := responseTimestamp
 				if mcpTimestamp.IsZero() {
-					_, _, mcpTimestamp, _ = responsesMetadata(
-						event.Response.Status, event.Response.IncompleteDetails,
-						event.Response.CreatedAt, event.Response.Background,
-					)
+					_, _, mcpTimestamp, _ = event.Response.metadata()
 				}
 				for _, item := range event.Response.Output {
 					if item.Type != "mcp_list_tools" {
@@ -672,10 +675,7 @@ func (m *ResponsesModel) responsesEventStream(
 				if modelName == "" {
 					modelName = m.name
 				}
-				rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
-					event.Response.Status, event.Response.IncompleteDetails,
-					event.Response.CreatedAt, event.Response.Background,
-				)
+				rawFinishReason, providerDetails, timestamp, state := event.Response.metadata()
 				if hasRefusal {
 					if providerDetails == nil {
 						providerDetails = map[string]any{}
@@ -697,13 +697,24 @@ func (m *ResponsesModel) responsesEventStream(
 					}
 				}
 				yield(ai.FinishEvent{
-					Parts: snapshotParts, Usage: event.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					Parts: snapshotParts, Usage: event.Response.usage(), ModelName: modelName, Timestamp: timestamp,
 					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: event.Response.ID,
 					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
 				}, nil)
 				return
 			case "response.failed", "response.incomplete":
+				if event.Type == "response.failed" {
+					body := "Responses API reported a failed response"
+					if event.Response.Error != nil {
+						body = event.Response.Error.Message
+						if event.Response.Error.Code != "" {
+							body = event.Response.Error.Code + ": " + body
+						}
+					}
+					yield(nil, &APIError{Body: body, ProviderName: m.providerName})
+					return
+				}
 				var snapshotParts []ai.ResponsePart
 				if len(event.Response.Output) > 0 {
 					response, err := modelResponseFromResponses(event.Response, includeRawAnnotations)
@@ -725,10 +736,7 @@ func (m *ResponsesModel) responsesEventStream(
 				if modelName == "" {
 					modelName = m.name
 				}
-				rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
-					event.Response.Status, event.Response.IncompleteDetails,
-					event.Response.CreatedAt, event.Response.Background,
-				)
+				rawFinishReason, providerDetails, timestamp, state := event.Response.metadata()
 				if hasRefusal {
 					if providerDetails == nil {
 						providerDetails = map[string]any{}
@@ -739,14 +747,18 @@ func (m *ResponsesModel) responsesEventStream(
 					snapshotParts = nil
 				}
 				yield(ai.FinishEvent{
-					Parts: snapshotParts, Usage: event.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					Parts: snapshotParts, Usage: event.Response.usage(), ModelName: modelName, Timestamp: timestamp,
 					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: event.Response.ID,
 					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,
 				}, nil)
 				return
 			case "error":
-				yield(nil, fmt.Errorf("openai: Responses stream error %s: %s", event.Error.Code, event.Error.Message))
+				body := event.Error.Message
+				if event.Error.Code != "" {
+					body = event.Error.Code + ": " + body
+				}
+				yield(nil, &APIError{Body: body, ProviderName: m.providerName})
 				return
 			case "response.created", "response.in_progress", "response.queued",
 				"response.content_part.added", "response.content_part.done",
@@ -785,10 +797,7 @@ func (m *ResponsesModel) responsesEventStream(
 					return
 				}
 			}
-			rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
-				latest.Response.Status, latest.Response.IncompleteDetails,
-				latest.Response.CreatedAt, latest.Response.Background,
-			)
+			rawFinishReason, providerDetails, timestamp, state := latest.Response.metadata()
 			if state == ai.ModelResponseStateSuspended {
 				if lastSequence != nil {
 					providerDetails["sequence_number"] = *lastSequence
@@ -798,7 +807,7 @@ func (m *ResponsesModel) responsesEventStream(
 					modelName = m.name
 				}
 				yield(ai.FinishEvent{
-					Parts: snapshotParts, Usage: latest.Response.Usage.usage(), ModelName: modelName, Timestamp: timestamp,
+					Parts: snapshotParts, Usage: latest.Response.usage(), ModelName: modelName, Timestamp: timestamp,
 					ProviderName: m.providerName, ProviderURL: m.baseURL, ProviderDetails: providerDetails,
 					ProviderResponseID: latest.Response.ID,
 					FinishReason:       openAIResponsesFinishReason(rawFinishReason), State: state,

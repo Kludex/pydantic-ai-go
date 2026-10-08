@@ -83,6 +83,7 @@ type responsesMessageConverter struct {
 	phaseSupport              bool
 	promptCacheBreakpoints    bool
 	responsesReasoningContent bool
+	storeDisabled             bool
 }
 
 func (c *responsesMessageConverter) convert(msg ai.ModelMessage) ([]responsesInput, error) {
@@ -166,7 +167,7 @@ func responsesUserContent(
 				continue
 			}
 			if len(content) == 0 {
-				return nil, fmt.Errorf("openai: cache point must follow user content")
+				content = append(content, responsesInputContent{Type: "input_text"})
 			}
 			content[len(content)-1].PromptCacheBreakpoint = &openAIPromptCacheBreakpoint{Mode: "explicit"}
 		case ai.TextContent:
@@ -373,7 +374,7 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				})
 				continue
 			}
-			if part.ToolKind == ai.ToolPartKindImageGeneration && part.ToolCallID != "" {
+			if part.ToolKind == ai.ToolPartKindImageGeneration && part.ToolCallID != "" && !c.storeDisabled {
 				out = append(out, responsesInput{Type: "image_generation_call", ID: part.ToolCallID})
 				continue
 			}

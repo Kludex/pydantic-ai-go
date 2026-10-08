@@ -18,9 +18,10 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
 )
 
-const defaultMaxTokens = 4096
+const defaultMaxTokens = 16384
 
 // Model calls the Anthropic Messages API. Create one with NewModel.
 type Model struct {
@@ -38,10 +39,16 @@ type Model struct {
 
 // ModelProfile reports model behavior and the bundled context window when known.
 func (m *Model) ModelProfile() ai.ModelProfile {
+	tiers := []ai.CacheRetention{ai.CacheRetention5Minutes, ai.CacheRetention1Hour}
+	if m.legacyBedrockClient != nil {
+		tiers = promptcache.BedrockRetentions(m.name)
+	}
 	return ai.ModelProfile{
+		SupportsCache: true, SupportsAutoCache: m.legacyBedrockClient == nil, SupportedCacheRetentions: tiers,
 		DefaultOutputMode:             ai.OutputModeTool,
 		SupportsToolAvailabilityDelta: m.deferredToolSupport,
 		ContextWindow:                 m.contextWindow,
+		DefaultCacheRetention:         5 * time.Minute,
 	}
 }
 
@@ -144,6 +151,10 @@ func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettin
 
 // PromptCacheRetention reports the longest requested Anthropic cache lifetime.
 func (m *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	settings, err := m.translateCache(settings)
+	if err != nil {
+		return 0, false
+	}
 	_, cache, err := extractCacheSettings(settings)
 	if err != nil {
 		return 0, false
@@ -311,7 +322,7 @@ func (m *Model) CountTokens(
 		InputTokens *int `json:"input_tokens"`
 	}
 	if err := json.Unmarshal(data, &counted); err != nil {
-		return ai.Usage{}, fmt.Errorf("anthropic: decode token count response: %w", err)
+		return ai.Usage{}, ai.NewModelTransportError(ctx, m, "decode token count response", err)
 	}
 	if counted.InputTokens == nil {
 		return ai.Usage{}, fmt.Errorf("anthropic: token count response omitted input_tokens")
@@ -390,6 +401,9 @@ type messagesRequest struct {
 	CacheControl         *anthropicPromptCacheControl `json:"cache_control,omitempty"`
 	OutputConfig         *anthropicOutputConfig       `json:"output_config,omitempty"`
 	ExtraBody            map[string]any               `json:"-"`
+	Diagnostics          *struct {
+		PreviousMessageID *string `json:"previous_message_id"`
+	} `json:"diagnostics,omitempty"`
 }
 
 type anthropicOutputConfig struct {
@@ -887,6 +901,34 @@ func anthropicDisallowsSamplingSettings(modelName string) bool {
 	return anthropicDisallowsBudgetThinking(modelName)
 }
 
+func defaultAnthropicMaxTokens(modelName string) int {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
+		"claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return 128000
+		}
+	}
+	for _, prefix := range []string{"claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return 64000
+		}
+	}
+	if modelName == "claude-opus-4" || modelName == "claude-sonnet-4" {
+		return 4096
+	}
+	for _, prefix := range []string{
+		"claude-3", "claude-4-", "claude-opus-4-0", "claude-opus-4-1", "claude-opus-4-2",
+		"claude-opus-4@", "claude-sonnet-4-0", "claude-sonnet-4-2", "claude-sonnet-4@",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return 4096
+		}
+	}
+	return defaultMaxTokens
+}
+
 func anthropicSupportsForcedToolChoice(modelName string) bool {
 	for _, prefix := range []string{"claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5-5"} {
 		if strings.HasPrefix(modelName, prefix) {
@@ -979,7 +1021,11 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
-	settings, cache, err := extractCacheSettings(params.Settings)
+	translated, err := m.translateCache(params.Settings)
+	if err != nil {
+		return nil, err
+	}
+	settings, cache, err := extractCacheSettings(translated)
 	if err != nil {
 		return nil, err
 	}
@@ -1133,6 +1179,22 @@ func (m *Model) buildPayload(
 		CacheControl:         promptCacheControl(cache.Automatic),
 		ExtraBody:            params.Settings.ExtraBody,
 	}
+	if cache.Diagnostics && m.legacyBedrockClient == nil {
+		req.Diagnostics = &struct {
+			PreviousMessageID *string `json:"previous_message_id"`
+		}{}
+		for index := len(msgs) - 1; index >= 0; index-- {
+			response, ok := msgs[index].(ai.ModelResponse)
+			if !ok || response.ProviderName != "anthropic" {
+				continue
+			}
+			if strings.HasPrefix(response.ProviderResponseID, "msg_") {
+				id := response.ProviderResponseID
+				req.Diagnostics.PreviousMessageID = &id
+			}
+			break
+		}
+	}
 	if params.Instructions != "" {
 		req.System = params.Instructions
 	}
@@ -1156,12 +1218,15 @@ func (m *Model) buildPayload(
 		req.System = blocks
 	}
 	if req.MaxTokens == 0 {
-		req.MaxTokens = defaultMaxTokens
+		req.MaxTokens = defaultAnthropicMaxTokens(m.name)
+		if thinking != nil && thinking.Type == "enabled" && thinking.BudgetTokens+4096 > req.MaxTokens {
+			req.MaxTokens = thinking.BudgetTokens + 4096
+		}
 	}
 	trimmedMessages, compaction := trimAnthropicCompactionMessages(msgs)
 	var searchTool *ai.ToolDefinition
 	for _, tool := range params.Tools {
-		if tool.Name == ai.ToolSearchName && tool.ToolKind == ai.ToolPartKindToolSearch {
+		if tool.ToolKind == ai.ToolPartKindToolSearch {
 			definition := tool
 			searchTool = &definition
 			break
@@ -1223,14 +1288,37 @@ func (m *Model) buildPayload(
 		return nil, err
 	}
 	if cache.Messages != "" {
+		if m.legacyBedrockClient != nil {
+			roles := make([]string, len(req.Messages))
+			counts := make([]int, len(req.Messages))
+			for index, message := range req.Messages {
+				roles[index], counts[index] = message.Role, len(message.Content)
+			}
+			if previous := promptcache.PreviousTail(roles, counts); previous >= 0 {
+				addAnthropicMessageCachePoint(req.Messages[:previous+1], cache.Messages)
+			}
+		}
 		addAnthropicMessageCachePoint(req.Messages, cache.Messages)
+	}
+	if len(req.Messages) > 0 {
+		blocks := req.Messages[len(req.Messages)-1].Content
+		for index := len(blocks) - 1; index >= 0; index-- {
+			if blocks[index].CacheControl != nil {
+				req.CacheControl = nil
+				break
+			}
+			switch blocks[index].Type {
+			case "text", "tool_use", "server_tool_use", "image", "tool_result", "document", "tool_addition":
+				index = -1
+			}
+		}
 	}
 	lastFunctionToolIndex := -1
 	for _, tool := range params.Tools {
 		if memoryEnabled && tool.Name == "memory" {
 			continue
 		}
-		if serverToolSearch && tool.Name == ai.ToolSearchName {
+		if serverToolSearch && tool.ToolKind == ai.ToolPartKindToolSearch {
 			continue
 		}
 		if nativeDeferred && tool.DeferLoading {
@@ -1302,7 +1390,7 @@ func (m *Model) buildPayload(
 		}
 		req.OutputConfig.Format = &anthropicOutputFormat{Type: "json_schema", Schema: params.OutputSchema}
 	}
-	return req, limitAnthropicCachePoints(req, cache.Automatic != "")
+	return req, limitAnthropicCachePoints(req, req.CacheControl != nil)
 }
 
 func supportsAnthropicNativeOutput(modelName string) bool {
@@ -1970,6 +2058,7 @@ type messagesResponse struct {
 	Content              []responseContentBlock `json:"content"`
 	Usage                anthropicUsage         `json:"usage"`
 	InputTransformations []map[string]any       `json:"input_transformations"`
+	Diagnostics          map[string]any         `json:"diagnostics"`
 	Container            *struct {
 		ID string `json:"id"`
 	} `json:"container"`
@@ -2085,7 +2174,7 @@ func (u anthropicUsage) usage() ai.Usage {
 func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	var mr messagesResponse
 	if err := json.Unmarshal(data, &mr); err != nil {
-		return nil, fmt.Errorf("anthropic: parse response: %w", err)
+		return nil, &ai.ModelTransportError{ProviderName: "anthropic", Operation: "parse response", Err: err}
 	}
 	providerDetails := map[string]any{}
 	if mr.StopReason != "" {
@@ -2093,6 +2182,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	}
 	if mr.ServiceTier != "" {
 		providerDetails["service_tier"] = mr.ServiceTier
+	}
+	if mr.Diagnostics != nil {
+		providerDetails["cache_diagnostics"] = mr.Diagnostics
 	}
 	if mr.Container != nil && mr.Container.ID != "" {
 		providerDetails["container_id"] = mr.Container.ID

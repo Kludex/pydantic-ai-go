@@ -24,7 +24,9 @@ func (model *Model) parseResponse(
 ) (*embeddings.Result, error) {
 	var response embeddingResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("openai embeddings: decode response: %w", err)
+		return nil, &ai.ModelTransportError{
+			ModelName: model.name, ProviderName: "openai embeddings", Operation: "decode response", Err: err,
+		}
 	}
 	if len(response.Data) != len(inputs) {
 		return nil, fmt.Errorf(

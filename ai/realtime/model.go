@@ -43,6 +43,9 @@ func (err *Error) Unwrap() error { return err.Err }
 type ConnectParams struct {
 	// Messages seeds portable conversation history.
 	Messages []ai.ModelMessage
+	// Conversation carries history, cumulative usage, and identity from prior runs.
+	// It cannot be combined with Messages.
+	Conversation *ai.Conversation
 	// Settings configures the provider session.
 	Settings Settings
 	// Request carries instructions and available tools.
@@ -118,6 +121,20 @@ type WebRTCModel interface {
 func validateConnect(model Model, params ConnectParams) (ConnectParams, Profile, error) {
 	if model == nil || (reflect.ValueOf(model).Kind() == reflect.Pointer && reflect.ValueOf(model).IsNil()) {
 		return ConnectParams{}, Profile{}, fmt.Errorf("realtime: model must not be nil")
+	}
+	if params.Conversation != nil {
+		if len(params.Messages) > 0 {
+			return ConnectParams{}, Profile{}, fmt.Errorf("realtime: conversation cannot be combined with messages")
+		}
+		conversation := *params.Conversation
+		conversation.Messages = (ai.ModelRequestContext{Messages: conversation.Messages}).Clone().Messages
+		conversation.Usage = conversation.Usage.Clone()
+		if conversation.DeferredToolRequests != nil {
+			deferred := conversation.DeferredToolRequests.Clone()
+			conversation.DeferredToolRequests = &deferred
+		}
+		params.Conversation = &conversation
+		params.Messages = conversation.Messages
 	}
 	settings, err := params.Settings.normalized()
 	if err != nil {

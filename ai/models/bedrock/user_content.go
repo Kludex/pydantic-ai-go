@@ -39,7 +39,7 @@ func userContentBlocks(
 			block, err = cachePointBlock(value)
 			if err == nil {
 				if len(blocks) == 0 {
-					err = attachCachePoint(priorMessages, block)
+					err = attachCachePoint(priorMessages, block, false)
 					if err == nil {
 						continue
 					}

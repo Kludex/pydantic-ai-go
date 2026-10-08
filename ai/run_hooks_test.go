@@ -63,7 +63,7 @@ func TestRunLifecycleHooksUseMiddlewareOrder(t *testing.T) {
 	}
 	want := []string{
 		"outer:wrap-before", "inner:wrap-before", "outer:before", "inner:before", "model",
-		"inner:wrap-after", "outer:wrap-after", "inner:after", "outer:after",
+		"inner:after", "outer:after", "inner:wrap-after", "outer:wrap-after",
 	}
 	if !slices.Equal(log, want) {
 		t.Fatalf("unexpected run lifecycle order:\n got %v\nwant %v", log, want)
@@ -149,14 +149,14 @@ func (wrapper *recoveringRunWrapper) WrapRun(
 	return ai.CompletedRunOutcome("wrapper recovered"), nil
 }
 
-func TestRunWrapperRecoversBeforeErrorHooks(t *testing.T) {
+func TestRunWrapperRecoversAfterErrorHooks(t *testing.T) {
 	wrapper := &recoveringRunWrapper{}
 	errorHookCalls := 0
 	errorHook := ai.RunErrorFunc(func(
-		context.Context, *ai.RunInfo, error,
+		_ context.Context, _ *ai.RunInfo, err error,
 	) (ai.RunOutcome, error) {
 		errorHookCalls++
-		return ai.RunOutcome{}, errors.New("must not run")
+		return ai.RunOutcome{}, fmt.Errorf("hook: %w", err)
 	})
 	modelErr := errors.New("model exploded")
 	model := fakes.NewFunctionModel(func(
@@ -167,7 +167,7 @@ func TestRunWrapperRecoversBeforeErrorHooks(t *testing.T) {
 	result, err := ai.NewAgent[deps, string](model, ai.WithCapabilities(wrapper, errorHook)).Run(
 		t.Context(), "go", deps{},
 	)
-	if err != nil || result.Output != "wrapper recovered" || !errors.Is(wrapper.seen, modelErr) || errorHookCalls != 0 {
+	if err != nil || result.Output != "wrapper recovered" || !errors.Is(wrapper.seen, modelErr) || errorHookCalls != 1 {
 		t.Fatalf(
 			"unexpected wrapper recovery result=%+v seen=%v error_hooks=%d err=%v",
 			result, wrapper.seen, errorHookCalls, err,

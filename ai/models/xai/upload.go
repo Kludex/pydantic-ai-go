@@ -125,7 +125,7 @@ func (model *Model) uploadFile(ctx context.Context, data []byte, filename, media
 		} `json:"file"`
 	}
 	if err := json.Unmarshal(encoded, &uploaded); err != nil {
-		return "", fmt.Errorf("xai: decode file upload: %w", err)
+		return "", ai.NewModelTransportError(ctx, model, "decode file upload", err)
 	}
 	if uploaded.ID == "" && uploaded.File != nil {
 		uploaded.ID = uploaded.File.ID

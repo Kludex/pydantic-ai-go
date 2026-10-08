@@ -12,11 +12,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
 )
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
@@ -299,10 +302,15 @@ func (m *Model) Name() string { return m.name }
 
 // ModelProfile returns model behavior and the bundled context window when known.
 func (m *Model) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{
-		DefaultOutputMode: ai.OutputModeTool,
-		ContextWindow:     m.contextWindow,
+	profile := ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, ContextWindow: m.contextWindow}
+	if m.providerName == "openai" && supportsOpenAIPromptCache(m.name) {
+		profile.DefaultCacheRetention = 30 * time.Minute
+		if m.providerName == "openai" {
+			profile.SupportsCache = true
+			profile.SupportedCacheRetentions = []ai.CacheRetention{ai.CacheRetention30Minutes}
+		}
 	}
+	return profile
 }
 
 // ContextWindow returns the bundled context window. Zero means unknown.
@@ -333,11 +341,7 @@ func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettin
 
 // PromptCacheRetention reports extended OpenAI prompt-cache retention.
 func (m *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
-	_, cache, err := extractPromptCacheSettings(settings)
-	if err != nil || cache.Retention != PromptCacheRetention24Hours {
-		return 0, false
-	}
-	return 24 * time.Hour, true
+	return cacheRetention(settings, m.ModelProfile())
 }
 
 // Request implements ai.Model.
@@ -552,7 +556,11 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
-	settings, promptCache, err := extractPromptCacheSettings(params.Settings)
+	translated, err := translateCache(params.Settings, m.ModelProfile())
+	if err != nil {
+		return nil, err
+	}
+	settings, promptCache, err := extractPromptCacheSettings(translated)
 	if err != nil {
 		return nil, err
 	}
@@ -647,7 +655,7 @@ func (m *Model) buildPayload(
 		cache.ExplicitMarkerStyle = ChatPromptCacheMarkerBreakpoint
 	}
 	if params.Instructions != "" {
-		if cache.InstructionsTTL != "" && len(params.InstructionParts) > 0 {
+		if (cache.InstructionsTTL != "" || promptCache.Instructions && supportsOpenAIPromptCache(m.name)) && len(params.InstructionParts) > 0 {
 			firstInstruction := len(req.Messages)
 			lastStaticInstruction := -1
 			hasDynamicInstructions := false
@@ -667,7 +675,7 @@ func (m *Model) buildPayload(
 					cacheIndex = -1
 				}
 			}
-			if cacheIndex >= firstInstruction {
+			if cacheIndex >= firstInstruction && cache.InstructionsTTL != "" {
 				addChatMessageCache(&req.Messages[cacheIndex], cache.InstructionsTTL, cache.IncludeTTL)
 			}
 		} else {
@@ -677,6 +685,7 @@ func (m *Model) buildPayload(
 			}
 		}
 	}
+	instructionCount := len(req.Messages)
 	for _, msg := range msgs {
 		converted, err := m.convertMessage(ctx, msg, cache)
 		if err != nil {
@@ -684,7 +693,78 @@ func (m *Model) buildPayload(
 		}
 		req.Messages = append(req.Messages, converted...)
 	}
+	if promptCache.Instructions && supportsOpenAIPromptCache(m.name) && m.chatSystemPromptRole() != "user" {
+		_, static, eligible := cacheableInstructions(msgs, params)
+		if eligible {
+			standingEnd := instructionCount
+			for standingEnd < len(req.Messages) && req.Messages[standingEnd].Role == m.chatSystemPromptRole() {
+				standingEnd++
+			}
+			standingCount := standingEnd - instructionCount
+			req.Messages = slices.Concat(req.Messages[instructionCount:standingEnd], req.Messages[:instructionCount], req.Messages[standingEnd:])
+			if target := standingCount + static - 1; target >= 0 {
+				message := &req.Messages[target]
+				if content, ok := message.Content.(string); ok {
+					message.Content = []contentPart{{
+						Type: "text", Text: content,
+						PromptCacheBreakpoint: &openAIPromptCacheBreakpoint{Mode: "explicit"},
+					}}
+				}
+			}
+		}
+	}
+	for index := 0; index < len(req.Messages); index++ {
+		content, ok := req.Messages[index].Content.([]contentPart)
+		if req.Messages[index].Role != "user" || !ok || len(content) == 0 ||
+			content[0].Type != "text" || content[0].Text != "" || content[0].PromptCacheBreakpoint == nil {
+			continue
+		}
+		attached := false
+		for previous := index - 1; previous >= 0 && !attached; previous-- {
+			switch body := req.Messages[previous].Content.(type) {
+			case string:
+				if body != "" {
+					req.Messages[previous].Content = []contentPart{{Type: "text", Text: body, PromptCacheBreakpoint: content[0].PromptCacheBreakpoint}}
+					attached = true
+				}
+			case []contentPart:
+				if len(body) > 0 {
+					switch body[len(body)-1].Type {
+					case "text", "image_url", "input_audio", "file":
+						body[len(body)-1].PromptCacheBreakpoint = content[0].PromptCacheBreakpoint
+						attached = true
+					}
+				}
+			}
+		}
+		if !attached {
+			return nil, fmt.Errorf("openai: cache point must follow user content")
+		}
+		if len(content) == 1 {
+			req.Messages = slices.Delete(req.Messages, index, index+1)
+			index--
+		} else {
+			req.Messages[index].Content = content[1:]
+		}
+	}
 	if cache.MessagesTTL != "" && len(req.Messages) > 0 {
+		roles := make([]string, len(req.Messages))
+		counts := make([]int, len(req.Messages))
+		for index, message := range req.Messages {
+			roles[index] = message.Role
+			switch content := message.Content.(type) {
+			case string:
+				if content != "" {
+					counts[index] = 1
+				}
+			case []contentPart:
+				counts[index] = len(content)
+			}
+			counts[index] += len(message.ToolCalls)
+		}
+		if previous := promptcache.PreviousTail(roles, counts); previous >= 0 {
+			addChatMessageCache(&req.Messages[previous], cache.MessagesTTL, cache.IncludeTTL)
+		}
 		addChatMessageCache(&req.Messages[len(req.Messages)-1], cache.MessagesTTL, cache.IncludeTTL)
 	}
 	for _, tool := range params.Tools {
@@ -786,7 +866,7 @@ func openAIThinkingEffortForModel(modelName string, settings *ai.ThinkingSetting
 		return "", err
 	}
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
-	if strings.HasPrefix(modelName, "gpt-6-astra") && effort == "none" {
+	if (strings.HasPrefix(modelName, "gpt-6-astra") || strings.HasPrefix(modelName, "gpt-6.1-sol")) && effort == "none" {
 		return "", nil
 	}
 	if effort == "minimal" && (strings.HasPrefix(modelName, "gpt-5.6") || openAIIsGPT6Model(modelName)) {
@@ -819,7 +899,7 @@ func openAIModelReasoningActive(modelName, effort string) bool {
 }
 
 func openAIIsGPT6Model(modelName string) bool {
-	for _, prefix := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna"} {
+	for _, prefix := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
 		}
@@ -937,8 +1017,20 @@ func convertTool(def ai.ToolDefinition, supportsStrict bool) (chatTool, error) {
 }
 
 type chatError struct {
-	Code    int    `json:"code"`
+	Code    any    `json:"code"`
 	Message string `json:"message"`
+}
+
+func (err *chatError) apiError(providerName string) error {
+	status := 0
+	if code, ok := err.Code.(float64); ok {
+		status = int(code)
+	}
+	body := err.Message
+	if code, ok := err.Code.(string); ok && code != "" {
+		body = code + ": " + body
+	}
+	return &APIError{StatusCode: status, Body: body, ProviderName: providerName}
 }
 
 type chatResponse struct {
@@ -1082,13 +1174,14 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		noCompletion = bytes.Equal(bytes.TrimSpace(envelope.Choices), []byte("null"))
 	}
 	var cr chatResponse
-	if err := json.Unmarshal(data, &cr); err != nil {
-		return nil, fmt.Errorf("openai: parse response: %w", err)
+	if !utf8.Valid(data) {
+		return nil, &APIError{Body: "response is not valid UTF-8", ProviderName: model.providerName}
 	}
-	if model.chatCompatibility.ExtendedMetadata && cr.Error != nil {
-		return nil, &APIError{
-			StatusCode: cr.Error.Code, Body: cr.Error.Message, ProviderName: model.providerName,
-		}
+	if err := json.Unmarshal(data, &cr); err != nil {
+		return nil, &APIError{Body: "decode response: " + err.Error(), ProviderName: model.providerName}
+	}
+	if cr.Error != nil {
+		return nil, cr.Error.apiError(model.providerName)
 	}
 	if len(cr.Choices) == 0 {
 		if noCompletion {
@@ -1296,7 +1389,10 @@ func (model *Model) convertUserPrompt(
 				continue
 			}
 			if len(parts) == 0 {
-				return chatMessage{}, fmt.Errorf("openai: cache point must follow user content")
+				if cache.ExplicitMarkerStyle != ChatPromptCacheMarkerBreakpoint {
+					return chatMessage{}, fmt.Errorf("openai: cache point must follow user content")
+				}
+				parts = append(parts, contentPart{Type: "text"})
 			}
 			switch cache.ExplicitMarkerStyle {
 			case ChatPromptCacheMarkerBreakpoint:
@@ -1422,8 +1518,10 @@ func (model *Model) convertUserPrompt(
 				}
 				parts = append(parts, contentPart{Type: "video_url", VideoURL: &videoURL{URL: location}})
 			default:
-				if _, err := fileExtension(item.MediaType); err != nil {
-					return chatMessage{}, err
+				if !isTextLikeMediaType(item.MediaType) {
+					if _, err := fileExtension(item.MediaType); err != nil {
+						return chatMessage{}, err
+					}
 				}
 				documentPart, err := model.chatDocumentPart(
 					item.Data, location, item.MediaType, item.ResolvedIdentifier(),

@@ -1,5 +1,69 @@
 # Message history
 
+## Carry and store a conversation
+
+```go
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	first, err := agent.Run(context.Background(), "My region is eu-west-1.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	stored, err := json.Marshal(first.Conversation())
+	if err != nil {
+		log.Fatal(err)
+	}
+	var conversation ai.Conversation
+	if err := json.Unmarshal(stored, &conversation); err != nil {
+		log.Fatal(err)
+	}
+	second, err := agent.Run(
+		context.Background(), "Which region did I choose?", struct{}{},
+		ai.WithConversation(conversation),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(second.Usage().Requests) // 2
+}
+```
+
+`Conversation` carries messages, cumulative `Usage`, the conversation ID, and any `DeferredToolRequests`.
+You extract it with `RunResult.Conversation()` and continue it with `WithConversation`.
+The zero value starts a new conversation. Its first run generates an ID.
+
+`Run`, `RunParts`, their streaming variants, and `StartRun` accept the same option.
+For a streamed or manually driven run, extract the bundle from `Result()` after successful completion.
+`Usage()` includes prior spend, so request, token, tool-call, and cost limits apply across turns, even if you trim the messages.
+`WithMessageHistory` still carries only messages and starts usage accounting from zero.
+
+The extracted bundle and the run option are detached snapshots.
+Continuing the same bundle twice creates independent branches without changing its messages or accounting.
+Do not combine `WithConversation` with `WithMessageHistory` or `WithConversationID`, including an explicit empty history.
+The run returns an error rather than choosing one source silently.
+
+JSON uses `MarshalMessages` and `UnmarshalMessages` for the message history.
+You can also store a `Conversation` as a field in your own struct.
+Application-defined metadata and tool returns must be JSON-serializable.
+Treat stored bundles as trusted server state; decoding JSON does not sanitize client-supplied messages or verify usage counters.
+
+A paused bundle retains approval requests, external calls, and their metadata.
+Answer them with `WithDeferredToolResults` alongside `WithConversation`; the bundle does not execute pending work on its own.
+A completed continuation has no deferred requests.
+See [Deferred execution](deferred-execution.md).
+
 ## Enqueue a message during a run
 
 ```go
@@ -93,7 +157,9 @@ func main() {
 
 `SanitizeMessages` removes values that are unsafe to honor from a browser, API request, or other untrusted source.
 The zero-value options strip system prompts and allow only HTTP and HTTPS file URLs.
-They reset forced downloads, drop provider-hosted file references, and remove unresolved local tool calls at the end of history.
+They reset forced downloads, drop provider-hosted file references, strip workspace references, and remove unresolved local tool calls at the end of history.
+Keep [workspace references](workspaces.md) server-side and authorize them before passing `WithRunWorkspaceRef`.
+Set `AllowWorkspaceRefs` only for history you already trust.
 
 The returned messages are detached from the input.
 The report lists every security-sensitive category that changed.
@@ -114,6 +180,32 @@ Retained audio and provider details in `SpeechPart` values are detached as well.
 
 Invalid allowlist values or malformed URLs return an error and no partial history.
 Reject the client request instead of passing the original history to an agent.
+
+## Repair incomplete tool history
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/Kludex/pydantic-ai-go/ai"
+)
+
+func main() {
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ToolCallPart{ToolName: "lookup", ToolCallID: "call-1", Args: []byte(`{}`)},
+	}}}
+	repaired := ai.RepairMessages(history, ai.MessageRepairOptions{})
+	request := repaired[1].(ai.ModelRequest)
+	result := request.Parts[0].(ai.ToolReturnPart)
+	fmt.Println(result.Outcome)
+}
+```
+
+`RepairMessages` returns a detached history. It drops orphaned results, closes dangling calls with interrupted results, and merges adjacent messages. The example prints `interrupted`.
+
+Set `PreserveLastResponse` when the latest response still represents live work that you intend to resolve. Interior dangling calls are still repaired. The helper does not execute tools or recover deferred metadata that was never persisted. Store a `Conversation` when you need approval and external-execution details.
 
 ## Replay realtime speech
 

@@ -179,6 +179,36 @@ func TestChatThinkingSettings(t *testing.T) {
 	}
 }
 
+func TestGPT61SolThinkingProfile(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body = nil
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
+	}))
+	defer server.Close()
+	model := openai.NewModel(
+		"gpt-6.1-sol", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+	)
+	temperature := 0.5
+	for _, test := range []struct {
+		settings ai.ModelSettings
+		effort   any
+	}{
+		{settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal}}, effort: "low"},
+		{settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}},
+		{settings: ai.ModelSettings{}},
+	} {
+		test.settings.Temperature = &temperature
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: test.settings}); err != nil {
+			t.Fatal(err)
+		}
+		if body["reasoning_effort"] != test.effort || body["temperature"] != nil {
+			t.Fatalf("unexpected GPT-6.1 request: %#v", body)
+		}
+	}
+}
+
 func TestExtraBodyRejectsConflictsAndInvalidValues(t *testing.T) {
 	model := openai.NewModel("gpt-5")
 	for name, body := range map[string]map[string]any{
@@ -778,6 +808,7 @@ func TestChatFileContent(t *testing.T) {
 		ai.BinaryContent{Data: []byte("audio"), MediaType: "audio/wav"},
 		ai.BinaryContent{Data: []byte("document"), MediaType: "application/pdf"},
 		ai.BinaryContent{Data: []byte("config"), MediaType: "text/plain", Identifier: "config"},
+		ai.BinaryContent{Data: []byte("name = \"demo\""), MediaType: "application/toml", Identifier: "project"},
 		ai.UploadedFile{FileID: "file-report", ProviderName: "openai", MediaType: "application/pdf"},
 	}}}}}
 	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
@@ -797,7 +828,10 @@ func TestChatFileContent(t *testing.T) {
 		parts[5].(map[string]any)["file"].(map[string]any)["filename"] != "filename.pdf" ||
 		parts[6].(map[string]any)["text"] !=
 			"-----BEGIN FILE id=\"config\" type=\"text/plain\"-----\nconfig\n-----END FILE id=\"config\"-----" ||
-		parts[7].(map[string]any)["file"].(map[string]any)["file_id"] != "file-report" {
+		parts[7].(map[string]any)["text"] !=
+			"-----BEGIN FILE id=\"project\" type=\"application/toml\"-----\nname = \"demo\"\n"+
+				"-----END FILE id=\"project\"-----" ||
+		parts[8].(map[string]any)["file"].(map[string]any)["file_id"] != "file-report" {
 		t.Fatalf("unexpected Chat file content: %#v", parts)
 	}
 }

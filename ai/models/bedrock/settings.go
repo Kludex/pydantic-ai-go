@@ -161,6 +161,9 @@ func extractSettings(settings ai.ModelSettings) (ai.ModelSettings, cacheSettings
 			continue
 		}
 		delete(extra, value.name)
+		if disabled, ok := raw.(bool); ok && !disabled {
+			continue
+		}
 		ttl, ok := raw.(CacheTTL)
 		if !ok {
 			return ai.ModelSettings{}, cacheSettings{}, requestSettings{}, fmt.Errorf(
@@ -192,7 +195,7 @@ func extractSettings(settings ai.ModelSettings) (ai.ModelSettings, cacheSettings
 
 func validateCacheTTL(ttl CacheTTL) error {
 	switch ttl {
-	case CacheTTL5Minutes, CacheTTL1Hour:
+	case CacheTTL5Minutes, CacheTTL1Hour, "default":
 		return nil
 	default:
 		return fmt.Errorf("bedrock: invalid cache TTL %q", ttl)
@@ -206,7 +209,7 @@ func (cache cacheSettings) retention() (time.Duration, bool) {
 		}
 	}
 	for _, ttl := range []CacheTTL{cache.instructions, cache.messages, cache.toolDefinitions} {
-		if ttl == CacheTTL5Minutes {
+		if ttl == CacheTTL5Minutes || ttl == "default" {
 			return 5 * time.Minute, true
 		}
 	}

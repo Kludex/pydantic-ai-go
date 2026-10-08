@@ -110,7 +110,7 @@ func TestLegacyBedrockRequestAndTokenCount(t *testing.T) {
 		t.Fatalf("unexpected response: %#v", response)
 	}
 	if requestBody["model"] != nil || requestBody["anthropic_version"] != "bedrock-2023-05-31" ||
-		requestBody["max_tokens"] != float64(4096) {
+		requestBody["max_tokens"] != float64(16384) {
 		t.Fatalf("unexpected request body: %#v", requestBody)
 	}
 	usage, err := model.CountTokens(context.Background(), nil, ai.ModelRequestParams{})

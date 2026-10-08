@@ -95,7 +95,7 @@ func TestTypedSettingsAndNativeOutput(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if retention, ok := ai.ResolvePromptCacheRetention(model, &settings); !ok || retention != time.Hour {
+	if retention, ok := ai.ResolveCacheRetention(model, &settings); !ok || retention != time.Hour {
 		t.Fatalf("unexpected cache retention: %s %v", retention, ok)
 	}
 

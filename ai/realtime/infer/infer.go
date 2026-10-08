@@ -43,7 +43,12 @@ func Model(name string, options ...Option) (realtime.Model, error) {
 		"azure": func(name string) (realtime.Model, error) {
 			return azurert.NewModel(name, azurert.Config{})
 		},
-		"openai": func(name string) (realtime.Model, error) { return openairt.NewModel(name), nil },
+		"openai": func(name string) (realtime.Model, error) {
+			if strings.HasPrefix(name, "gpt-live-") {
+				return openairt.NewLiveModel(name), nil
+			}
+			return openairt.NewModel(name), nil
+		},
 		"xai":    func(name string) (realtime.Model, error) { return xairt.NewModel(name), nil },
 		"google": func(name string) (realtime.Model, error) { return googlert.NewModel(name), nil },
 		"google-cloud": func(name string) (realtime.Model, error) {

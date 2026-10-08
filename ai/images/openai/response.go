@@ -3,7 +3,6 @@ package openai
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
@@ -40,7 +39,9 @@ type imageResponse struct {
 func (model *Model) parseResponse(prompt string, body []byte) (*images.Result, error) {
 	var response imageResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("openai images: decode response: %w", err)
+		return nil, &ai.ModelTransportError{
+			ModelName: model.name, ProviderName: "openai images", Operation: "decode response", Err: err,
+		}
 	}
 	if len(response.Data) == 0 {
 		return nil, &ai.UnexpectedModelBehaviorError{Message: "OpenAI image response contained no images"}

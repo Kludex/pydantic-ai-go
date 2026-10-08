@@ -96,6 +96,7 @@ type streamEvent struct {
 			ID string `json:"id"`
 		} `json:"container"`
 		InputTransformations []map[string]any `json:"input_transformations"`
+		Diagnostics          map[string]any   `json:"diagnostics"`
 	} `json:"message"`
 	ContentBlock responseContentBlock `json:"content_block"`
 	Delta        struct {
@@ -129,6 +130,7 @@ func (m *Model) eventStream(
 		stopReason := ""
 		containerID := ""
 		var inputTransformations []map[string]any
+		var diagnostics map[string]any
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 		searchCalls := make(map[int]responseContentBlock)
@@ -143,11 +145,12 @@ func (m *Model) eventStream(
 			data = strings.TrimSpace(data)
 			var event streamEvent
 			if err := json.Unmarshal([]byte(data), &event); err != nil {
-				yield(nil, fmt.Errorf("anthropic: parse stream event: %w", err))
+				yield(nil, ai.NewModelTransportError(ctx, m, "parse stream event", err))
 				return
 			}
 			switch event.Type {
 			case "message_start":
+				diagnostics = event.Message.Diagnostics
 				if event.Message.ID != "" {
 					responseID = event.Message.ID
 				}
@@ -262,6 +265,9 @@ func (m *Model) eventStream(
 				}
 			case "message_stop":
 				providerDetails := map[string]any{}
+				if diagnostics != nil {
+					providerDetails["cache_diagnostics"] = diagnostics
+				}
 				if stopReason != "" {
 					providerDetails["finish_reason"] = stopReason
 				}
@@ -285,7 +291,7 @@ func (m *Model) eventStream(
 				}, nil)
 				return
 			case "error":
-				yield(nil, fmt.Errorf("anthropic: stream error %s: %s", event.Error.Type, event.Error.Message))
+				yield(nil, &APIError{Body: fmt.Sprintf("stream error %s: %s", event.Error.Type, event.Error.Message)})
 				return
 			case "content_block_stop":
 				block, ok := searchCalls[event.Index]

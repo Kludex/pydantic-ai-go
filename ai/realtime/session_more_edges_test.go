@@ -91,7 +91,7 @@ func TestSessionAnonymousInputAudioAndInterruptedResponse(t *testing.T) {
 				}
 			}
 		case ai.ModelResponse:
-			foundIncomplete = foundIncomplete || message.State == ai.ModelResponseStateIncomplete
+			foundIncomplete = foundIncomplete || message.State == ai.ModelResponseStateInterrupted
 		}
 	}
 	if !foundAudio || !foundIncomplete {

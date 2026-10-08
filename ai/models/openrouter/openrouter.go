@@ -115,6 +115,30 @@ func NewModel(name string, options ...Option) *Model {
 	return &Model{ModelWrapper: ai.WrapModel(model), model: model}
 }
 
+// ModelProfile returns downstream cache defaults with the wrapped model behavior.
+func (model *Model) ModelProfile() ai.ModelProfile {
+	profile := model.ModelWrapper.ModelProfile()
+	provider, routedModel, found := strings.Cut(strings.TrimPrefix(model.Name(), "~"), "/")
+	if !found {
+		return profile
+	}
+	switch {
+	case provider == "anthropic":
+		profile.DefaultCacheRetention = 5 * time.Minute
+		profile.SupportsCache = true
+		profile.SupportedCacheRetentions = []ai.CacheRetention{ai.CacheRetention5Minutes, ai.CacheRetention1Hour}
+	case provider == "google" && (strings.HasPrefix(routedModel, "gemini-2.5") ||
+		strings.HasPrefix(routedModel, "gemini-3") || strings.HasPrefix(routedModel, "gemini-4")):
+		profile.DefaultCacheRetention = 5 * time.Minute
+		profile.SupportsCache = true
+	case provider == "openai" && (strings.HasPrefix(routedModel, "gpt-5.6") ||
+		strings.HasPrefix(routedModel, "gpt-6-astra") || strings.HasPrefix(routedModel, "gpt-6-sol") ||
+		strings.HasPrefix(routedModel, "gpt-6-luna") || strings.HasPrefix(routedModel, "gpt-6.1-sol")):
+		profile.DefaultCacheRetention = 30 * time.Minute
+	}
+	return profile
+}
+
 // SupportsNativeTool reports native tools rendered by OpenRouter.
 func (*Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
@@ -128,8 +152,19 @@ func (*Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	}
 }
 
+// CacheRetention reports the longest downstream prompt-cache lifetime.
+func (model *Model) CacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	return model.PromptCacheRetention(settings)
+}
+
 // PromptCacheRetention reports the longest downstream prompt-cache lifetime.
+//
+// Deprecated: use CacheRetention.
 func (model *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	settings, err := model.translateCache(settings)
+	if err != nil {
+		return 0, false
+	}
 	_, cache, err := extractCacheSettings(settings)
 	if err != nil {
 		return 0, false
@@ -191,7 +226,11 @@ func (model *Model) prepareParams(
 			"openrouter: model name %q must use the provider/model form", model.Name(),
 		)
 	}
-	settings, err := prepareSettings(params.Settings)
+	translated, err := model.translateCache(params.Settings)
+	if err != nil {
+		return ctx, ai.ModelRequestParams{}, err
+	}
+	settings, err := prepareSettings(translated)
 	if err != nil {
 		return ctx, ai.ModelRequestParams{}, err
 	}
@@ -258,7 +297,8 @@ func (model *Model) prepareParams(
 	case "openai":
 		routedModel = strings.ToLower(routedModel)
 		if strings.HasPrefix(routedModel, "gpt-5.6") || strings.HasPrefix(routedModel, "gpt-6-astra") ||
-			strings.HasPrefix(routedModel, "gpt-6-sol") || strings.HasPrefix(routedModel, "gpt-6-luna") {
+			strings.HasPrefix(routedModel, "gpt-6-sol") || strings.HasPrefix(routedModel, "gpt-6-luna") ||
+			strings.HasPrefix(routedModel, "gpt-6.1-sol") {
 			cache.ExplicitMarkerStyle = openai.ChatPromptCacheMarkerBreakpoint
 		}
 	}

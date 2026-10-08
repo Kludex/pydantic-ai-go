@@ -78,23 +78,55 @@ func (r *run[Deps, Output]) executeTool(
 		Call: call, Definition: entry.def, Approved: rc.ToolCallApproved,
 		CallMetadata: cloneSchemaMap(rc.ToolCallMetadata),
 	}.Clone()
-	var err error
-	for index, capability := range r.capabilities {
-		hook, ok := capability.(BeforeToolExecutionHook)
-		if !ok {
-			continue
-		}
-		previous := args
-		args, err = hook.BeforeToolExecution(ctx, r.capabilityInfo(index), hookContext.Clone(), args)
-		if err != nil {
-			return nil, err
-		}
-		if deferred, ok := asToolHookDeferral(args, previous); ok {
-			return deferred, nil
-		}
-	}
 	next := ToolExecutionFunc(func(ctx context.Context, args any) (any, error) {
-		return entry.execute(ctx, rc, args)
+		var err error
+		for index, capability := range r.capabilities {
+			hook, ok := capability.(BeforeToolExecutionHook)
+			if !ok {
+				continue
+			}
+			previous := args
+			args, err = hook.BeforeToolExecution(ctx, r.capabilityInfo(index), hookContext.Clone(), args)
+			if err != nil {
+				return nil, err
+			}
+			if deferred, ok := asToolHookDeferral(args, previous); ok {
+				return deferred, nil
+			}
+		}
+		result, err := entry.execute(ctx, rc, args)
+		var failed *ToolFailedError
+		var retry *RetryError
+		if err != nil && !errors.As(err, &failed) && !errors.As(err, &retry) &&
+			!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+			for index := len(r.capabilities) - 1; index >= 0; index-- {
+				hook, ok := r.capabilities[index].(ToolExecutionErrorHook)
+				if !ok {
+					continue
+				}
+				result, err = hook.OnToolExecutionError(ctx, r.capabilityInfo(index), hookContext.Clone(), args, err)
+				if err == nil {
+					break
+				}
+			}
+		}
+		if err != nil {
+			return result, err
+		}
+		for index := len(r.capabilities) - 1; index >= 0; index-- {
+			hook, ok := r.capabilities[index].(AfterToolExecutionHook)
+			if !ok {
+				continue
+			}
+			result, err = hook.AfterToolExecution(ctx, r.capabilityInfo(index), hookContext.Clone(), args, result)
+			if err != nil {
+				return result, err
+			}
+			if deferred, ok := asToolHookDeferral(result, args); ok {
+				return deferred, nil
+			}
+		}
+		return result, nil
 	})
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(ToolExecutionWrapper); ok {
@@ -105,37 +137,5 @@ func (r *run[Deps, Output]) executeTool(
 			}
 		}
 	}
-	result, err := next(ctx, args)
-	var failed *ToolFailedError
-	var retry *RetryError
-	if err != nil && !errors.As(err, &failed) && !errors.As(err, &retry) &&
-		!errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
-		for index := len(r.capabilities) - 1; index >= 0; index-- {
-			hook, ok := r.capabilities[index].(ToolExecutionErrorHook)
-			if !ok {
-				continue
-			}
-			result, err = hook.OnToolExecutionError(ctx, r.capabilityInfo(index), hookContext.Clone(), args, err)
-			if err == nil {
-				break
-			}
-		}
-	}
-	if err != nil {
-		return result, err
-	}
-	for index := len(r.capabilities) - 1; index >= 0; index-- {
-		hook, ok := r.capabilities[index].(AfterToolExecutionHook)
-		if !ok {
-			continue
-		}
-		result, err = hook.AfterToolExecution(ctx, r.capabilityInfo(index), hookContext.Clone(), args, result)
-		if err != nil {
-			return result, err
-		}
-		if deferred, ok := asToolHookDeferral(result, args); ok {
-			return deferred, nil
-		}
-	}
-	return result, nil
+	return next(ctx, args)
 }

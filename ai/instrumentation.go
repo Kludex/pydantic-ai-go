@@ -256,6 +256,7 @@ type instrumentedRequest struct {
 	span      trace.Span
 	messages  []ModelMessage
 	params    ModelRequestParams
+	observed  *modelRequestObservation
 	once      sync.Once
 }
 
@@ -296,8 +297,19 @@ func (model *InstrumentedModel) startOperation(
 	} else {
 		spanCtx = context.WithValue(spanCtx, modelRequestSpanContextKey{}, true)
 	}
+	var observed *modelRequestObservation
+	if operation == "chat" {
+		observed, _ = ctx.Value(modelRequestObservationKey{}).(*modelRequestObservation)
+	}
+	if observed == nil {
+		observed = &modelRequestObservation{}
+		if operation == "chat" {
+			observed.marks = bindCacheMarks(latestConversationID(messages))
+		}
+	}
+	observed.started = time.Now()
 	return spanCtx, &instrumentedRequest{
-		model: model, operation: operation, span: span, messages: cloneModelMessages(messages),
+		model: model, operation: operation, span: span, messages: cloneModelMessages(messages), observed: observed,
 		params: ModelRequestContext{Params: params}.Clone().Params,
 	}
 }
@@ -309,9 +321,25 @@ func (request *instrumentedRequest) finish(
 		if requestErr != nil {
 			recordSpanError(request.span, requestErr, request.model.includeContent)
 		}
+		served := request.observed.response
+		if response == nil {
+			response = served
+		}
 		if response == nil {
 			request.span.End()
 			return
+		}
+		if request.operation == "chat" {
+			if served != nil {
+				recordCacheHealth(request.span, request.observed.marks, request.observed.model,
+					request.observed.messages, request.observed.params, served, request.observed.finalSegment)
+			} else {
+				recordCacheHealth(request.span, request.observed.marks, request.model,
+					request.messages, request.params, response, response)
+			}
+		}
+		if firstChunk == 0 {
+			firstChunk = request.observed.firstChunk
 		}
 		response = cloneModelResponse(response)
 		attributes := responseTelemetryAttributes(response)
@@ -366,25 +394,27 @@ func recordSpanError(span trace.Span, err error, includeContent bool) {
 	))
 }
 
-func hasInstrumentedModel(model Model) bool {
+func hasInstrumentedModel(model Model) bool { return findInstrumentedModel(model) != nil }
+
+func findInstrumentedModel(model Model) *InstrumentedModel {
 	seen := make([]Model, 0, 4)
 	for !modelIsNil(model) {
-		if _, ok := model.(*InstrumentedModel); ok {
-			return true
+		if instrumented, ok := model.(*InstrumentedModel); ok {
+			return instrumented
 		}
 		for _, previous := range seen {
 			if sameModelInstance(previous, model) {
-				return false
+				return nil
 			}
 		}
 		seen = append(seen, model)
 		wrapper, ok := model.(ModelUnwrapper)
 		if !ok {
-			return false
+			return nil
 		}
 		model = wrapper.UnwrapModel()
 	}
-	return false
+	return nil
 }
 
 func (model *InstrumentedModel) recordMetrics(

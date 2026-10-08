@@ -59,21 +59,29 @@ type Settings struct {
 	PromptCacheRetention PromptCacheRetention
 	// PromptCacheOptions configures GPT-5.6 request-wide caching.
 	PromptCacheOptions *PromptCacheOptions
+	// CacheInstructions marks the last static instruction boundary on supported models.
+	CacheInstructions bool
+	// PromptCacheDiagnostics compares Responses requests with prior responses. Nil enables supported endpoints.
+	PromptCacheDiagnostics *bool
 }
 
 const (
-	predictionSetting            = "openai_prediction"
-	includeRawAnnotationsSetting = "openai_include_raw_annotations"
-	responsesIncludeSetting      = "openai_responses_include"
-	promptCacheKeySetting        = "openai_prompt_cache_key"
-	promptCacheRetentionSetting  = "openai_prompt_cache_retention"
-	promptCacheOptionsSetting    = "openai_prompt_cache_options"
+	predictionSetting             = "openai_prediction"
+	includeRawAnnotationsSetting  = "openai_include_raw_annotations"
+	responsesIncludeSetting       = "openai_responses_include"
+	promptCacheKeySetting         = "openai_prompt_cache_key"
+	promptCacheRetentionSetting   = "openai_prompt_cache_retention"
+	promptCacheOptionsSetting     = "openai_prompt_cache_options"
+	cacheInstructionsSetting      = "openai_cache_instructions"
+	promptCacheDiagnosticsSetting = "openai_prompt_cache_diagnostics"
 )
 
 type promptCacheSettings struct {
-	Key       string
-	Retention PromptCacheRetention
-	Options   *PromptCacheOptions
+	Key          string
+	Retention    PromptCacheRetention
+	Options      *PromptCacheOptions
+	Instructions bool
+	Diagnostics  bool
 }
 
 // Build returns detached portable settings accepted by agents and direct requests.
@@ -97,10 +105,17 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	for _, name := range []string{
 		predictionSetting, includeRawAnnotationsSetting, responsesIncludeSetting,
 		promptCacheKeySetting, promptCacheRetentionSetting, promptCacheOptionsSetting,
+		cacheInstructionsSetting, promptCacheDiagnosticsSetting,
 	} {
 		if _, exists := extra[name]; exists {
 			return ai.ModelSettings{}, fmt.Errorf("openai: setting field %q is reserved", name)
 		}
+	}
+	if settings.CacheInstructions {
+		extra[cacheInstructionsSetting] = true
+	}
+	if settings.PromptCacheDiagnostics != nil {
+		extra[promptCacheDiagnosticsSetting] = *settings.PromptCacheDiagnostics
 	}
 	if prediction != nil {
 		if _, exists := extra["prediction"]; exists {
@@ -158,7 +173,20 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 func extractPromptCacheSettings(settings ai.ModelSettings) (ai.ModelSettings, promptCacheSettings, error) {
 	settings = settings.Clone()
 	extra := maps.Clone(settings.ExtraBody)
-	cache := promptCacheSettings{}
+	cache := promptCacheSettings{Diagnostics: true}
+	for _, field := range []struct {
+		name  string
+		value *bool
+	}{{cacheInstructionsSetting, &cache.Instructions}, {promptCacheDiagnosticsSetting, &cache.Diagnostics}} {
+		if value, exists := extra[field.name]; exists {
+			delete(extra, field.name)
+			boolean, ok := value.(bool)
+			if !ok {
+				return ai.ModelSettings{}, promptCacheSettings{}, fmt.Errorf("openai: %s must be a boolean", field.name)
+			}
+			*field.value = boolean
+		}
+	}
 	if value, exists := extra[promptCacheKeySetting]; exists {
 		delete(extra, promptCacheKeySetting)
 		key, ok := value.(string)

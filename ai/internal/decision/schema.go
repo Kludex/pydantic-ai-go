@@ -1,4 +1,4 @@
-package typesafe
+package decision
 
 import (
 	"encoding/json"
@@ -57,11 +57,11 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, map[string]
 	flatten = func(values map[string]any, prefix string, seen map[string]bool, ancestors []string) error {
 		for name, raw := range values {
 			if strings.Contains(name, ".") {
-				return fmt.Errorf("typesafe: field %q contains a dot", prefix+name)
+				return fmt.Errorf("decision: field %q contains a dot", prefix+name)
 			}
 			rawProperty, ok := raw.(map[string]any)
 			if !ok {
-				return fmt.Errorf("typesafe: field %q has an invalid schema", prefix+name)
+				return fmt.Errorf("decision: field %q has an invalid schema", prefix+name)
 			}
 			reference, _ := rawProperty["$ref"].(string)
 			property := resolve(rawProperty)
@@ -70,7 +70,7 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, map[string]
 					defaulted[prefix+name] = true
 				}
 				if reference != "" && seen[reference] {
-					return fmt.Errorf("typesafe: output field %q contains itself", prefix+name)
+					return fmt.Errorf("decision: output field %q contains itself", prefix+name)
 				}
 				next := make(map[string]bool, len(seen)+1)
 				for item := range seen {
@@ -113,11 +113,15 @@ func schemaFields(schema map[string]any) (map[string]map[string]any, map[string]
 }
 
 func buildQuestions(
-	fields map[string]map[string]any, contexts map[string][]string, goal, instructions, chosen string,
-) (map[string]question, error) {
-	questions := make(map[string]question, len(fields))
+	fields map[string]map[string]any, contexts map[string][]string, goal, instructions, chosen string, config Config,
+	scalar bool,
+) (map[string]Question, error) {
+	questions := make(map[string]Question, len(fields))
 	for name, property := range fields {
-		ask := map[string]any{"field": name}
+		ask := map[string]any{}
+		if !scalar {
+			ask["field"] = name
+		}
 		if description, _ := property["description"].(string); description != "" {
 			ask["question"] = description
 		}
@@ -143,7 +147,7 @@ func buildQuestions(
 			options = nil
 		}
 		if len(noneOption) > 0 {
-			if options == nil || rubricCriteria(options) != nil || !pickableOptions(options) {
+			if options == nil || rubricCriteria(options, config.MaxScoreLevels) != nil || !pickableOptions(options) {
 				return nil, unsupportedField(name)
 			}
 			options = append(options, noneOption...)
@@ -156,6 +160,9 @@ func buildQuestions(
 			continue
 		}
 		asked := compactInstructions(ask)
+		if asked == nil && config.RequiresInstructions {
+			asked = "Which of these applies?"
+		}
 		switch {
 		case property["type"] == "array":
 			items, _ := property["items"].(map[string]any)
@@ -165,9 +172,9 @@ func buildQuestions(
 			}
 			fanOut(questions, name, ask, labels)
 		case options != nil:
-			switch rubric := rubricCriteria(options); {
+			switch rubric := rubricCriteria(options, config.MaxScoreLevels); {
 			case rubric != nil:
-				questions[name] = question{Type: "score", Instructions: asked, Criteria: rubric}
+				questions[name] = Question{Type: "score", Instructions: asked, Criteria: rubric}
 			case allBooleanOptions(options) && len(options) == 2:
 				criteria := map[string]any{}
 				for _, option := range options {
@@ -175,22 +182,23 @@ func buildQuestions(
 						criteria[strconv.FormatBool(option.value.(bool))] = option.description
 					}
 				}
-				questions[name] = question{Type: "noul", Instructions: asked, Criteria: criteria}
-			case len(options) < 2 || len(options) > 255 || !pickableOptions(options):
+				questions[name] = Question{Type: "noul", Instructions: asked, Criteria: criteria}
+			case len(options) < 2 || config.MaxChoiceOptions > 0 && len(options) > config.MaxChoiceOptions ||
+				!pickableOptions(options):
 				return nil, unsupportedField(name)
 			default:
-				questions[name] = question{Type: "choice", Instructions: asked, Criteria: choiceCriteria(options)}
+				questions[name] = Question{Type: "choice", Instructions: asked, Criteria: choiceCriteria(options)}
 			}
 		case property["type"] == "boolean":
-			if len(ask) == 1 {
-				return nil, fmt.Errorf("typesafe: output field %q asks no question", name)
+			if len(ask) == 0 || len(ask) == 1 && ask["field"] != nil {
+				return nil, fmt.Errorf("decision: output field %q asks no question", name)
 			}
-			questions[name] = question{Type: "noul", Instructions: asked}
+			questions[name] = Question{Type: "noul", Instructions: asked}
 		case property["type"] == "number":
-			if _, ok := boundedNumber(property); !ok || len(ask) == 1 {
+			if _, ok := boundedNumber(property); !ok || len(ask) == 0 || len(ask) == 1 && ask["field"] != nil {
 				return nil, unsupportedField(name)
 			}
-			questions[name] = question{Type: "noul", Instructions: asked}
+			questions[name] = Question{Type: "noul", Instructions: asked}
 		default:
 			return nil, unsupportedField(name)
 		}
@@ -198,14 +206,14 @@ func buildQuestions(
 	return questions, nil
 }
 
-func fanOut(questions map[string]question, name string, ask map[string]any, labels map[string]any) {
+func fanOut(questions map[string]Question, name string, ask map[string]any, labels map[string]any) {
 	for key, description := range labels {
 		itemAsk := mapsClone(ask)
 		itemAsk["option"] = key
 		if description, _ := description.(string); description != "" {
 			itemAsk["option"] = key + ": " + description
 		}
-		questions[name+"."+key] = question{Type: "noul", Instructions: compactInstructions(itemAsk)}
+		questions[name+"."+key] = Question{Type: "noul", Instructions: compactInstructions(itemAsk)}
 	}
 }
 
@@ -230,6 +238,9 @@ func mappingOptions(property map[string]any) map[string]any {
 }
 
 func compactInstructions(values map[string]any) any {
+	if len(values) == 0 {
+		return nil
+	}
 	if len(values) == 1 {
 		for _, value := range values {
 			return value
@@ -394,8 +405,8 @@ func choiceCriteria(options []schemaOption) map[string]any {
 	return criteria
 }
 
-func rubricCriteria(options []schemaOption) []any {
-	if len(options) < 2 || len(options) > 10 {
+func rubricCriteria(options []schemaOption, maxLevels int) []any {
+	if len(options) < 2 || maxLevels > 0 && len(options) > maxLevels {
 		return nil
 	}
 	criteria := make([]any, len(options))
@@ -438,9 +449,9 @@ func wholeNumber(value any) (int64, bool) {
 }
 
 func decodeAnswers(
-	answers map[string]answer,
+	answers map[string]Answer,
 	fields map[string]map[string]any,
-	questions map[string]question,
+	questions map[string]Question,
 	threshold float64,
 	defaulted map[string]bool,
 ) (map[string]any, map[string]any, error) {
@@ -484,7 +495,7 @@ func decodeAnswers(
 		switch questions[name].Type {
 		case "noul":
 			if value.Noul == nil {
-				return nil, nil, fmt.Errorf("typesafe: invalid answer for %q", name)
+				return nil, nil, fmt.Errorf("decision: invalid answer for %q", name)
 			}
 			if maximum, ok := boundedNumber(property); ok {
 				setNested(result, name, *value.Noul*maximum)
@@ -494,8 +505,9 @@ func decodeAnswers(
 				confidence[name] = sure
 			}
 		case "choice":
-			if value.Choice == "" {
-				return nil, nil, fmt.Errorf("typesafe: invalid answer for %q", name)
+			choices := labelledOptions(propertyOptions(property))
+			if _, exists := choices[value.Choice]; value.Choice == "" && !exists {
+				return nil, nil, fmt.Errorf("decision: invalid answer for %q", name)
 			}
 			if isNoneChoice(value.Choice, noneOption) {
 				if _, hasDefault := originalProperty["default"]; hasDefault {
@@ -504,7 +516,7 @@ func decodeAnswers(
 					setNested(result, name, nil)
 				}
 			} else {
-				chosen, exists := labelledOptions(propertyOptions(property))[value.Choice]
+				chosen, exists := choices[value.Choice]
 				if !exists {
 					chosen = value.Choice
 				}
@@ -514,7 +526,7 @@ func decodeAnswers(
 			probabilities[name] = value.Probabilities
 		case "score":
 			if value.Score == nil {
-				return nil, nil, fmt.Errorf("typesafe: invalid score for %q", name)
+				return nil, nil, fmt.Errorf("decision: invalid score for %q", name)
 			}
 			setNested(result, name, int(math.Floor(*value.Score+.5)))
 			confidence[name] = value.Confidence
@@ -527,7 +539,7 @@ func decodeAnswers(
 }
 
 func fanIn(
-	answers map[string]answer,
+	answers map[string]Answer,
 	name string,
 	labels map[string]any,
 	threshold float64,
@@ -538,7 +550,7 @@ func fanIn(
 	for label := range labels {
 		value := answers[name+"."+label]
 		if value.Noul == nil {
-			return nil, 0, fmt.Errorf("typesafe: invalid answer for %q", name+"."+label)
+			return nil, 0, fmt.Errorf("decision: invalid answer for %q", name+"."+label)
 		}
 		chosen, certainty := verdict(*value.Noul, threshold)
 		values[label] = *value.Noul
@@ -610,7 +622,7 @@ func leaveOutUnanswered(
 	return answered
 }
 func unsupportedField(name string) error {
-	return fmt.Errorf("typesafe: output field %q is not supported", name)
+	return fmt.Errorf("decision: output field %q is not supported", name)
 }
 func number(value any) float64 {
 	switch value := value.(type) {
@@ -643,35 +655,8 @@ func messageState(messages []ai.ModelMessage) (any, error) {
 			}
 		}
 	}
-	if latestMessage < 0 {
-		history := make([]any, 0)
-		for _, message := range messages {
-			switch message := message.(type) {
-			case ai.ModelRequest:
-				for _, part := range message.Parts {
-					entry, err := requestStateEntry(part)
-					if err != nil {
-						return nil, err
-					}
-					if entry != nil {
-						history = append(history, entry)
-					}
-				}
-			case ai.ModelResponse:
-				entries, err := responseStateEntries(message)
-				if err != nil {
-					return nil, err
-				}
-				history = append(history, entries...)
-			}
-		}
-		if len(history) == 0 {
-			return nil, fmt.Errorf("typesafe: request needs text to judge")
-		}
-		return map[string]any{"history": history}, nil
-	}
 	turn := false
-	for messageIndex := latestMessage; messageIndex < len(messages); messageIndex++ {
+	for messageIndex := latestMessage; messageIndex >= 0 && messageIndex < len(messages); messageIndex++ {
 		request, ok := messages[messageIndex].(ai.ModelRequest)
 		if !ok {
 			continue
@@ -721,6 +706,12 @@ func messageState(messages []ai.ModelMessage) (any, error) {
 			}
 			*target = append(*target, entries...)
 		}
+	}
+	if latestMessage < 0 {
+		if len(history) == 0 {
+			return nil, fmt.Errorf("decision: request needs text to judge")
+		}
+		return map[string]any{"history": history}, nil
 	}
 	text := strings.Join(texts, "\n\n")
 	if len(history) == 0 && !turn {
@@ -777,7 +768,7 @@ func responseStateEntries(message ai.ModelResponse) ([]any, error) {
 				entries = append(entries, map[string]any{"summary": part.Content})
 			}
 		case ai.FilePart:
-			return nil, fmt.Errorf("typesafe: files are not supported")
+			return nil, fmt.Errorf("decision: files are not supported")
 		}
 	}
 	return entries, nil
@@ -794,7 +785,7 @@ func promptText(part ai.UserPromptPart) (string, error) {
 			texts = append(texts, content.Text)
 		case ai.CachePoint:
 		default:
-			return "", fmt.Errorf("typesafe: files are not supported")
+			return "", fmt.Errorf("decision: files are not supported")
 		}
 	}
 	return strings.Join(texts, "\n\n"), nil

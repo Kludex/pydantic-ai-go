@@ -59,6 +59,7 @@ func suspendedRunOptions(history []ModelMessage, opts []RunOption) []RunOption {
 	options := slices.Clone(opts)
 	options = append(options, func(cfg *runConfig) {
 		cfg.history = cloneModelMessages(history)
+		cfg.historySet = true
 		cfg.resumeSuspended = true
 	})
 	return options
@@ -118,6 +119,15 @@ func buildRunConfig(opts []RunOption) runConfig {
 func (a *Agent[Deps, Output]) newRun(
 	ctx context.Context, prompt UserPromptPart, deps Deps, cfg runConfig,
 ) (*run[Deps, Output], error) {
+	if cfg.conversation != nil {
+		if cfg.historySet || cfg.conversationID != nil {
+			return nil, fmt.Errorf("ai: WithConversation cannot be combined with WithMessageHistory or WithConversationID")
+		}
+		cfg.history = cloneModelMessages(cfg.conversation.Messages)
+		if cfg.conversation.ConversationID != "" {
+			cfg.conversationID = &cfg.conversation.ConversationID
+		}
+	}
 	a.started.Store(true)
 	runCtx, cancel := context.WithCancelCause(ctx)
 	cancellation := &runCancellation{cancel: cancel, active: true}
@@ -287,6 +297,11 @@ func (a *Agent[Deps, Output]) newRun(
 		pendingMessages:    &pendingMessageQueue{},
 		bannerCapabilities: bannerCapabilities, bannerOutput: bannerOutputType(reflect.TypeFor[Output]()),
 	}
+	if cfg.conversation != nil {
+		r.usage = cfg.conversation.Usage.Clone()
+		r.toolCalls.Store(int64(r.usage.ToolCalls))
+		r.usage.ToolCalls = 0
+	}
 	if cfg.deferredResults != nil {
 		results := cloneDeferredToolResults(*cfg.deferredResults)
 		r.deferredResults = &results
@@ -431,6 +446,10 @@ func (a *Agent[Deps, Output]) newRun(
 	}
 	r.rc.emitEvent = r.emitEvent
 	r.info.emitEvent = r.emitEvent
+	if err := r.selectWorkspace(runCtx, cfg, agentCapabilities, runCapabilities); err != nil {
+		cancellation.finish()
+		return nil, err
+	}
 	if err := r.resolveMetadata(runCtx); err != nil {
 		cancellation.finish()
 		return nil, err
@@ -574,8 +593,24 @@ func mergeConsecutiveMessages(messages []ModelMessage) []ModelMessage {
 			if timestamp.IsZero() {
 				timestamp = previous.Timestamp
 			}
+			metadata := cloneSchemaMap(previous.Metadata)
+			if metadata == nil && len(message.Metadata) > 0 {
+				metadata = map[string]any{}
+			}
+			for key, value := range cloneSchemaMap(message.Metadata) {
+				metadata[key] = value
+			}
+			runID := message.RunID
+			if runID == "" {
+				runID = previous.RunID
+			}
+			conversationID := message.ConversationID
+			if conversationID == "" {
+				conversationID = previous.ConversationID
+			}
 			merged[len(merged)-1] = ModelRequest{
 				Parts: parts, Timestamp: timestamp, Instructions: instructions,
+				RunID: runID, ConversationID: conversationID, Metadata: metadata, State: message.State,
 			}
 		case ModelResponse:
 			previous, ok := merged[len(merged)-1].(ModelResponse)
@@ -703,6 +738,7 @@ type run[Deps, Output any] struct {
 	rc                         *RunContext[Deps]
 	info                       *RunInfo
 	params                     ModelRequestParams
+	cacheMarks                 *conversationCacheMarks
 	baseParams                 ModelRequestParams
 	promptedTemplate           string
 	messages                   []ModelMessage
@@ -744,6 +780,7 @@ type run[Deps, Output any] struct {
 	staticModelID              string
 	runModelSelectors          []erasedModelSelectorFunc
 	resolvedModels             map[string]Model
+	carriedWorkspaceRef        *WorkspaceRef
 	resumeSeed                 *ModelResponse
 	detachedResponse           *ModelResponse
 	enteredModels              []Model
@@ -1085,6 +1122,11 @@ func (r *run[Deps, Output]) resolveModelID(ctx context.Context, modelID string) 
 // modelRequest is the model-request interception point: tracing plus
 // capability middleware (ModelRequestWrapper), outermost first.
 func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, error) {
+	if r.cacheMarks == nil {
+		r.cacheMarks = bindCacheMarks(r.rc.ConversationID)
+	}
+	observation := &modelRequestObservation{marks: r.cacheMarks, started: time.Now()}
+	ctx = context.WithValue(ctx, modelRequestObservationKey{}, observation)
 	r.revealedTools = revealedToolNames(r.messages)
 	if r.deferredResults == nil {
 		if err := r.deliverPendingMessages(PendingMessageASAP); err != nil {
@@ -1114,11 +1156,23 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
 		}
 		r.setCurrentTools(params)
-		if hasInstrumentedModel(r.model) || modelRequestSpanActive(ctx) {
+		if modelRequestSpanActive(ctx) {
 			return r.doModelRequest(ctx, msgs, params)
+		}
+		if instrumented := findInstrumentedModel(r.model); instrumented != nil {
+			runtime := *instrumented
+			runtime.ModelWrapper = WrapModel(r.model)
+			reqCtx, request := runtime.startRequest(ctx, msgs, params)
+			resp, err := r.doModelRequest(reqCtx, msgs, params)
+			request.finish(reqCtx, resp, err, 0)
+			return resp, err
 		}
 		reqCtx, reqSpan := startRequestSpan(ctx, r.model.Name())
 		resp, err := r.doModelRequest(reqCtx, msgs, params)
+		if observation.response != nil {
+			recordCacheHealth(reqSpan, observation.marks, observation.model,
+				observation.messages, observation.params, observation.response, observation.finalSegment)
+		}
 		if err != nil {
 			endSpan(reqSpan, err)
 			return resp, err
@@ -1134,16 +1188,6 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	r.params = params
 	if r.resumeSeed == nil {
 		setLatestRequestContext(r.messages, params.Instructions, r.rc.RunID, r.rc.ConversationID)
-	}
-	next := inner
-	for i := len(r.capabilities) - 1; i >= 0; i-- {
-		if wrapper, ok := r.capabilities[i].(ModelRequestWrapper); ok {
-			innerNext := next
-			info := r.capabilityInfo(i)
-			next = func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
-				return wrapper.WrapModelRequest(ctx, info, msgs, params, innerNext)
-			}
-		}
 	}
 	r.setCurrentTools(params)
 	if r.deferredResults != nil {
@@ -1179,145 +1223,160 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	if r.resumeSeed != nil {
 		requestMessages = append(slices.Clone(requestMessages), *cloneModelResponse(r.resumeSeed))
 	}
-	request := ModelRequestContext{
-		Model: r.model, ModelID: r.rc.ModelID, Messages: requestMessages, Params: params, Streaming: r.emit != nil,
-	}.Clone()
-	for index, capability := range r.capabilities {
-		hook, ok := capability.(BeforeModelRequestHook)
-		if !ok {
-			continue
-		}
-		previousInstructions := request.Params.Instructions
-		previousParts := cloneInstructionParts(request.Params.InstructionParts)
-		request, err = hook.BeforeModelRequest(ctx, r.capabilityInfo(index), request)
-		if err != nil {
-			return nil, err
-		}
-		reconcileHookInstructions(&request.Params, previousInstructions, previousParts)
-	}
-	request.Params.NativeTools = CloneNativeTools(request.Params.NativeTools)
-	if err := ValidateNativeTools(request.Params.NativeTools); err != nil {
-		return nil, err
-	}
-	if request.ReplaceHistory {
-		r.messages = cloneModelMessages(request.Messages)
-		r.newMessages = 0
-	}
-	if !request.AdditionalUsage.IsZero() {
-		r.addUsage(request.AdditionalUsage)
-		r.publishUsage(nil)
-		if err := r.usageLimits.check(r.info.Usage()); err != nil {
-			return nil, err
-		}
-	}
-	if request.Params.Settings.RequestTimeout < 0 {
-		return nil, fmt.Errorf(
-			"ai: request timeout must be non-negative, got %s", request.Params.Settings.RequestTimeout,
-		)
-	}
-	if err := validateModelSettings(request.Params.Settings); err != nil {
-		return nil, err
-	}
-	if modelIsNil(request.Model) {
-		if request.ModelID == "" {
-			return nil, ErrNoModel
-		}
-		request.Model, err = r.resolveModelID(ctx, request.ModelID)
-		if err != nil {
-			return nil, err
-		}
-	}
-	modelChanged := !sameModelInstance(r.model, request.Model)
-	if modelChanged && request.Params.OutputMode == r.params.OutputMode && r.baseParams.OutputMode == OutputModeAuto {
-		outputParams := request.Params
-		outputParams.OutputMode = r.baseParams.OutputMode
-		if outputParams.OutputSchema == nil && outputParams.OutputTool != nil {
-			outputParams.OutputSchema = cloneSchemaMap(outputParams.OutputTool.Schema)
-		}
-		outputParams.OutputPrompt = ""
-		outputParams.InstructionParts = removeOutputPrompt(outputParams.InstructionParts, r.params.OutputPrompt)
-		outputParams.Instructions = joinInstructionParts(outputParams.InstructionParts)
-		request.Params, err = resolveModelOutputParams(request.Model, outputParams, r.outputTool, r.promptedTemplate)
-		if err != nil {
-			return nil, err
-		}
-	}
-	request.Params, err = ResolveNativeToolPreferences(request.Model, request.Params)
-	if err != nil {
-		return nil, err
-	}
-	r.model = request.Model
-	r.rc.Model = request.Model
-	r.rc.ModelID = request.ModelID
-	if modelChanged {
-		if err := r.openSelectedModel(ctx); err != nil {
-			return nil, err
-		}
-		if r.recordSelectedModel != nil {
-			r.recordSelectedModel(r.model.Name())
-		}
-	}
-	r.params = request.Params
-	r.currentOutputTool = request.Params.OutputTool
-	r.setCurrentTools(request.Params)
-	if err := r.compileCurrentSchemas(request.Params); err != nil {
-		return nil, err
-	}
-	modelID := r.rc.ModelID
-	if modelID == "" {
-		modelID = r.model.Name()
-	}
-	toolCount := len(request.Params.Tools)
-	displayRunBanner(os.Stderr, bannerDetails{
-		name: r.agent.name, model: modelID, output: r.bannerOutput, tools: &toolCount,
-		capabilities: r.bannerCapabilities, observability: true,
-	}, r.runStep != 1 || hasInstrumentationCapability(r.capabilities) || hasInstrumentedModel(r.model))
-	response, err := next(ctx, request.Messages, request.Params)
-	var retry *RetryError
-	if err != nil && !errors.As(err, &retry) {
-		for index := len(r.capabilities) - 1; index >= 0; index-- {
-			hook, ok := r.capabilities[index].(ModelRequestErrorHook)
+	next := ModelRequestFunc(func(ctx context.Context, requestMessages []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+		var err error
+		request := ModelRequestContext{
+			Model: r.model, ModelID: r.rc.ModelID, Messages: requestMessages, Params: params, Streaming: r.emit != nil,
+		}.Clone()
+		for index, capability := range r.capabilities {
+			hook, ok := capability.(BeforeModelRequestHook)
 			if !ok {
 				continue
 			}
-			response, err = hook.OnModelRequestError(ctx, r.capabilityInfo(index), request, err)
-			if err == nil {
-				if response == nil {
-					return nil, &UnexpectedModelBehaviorError{Message: "model request error hook returned no response"}
-				}
-				break
+			previousInstructions := request.Params.Instructions
+			previousParts := cloneInstructionParts(request.Params.InstructionParts)
+			request, err = hook.BeforeModelRequest(ctx, r.capabilityInfo(index), request)
+			if err != nil {
+				return nil, err
+			}
+			reconcileHookInstructions(&request.Params, previousInstructions, previousParts)
+		}
+		request.Params.NativeTools = CloneNativeTools(request.Params.NativeTools)
+		if err := ValidateNativeTools(request.Params.NativeTools); err != nil {
+			return nil, err
+		}
+		if request.ReplaceHistory {
+			r.messages = cloneModelMessages(request.Messages)
+			r.newMessages = 0
+		}
+		if !request.AdditionalUsage.IsZero() {
+			r.addUsage(request.AdditionalUsage)
+			r.publishUsage(nil)
+			if err := r.usageLimits.check(r.info.Usage()); err != nil {
+				return nil, err
 			}
 		}
-	}
-	if err != nil {
-		return response, err
-	}
-	if response == nil {
-		return nil, nil
-	}
-	r.stampModelResponse(response)
-	for index := len(r.capabilities) - 1; index >= 0; index-- {
-		hook, ok := r.capabilities[index].(AfterModelRequestHook)
-		if !ok {
-			continue
+		if request.Params.Settings.RequestTimeout < 0 {
+			return nil, fmt.Errorf(
+				"ai: request timeout must be non-negative, got %s", request.Params.Settings.RequestTimeout,
+			)
 		}
-		response, err = hook.AfterModelRequest(ctx, r.capabilityInfo(index), request, response)
+		if err := validateModelSettings(request.Params.Settings); err != nil {
+			return nil, err
+		}
+		if modelIsNil(request.Model) {
+			if request.ModelID == "" {
+				return nil, ErrNoModel
+			}
+			request.Model, err = r.resolveModelID(ctx, request.ModelID)
+			if err != nil {
+				return nil, err
+			}
+		}
+		modelChanged := !sameModelInstance(r.model, request.Model)
+		if modelChanged && request.Params.OutputMode == r.params.OutputMode && r.baseParams.OutputMode == OutputModeAuto {
+			outputParams := request.Params
+			outputParams.OutputMode = r.baseParams.OutputMode
+			if outputParams.OutputSchema == nil && outputParams.OutputTool != nil {
+				outputParams.OutputSchema = cloneSchemaMap(outputParams.OutputTool.Schema)
+			}
+			outputParams.OutputPrompt = ""
+			outputParams.InstructionParts = removeOutputPrompt(outputParams.InstructionParts, r.params.OutputPrompt)
+			outputParams.Instructions = joinInstructionParts(outputParams.InstructionParts)
+			request.Params, err = resolveModelOutputParams(request.Model, outputParams, r.outputTool, r.promptedTemplate)
+			if err != nil {
+				return nil, err
+			}
+		}
+		request.Params, err = ResolveNativeToolPreferences(request.Model, request.Params)
+		if err != nil {
+			return nil, err
+		}
+		r.model = request.Model
+		r.rc.Model = request.Model
+		r.rc.ModelID = request.ModelID
+		if modelChanged {
+			if err := r.openSelectedModel(ctx); err != nil {
+				return nil, err
+			}
+			if r.recordSelectedModel != nil {
+				r.recordSelectedModel(r.model.Name())
+			}
+		}
+		r.params = request.Params
+		r.currentOutputTool = request.Params.OutputTool
+		r.setCurrentTools(request.Params)
+		if err := r.compileCurrentSchemas(request.Params); err != nil {
+			return nil, err
+		}
+		modelID := r.rc.ModelID
+		if modelID == "" {
+			modelID = r.model.Name()
+		}
+		toolCount := len(request.Params.Tools)
+		displayRunBanner(os.Stderr, bannerDetails{
+			name: r.agent.name, model: modelID, output: r.bannerOutput, tools: &toolCount,
+			capabilities: r.bannerCapabilities, observability: true,
+		}, r.runStep != 1 || hasInstrumentationCapability(r.capabilities) || hasInstrumentedModel(r.model))
+		response, err := inner(ctx, request.Messages, request.Params)
+		var retry *RetryError
+		if err != nil && !errors.As(err, &retry) {
+			for index := len(r.capabilities) - 1; index >= 0; index-- {
+				hook, ok := r.capabilities[index].(ModelRequestErrorHook)
+				if !ok {
+					continue
+				}
+				response, err = hook.OnModelRequestError(ctx, r.capabilityInfo(index), request, err)
+				if err == nil {
+					if response == nil {
+						return nil, &UnexpectedModelBehaviorError{Message: "model request error hook returned no response"}
+					}
+					break
+				}
+			}
+		}
 		if err != nil {
 			return response, err
 		}
-		if response == nil {
-			return nil, &UnexpectedModelBehaviorError{Message: "after model request hook returned no response"}
+		r.stampModelResponse(response)
+		for index := len(r.capabilities) - 1; index >= 0; index-- {
+			hook, ok := r.capabilities[index].(AfterModelRequestHook)
+			if !ok {
+				continue
+			}
+			response, err = hook.AfterModelRequest(ctx, r.capabilityInfo(index), request, response)
+			if err != nil {
+				return response, err
+			}
+			if response == nil {
+				return nil, &UnexpectedModelBehaviorError{Message: "after model request hook returned no response"}
+			}
+		}
+		r.stampModelResponse(response)
+		if err := validateResponseSpeech(response); err != nil {
+			return response, err
+		}
+		r.resumeSeed = nil
+		return response, nil
+	})
+	for i := len(r.capabilities) - 1; i >= 0; i-- {
+		if wrapper, ok := r.capabilities[i].(ModelRequestWrapper); ok {
+			innerNext := next
+			info := r.capabilityInfo(i)
+			next = func(ctx context.Context, msgs []ModelMessage, params ModelRequestParams) (*ModelResponse, error) {
+				return wrapper.WrapModelRequest(ctx, info, msgs, params, innerNext)
+			}
 		}
 	}
-	r.stampModelResponse(response)
-	if err := validateResponseSpeech(response); err != nil {
-		return response, err
+	response, err := next(ctx, requestMessages, params)
+	if response != nil {
+		r.stampModelResponse(response)
 	}
-	r.resumeSeed = nil
-	return response, nil
+	return response, err
 }
 
 func (r *run[Deps, Output]) stampModelResponse(response *ModelResponse) {
+	response.WorkspaceRef = r.recordedWorkspaceRef()
 	if response.Timestamp.IsZero() {
 		response.Timestamp = time.Now().UTC()
 	}
@@ -2239,6 +2298,7 @@ func cloneCollectionValue(value reflect.Value, seen map[collectionCloneKey]refle
 func (r *run[Deps, Output]) doModelRequest(
 	ctx context.Context, msgs []ModelMessage, params ModelRequestParams,
 ) (*ModelResponse, error) {
+	observation, _ := ctx.Value(modelRequestObservationKey{}).(*modelRequestObservation)
 	baseMessages := slices.Clone(msgs)
 	var response *ModelResponse
 	if historyEndsSuspended(baseMessages) {
@@ -2288,6 +2348,9 @@ func (r *run[Deps, Output]) doModelRequest(
 			r.publishUsage(current)
 		}
 		segment, err := r.requestModelSegment(ctx, segmentMessages, params, emit, observe)
+		if segment != nil && observation != nil {
+			observation.record(r.model, msgs, params, response, segment)
+		}
 		if err != nil {
 			prior := response
 			partial := response
@@ -2379,7 +2442,7 @@ func (r *run[Deps, Output]) requestModelSegment(
 		if err != nil {
 			return nil, err
 		}
-		response, err := accumulate(events, params, emit, observe)
+		response, err := accumulate(observeRequestStream(ctx, events), params, emit, observe)
 		fillResponseCost(ctx, response)
 		return response, err
 	}
@@ -2448,7 +2511,9 @@ func (r *run[Deps, Output]) cancelSuspendedResponse(response *ModelResponse) {
 }
 
 func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error) {
+	defer r.refreshWorkspaceRef()
 	for {
+		r.refreshWorkspaceRef()
 		resp, err := r.modelRequest(ctx)
 		if err != nil {
 			var retry *RetryError
@@ -2485,8 +2550,19 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			return nil, err
 		}
 		r.messages = append(r.messages, *resp)
-		if len(resp.Parts) == 0 && resp.FinishReason == FinishReasonContentFilter {
-			return nil, newContentFilterError(resp)
+		if resp.FinishReason == FinishReasonContentFilter {
+			hasOutput := false
+			for _, part := range resp.Parts {
+				switch part := part.(type) {
+				case TextPart:
+					hasOutput = hasOutput || part.Content != ""
+				case ToolCallPart, FilePart, SpeechPart:
+					hasOutput = true
+				}
+			}
+			if !hasOutput {
+				return nil, newContentFilterError(resp)
+			}
 		}
 
 		calls := resp.ToolCalls()
@@ -2941,6 +3017,15 @@ func (r *run[Deps, Output]) executeCalls(
 func (r *run[Deps, Output]) executeCallsWithCallEvents(
 	ctx context.Context, calls []ToolCallPart, emitCalls bool,
 ) ([]RequestPart, *Output, error) {
+	seenCallIDs := make(map[string]struct{}, len(calls))
+	for _, call := range calls {
+		if _, exists := seenCallIDs[call.ToolCallID]; exists {
+			return nil, nil, &UnexpectedModelBehaviorError{Message: fmt.Sprintf(
+				"model returned duplicate tool call ID %q", call.ToolCallID,
+			)}
+		}
+		seenCallIDs[call.ToolCallID] = struct{}{}
+	}
 	r.pendingDeferred = nil
 	if emitCalls && !r.emitToolCallEvents(calls) {
 		return nil, nil, context.Canceled
@@ -3245,7 +3330,6 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 		winner = nil
 	}
 	pending := DeferredToolRequests{Metadata: map[string]map[string]any{}}
-	seenDeferredIDs := map[string]struct{}{}
 	parts := make([]RequestPart, 0, len(outcomes))
 	for index := range outcomes {
 		outcome := &outcomes[index]
@@ -3271,10 +3355,6 @@ func (r *run[Deps, Output]) collectCallOutcomes(
 				if id == "" {
 					return nil, nil, fmt.Errorf("ai: deferred tool call %q has an empty tool call ID", outcome.deferred.call.ToolName)
 				}
-				if _, duplicate := seenDeferredIDs[id]; duplicate {
-					return nil, nil, fmt.Errorf("ai: deferred tool calls have duplicate tool call ID %q", id)
-				}
-				seenDeferredIDs[id] = struct{}{}
 				if outcome.deferred.kind == deferredCallExternal {
 					pending.Calls = append(pending.Calls, outcome.deferred.call)
 				} else {
@@ -3989,15 +4069,17 @@ func (r *run[Deps, Output]) outputRetryCount() int {
 }
 
 func (r *run[Deps, Output]) result(out Output) *RunResult[Output] {
+	r.refreshWorkspaceRef()
 	usage := r.usageSnapshot()
 	usage.ToolCalls += int(r.toolCalls.Load())
 	return &RunResult[Output]{
-		Output: out, usage: usage, messages: r.messages, newMessages: r.newMessages,
+		Output: out, workspace: r.rc.Workspace, usage: usage, messages: r.messages, newMessages: r.newMessages,
 		metadata: r.metadata.snapshot(), runID: r.info.RunID, conversationID: r.info.ConversationID,
 	}
 }
 
 func (r *run[Deps, Output]) deferredResult(requests DeferredToolRequests) (*RunResult[Output], error) {
+	r.refreshWorkspaceRef()
 	if err := persistPendingMessages(r.messages, r.pendingMessages); err != nil {
 		return nil, err
 	}
@@ -4005,7 +4087,7 @@ func (r *run[Deps, Output]) deferredResult(requests DeferredToolRequests) (*RunR
 	usage.ToolCalls += int(r.toolCalls.Load())
 	requests = requests.Clone()
 	return &RunResult[Output]{
-		usage: usage, messages: r.messages, newMessages: r.newMessages,
+		workspace: r.rc.Workspace, usage: usage, messages: r.messages, newMessages: r.newMessages,
 		metadata: r.metadata.snapshot(), deferred: &requests,
 		runID: r.info.RunID, conversationID: r.info.ConversationID,
 	}, nil
@@ -4300,14 +4382,43 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 			}
 		}
 		result, err := r.loop(ctx)
-		if err != nil {
-			return RunOutcome{}, err
+		var outcome RunOutcome
+		if err == nil {
+			if metadataErr := r.resolveMetadata(ctx); metadataErr != nil {
+				return RunOutcome{}, metadataErr
+			}
+			result.metadata = r.metadata.snapshot()
+			outcome = runOutcomeFromResult(result)
 		}
-		if err := r.resolveMetadata(ctx); err != nil {
-			return RunOutcome{}, err
+		if eventErr := r.streamEventError(); eventErr != nil {
+			err = eventErr
 		}
-		result.metadata = r.metadata.snapshot()
-		return runOutcomeFromResult(result), nil
+		detached := errors.Is(context.Cause(r.ctx), errStreamDetached)
+		if err != nil && !detached {
+			for index := len(r.capabilities) - 1; index >= 0; index-- {
+				hook, ok := r.capabilities[index].(RunErrorHook)
+				if !ok {
+					continue
+				}
+				outcome, err = hook.OnRunError(ctx, r.capabilityInfo(index), err)
+				if err == nil {
+					break
+				}
+			}
+		}
+		if err == nil {
+			for index := len(r.capabilities) - 1; index >= 0; index-- {
+				hook, ok := r.capabilities[index].(AfterRunHook)
+				if !ok {
+					continue
+				}
+				outcome, err = hook.AfterRun(ctx, r.capabilityInfo(index), outcome.Clone())
+				if err != nil {
+					break
+				}
+			}
+		}
+		return outcome, err
 	})
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(RunWrapper); ok {
@@ -4319,34 +4430,6 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 		}
 	}
 	outcome, err := next(ctx)
-	if eventErr := r.streamEventError(); eventErr != nil {
-		err = eventErr
-	}
-	detached := errors.Is(context.Cause(r.ctx), errStreamDetached)
-	if err != nil && !detached {
-		for index := len(r.capabilities) - 1; index >= 0; index-- {
-			hook, ok := r.capabilities[index].(RunErrorHook)
-			if !ok {
-				continue
-			}
-			outcome, err = hook.OnRunError(ctx, r.capabilityInfo(index), err)
-			if err == nil {
-				break
-			}
-		}
-	}
-	if err == nil {
-		for index := len(r.capabilities) - 1; index >= 0; index-- {
-			hook, ok := r.capabilities[index].(AfterRunHook)
-			if !ok {
-				continue
-			}
-			outcome, err = hook.AfterRun(ctx, r.capabilityInfo(index), outcome.Clone())
-			if err != nil {
-				break
-			}
-		}
-	}
 	cause := context.Cause(r.ctx)
 	if errors.Is(cause, ErrRunCancelled) {
 		usage := r.usageSnapshot()

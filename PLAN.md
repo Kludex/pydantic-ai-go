@@ -23,10 +23,12 @@ github.com/Kludex/pydantic-ai-go
 │   ├── ai/models/openai/                   // package openai: implements ai.Model
 │   ├── ai/models/anthropic/
 │   ├── ai/models/google/
+│   ├── ai/models/systemone/                // package systemone: decision models over /v1/systemone
 │   ├── ai/models/fakes/                    // package fakes: TestModel, FunctionModel for users' tests
 │   ├── ai/images/                          // direct image generation, providers, instrumentation, fakes
 │   ├── ai/mcp/                             // official MCP client and toolset adapters
-│   └── ai/a2a/                             // official A2A server and client adapters
+│   ├── ai/a2a/                             // official A2A server and client adapters
+│   └── ai/workspace*.go                    // workspace contracts and the local backend
 └── examples/
 ```
 
@@ -104,6 +106,14 @@ result.Output // Weather, unmarshalled and validated
 Options at construction: `WithInstructions`, `WithInstructionsFunc`, `WithModelSettings`, `WithUsageLimits`, `WithMaxToolRetries`, `WithOutputMode`, later `WithCapabilities`. Run options: `WithMessageHistory`, per-run settings overrides.
 
 Multimodal input arrives later as `RunParts(ctx, []UserPart{...}, deps)` without breaking the string signature.
+
+### Conversation
+
+`Conversation` is the detached persistence and continuation unit. It carries messages, cumulative usage, the conversation ID, and unresolved deferred requests. `WithConversation` continues it without mutating the stored branch. `RunResult.Conversation()` produces the next snapshot.
+
+### Workspaces
+
+`Workspace` gives tools one environment for files and commands through small optional backend interfaces. A run selects an explicit workspace, a trusted persisted `WorkspaceRef`, or a capability-provided backend. The core includes a local backend and read-only facade. It does not add model tools, sandboxing, or workflow-runtime ownership.
 
 ### RunContext
 

@@ -47,7 +47,7 @@ func (model *Model) Embed(
 			ModelID: modelID(model.modelName, values), Body: body, Headers: maps.Clone(values.headers),
 		})
 		if err != nil {
-			return nil, fmt.Errorf("bedrock embeddings: invoke %q: %w", model.modelName, err)
+			return nil, model.invokeError(ctx, err)
 		}
 		vectors, responseID, err = model.parseResponse(response.Body)
 		if err != nil {

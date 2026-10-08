@@ -173,21 +173,25 @@ type ModelDefaultSettings interface {
 	DefaultModelSettings() ModelSettings
 }
 
-// PromptCacheRetentionModel is implemented by models that can report how long
-// provider prompt-cache entries requested by settings may remain reusable.
+// CacheRetentionModel is implemented by models that can report how long
+// provider cache entries requested by settings may remain reusable.
+type CacheRetentionModel interface {
+	// CacheRetention returns the requested retention and whether it is known.
+	CacheRetention(settings ModelSettings) (time.Duration, bool)
+}
+
+// PromptCacheRetentionModel is implemented by models using the former method name.
+//
+// Deprecated: implement CacheRetentionModel instead.
 type PromptCacheRetentionModel interface {
 	// PromptCacheRetention returns the requested retention and whether it is known.
 	PromptCacheRetention(settings ModelSettings) (time.Duration, bool)
 }
 
-// ResolvePromptCacheRetention reports the longest requested provider cache lifetime.
+// ResolveCacheRetention reports the longest requested provider cache lifetime.
 // Model defaults are merged before the provider interprets its settings.
-func ResolvePromptCacheRetention(model Model, settings *ModelSettings) (time.Duration, bool) {
+func ResolveCacheRetention(model Model, settings *ModelSettings) (time.Duration, bool) {
 	if modelIsNil(model) {
-		return 0, false
-	}
-	resolver, ok := model.(PromptCacheRetentionModel)
-	if !ok {
 		return 0, false
 	}
 	merged := ModelSettings{}
@@ -195,7 +199,20 @@ func ResolvePromptCacheRetention(model Model, settings *ModelSettings) (time.Dur
 		merged = defaults.DefaultModelSettings()
 	}
 	merged = mergeModelSettings(merged, settings)
-	return resolver.PromptCacheRetention(merged)
+	if resolver, ok := model.(CacheRetentionModel); ok {
+		return resolver.CacheRetention(merged)
+	}
+	if resolver, ok := model.(PromptCacheRetentionModel); ok {
+		return resolver.PromptCacheRetention(merged)
+	}
+	return 0, false
+}
+
+// ResolvePromptCacheRetention is the former name of ResolveCacheRetention.
+//
+// Deprecated: use ResolveCacheRetention.
+func ResolvePromptCacheRetention(model Model, settings *ModelSettings) (time.Duration, bool) {
+	return ResolveCacheRetention(model, settings)
 }
 
 func modelName(model Model) string {
@@ -404,6 +421,8 @@ type ModelSettings struct {
 	ParallelToolCalls *bool
 	// Thinking configures portable provider reasoning.
 	Thinking *ThinkingSettings
+	// Cache configures portable prompt caching. Nil leaves caching unconfigured.
+	Cache *CacheConfig
 }
 
 // Clone returns settings detached from pointer and slice fields.
@@ -420,6 +439,11 @@ func (s ModelSettings) Clone() ModelSettings {
 	s.ExtraBody = cloneSchemaMap(s.ExtraBody)
 	s.StopSequences = slices.Clone(s.StopSequences)
 	s.ParallelToolCalls = clonePointer(s.ParallelToolCalls)
+	if s.Cache != nil {
+		cache := *s.Cache
+		cache.Messages = clonePointer(cache.Messages)
+		s.Cache = &cache
+	}
 	if s.Thinking != nil {
 		thinking := *s.Thinking
 		thinking.TokenBudget = clonePointer(thinking.TokenBudget)
@@ -445,6 +469,9 @@ func validateModelSettings(settings ModelSettings) error {
 	case "", ServiceTierAuto, ServiceTierDefault, ServiceTierFlex, ServiceTierPriority:
 	default:
 		return fmt.Errorf("ai: invalid service tier %q", settings.ServiceTier)
+	}
+	if err := validateCacheConfig(settings.Cache); err != nil {
+		return err
 	}
 	return validateThinkingSettings(settings.Thinking)
 }
@@ -523,6 +550,9 @@ func mergeModelSettings(base ModelSettings, override *ModelSettings) ModelSettin
 	if override.Thinking != nil {
 		thinking := ModelSettings{Thinking: override.Thinking}.Clone()
 		base.Thinking = thinking.Thinking
+	}
+	if override.Cache != nil {
+		base.Cache = ModelSettings{Cache: override.Cache}.Clone().Cache
 	}
 	return base
 }

@@ -12,7 +12,7 @@ Deprecated APIs remain available for at least one minor release when a compatibi
 
 ## Public Go API
 
-The compatibility promise covers exported identifiers in the `ai` package and its provider, embedding, MCP, retry, and evaluation packages. It also covers documented option precedence, lifecycle ownership, concurrency behavior, and errors intended for `errors.Is` or `errors.As`.
+The compatibility promise covers exported identifiers in the `ai` package and its provider, embedding, MCP, retry, workspace, and evaluation packages. It also covers documented option precedence, lifecycle ownership, concurrency behavior, and errors intended for `errors.Is` or `errors.As`.
 
 The following details are not stable contracts:
 
@@ -32,7 +32,7 @@ Raising the minimum Go version may happen in a minor release before `v1.0.0`. Af
 
 ## Persisted messages
 
-`MarshalMessages` and `UnmarshalMessages` are the stable persistence boundary. The project preserves documented discriminators and continues to decode supported legacy aliases. New optional fields may appear in serialized messages without a major release.
+`MarshalMessages`, `UnmarshalMessages`, and `Conversation` JSON are the stable persistence boundary. The project preserves documented discriminators and continues to decode supported legacy aliases. New optional fields may appear in serialized messages without a major release.
 
 Compatibility claims apply to the PydanticAI baseline recorded in `CHECKLIST.md` and `.upstream-sync.json`. A checklist item marked partial does not promise compatibility for the missing upstream variants.
 
@@ -43,6 +43,26 @@ Application-defined values in metadata or tool returns must remain valid for the
 Provider APIs change independently of this module. A compatible release may add model names, settings, metadata, finish reasons, or native tools. Removing a provider package or a documented setting follows the version guarantees above.
 
 A provider can reject a model or feature that its remote API no longer supports. This is not a Go API compatibility break. The library should return an inspectable error instead of silently changing the request.
+
+## Audited upstream additions
+
+The port includes these applicable changes through the baseline recorded in `.upstream-sync.json`:
+
+| Commit | Go behavior |
+| --- | --- |
+| `e6eee68add2178c45d0e5603ae57f52b248d0d7d` | Generic System One questions when options provide the meaning but instructions are absent; `systemone.Profile.RequiresInstructions` can explicitly disable the fallback |
+| `5855737715205bafee933f842b413f7cb483ffa1` | Indexed keyword tool-search corpus, invalidated by names, descriptions, membership, and order; concurrency-safe ranking preserves undiscovered-first and corpus-order ties |
+| `5274216031eeceef1523d78e835c34410e13b376` | Portable `ModelSettings.Cache`, `CacheConfig`, and `Caching`; provider-local precedence, retention snapping, stable-prefix-only caching, wide-turn boundaries, honored-tier outlook, and missing-configuration telemetry |
+
+Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
+
+These harness-only commits are permanently excluded. No Go code is added for either:
+
+- `d9a8a4bbee3f37d990a7a9e9bfdc71c8ddba4d33`: canonical session events in the gh-aw clai2 runner. This port does not own a harness runner.
+- `2132206fb5d6b7cbe0abaef6e17a4825bddde409`: relocate `MCPReadOnlyNoToolsWarning` to keep Python harness imports light. There is no corresponding library behavior or Go import-time warning mechanism.
+- `f55bfd2d7b190c68ac7f78371f5da89fa9b11164`: change Harness spend accrual around durable continuation retries. The core change only documents a private Python observer consumed by that version-pinned Harness package.
+
+Upstream patches are reference data, not executable inputs. These additions do not introduce harness capability loading or self-extension.
 
 ## Reporting compatibility problems
 

@@ -76,6 +76,8 @@ type Settings struct {
 	MaxTokens int
 	// ParallelToolCalls controls concurrent provider function calls.
 	ParallelToolCalls *bool
+	// AsyncToolCalls enables asynchronous generation on models with an optional mode.
+	AsyncToolCalls *bool
 	// ToolChoice controls whether and which functions may be called.
 	ToolChoice ToolChoice
 	// InputTranscriptionModel selects a provider transcription model. An empty value disables it.

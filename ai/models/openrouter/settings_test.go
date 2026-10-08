@@ -90,6 +90,22 @@ func TestOpenRouterThinkingLevels(t *testing.T) {
 	}
 }
 
+func TestOpenRouterCurrentRoutingValues(t *testing.T) {
+	settings, err := (openrouter.Settings{Provider: &openrouter.ProviderRouting{
+		Sort: openrouter.ProviderSortExacto,
+		Quantizations: []openrouter.Quantization{
+			openrouter.QuantizationMXFP4, openrouter.QuantizationNVFP4, openrouter.QuantizationMXFP8,
+		},
+	}}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := settings.ExtraBody["provider"].(openrouter.ProviderRouting)
+	if provider.Sort != openrouter.ProviderSortExacto || len(provider.Quantizations) != 3 {
+		t.Fatalf("unexpected routing values: %+v", provider)
+	}
+}
+
 func TestOpenRouterSettingsValidation(t *testing.T) {
 	enabled := true
 	for name, test := range map[string]struct {
@@ -182,14 +198,14 @@ func TestOpenRouterPromptCacheRetention(t *testing.T) {
 	anthropic := openrouter.NewModel(
 		"anthropic/claude-sonnet-4.6", openrouter.WithDefaultSettings(anthropicSettings),
 	)
-	if duration, ok := ai.ResolvePromptCacheRetention(anthropic, nil); !ok || duration != time.Hour {
+	if duration, ok := ai.ResolveCacheRetention(anthropic, nil); !ok || duration != time.Hour {
 		t.Fatalf("unexpected Anthropic retention: %s %v", duration, ok)
 	}
 	fiveMinutes, err := (openrouter.Settings{CacheToolDefinitions: openrouter.CacheTTL5Minutes}).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if duration, ok := ai.ResolvePromptCacheRetention(anthropic, &fiveMinutes); !ok || duration != 5*time.Minute {
+	if duration, ok := ai.ResolveCacheRetention(anthropic, &fiveMinutes); !ok || duration != 5*time.Minute {
 		t.Fatalf("unexpected Anthropic five-minute retention: %s %v", duration, ok)
 	}
 	googleSettings, err := (openrouter.Settings{CacheMessages: openrouter.CacheTTL1Hour}).Build()
@@ -197,14 +213,14 @@ func TestOpenRouterPromptCacheRetention(t *testing.T) {
 		t.Fatal(err)
 	}
 	google := openrouter.NewModel("google/gemini-3.1-pro")
-	if duration, ok := ai.ResolvePromptCacheRetention(google, &googleSettings); ok || duration != 0 {
+	if duration, ok := ai.ResolveCacheRetention(google, &googleSettings); ok || duration != 0 {
 		t.Fatalf("Google cache TTL should remain unknown: %s %v", duration, ok)
 	}
 	toolOnly, err := (openrouter.Settings{CacheToolDefinitions: openrouter.CacheTTL1Hour}).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if duration, ok := ai.ResolvePromptCacheRetention(google, &toolOnly); ok || duration != 0 {
+	if duration, ok := ai.ResolveCacheRetention(google, &toolOnly); ok || duration != 0 {
 		t.Fatalf("unsupported Google tool cache reported retention: %s %v", duration, ok)
 	}
 	for name, test := range map[string]struct {

@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 )
@@ -18,27 +19,70 @@ func (r *run[Deps, Output]) validateToolCall(
 		Call: call, Definition: entry.def, Approved: rc.ToolCallApproved,
 		CallMetadata: cloneSchemaMap(rc.ToolCallMetadata),
 	}.Clone()
-	rawArgs := slices.Clone(call.Args)
-	for index, capability := range r.capabilities {
-		hook, ok := capability.(BeforeToolValidationHook)
-		if !ok {
-			continue
-		}
-		var err error
-		rawArgs, err = hook.BeforeToolValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), slices.Clone(rawArgs))
-		if err != nil {
-			call.Args = slices.Clone(rawArgs)
-			return call, nil, err
-		}
-	}
-	call.Args = slices.Clone(rawArgs)
+	validatedOnce := false
+	var validatedArgs any
 	next := ToolValidationFunc(func(ctx context.Context, rawArgs json.RawMessage) (any, error) {
-		if validator := r.currentToolValidators[call.ToolName]; validator != nil {
-			if err := validator.ValidateJSON(rawArgs); err != nil {
-				return nil, &toolArgsSchemaValidationError{err: err}
+		for index, capability := range r.capabilities {
+			hook, ok := capability.(BeforeToolValidationHook)
+			if !ok {
+				continue
+			}
+			var err error
+			rawArgs, err = hook.BeforeToolValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), slices.Clone(rawArgs))
+			call.Args = slices.Clone(rawArgs)
+			if err != nil {
+				return nil, err
 			}
 		}
-		return entry.validate(ctx, rc, rawArgs)
+		call.Args = slices.Clone(rawArgs)
+		var validated any
+		var err error
+		if validator := r.currentToolValidators[call.ToolName]; validator != nil {
+			if validationErr := validator.ValidateJSON(rawArgs); validationErr != nil {
+				err = &toolArgsSchemaValidationError{err: validationErr}
+			}
+		}
+		if err == nil {
+			validated, err = entry.validate(ctx, rc, rawArgs)
+		}
+		var failed *ToolFailedError
+		if err != nil && !errors.As(err, &failed) {
+			for index := len(r.capabilities) - 1; index >= 0; index-- {
+				hook, ok := r.capabilities[index].(ToolValidationErrorHook)
+				if !ok {
+					continue
+				}
+				validated, err = hook.OnToolValidationError(
+					ctx, r.capabilityInfo(index), hookContext.Clone(), slices.Clone(rawArgs), err,
+				)
+				if err == nil {
+					break
+				}
+			}
+		}
+		if err != nil {
+			return nil, err
+		}
+		if _, deferred := asToolHookDeferral(validated, nil); deferred {
+			return nil, fmt.Errorf("tool validation error hooks cannot defer a call")
+		}
+		validatedOnce = true
+		for index := len(r.capabilities) - 1; index >= 0; index-- {
+			hook, ok := r.capabilities[index].(AfterToolValidationHook)
+			if !ok {
+				continue
+			}
+			previous := validated
+			validated, err = hook.AfterToolValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), validated)
+			if err != nil {
+				return nil, err
+			}
+			if deferred, ok := asToolHookDeferral(validated, previous); ok {
+				return deferred, nil
+			}
+		}
+		validatedArgs = validated
+		return validated, nil
 	})
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(ToolValidationWrapper); ok {
@@ -51,46 +95,22 @@ func (r *run[Deps, Output]) validateToolCall(
 			}
 		}
 	}
-	validated, err := next(ctx, rawArgs)
-	if err != nil {
-		for index := len(r.capabilities) - 1; index >= 0; index-- {
-			hook, ok := r.capabilities[index].(ToolValidationErrorHook)
-			if !ok {
-				continue
-			}
-			validated, err = hook.OnToolValidationError(
-				ctx, r.capabilityInfo(index), hookContext.Clone(), slices.Clone(rawArgs), err,
-			)
-			if err == nil {
-				break
-			}
-		}
-	}
+	validated, err := next(ctx, slices.Clone(call.Args))
 	if err != nil {
 		return call, nil, err
 	}
-	if _, deferred := asToolHookDeferral(validated, nil); deferred {
-		return call, nil, fmt.Errorf("tool validation error hooks cannot defer a call")
+	args := validated
+	if deferred, ok := asToolHookDeferral(validated, validatedArgs); ok {
+		if !validatedOnce {
+			return call, nil, fmt.Errorf("tool validation wrappers cannot defer before validation")
+		}
+		args = deferred.args
+		validated = deferred
 	}
-	for index := len(r.capabilities) - 1; index >= 0; index-- {
-		hook, ok := r.capabilities[index].(AfterToolValidationHook)
-		if !ok {
-			continue
-		}
-		previous := validated
-		validated, err = hook.AfterToolValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), validated)
-		if err != nil {
-			return call, nil, err
-		}
-		if deferred, ok := asToolHookDeferral(validated, previous); ok {
-			call.Args, err = validatedToolArgsJSON(previous)
-			if err != nil {
-				return call, nil, fmt.Errorf("marshal validated arguments: %w", err)
-			}
-			return call, deferred, nil
-		}
+	if deferred, ok := validated.(toolHookDeferral); ok {
+		args = deferred.args
 	}
-	call.Args, err = validatedToolArgsJSON(validated)
+	call.Args, err = validatedToolArgsJSON(args)
 	if err != nil {
 		return call, nil, fmt.Errorf("marshal validated arguments: %w", err)
 	}

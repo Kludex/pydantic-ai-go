@@ -143,14 +143,14 @@ func TestOutputValidationAndProcessingHooksUseMiddlewareOrder(t *testing.T) {
 		t.Fatalf("unexpected output hook result=%+v err=%v", result, err)
 	}
 	want := []string{
-		"outer:before-validation", "inner:before-validation",
 		"outer:validation-wrapper-before", "inner:validation-wrapper-before",
-		"inner:validation-wrapper-after", "outer:validation-wrapper-after",
+		"outer:before-validation", "inner:before-validation",
 		"inner:after-validation", "outer:after-validation",
-		"outer:before-processing", "inner:before-processing",
-		"outer:processing-wrapper-before", "inner:processing-wrapper-before", "validator:11",
-		"inner:processing-wrapper-after", "outer:processing-wrapper-after",
+		"inner:validation-wrapper-after", "outer:validation-wrapper-after",
+		"outer:processing-wrapper-before", "inner:processing-wrapper-before",
+		"outer:before-processing", "inner:before-processing", "validator:11",
 		"inner:after-processing", "outer:after-processing",
+		"inner:processing-wrapper-after", "outer:processing-wrapper-after",
 	}
 	if !slices.Equal(log, want) {
 		t.Fatalf("unexpected output hook order:\n got %v\nwant %v", log, want)
@@ -211,10 +211,17 @@ func TestOutputProcessingErrorHooksRecoverInsideOut(t *testing.T) {
 			ToolName: "final_result", ToolCallID: "output", Args: json.RawMessage(`{"value":1}`),
 		}}}, nil
 	})
-	agent := ai.NewAgent[deps, hookedOutput](model, ai.WithCapabilities(outer, wrapper, inner))
+	agent := ai.NewAgent[deps, hookedOutput](model, ai.WithCapabilities(outer, inner))
+	agent.AddOutputValidator(func(context.Context, *ai.RunContext[deps], hookedOutput) error {
+		return errors.New("processing failed")
+	})
 	result, err := agent.Run(t.Context(), "go", deps{})
 	if err != nil || result.Output.Value != 9 {
 		t.Fatalf("unexpected processing recovery result=%+v err=%v", result, err)
+	}
+	bypassed := ai.NewAgent[deps, hookedOutput](model, ai.WithCapabilities(outer, wrapper, inner))
+	if _, err := bypassed.Run(t.Context(), "go", deps{}); err == nil || err.Error() != "ai: output processing: processing failed" {
+		t.Fatalf("wrapper failure reached error hooks: %v", err)
 	}
 }
 

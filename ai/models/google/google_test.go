@@ -411,6 +411,14 @@ func TestThinkingSettings(t *testing.T) {
 			model: "gemini-3-pro-preview", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
 			level: "LOW", include: true, hasInclude: true,
 		},
+		"flash image low snaps down": {
+			model: "gemini-3.1-flash-image", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow},
+			level: "MINIMAL", include: true, hasInclude: true,
+		},
+		"flash image medium snaps up": {
+			model: "gemini-3.1-flash-image", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
+			level: "HIGH", include: true, hasInclude: true,
+		},
 		"flash lite image low snaps down": {
 			model: "gemini-3.1-flash-lite-image", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow},
 			level: "MINIMAL", include: true, hasInclude: true,

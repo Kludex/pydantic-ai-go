@@ -74,6 +74,8 @@ func main() {
 
 ### Prompt caching
 
+Use [`ai.Caching{}` or `ModelSettings.Cache`](caching.md) for portable configuration. The provider-local settings below take precedence over that configuration.
+
 ```go
 package main
 
@@ -115,7 +117,9 @@ func main() {
 }
 ```
 
-`PromptCacheOptions` controls request-wide caching for GPT-5.6 and GPT-6 models with Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolvePromptCacheRetention` reports the longest requested lifetime for durable backends without treating in-memory caching as durable.
+`PromptCacheOptions` controls request-wide caching for GPT-5.6 and GPT-6 models with Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolveCacheRetention` reports the longest requested lifetime without treating in-memory caching as durable.
+
+`ai.PromptCacheOutlook` compares the latest served response with an explicit retention or `ModelProfile.DefaultCacheRetention`. It returns `warm`, `cold`, or `unknown`. Cache points extend a known boundary only when the provider honors their TTL, and they never invent one. Treat `unknown` like `warm` when deciding whether to mutate history.
 
 ## OpenAI Codex subscription
 
@@ -370,6 +374,10 @@ Register your own GitHub OAuth application and enable device flow. `NewOAuthFlow
 Copilot model availability depends on your subscription. The adapter sends model IDs unchanged and uses the Chat Completions endpoint. It resolves Claude, GPT, o-series, Gemini, Grok, Kimi, MAI, OSWE, Raptor, and exec-agent model families. It normalizes `reasoning_text` for Claude and Gemini models, drops sampling settings rejected by the affected Claude families, and removes thinking settings from unknown or known non-reasoning models. Responses-only models, realtime, and embeddings are not supported by the service. The embedding inference prefix remains available for upstream compatibility, but Copilot currently rejects `/embeddings` requests.
 
 Use `githubcopilot.WithBaseURL` for an enterprise host or local proxy. The default integration headers match GitHub's Copilot clients. A caller-provided HTTP client remains caller-owned.
+
+## System One decision models
+
+See [System One decision models](system-one.md) for a complete example, endpoint configuration, thresholds, model limits, and errors. You use `systemone.NewModel` or the `system-one:` inference prefix for any server exposing `POST /v1/systemone`, including local decision models served by Ollama.
 
 ## TypeSafe Jev
 

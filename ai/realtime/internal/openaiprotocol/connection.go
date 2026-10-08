@@ -40,6 +40,7 @@ type Config struct {
 	InterruptsResponseOnSpeech bool
 	SupportsImages             bool
 	OutputSampleRate           int
+	ManualAudioTurns           bool
 }
 
 // Connection implements the common OpenAI realtime websocket protocol.
@@ -63,6 +64,27 @@ type Connection struct {
 	responseInputs      []int
 	deferredInputs      []int
 	seenToolCalls       map[string]struct{}
+	idleTimeoutItems    map[string]bool
+	toolBatches         map[string]*toolBatch
+	toolResponses       map[string]string
+	reconnecting        bool
+	gaveUp              bool
+	manualMu            sync.Mutex
+	commitHeld          bool
+	commitAnnounced     bool
+	commitListener      func()
+	heldAudio           []map[string]any
+	heldCommitted       int
+	sentAudio           []map[string]any
+	audioUncommitted    bool
+	audioLatest         bool
+	speechDetected      bool
+}
+
+type toolBatch struct {
+	unanswered map[string]bool
+	input      int
+	done       bool
 }
 
 // New returns a configured protocol connection.
@@ -75,8 +97,27 @@ func New(config Config) (*Connection, error) {
 	}
 	return &Connection{
 		config: config, socket: config.Socket, model: config.ServerModel, seenToolCalls: map[string]struct{}{},
+		toolBatches: map[string]*toolBatch{}, toolResponses: map[string]string{}, idleTimeoutItems: map[string]bool{},
 	}, nil
 }
+
+// IsReconnecting reports that the current transport is being replaced.
+func (connection *Connection) IsReconnecting() bool {
+	connection.stateMu.Lock()
+	defer connection.stateMu.Unlock()
+	return connection.reconnecting
+}
+
+// CanReconnect reports whether another transport recovery is available.
+func (connection *Connection) CanReconnect() bool {
+	connection.stateMu.Lock()
+	defer connection.stateMu.Unlock()
+	return !connection.gaveUp && connection.config.Reconnect != nil && connection.config.Dial != nil &&
+		connection.reconnects < connection.config.Reconnect.MaxReconnects
+}
+
+// AnswersToolCallsPerResponse reports that every response's tool results share one reply.
+func (*Connection) AnswersToolCallsPerResponse() bool { return true }
 
 // ModelName returns the model reported by the server handshake.
 func (connection *Connection) ModelName() string {
@@ -112,6 +153,16 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if connection.config.ManualAudioTurns {
+		switch input.(type) {
+		case realtime.AudioInput, realtime.CommitAudio, realtime.ClearAudio, realtime.CreateResponse,
+			realtime.CancelResponse, realtime.TruncateOutput:
+		default:
+			connection.manualMu.Lock()
+			connection.audioLatest = false
+			connection.manualMu.Unlock()
+		}
+	}
 	connection.stateMu.Lock()
 	inputIndex := connection.inputsReceived
 	connection.inputsReceived++
@@ -120,6 +171,9 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 	case realtime.AudioInput:
 		if len(input.Data)%2 != 0 {
 			return fmt.Errorf("realtime: PCM16 audio length must be even")
+		}
+		if connection.IsReconnecting() {
+			return nil
 		}
 		return connection.writeJSON(ctx, map[string]any{
 			"type": "input_audio_buffer.append", "audio": base64.StdEncoding.EncodeToString(input.Data),
@@ -149,23 +203,26 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 		if err != nil {
 			return err
 		}
-		if err := connection.writeJSON(ctx, map[string]any{
-			"type": "conversation.item.create",
-			"item": map[string]any{
-				"type": "function_call_output", "call_id": input.ToolCallID, "output": input.Output,
-			},
-		}); err != nil {
-			return err
-		}
+		items := []map[string]any{{"type": "function_call_output", "call_id": input.ToolCallID, "output": input.Output}}
 		if len(parts) > 0 {
-			err = connection.writeJSON(ctx, map[string]any{
-				"type": "conversation.item.create",
-				"item": map[string]any{"type": "message", "role": "user", "content": parts},
-			})
-			if err == nil {
-				err = connection.requestResponse(ctx, []int{inputIndex})
+			items = append(items, map[string]any{"type": "message", "role": "user", "content": parts})
+		}
+		for _, item := range items {
+			if err := connection.writeJSON(ctx, map[string]any{"type": "conversation.item.create", "item": item}); err != nil {
+				return err
 			}
-			return err
+		}
+		connection.stateMu.Lock()
+		responseID, batched := connection.toolResponses[input.ToolCallID]
+		if batched {
+			delete(connection.toolResponses, input.ToolCallID)
+			batch := connection.toolBatches[responseID]
+			delete(batch.unanswered, input.ToolCallID)
+			batch.input = inputIndex
+		}
+		connection.stateMu.Unlock()
+		if batched {
+			return connection.answerToolBatch(ctx, responseID)
 		}
 		return connection.requestResponse(ctx, []int{inputIndex})
 	case realtime.CommitAudio:
@@ -253,6 +310,15 @@ func clientEventID(kind string, inputs []int) string {
 }
 
 func (connection *Connection) writeJSON(ctx context.Context, value any) error {
+	if connection.config.ManualAudioTurns {
+		connection.manualMu.Lock()
+		defer connection.manualMu.Unlock()
+		return connection.writeManual(ctx, value.(map[string]any))
+	}
+	return connection.writeRaw(ctx, value)
+}
+
+func (connection *Connection) writeRaw(ctx context.Context, value any) error {
 	data, _ := json.Marshal(value)
 	connection.mu.RLock()
 	socket := connection.socket
@@ -276,6 +342,14 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 					return
 				}
+				if !connection.config.RestoresInFlightState {
+					connection.stateMu.Lock()
+					active, responseID := connection.responseActive, connection.activeResponseID
+					connection.stateMu.Unlock()
+					if active && !yield(realtime.ResponseDone{Interrupted: true, ProviderResponseID: responseID}, nil) {
+						return
+					}
+				}
 				reconnected, reconnectErr := connection.reconnect(ctx)
 				if reconnectErr != nil {
 					yield(nil, reconnectErr)
@@ -293,6 +367,14 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 			if messageType != websocket.MessageText {
 				continue
 			}
+			var lifecycle struct {
+				Type   string `json:"type"`
+				ItemID string `json:"item_id"`
+			}
+			_ = json.Unmarshal(data, &lifecycle)
+			if lifecycle.Type == "input_audio_buffer.timeout_triggered" && connection.config.InputTranscriptionEnabled {
+				connection.idleTimeoutItems[lifecycle.ItemID] = true
+			}
 			events, err := connection.config.Mapper(data)
 			if err != nil {
 				if !yield(realtime.SessionError{Err: err, Recoverable: true}, nil) {
@@ -301,10 +383,29 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 				continue
 			}
 			for _, event := range events {
+				if transcript, ok := event.(realtime.InputTranscript); ok && connection.idleTimeoutItems[transcript.ItemID] {
+					if transcript.Final {
+						delete(connection.idleTimeoutItems, transcript.ItemID)
+					}
+					continue
+				}
+				if failed, ok := event.(realtime.InputTranscriptionError); ok && connection.idleTimeoutItems[failed.ItemID] {
+					delete(connection.idleTimeoutItems, failed.ItemID)
+					continue
+				}
 				if call, ok := event.(realtime.ToolCall); ok {
 					connection.stateMu.Lock()
 					_, duplicate := connection.seenToolCalls[call.ToolCallID]
 					connection.seenToolCalls[call.ToolCallID] = struct{}{}
+					if !duplicate && call.ResponseID != "" {
+						batch := connection.toolBatches[call.ResponseID]
+						if batch == nil {
+							batch = &toolBatch{unanswered: map[string]bool{}}
+							connection.toolBatches[call.ResponseID] = batch
+						}
+						batch.unanswered[call.ToolCallID] = true
+						connection.toolResponses[call.ToolCallID] = call.ResponseID
+					}
 					connection.stateMu.Unlock()
 					if duplicate {
 						continue
@@ -316,8 +417,28 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 						return
 					}
 				}
+				if _, started := event.(realtime.ResponseStarted); started {
+					connection.stateMu.Lock()
+					merged := max(0, len(connection.responseInputs)-1)
+					connection.stateMu.Unlock()
+					if merged > 0 && !yield(realtime.ResponseRequestsMerged{Count: merged}, nil) {
+						return
+					}
+				}
 				connection.observe(event)
-				if _, done := event.(realtime.ResponseDone); done {
+				if done, ok := event.(realtime.ResponseDone); ok {
+					connection.stateMu.Lock()
+					batch := connection.toolBatches[done.ProviderResponseID]
+					if batch != nil {
+						batch.done = true
+					}
+					connection.stateMu.Unlock()
+					if batch != nil {
+						if err := connection.answerToolBatch(ctx, done.ProviderResponseID); err != nil {
+							yield(nil, err)
+							return
+						}
+					}
 					if err := connection.sendDeferredResponse(ctx); err != nil {
 						yield(nil, err)
 						return
@@ -325,6 +446,18 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 				}
 				if !yield(event, nil) {
 					return
+				}
+				if sessionError, ok := event.(realtime.SessionError); ok && !sessionError.Recoverable {
+					return
+				}
+				if _, done := event.(realtime.ResponseDone); done && connection.config.ManualAudioTurns {
+					connection.manualMu.Lock()
+					err := connection.flushHeldAudio(ctx, false)
+					connection.manualMu.Unlock()
+					if err != nil {
+						yield(nil, err)
+						return
+					}
 				}
 			}
 		}
@@ -341,7 +474,13 @@ func (connection *Connection) observe(event realtime.CodecEvent) {
 			connection.generatedAudioBytes = 0
 		}
 		connection.generatedAudioBytes += len(event.Data)
+		connection.currentContentIndex = event.ContentIndex
+	case realtime.InputSpeechStarted:
+		if connection.config.ManualAudioTurns {
+			connection.speechDetected = true
+		}
 	case realtime.ResponseStarted:
+		connection.speechDetected = false
 		connection.responseActive = true
 		connection.activeResponseID = event.ResponseID
 	case realtime.ResponseDone:
@@ -361,6 +500,22 @@ func (connection *Connection) rejectResponse(ctx context.Context, inputIndex int
 	connection.stateMu.Unlock()
 	if matched {
 		return connection.sendDeferredResponse(ctx)
+	}
+	return nil
+}
+
+func (connection *Connection) answerToolBatch(ctx context.Context, responseID string) error {
+	connection.stateMu.Lock()
+	batch := connection.toolBatches[responseID]
+	ready := batch != nil && batch.done && len(batch.unanswered) == 0
+	input := 0
+	if ready {
+		input = batch.input
+		delete(connection.toolBatches, responseID)
+	}
+	connection.stateMu.Unlock()
+	if ready {
+		return connection.requestResponse(ctx, []int{input})
 	}
 	return nil
 }
@@ -387,7 +542,27 @@ func (connection *Connection) reconnect(ctx context.Context) (bool, error) {
 		connection.stateMu.Unlock()
 		return false, fmt.Errorf("realtime: reconnect limit reached")
 	}
+	connection.reconnecting = true
 	connection.stateMu.Unlock()
+	if connection.config.ManualAudioTurns {
+		connection.manualMu.Lock()
+		if connection.commitHeld {
+			connection.heldAudio = append(slices.Clone(connection.sentAudio), connection.heldAudio...)
+			connection.heldCommitted += len(connection.sentAudio)
+		}
+		connection.sentAudio = nil
+		connection.audioLatest = false
+		connection.audioUncommitted = false
+		connection.stateMu.Lock()
+		connection.speechDetected = false
+		connection.stateMu.Unlock()
+		connection.manualMu.Unlock()
+	}
+	defer func() {
+		connection.stateMu.Lock()
+		connection.reconnecting = false
+		connection.stateMu.Unlock()
+	}()
 	var last error
 	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
 		if attempt > 0 || policy.BaseDelay > 0 {
@@ -412,6 +587,42 @@ func (connection *Connection) reconnect(ctx context.Context) (bool, error) {
 		var messages []ai.ModelMessage
 		if history != nil {
 			messages = history()
+			for index, message := range messages {
+				switch message := message.(type) {
+				case ai.ModelRequest:
+					var parts []ai.RequestPart
+					for _, part := range message.Parts {
+						switch part := part.(type) {
+						case ai.SpeechPart:
+							if part.Transcript == nil || *part.Transcript == "" {
+								parts = append(parts, ai.UserPromptPart{Content: "[The user spoke; no transcript is available.]"})
+							} else {
+								part.Audio = nil
+								parts = append(parts, part)
+							}
+						case ai.UserPromptPart:
+							part.Contents = slices.DeleteFunc(slices.Clone(part.Contents), func(content ai.UserContent) bool {
+								_, text := content.(ai.TextContent)
+								return !text
+							})
+							parts = append(parts, part)
+						default:
+							parts = append(parts, part)
+						}
+					}
+					message.Parts = parts
+					messages[index] = message
+				case ai.ModelResponse:
+					message.Parts = slices.Clone(message.Parts)
+					for index, part := range message.Parts {
+						if speech, ok := part.(ai.SpeechPart); ok {
+							speech.Audio = nil
+							message.Parts[index] = speech
+						}
+					}
+					messages[index] = message
+				}
+			}
 		}
 		socket, model, err := connection.config.Dial(ctx, messages)
 		if err == nil && socket == nil {
@@ -433,12 +644,18 @@ func (connection *Connection) reconnect(ctx context.Context) (bool, error) {
 			connection.responseActive = false
 			connection.activeResponseID = ""
 			connection.responseInputs = nil
+			connection.deferredInputs = nil
+			clear(connection.toolBatches)
+			clear(connection.toolResponses)
 			connection.currentItemID = ""
 			connection.generatedAudioBytes = 0
 		}
 		connection.stateMu.Unlock()
 		return true, nil
 	}
+	connection.stateMu.Lock()
+	connection.gaveUp = true
+	connection.stateMu.Unlock()
 	return false, fmt.Errorf("realtime: reconnect failed: %w", last)
 }
 

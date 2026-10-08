@@ -8,7 +8,7 @@ interactions:
         proto_minor: 1
         content_length: 429
         host: api.anthropic.com
-        body: '{"model":"claude-haiku-4-5","max_tokens":4096,"system":"Use the get_weather tool, then answer briefly.","messages":[{"role":"user","content":[{"type":"text","text":"What is the weather in Berlin?"}]}],"tools":[{"name":"get_weather","description":"Get current weather for a city","input_schema":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}]}'
+        body: '{"model":"claude-haiku-4-5","max_tokens":64000,"system":"Use the get_weather tool, then answer briefly.","messages":[{"role":"user","content":[{"type":"text","text":"What is the weather in Berlin?"}]}],"tools":[{"name":"get_weather","description":"Get current weather for a city","input_schema":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}]}'
         headers:
             Anthropic-Version:
                 - "2023-06-01"
@@ -84,7 +84,7 @@ interactions:
         proto_minor: 1
         content_length: 698
         host: api.anthropic.com
-        body: '{"model":"claude-haiku-4-5","max_tokens":4096,"system":"Use the get_weather tool, then answer briefly.","messages":[{"role":"user","content":[{"type":"text","text":"What is the weather in Berlin?"}]},{"role":"assistant","content":[{"type":"tool_use","id":"toolu_016QB1XR1bVv9xqP4gW2HyBi","name":"get_weather","input":{"city":"Berlin"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_016QB1XR1bVv9xqP4gW2HyBi","content":"sunny, 21C in Berlin"}]}],"tools":[{"name":"get_weather","description":"Get current weather for a city","input_schema":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}]}'
+        body: '{"model":"claude-haiku-4-5","max_tokens":64000,"system":"Use the get_weather tool, then answer briefly.","messages":[{"role":"user","content":[{"type":"text","text":"What is the weather in Berlin?"}]},{"role":"assistant","content":[{"type":"tool_use","id":"toolu_016QB1XR1bVv9xqP4gW2HyBi","name":"get_weather","input":{"city":"Berlin"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_016QB1XR1bVv9xqP4gW2HyBi","content":"sunny, 21C in Berlin"}]}],"tools":[{"name":"get_weather","description":"Get current weather for a city","input_schema":{"additionalProperties":false,"properties":{"city":{"description":"City name","type":"string"}},"required":["city"],"type":"object"}}]}'
         headers:
             Anthropic-Version:
                 - "2023-06-01"

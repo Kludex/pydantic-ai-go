@@ -93,6 +93,30 @@ func TestTypeSafeResolvedAndFannedSchemas(t *testing.T) {
 	}
 }
 
+func TestTypeSafeDecisionLimits(t *testing.T) {
+	model := typesafe.NewModel("jev", typesafe.WithBaseURL(":"), typesafe.WithDecisionLimits(1, 0))
+	schema := objectSchema("choice", map[string]any{
+		"type": "string", "description": "Pick one", "anyOf": []any{
+			map[string]any{"const": "a"}, map[string]any{"const": "b"},
+		},
+	})
+	schema["required"] = []any{"choice"}
+	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: "choose"},
+	}}}, ai.ModelRequestParams{OutputTool: &ai.ToolDefinition{
+		Name: "final_result", Schema: schema,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Fatalf("unexpected choice-limit error: %v", err)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("negative decision limits did not panic")
+		}
+	}()
+	typesafe.WithDecisionLimits(-1, 0)
+}
+
 func TestTypeSafeNewSchemaEdges(t *testing.T) {
 	for _, test := range []struct {
 		name   string
@@ -310,6 +334,9 @@ func TestTypeSafeRoutingEdges(t *testing.T) {
 	var proposed *typesafe.ToolCallProposed
 	if !errors.As(err, &proposed) || proposed.ToolName != "act" {
 		t.Fatalf("unexpected proposed tool error: %v", err)
+	}
+	if route, probability := proposed.DecisionRoute(); route != "act" || probability != 1 {
+		t.Fatalf("unexpected proposed route: %q %g", route, probability)
 	}
 
 	server = httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {

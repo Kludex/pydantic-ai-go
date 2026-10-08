@@ -14,12 +14,18 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
 )
 
 func buildConverseInput(
 	ctx context.Context, modelName string, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*bedrockruntime.ConverseInput, error) {
-	settings, cache, requestSettings, err := extractSettings(params.Settings)
+	unified := params.Settings.Cache != nil && !hasCacheSettings(params.Settings)
+	translated, err := translateCache(modelName, params.Settings)
+	if err != nil {
+		return nil, err
+	}
+	settings, cache, requestSettings, err := extractSettings(translated)
 	if err != nil {
 		return nil, err
 	}
@@ -60,16 +66,41 @@ func buildConverseInput(
 			input.PromptVariables[name] = &types.PromptVariableValuesMemberText{Value: value}
 		}
 	}
-	if params.Instructions != "" {
-		input.System = append(input.System, &types.SystemContentBlockMemberText{Value: params.Instructions})
-	}
-	if cache.instructions != "" {
-		if len(input.System) == 0 {
-			return nil, fmt.Errorf("bedrock: instruction caching requires instructions")
+	if cache.instructions != "" && len(params.InstructionParts) > 0 {
+		static := 0
+		for _, part := range params.InstructionParts {
+			if part.Dynamic {
+				break
+			}
+			static++
 		}
-		input.System = append(input.System, &types.SystemContentBlockMemberCachePoint{
-			Value: providerCachePoint(cache.instructions),
-		})
+		for index, part := range params.InstructionParts {
+			input.System = append(input.System, &types.SystemContentBlockMemberText{Value: part.Content})
+			if index+1 == static {
+				input.System = append(input.System, &types.SystemContentBlockMemberCachePoint{
+					Value: providerCachePoint(cache.instructions),
+				})
+			}
+		}
+		if static == 0 {
+			cache.instructions = ""
+		}
+	} else {
+		if params.Instructions != "" {
+			input.System = append(input.System, &types.SystemContentBlockMemberText{Value: params.Instructions})
+		}
+		if cache.instructions != "" {
+			if len(input.System) == 0 {
+				if !unified {
+					return nil, fmt.Errorf("bedrock: instruction caching requires instructions")
+				}
+				cache.instructions = ""
+			} else {
+				input.System = append(input.System, &types.SystemContentBlockMemberCachePoint{
+					Value: providerCachePoint(cache.instructions),
+				})
+			}
+		}
 	}
 	for _, message := range messages {
 		switch value := message.(type) {
@@ -97,12 +128,27 @@ func buildConverseInput(
 		reservedCachePoints++
 	}
 	if cache.messages != "" {
+		roles := make([]string, len(input.Messages))
+		counts := make([]int, len(input.Messages))
+		for index, message := range input.Messages {
+			roles[index], counts[index] = string(message.Role), len(message.Content)
+		}
+		if previous := promptcache.PreviousTail(roles, counts); previous >= 0 {
+			point := &types.ContentBlockMemberCachePoint{Value: providerCachePoint(cache.messages)}
+			err := attachCachePoint(input.Messages[:previous+1], point, true)
+			if err != nil { // pragma: no cover - previous is a nonempty user message.
+				return nil, fmt.Errorf("bedrock: previous message caching: %w", err)
+			}
+		}
 		point := &types.ContentBlockMemberCachePoint{Value: providerCachePoint(cache.messages)}
-		if err := attachCachePoint(input.Messages, point); err != nil {
+		if err := attachCachePoint(input.Messages, point, true); err != nil {
 			return nil, fmt.Errorf("bedrock: message caching: %w", err)
 		}
 	}
 	input.ToolConfig = toolConfiguration(params)
+	if unified && input.ToolConfig == nil {
+		cache.toolDefinitions = ""
+	}
 	if cache.toolDefinitions != "" {
 		if input.ToolConfig == nil {
 			return nil, fmt.Errorf("bedrock: tool-definition caching requires tools")

@@ -59,6 +59,12 @@ func prepareOpenAISchema(source map[string]any, requested *bool) (map[string]any
 		delete(schema, "$schema")
 		delete(schema, "discriminator")
 		if ref, ok := schema["$ref"].(string); ok {
+			if requested == nil && strings.HasPrefix(ref, "#/") {
+				parts := strings.Split(strings.TrimPrefix(ref, "#/"), "/")
+				if len(parts) != 2 || parts[0] != "$defs" && parts[0] != "definitions" {
+					compatible = false
+				}
+			}
 			if ref == rootRef {
 				schema["$ref"] = "#"
 			}

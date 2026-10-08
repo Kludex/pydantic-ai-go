@@ -14,7 +14,9 @@ import (
 func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 	var response chatResponse
 	if err := json.Unmarshal(data, &response); err != nil {
-		return nil, fmt.Errorf("mistral: decode response: %w", err)
+		return nil, &ai.ModelTransportError{
+			ModelName: model.name, ProviderName: model.providerName, Operation: "decode response", Err: err,
+		}
 	}
 	if len(response.Choices) == 0 {
 		return nil, &ai.UnexpectedModelBehaviorError{Message: "Mistral returned no choices"}

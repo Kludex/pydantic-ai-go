@@ -104,12 +104,19 @@ type sessionConfig struct {
 	toolExecutor      ToolExecutor
 	retainImagesEvery int
 	retainImagesMax   int
+	retainAudioMax    time.Duration
 	handleBargeIn     bool
 }
 
 // WithAudioRetention controls which raw audio streams are retained in history.
 func WithAudioRetention(retention AudioRetention) SessionOption {
 	return func(config *sessionConfig) { config.audioRetention = retention }
+}
+
+// WithAudioRetentionLimit bounds retained audio across both speakers. Zero retains none; -1 disables the bound.
+// Seeded audio is not counted. The default is thirty minutes.
+func WithAudioRetentionLimit(maximum time.Duration) SessionOption {
+	return func(config *sessionConfig) { config.retainAudioMax = maximum }
 }
 
 // WithToolExecutor enables concurrent local function-tool execution.
@@ -154,35 +161,45 @@ type Session struct {
 	events   chan eventResult
 	eventsMu sync.RWMutex
 
-	sendMu       sync.Mutex
-	mu           sync.RWMutex
-	closed       bool
-	err          error
-	errDelivered bool
-	usage        ai.Usage
+	sendMu         sync.Mutex
+	mu             sync.RWMutex
+	closed         bool
+	err            error
+	errDelivered   bool
+	usage          ai.Usage
+	conversationID string
 
-	seeded              []ai.ModelMessage
-	history             []ai.ModelMessage
-	responseParts       []ai.ResponsePart
-	activeAssistant     *activeSpeech
-	userTurns           map[string]*activeSpeech
-	anonymousUser       *activeSpeech
-	nextPartIndex       int
-	inputAudio          []byte
-	outputAudio         []byte
-	imageCount          int
-	retainedImages      []ai.ModelRequest
-	pendingUsage        ai.Usage
-	pendingResponseID   string
-	pendingFinish       ai.FinishReason
-	pendingToolResults  map[string]ai.ModelRequest
-	providerPartIndexes map[string]int
-	responseActive      bool
-	exchangeActive      bool
-	pendingResponses    int
-	pendingToolCalls    int
-	replyProgress       chan struct{}
-	serverCancelling    bool
+	seeded                   []ai.ModelMessage
+	history                  []ai.ModelMessage
+	responseParts            []ai.ResponsePart
+	activeAssistant          *activeSpeech
+	userTurns                map[string]*activeSpeech
+	anonymousUser            *activeSpeech
+	userOrder                []*activeSpeech
+	pendingHistory           []ai.ModelRequest
+	audioUncommitted         bool
+	cancelledTools           map[string]bool
+	openToolBatch            *toolBatch
+	toolBatches              map[string]*toolBatch
+	nextPartIndex            int
+	inputAudio               []byte
+	imageCount               int
+	retainedImages           []ai.ModelRequest
+	pendingUsage             ai.Usage
+	pendingProviderDetails   map[string]any
+	closeRequested           bool
+	pendingContextWindowUsed *float64
+	contextWindowUsed        *float64
+	pendingResponseID        string
+	pendingFinish            ai.FinishReason
+	pendingToolResults       map[string]ai.ModelRequest
+	providerPartIndexes      map[string]int
+	responseActive           bool
+	exchangeActive           bool
+	pendingResponses         int
+	pendingToolCalls         int
+	replyProgress            chan struct{}
+	serverCancelling         bool
 
 	toolMu          sync.Mutex
 	toolCancels     map[string]context.CancelFunc
@@ -227,13 +244,33 @@ type queuedPrompt struct {
 }
 
 type activeSpeech struct {
-	index      int
-	partID     string
-	itemID     string
-	speaker    ai.SpeechSpeaker
-	transcript string
-	audio      []byte
-	text       bool
+	index         int
+	partID        string
+	itemID        string
+	speaker       ai.SpeechSpeaker
+	transcript    string
+	audio         []byte
+	text          bool
+	position      int
+	afterResponse bool
+	finished      bool
+	commitHeld    bool
+	timestamp     time.Time
+}
+
+type toolBatch struct {
+	remaining int
+	closed    bool
+	counted   bool
+	abandoned bool
+}
+
+func (batch *toolBatch) countAnswer() bool {
+	if batch.remaining != 0 || !batch.closed || batch.counted || batch.abandoned {
+		return false
+	}
+	batch.counted = true
+	return true
 }
 
 type eventResult struct {
@@ -258,6 +295,7 @@ func Open(ctx context.Context, model Model, params ConnectParams, options ...Ses
 		audioRetention:    AudioRetentionTranscriptOnly,
 		retainImagesEvery: 1,
 		retainImagesMax:   100,
+		retainAudioMax:    30 * time.Minute,
 	}
 	for _, option := range options {
 		option(&config)
@@ -281,10 +319,29 @@ func Open(ctx context.Context, model Model, params ConnectParams, options ...Ses
 		toolCancels: map[string]context.CancelFunc{}, playbackProgress: make(chan struct{}, 1),
 		replyProgress: make(chan struct{}, 1),
 		audioTaps:     map[*audioTap]struct{}{}, transcriptTaps: map[chan TranscriptUpdate]struct{}{},
-		inputRequests: map[int]ai.ModelRequest{},
+		inputRequests:  map[int]ai.ModelRequest{},
+		cancelledTools: map[string]bool{}, toolBatches: map[string]*toolBatch{},
+	}
+	if params.Conversation != nil {
+		session.usage = params.Conversation.Usage.Clone()
+		session.conversationID = params.Conversation.ConversationID
 	}
 	if historyAware, ok := connection.(HistoryAwareConnection); ok {
 		historyAware.SetMessageHistory(session.Messages)
+	}
+	if commits, ok := connection.(DeferredAudioCommitConnection); ok && commits.DefersAudioCommit() {
+		commits.SetAudioCommitListener(func() {
+			session.mu.Lock()
+			for _, active := range session.userOrder {
+				if active.commitHeld {
+					active.commitHeld = false
+					active.position = len(session.history)
+					active.afterResponse = session.activeAssistant != nil || len(session.responseParts) > 0
+				}
+			}
+			session.flushUsersLocked(false)
+			session.mu.Unlock()
+		})
 	}
 	go session.pump()
 	return session, nil
@@ -306,6 +363,9 @@ func validateSessionConfig(config sessionConfig) error {
 	}
 	if config.retainImagesEvery < 1 {
 		return fmt.Errorf("realtime: image retention interval must be at least one")
+	}
+	if config.retainAudioMax < 0 && config.retainAudioMax != -1 {
+		return fmt.Errorf("realtime: audio retention limit must be nonnegative, or -1 for no limit")
 	}
 	if config.retainImagesMax < -1 {
 		return fmt.Errorf("realtime: image retention maximum must be at least zero, or -1 for no limit")
@@ -353,6 +413,23 @@ func (session *Session) Usage() ai.Usage {
 	session.mu.RLock()
 	defer session.mu.RUnlock()
 	return session.usage.Clone()
+}
+
+// Conversation returns a detached bundle ready for a later agent or realtime session.
+func (session *Session) Conversation() ai.Conversation {
+	return ai.Conversation{
+		Messages: session.Messages(), Usage: session.Usage(), ConversationID: session.conversationID,
+	}
+}
+
+// ContextWindowUsed returns the latest response's occupied context fraction.
+func (session *Session) ContextWindowUsed() (float64, bool) {
+	session.mu.RLock()
+	defer session.mu.RUnlock()
+	if session.contextWindowUsed == nil {
+		return 0, false
+	}
+	return *session.contextWindowUsed, true
 }
 
 // Messages returns seeded and newly accumulated portable history.
@@ -417,12 +494,17 @@ func (session *Session) Send(ctx context.Context, content any, options ...SendOp
 		}
 		request := ai.ModelRequest{
 			Parts: []ai.RequestPart{ai.UserPromptPart{Content: value}}, Timestamp: time.Now().UTC(),
+			ConversationID: session.conversationID,
 		}
 		if respond {
 			session.reserveResponse()
 		}
 		session.mu.Lock()
-		session.history = append(session.history, request)
+		if session.activeAssistant != nil || len(session.responseParts) > 0 {
+			session.pendingHistory = append(session.pendingHistory, request)
+		} else {
+			session.history = append(session.history, request)
+		}
 		session.mu.Unlock()
 		if _, err := session.sendRecorded(ctx, input, request); err != nil {
 			if respond {
@@ -456,31 +538,55 @@ func (session *Session) SendAudio(ctx context.Context, data []byte, mediaType st
 	if len(data) == 0 {
 		return nil
 	}
-	pcm := slices.Clone(data)
+	pcm, err := AudioPCM(ai.BinaryContent{Data: data, MediaType: mediaType}, session.profile.AudioInputSampleRate)
+	if err != nil {
+		return err
+	}
+	recovery, recovers := session.connection.(ReconnectingConnection)
+	if recovers && recovery.IsReconnecting() {
+		return nil
+	}
+	if err := session.send(ctx, AudioInput{Data: pcm}); err != nil {
+		if recovers && recovery.CanReconnect() && ctx.Err() == nil {
+			return nil
+		}
+		return err
+	}
+	session.mu.Lock()
+	session.audioUncommitted = true
+	if !session.profile.EmitsInputSpeechEvents || session.InputTranscriptionEnabled() {
+		if session.anonymousUser == nil && len(session.userTurns) == 0 {
+			session.userTurnLocked("")
+		}
+	}
+	if session.config.audioRetention == AudioRetentionInput || session.config.audioRetention == AudioRetentionAll {
+		session.inputAudio = append(session.inputAudio, pcm...)
+		session.boundAudioLocked()
+	}
+	session.mu.Unlock()
+	return nil
+}
+
+// AudioPCM decodes mono PCM16 input and validates its sample rate when a WAV header is present.
+func AudioPCM(content ai.BinaryContent, sampleRate int) ([]byte, error) {
+	pcm := slices.Clone(content.Data)
+	mediaType := content.MediaType
 	if mediaType == "audio/wav" || mediaType == "audio/x-wav" {
 		decoded, rate, err := decodePCMWAV(pcm)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if rate != session.profile.AudioInputSampleRate {
-			return fmt.Errorf("realtime: WAV sample rate %d does not match required %d", rate, session.profile.AudioInputSampleRate)
+		if rate != sampleRate {
+			return nil, fmt.Errorf("realtime: WAV sample rate %d does not match required %d", rate, sampleRate)
 		}
 		pcm = decoded
 	} else if mediaType != "" && mediaType != "audio/pcm" && mediaType != "audio/L16" {
-		return fmt.Errorf("realtime: audio must be PCM16 or PCM WAV, got %q", mediaType)
+		return nil, fmt.Errorf("realtime: audio must be PCM16 or PCM WAV, got %q", mediaType)
 	}
 	if len(pcm)%2 != 0 {
-		return fmt.Errorf("realtime: PCM16 audio length must be even")
+		return nil, fmt.Errorf("realtime: PCM16 audio length must be even")
 	}
-	if err := session.send(ctx, AudioInput{Data: pcm}); err != nil {
-		return err
-	}
-	if session.config.audioRetention == AudioRetentionInput || session.config.audioRetention == AudioRetentionAll {
-		session.mu.Lock()
-		session.inputAudio = append(session.inputAudio, pcm...)
-		session.mu.Unlock()
-	}
-	return nil
+	return pcm, nil
 }
 
 // SendStream sends text, images, or audio values from a caller-owned iterator.
@@ -516,7 +622,10 @@ func (session *Session) sendImage(ctx context.Context, content ai.BinaryContent,
 	if !session.profile.SupportsImageInput {
 		return fmt.Errorf("realtime: model %q does not support image input", session.model.Name())
 	}
-	if respond && !session.profile.SupportsManualTurnControl {
+	if !respond && session.profile.ImageInputRequiresResponse {
+		return fmt.Errorf("realtime: model %q requires a response for image input", session.model.Name())
+	}
+	if respond && !session.profile.SupportsManualTurnControl && !session.profile.ImageInputRequiresResponse {
 		return fmt.Errorf(
 			"realtime: cannot ask for an image response: model %q does not support manual turn control",
 			session.model.Name(),
@@ -527,6 +636,7 @@ func (session *Session) sendImage(ctx context.Context, content ai.BinaryContent,
 	}
 	request := ai.ModelRequest{
 		Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{content}}}, Timestamp: time.Now().UTC(),
+		ConversationID: session.conversationID,
 	}
 	inputIndex, err := session.sendRecorded(ctx, ImageInput{Content: content, Respond: respond}, request)
 	if err != nil {
@@ -542,13 +652,20 @@ func (session *Session) sendImage(ctx context.Context, content ai.BinaryContent,
 		delete(session.inputRequests, inputIndex)
 		return nil
 	}
-	session.history = append(session.history, request)
+	if session.activeAssistant != nil || len(session.responseParts) > 0 {
+		session.pendingHistory = append(session.pendingHistory, request)
+	} else {
+		session.history = append(session.history, request)
+	}
 	session.retainedImages = append(session.retainedImages, request)
 	if session.config.retainImagesMax >= 0 && len(session.retainedImages) > session.config.retainImagesMax {
 		oldest := session.retainedImages[0]
 		session.retainedImages = session.retainedImages[1:]
+		session.pendingHistory = slices.DeleteFunc(session.pendingHistory, func(request ai.ModelRequest) bool {
+			return request.Timestamp.Equal(oldest.Timestamp)
+		})
 		for index, message := range session.history {
-			if sameImageRequest(message, oldest) {
+			if reflect.DeepEqual(message, oldest) {
 				session.history = append(session.history[:index], session.history[index+1:]...)
 				break
 			}
@@ -562,7 +679,21 @@ func (session *Session) CommitAudio(ctx context.Context) error {
 	if err := session.require(session.profile.SupportsManualTurnControl, "commit audio", "manual turn control"); err != nil {
 		return err
 	}
-	return session.send(ctx, CommitAudio{})
+	if err := session.send(ctx, CommitAudio{}); err != nil {
+		return err
+	}
+	session.mu.Lock()
+	if session.audioUncommitted {
+		active := session.userTurnLocked("")
+		active.audio = session.inputAudio
+		session.inputAudio = nil
+		session.audioUncommitted = false
+		if !session.InputTranscriptionEnabled() {
+			session.finishUserLocked(active)
+		}
+	}
+	session.mu.Unlock()
+	return nil
 }
 
 // ClearAudio discards provider and locally retained uncommitted input.
@@ -575,6 +706,7 @@ func (session *Session) ClearAudio(ctx context.Context) error {
 	}
 	session.mu.Lock()
 	session.inputAudio = nil
+	session.audioUncommitted = false
 	session.mu.Unlock()
 	return nil
 }
@@ -624,10 +756,6 @@ func (session *Session) Interrupt(ctx context.Context, playedMilliseconds *int) 
 	return nil
 }
 
-func sameImageRequest(message ai.ModelMessage, expected ai.ModelRequest) bool {
-	return reflect.DeepEqual(message, expected)
-}
-
 func (session *Session) removeInputRequest(expected ai.ModelRequest) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
@@ -638,6 +766,9 @@ func (session *Session) removeInputRequest(expected ai.ModelRequest) {
 			break
 		}
 	}
+	session.pendingHistory = slices.DeleteFunc(session.pendingHistory, func(request ai.ModelRequest) bool {
+		return request.Timestamp.Equal(expected.Timestamp)
+	})
 	for index := len(session.retainedImages) - 1; index >= 0; index-- {
 		if session.retainedImages[index].Timestamp.Equal(expected.Timestamp) {
 			session.retainedImages = append(session.retainedImages[:index], session.retainedImages[index+1:]...)
@@ -884,8 +1015,14 @@ func (session *Session) Close(ctx context.Context) error {
 		}
 	}
 	session.toolMu.Unlock()
+	session.mu.Lock()
+	session.closeRequested = waitCtx.Err() == nil
+	session.mu.Unlock()
 	session.cancel(context.Canceled)
-	closeErr := session.connection.Close(waitCtx)
+	var closeErr error
+	if _, ending := session.connection.(SessionEndingConnection); !ending {
+		closeErr = session.connection.Close(waitCtx)
+	}
 	select {
 	case <-session.done:
 	case <-waitCtx.Done():
@@ -897,6 +1034,38 @@ func (session *Session) Close(ctx context.Context) error {
 func (session *Session) pump() {
 	defer func() {
 		session.closeEnqueue()
+		session.mu.RLock()
+		recordFinal := session.closeRequested || session.ctx.Err() == nil
+		session.mu.RUnlock()
+		session.mu.Lock()
+		for _, active := range session.userOrder {
+			if !active.finished {
+				session.finishUserLocked(active)
+			}
+		}
+		session.mu.Unlock()
+		session.mu.RLock()
+		partial := session.activeAssistant != nil || len(session.responseParts) > 0
+		session.mu.RUnlock()
+		if partial {
+			session.finishResponse(ResponseDone{Interrupted: true})
+		}
+		session.mu.Lock()
+		session.history = append(session.history, requestsAsMessages(session.pendingHistory)...)
+		session.pendingHistory = nil
+		session.flushUsersLocked(true)
+		session.mu.Unlock()
+		if ending, ok := session.connection.(SessionEndingConnection); ok && recordFinal {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			for report, err := range ending.EndSession(ctx) {
+				if err != nil {
+					break
+				}
+				report.ResponseScoped = false
+				session.handleUsage(report)
+			}
+			cancel()
+		}
 		session.cancel(nil)
 		_ = session.connection.Close(context.Background())
 		session.toolMu.Lock()
@@ -964,10 +1133,19 @@ func (session *Session) handle(event CodecEvent) bool {
 		session.cancelTools(event.ToolCallIDs)
 	case SessionUsage:
 		session.handleUsage(event)
+		if event.ResponseScoped && session.profile.SynthesizesTurnBoundary {
+			session.mu.RLock()
+			hasCalls := slices.ContainsFunc(session.responseParts, func(part ai.ResponsePart) bool { _, ok := part.(ai.ToolCallPart); return ok })
+			session.mu.RUnlock()
+			if hasCalls {
+				session.finishResponse(ResponseDone{MoreExpected: true, FinishReason: ai.FinishReasonToolCall})
+			}
+		}
 	case ResponseDone:
 		session.finishResponse(event)
 	case InputSpeechStarted:
 		session.mu.Lock()
+		session.userTurnLocked(event.ItemID)
 		interrupts, ok := session.connection.(SpeechInterruptionConnection)
 		session.serverCancelling = ok && interrupts.InterruptsResponseOnSpeech()
 		session.mu.Unlock()
@@ -981,14 +1159,54 @@ func (session *Session) handle(event CodecEvent) bool {
 		}
 		session.publish(InputSpeechStartEvent(event))
 	case InputSpeechEnded:
+		session.mu.Lock()
+		active := session.anonymousUser
+		if event.ItemID != "" {
+			active = session.userTurns[event.ItemID]
+		}
+		if active != nil {
+			if active.audio == nil {
+				active.audio = session.inputAudio
+				session.inputAudio = nil
+			}
+			session.audioUncommitted = false
+			if !session.InputTranscriptionEnabled() {
+				session.finishUserLocked(active)
+			}
+		}
+		session.mu.Unlock()
 		session.publish(InputSpeechEndEvent(event))
 	case OutputSpeechStarted:
 		session.publish(OutputSpeechStartEvent{})
 	case OutputSpeechEnded:
 		session.publish(OutputSpeechEndEvent{})
 	case InputTranscriptionError:
+		session.finishUser(event.ItemID)
 		session.publish(InputTranscriptionErrorEvent(event))
 	case SessionReconnected:
+		if session.profile.SynthesizesTurnBoundary || !event.StateRestored {
+			if !event.StateRestored {
+				session.toolMu.Lock()
+				ids := make([]string, 0, len(session.toolCancels))
+				for id := range session.toolCancels {
+					ids = append(ids, id)
+				}
+				session.toolMu.Unlock()
+				session.cancelTools(ids)
+			}
+			session.mu.RLock()
+			partial := session.activeAssistant != nil || len(session.responseParts) > 0
+			session.mu.RUnlock()
+			if partial {
+				session.finishResponse(ResponseDone{Interrupted: true})
+			}
+			session.mu.Lock()
+			session.pendingResponses = 0
+			session.exchangeActive = false
+			session.responseActive = false
+			session.notifyReplyLocked()
+			session.mu.Unlock()
+		}
 		session.mu.Lock()
 		session.serverCancelling = false
 		session.mu.Unlock()
@@ -1014,6 +1232,11 @@ func (session *Session) handle(event CodecEvent) bool {
 		session.pendingResponseID = event.ResponseID
 		session.beginResponseLocked()
 		session.serverCancelling = false
+		session.mu.Unlock()
+	case ResponseRequestsMerged:
+		session.mu.Lock()
+		session.pendingResponses = max(0, session.pendingResponses-event.Count)
+		session.notifyReplyLocked()
 		session.mu.Unlock()
 	case ConversationCreated, ConversationItemCreated:
 	case InputRejected:
@@ -1045,10 +1268,13 @@ func (session *Session) handle(event CodecEvent) bool {
 func (session *Session) handleAudio(event AudioDelta) {
 	session.mu.Lock()
 	session.beginResponseLocked()
+	if event.ResponseID != "" {
+		session.pendingResponseID = event.ResponseID
+	}
 	active := session.ensureAssistantLocked(false, event.ItemID)
-	active.audio = append(active.audio, event.Data...)
 	if session.config.audioRetention == AudioRetentionOutput || session.config.audioRetention == AudioRetentionAll {
-		session.outputAudio = append(session.outputAudio, event.Data...)
+		active.audio = append(active.audio, event.Data...)
+		session.boundAudioLocked()
 	}
 	index, partID := active.index, active.partID
 	session.mu.Unlock()
@@ -1061,6 +1287,9 @@ func (session *Session) handleAudio(event AudioDelta) {
 func (session *Session) handleOutputTranscript(event OutputTranscript) {
 	session.mu.Lock()
 	session.beginResponseLocked()
+	if event.ResponseID != "" {
+		session.pendingResponseID = event.ResponseID
+	}
 	active := session.ensureAssistantLocked(event.OutputText, event.ItemID)
 	previous := active.transcript
 	transcript, delta := accumulateTranscript(previous, event.Text, event.Final)
@@ -1145,7 +1374,21 @@ func (session *Session) userTurnLocked(itemID string) *activeSpeech {
 	}
 	index := session.nextPartIndex
 	session.nextPartIndex++
-	active = &activeSpeech{index: index, partID: fmt.Sprintf("user-%d", index), itemID: itemID, speaker: ai.SpeechSpeakerUser}
+	if itemID != "" && session.anonymousUser != nil {
+		active = session.anonymousUser
+		session.anonymousUser = nil
+		active.itemID = itemID
+		session.userTurns[itemID] = active
+		return active
+	}
+	active = &activeSpeech{index: index, partID: fmt.Sprintf("user-%d", index), itemID: itemID, speaker: ai.SpeechSpeakerUser,
+		position: len(session.history), afterResponse: session.activeAssistant != nil || len(session.responseParts) > 0,
+		timestamp: time.Now().UTC(),
+	}
+	if commits, ok := session.connection.(DeferredAudioCommitConnection); ok {
+		active.commitHeld = commits.DefersAudioCommit()
+	}
+	session.userOrder = append(session.userOrder, active)
 	if itemID == "" {
 		session.anonymousUser = active
 	} else {
@@ -1183,30 +1426,11 @@ func (session *Session) finishAssistantPartLocked() {
 	session.responseParts = append(session.responseParts, part)
 	session.publishLocked(ai.PartEndEvent{Index: active.index, PartID: active.partID, Part: part})
 	session.activeAssistant = nil
-	session.outputAudio = nil
 }
 
 func (session *Session) finishUser(itemID string) {
 	session.mu.Lock()
-	var active *activeSpeech
-	if itemID == "" {
-		active = session.anonymousUser
-		session.anonymousUser = nil
-	} else {
-		active = session.userTurns[itemID]
-		delete(session.userTurns, itemID)
-	}
-	transcript := active.transcript
-	part := ai.SpeechPart{Speaker: ai.SpeechSpeakerUser}
-	if transcript != "" {
-		part.Transcript = &transcript
-	}
-	if len(session.inputAudio) > 0 && (session.config.audioRetention == AudioRetentionInput || session.config.audioRetention == AudioRetentionAll) {
-		part.Audio = &ai.BinaryContent{Data: pcmToWAV(session.inputAudio, session.profile.AudioInputSampleRate), MediaType: "audio/wav"}
-		session.inputAudio = nil
-	}
-	session.history = append(session.history, ai.ModelRequest{Parts: []ai.RequestPart{part}})
-	session.publishLocked(ai.PartEndEvent{Index: active.index, PartID: active.partID, Part: part})
+	session.finishUserLocked(session.userTurnLocked(itemID))
 	session.mu.Unlock()
 }
 
@@ -1215,12 +1439,23 @@ func (session *Session) handleUsage(event SessionUsage) {
 	session.usage.Add(event.Usage)
 	if event.ResponseScoped {
 		session.pendingUsage.Add(event.Usage)
+		if event.ProviderDetails != nil {
+			session.pendingProviderDetails = cloneAnyMap(event.ProviderDetails)
+		}
+	}
+	if event.ContextWindowUsed != nil && session.profile.SynthesizesTurnBoundary {
+		value := *event.ContextWindowUsed
+		session.contextWindowUsed = &value
 	}
 	if event.ProviderResponseID != "" {
 		session.pendingResponseID = event.ProviderResponseID
 	}
 	if event.FinishReason != "" {
 		session.pendingFinish = event.FinishReason
+	}
+	if event.ContextWindowUsed != nil {
+		value := *event.ContextWindowUsed
+		session.pendingContextWindowUsed = &value
 	}
 	session.mu.Unlock()
 }
@@ -1231,6 +1466,9 @@ func (session *Session) finishResponse(event ResponseDone) {
 	}
 	session.mu.Lock()
 	session.beginResponseLocked()
+	if !session.profile.EmitsInputSpeechEvents && session.anonymousUser != nil {
+		session.finishUserLocked(session.anonymousUser)
+	}
 	session.finishAssistantPartLocked()
 	responseID := event.ProviderResponseID
 	if responseID == "" {
@@ -1240,17 +1478,36 @@ func (session *Session) finishResponse(event ResponseDone) {
 	if finish == "" {
 		finish = session.pendingFinish
 	}
+	if slices.ContainsFunc(session.responseParts, func(part ai.ResponsePart) bool {
+		_, call := part.(ai.ToolCallPart)
+		return call
+	}) && !event.Interrupted {
+		event.MoreExpected = true
+	}
 	response := ai.ModelResponse{
 		Parts: slices.Clone(session.responseParts), Usage: session.pendingUsage.Clone(),
 		ModelName: session.model.Name(), ProviderName: session.model.ProviderName(),
-		ProviderResponseID: responseID, FinishReason: finish,
-		ProviderDetails: cloneAnyMap(event.ProviderDetails), Timestamp: time.Now().UTC(),
+		ProviderResponseID: responseID, FinishReason: finish, ConversationID: session.conversationID,
+		ProviderDetails: cloneAnyMap(session.pendingProviderDetails), Timestamp: time.Now().UTC(),
+	}
+	if response.ProviderDetails == nil {
+		response.ProviderDetails = map[string]any{}
+	}
+	for key, value := range event.ProviderDetails {
+		response.ProviderDetails[key] = cloneAnyValue(value)
+	}
+	if len(response.ProviderDetails) == 0 {
+		response.ProviderDetails = nil
 	}
 	if identified, ok := session.model.(interface{ ProviderURL() string }); ok {
 		response.ProviderURL = identified.ProviderURL()
 	}
 	if response.Usage.CostUSD == nil {
-		if price, err := response.Price(); err == nil {
+		priced := response
+		if backend, ok := response.ProviderDetails["delegated_model"].(string); ok {
+			priced.ModelName = backend
+		}
+		if price, err := priced.Price(); err == nil {
 			response.Usage.CostUSD = &price.TotalPrice
 			session.pendingUsage.CostUSD = &price.TotalPrice
 			session.usage.Add(ai.Usage{CostUSD: &price.TotalPrice})
@@ -1260,12 +1517,28 @@ func (session *Session) finishResponse(event ResponseDone) {
 		response.ModelName = info.ModelName()
 	}
 	if event.Interrupted {
-		response.State = ai.ModelResponseStateIncomplete
+		response.State = ai.ModelResponseStateInterrupted
 	} else {
 		response.State = ai.ModelResponseStateComplete
 	}
+	switch {
+	case session.pendingContextWindowUsed != nil:
+		value := *session.pendingContextWindowUsed
+		session.contextWindowUsed = &value
+	case !session.profile.UsageExcludesContextWindow && session.profile.ContextWindow > 0 && response.Usage.TotalTokens() > 0:
+		value := float64(response.Usage.TotalTokens()) / float64(session.profile.ContextWindow)
+		session.contextWindowUsed = &value
+	case !session.profile.SynthesizesTurnBoundary:
+		session.contextWindowUsed = nil
+	}
 	if len(response.Parts) > 0 {
 		session.history = append(session.history, response)
+		for _, active := range session.userOrder {
+			if active.afterResponse {
+				active.afterResponse = false
+				active.position = len(session.history)
+			}
+		}
 		for _, part := range response.Parts {
 			call, ok := part.(ai.ToolCallPart)
 			if !ok {
@@ -1277,8 +1550,22 @@ func (session *Session) finishResponse(event ResponseDone) {
 			}
 		}
 	}
+	if session.openToolBatch != nil {
+		batch := session.openToolBatch
+		batch.closed = true
+		if batch.countAnswer() {
+			session.pendingResponses++
+		}
+		session.openToolBatch = nil
+	}
+	session.flushUsersLocked(false)
+	session.history = append(session.history, requestsAsMessages(session.pendingHistory)...)
+	session.pendingHistory = nil
 	session.responseParts = nil
+	session.boundAudioLocked()
 	session.pendingUsage = ai.Usage{}
+	session.pendingProviderDetails = nil
+	session.pendingContextWindowUsed = nil
 	session.pendingResponseID = ""
 	session.pendingFinish = ""
 	session.responseActive = false
@@ -1296,7 +1583,17 @@ func (session *Session) finishResponse(event ResponseDone) {
 func (session *Session) handleToolCall(event ToolCall) {
 	session.mu.Lock()
 	session.beginResponseLocked()
+	if event.ResponseID != "" {
+		session.pendingResponseID = event.ResponseID
+	}
 	session.pendingToolCalls++
+	if batched, ok := session.connection.(ToolBatchConnection); ok && batched.AnswersToolCallsPerResponse() {
+		if session.openToolBatch == nil {
+			session.openToolBatch = &toolBatch{}
+		}
+		session.openToolBatch.remaining++
+		session.toolBatches[event.ToolCallID] = session.openToolBatch
+	}
 	session.notifyReplyLocked()
 	session.mu.Unlock()
 	call := ai.ToolCallPart{
@@ -1377,10 +1674,29 @@ func normalizeToolResult(call ai.ToolCallPart, value any, err error) (ai.Request
 func (session *Session) completeTool(call ai.ToolCallPart, part ai.RequestPart, extra []ai.UserContent) {
 	defer session.finishPendingTool()
 	output := renderToolPart(part)
-	session.reserveResponse()
-	if err := session.send(session.ctx, ToolResult{
-		ToolCallID: call.ToolCallID, Output: output, Content: slices.Clone(extra),
-	}); err != nil {
+	session.mu.Lock()
+	cancelled := session.cancelledTools[call.ToolCallID]
+	delete(session.cancelledTools, call.ToolCallID)
+	if cancelled {
+		part = ai.ToolReturnPart{ToolName: call.ToolName, ToolCallID: call.ToolCallID,
+			Content: "Tool call interrupted.", Outcome: ai.ToolReturnOutcomeFailed}
+	}
+	batch := session.toolBatches[call.ToolCallID]
+	delete(session.toolBatches, call.ToolCallID)
+	reserve := !cancelled && !session.profile.SynthesizesTurnBoundary
+	if batch != nil {
+		batch.remaining--
+		reserve = reserve && batch.countAnswer()
+	}
+	session.mu.Unlock()
+	if reserve {
+		session.reserveResponse()
+	}
+	var sendErr error
+	if !cancelled {
+		sendErr = session.send(session.ctx, ToolResult{ToolCallID: call.ToolCallID, Output: output, Content: slices.Clone(extra)})
+	}
+	if err := sendErr; err != nil {
 		session.releaseResponseReservation()
 		if !errors.Is(err, context.Canceled) {
 			session.mu.RLock()
@@ -1401,7 +1717,7 @@ func (session *Session) completeTool(call ai.ToolCallPart, part ai.RequestPart, 
 	if len(extra) > 0 {
 		requestParts = append(requestParts, ai.UserPromptPart{Contents: slices.Clone(extra)})
 	}
-	request := ai.ModelRequest{Parts: requestParts}
+	request := ai.ModelRequest{Parts: requestParts, ConversationID: session.conversationID}
 	if responseIndex := responseWithToolCall(session.history, call.ToolCallID); responseIndex >= 0 {
 		insertAt := responseIndex + 1
 		for insertAt < len(session.history) && isToolResultRequest(session.history[insertAt]) {
@@ -1462,6 +1778,14 @@ func renderToolPart(part ai.RequestPart) string {
 }
 
 func (session *Session) cancelTools(ids []string) {
+	session.mu.Lock()
+	for _, id := range ids {
+		session.cancelledTools[id] = true
+		if batch := session.toolBatches[id]; batch != nil {
+			batch.abandoned = true
+		}
+	}
+	session.mu.Unlock()
 	session.toolMu.Lock()
 	defer session.toolMu.Unlock()
 	for _, id := range ids {
@@ -1535,7 +1859,7 @@ func (session *Session) publishTranscript(update TranscriptUpdate) {
 		default:
 			select {
 			case <-tap:
-			default:
+			default: // pragma: no cover - a concurrent consumer can drain the full queue between selects.
 			}
 			tap <- update
 		}

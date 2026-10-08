@@ -3,6 +3,8 @@ package bedrock
 import (
 	"encoding/json"
 	"fmt"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 func (model *Model) parseResponse(data []byte) ([][]float64, string, error) {
@@ -32,7 +34,7 @@ func (model *Model) parseResponse(data []byte) ([][]float64, string, error) {
 				Float [][]float64 `json:"float"`
 			}
 			if typedErr := json.Unmarshal(response.Embeddings, &byType); typedErr != nil {
-				return nil, "", fmt.Errorf("bedrock embeddings: decode Cohere response: %w", err)
+				return nil, "", &ai.ModelTransportError{ProviderName: "bedrock embeddings", Operation: "decode Cohere response", Err: err}
 			}
 			vectors = byType.Float
 		}
@@ -57,5 +59,5 @@ func (model *Model) parseResponse(data []byte) ([][]float64, string, error) {
 }
 
 func responseError(err error) error {
-	return fmt.Errorf("bedrock embeddings: decode response: %w", err)
+	return &ai.ModelTransportError{ProviderName: "bedrock embeddings", Operation: "decode response", Err: err}
 }

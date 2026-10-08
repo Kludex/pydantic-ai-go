@@ -48,6 +48,24 @@ func TestEmptyContentFilterResponseFails(t *testing.T) {
 	}
 }
 
+func TestThinkingOnlyContentFilterResponseFails(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{
+			Parts: []ai.ResponsePart{
+				ai.ThinkingPart{Content: "I cannot answer."}, ai.TextPart{},
+			},
+			FinishReason: ai.FinishReasonContentFilter,
+		}, nil
+	})
+	_, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "filtered", struct{}{})
+	var filtered *ai.ContentFilterError
+	if !errors.As(err, &filtered) || len(filtered.Response().Parts) != 2 {
+		t.Fatalf("unexpected thinking-only content filter result: %v", err)
+	}
+}
+
 func TestRaiseContentFilterErrorCapability(t *testing.T) {
 	for _, test := range []struct {
 		name    string

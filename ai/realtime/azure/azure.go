@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -54,6 +56,12 @@ type Settings struct {
 	VoiceLive bool
 	// VoiceLiveTurnDetection replaces portable VAD on Voice Live.
 	VoiceLiveTurnDetection map[string]any
+	// VoiceLiveVoice selects an Azure standard voice by name or a complete Voice Live voice object.
+	VoiceLiveVoice any
+	// VoiceLiveTemperature controls sampling between zero and two on non-reasoning sessions.
+	VoiceLiveTemperature *float64
+	// WarningHandler receives configuration and provider warnings. Nil uses slog.Warn.
+	WarningHandler func(string)
 }
 
 // Option configures a Model.
@@ -108,7 +116,7 @@ func NewModel(name string, config Config, options ...Option) (*Model, error) {
 	if config.VoiceLiveAPIVersion == "" {
 		config.VoiceLiveAPIVersion = os.Getenv("AZURE_VOICELIVE_API_VERSION")
 		if config.VoiceLiveAPIVersion == "" {
-			config.VoiceLiveAPIVersion = "2025-10-01"
+			config.VoiceLiveAPIVersion = "2026-07-15"
 		}
 	}
 	if config.HTTPClient == nil {
@@ -125,8 +133,9 @@ func NewModel(name string, config Config, options ...Option) (*Model, error) {
 	profile.SupportsSeedingImages = true
 	profile.SupportsSeedingAudio = true
 	profile.SupportsAsyncToolCalls = true
+	profile.AsyncToolCallMode = realtime.AsyncToolCallsAlways
 	profile.EmitsInputSpeechEvents = true
-	profile.SupportsThinking = supportsThinking(name)
+	profile.SupportsThinking = supportsThinking(name) || isCascade(name) && nameMatches(name, "gpt-5")
 	profile.ContextWindow = contextwindow.Lookup(name, "azure", config.Endpoint)
 	if modelAPIs(name) == voiceLiveOnly {
 		profile.SupportsWebRTC = false
@@ -154,6 +163,9 @@ func (model *Model) Profile() realtime.Profile {
 
 // Connect opens and configures an Azure realtime websocket.
 func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) (realtime.Connection, error) {
+	if err := validateToolChoice(params.Settings.ToolChoice); err != nil {
+		return nil, err
+	}
 	settings := model.resolveSettings(params.Settings)
 	voiceLive, err := model.useVoiceLive(settings)
 	if err != nil {
@@ -169,7 +181,21 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 	config, _ := sessionConfig(params.Request, params.Settings, settings, voiceLive, model.profile, model.name)
 	return openaiprotocol.New(openaiprotocol.Config{
 		Provider: "Azure Realtime", Model: model.name, Socket: socket, ServerModel: serverModel,
-		Dial: dial, Mapper: openairt.MapEvent, Reconnect: params.Settings.Reconnect,
+		Dial: dial, Mapper: func(data []byte) ([]realtime.CodecEvent, error) {
+			if voiceLive {
+				var frame map[string]any
+				if err := json.Unmarshal(data, &frame); err != nil {
+					return nil, err
+				}
+				if stringValue(frame["type"]) == "warning" {
+					warning := object(frame["warning"])
+					warn(settings, fmt.Sprintf("Azure AI Voice Live: %s (code=%s, param=%s)",
+						stringValue(warning["message"]), stringValue(warning["code"]), stringValue(warning["param"])))
+					return nil, nil
+				}
+			}
+			return openairt.MapEvent(data)
+		}, Reconnect: params.Settings.Reconnect,
 		InputTranscriptionEnabled:  transcriptionEnabled(params.Settings),
 		RestoresInFlightState:      false,
 		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
@@ -268,6 +294,9 @@ func (model *Model) AnswerWebRTCOffer(
 func (model *Model) ConnectWebRTC(
 	ctx context.Context, session realtime.ProviderSession, params realtime.ConnectParams,
 ) (realtime.Connection, error) {
+	if err := validateToolChoice(params.Settings.ToolChoice); err != nil {
+		return nil, err
+	}
 	if session == nil || session.ProviderName() != "azure" || session.SessionID() == "" {
 		return nil, fmt.Errorf("azure realtime: WebRTC session must be an Azure call")
 	}
@@ -373,7 +402,16 @@ func sessionConfig(
 	profile realtime.Profile,
 	modelName string,
 ) (map[string]any, error) {
+	if err := validateToolChoice(common.ToolChoice); err != nil {
+		return nil, err
+	}
 	if voiceLive {
+		if settings.VoiceLiveTemperature != nil {
+			value := *settings.VoiceLiveTemperature
+			if math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || value > 2 {
+				return nil, fmt.Errorf("azure realtime: Voice Live temperature must be between zero and two")
+			}
+		}
 		return voiceLiveSessionConfig(request, common, settings, profile, modelName), nil
 	}
 	config := map[string]any{
@@ -427,12 +465,18 @@ func voiceLiveSessionConfig(
 	if defaultOutput(common.OutputModality) == realtime.OutputModalityText {
 		modalities = []string{"text"}
 	}
-	turnDetection := settings.VoiceLiveTurnDetection
-	if turnDetection == nil && common.TurnDetection != nil {
+	turnDetection := map[string]any{"type": "server_vad"}
+	switch {
+	case settings.VoiceLiveTurnDetection != nil:
+		turnDetection = cloneMap(settings.VoiceLiveTurnDetection)
+	case settings.OpenAI.TurnDetection != nil:
+		turnDetection = cloneMap(settings.OpenAI.TurnDetection)
+	case common.TurnDetection != nil:
 		turnDetection = portableTurnDetection(*common.TurnDetection)
 	}
-	if turnDetection == nil {
-		turnDetection = map[string]any{"type": "server_vad"}
+	if turnDetection["type"] == "semantic_vad" && isCascade(modelName) {
+		turnDetection["type"] = "azure_semantic_vad"
+		delete(turnDetection, "eagerness")
 	}
 	config := map[string]any{
 		"instructions": request.Instructions, "modalities": modalities,
@@ -443,19 +487,60 @@ func voiceLiveSessionConfig(
 	if common.MaxTokens > 0 {
 		config["max_response_output_tokens"] = common.MaxTokens
 	}
+	if common.ParallelToolCalls != nil && !*common.ParallelToolCalls {
+		config["parallel_tool_calls"] = false
+	}
 	if common.ToolChoice != "" {
 		config["tool_choice"] = common.ToolChoice
 	}
-	applyTools(config, request)
+	if common.ToolChoice != realtime.ToolChoiceNone {
+		applyTools(config, request)
+	}
 	automatic := "azure-speech"
 	if strings.HasPrefix(modelName, "gpt-realtime") {
 		automatic = "whisper-1"
 	}
 	applyTranscription(config, "input_audio_transcription", common, automatic)
-	if settings.OpenAI.Voice != "" {
+	if settings.VoiceLiveVoice != nil {
+		if name, ok := settings.VoiceLiveVoice.(string); ok {
+			config["voice"] = map[string]any{"type": "azure-standard", "name": name}
+		} else {
+			config["voice"] = settings.VoiceLiveVoice
+		}
+	} else if settings.OpenAI.Voice != "" {
 		config["voice"] = map[string]any{"type": "openai", "name": settings.OpenAI.Voice}
 	}
+	if settings.OpenAI.InputNoiseReduction != "" {
+		config["input_audio_noise_reduction"] = map[string]any{"type": settings.OpenAI.InputNoiseReduction}
+	}
+	if common.Thinking != "" && profile.SupportsThinking {
+		effort := string(common.Thinking)
+		switch common.Thinking {
+		case ai.ThinkingLevelDisabled:
+			effort = "none"
+		case ai.ThinkingLevelEnabled:
+			effort = "medium"
+		}
+		config["reasoning_effort"] = effort
+	}
+	if settings.VoiceLiveTemperature != nil {
+		if isCascade(modelName) && profile.SupportsThinking && common.Thinking != ai.ThinkingLevelDisabled {
+			warn(settings, "azure realtime: Voice Live temperature is ignored while the cascade model is reasoning")
+		} else {
+			config["temperature"] = *settings.VoiceLiveTemperature
+		}
+	}
 	return config
+}
+
+func validateToolChoice(choice realtime.ToolChoice) error {
+	if choice == realtime.ToolChoiceRequired {
+		return fmt.Errorf("azure realtime: required tool choice is not supported for persistent sessions")
+	}
+	if choice != "" && choice != realtime.ToolChoiceAuto && choice != realtime.ToolChoiceNone {
+		return fmt.Errorf("azure realtime: invalid tool choice %q", choice)
+	}
+	return nil
 }
 
 func applyCommonConfig(config map[string]any, request ai.ModelRequestParams, common realtime.Settings) {
@@ -468,7 +553,9 @@ func applyCommonConfig(config map[string]any, request ai.ModelRequestParams, com
 	if common.ToolChoice != "" {
 		config["tool_choice"] = common.ToolChoice
 	}
-	applyTools(config, request)
+	if common.ToolChoice != realtime.ToolChoiceNone {
+		applyTools(config, request)
+	}
 }
 
 func applyTools(config map[string]any, request ai.ModelRequestParams) {
@@ -509,6 +596,12 @@ func (model *Model) resolveSettings(common realtime.Settings) Settings {
 	if value, ok := common.Provider["azure_voice_live_turn_detection"].(map[string]any); ok {
 		settings.VoiceLiveTurnDetection = cloneMap(value)
 	}
+	if value, ok := common.Provider["azure_voice_live_voice"]; ok {
+		settings.VoiceLiveVoice = value
+	}
+	if value, ok := common.Provider["azure_voice_live_temperature"].(float64); ok {
+		settings.VoiceLiveTemperature = &value
+	}
 	if value, ok := common.Provider["openai_voice"].(string); ok {
 		settings.OpenAI.Voice = value
 	}
@@ -537,7 +630,7 @@ const (
 
 func modelAPIs(name string) servingAPIs {
 	for _, base := range []string{
-		"gpt-4o-realtime", "gpt-4o-mini-realtime", "gpt-realtime-2", "gpt-realtime-translate",
+		"gpt-4o-realtime", "gpt-4o-mini-realtime", "gpt-realtime-translate",
 		"gpt-realtime-whisper", "gpt-live-transcribe",
 	} {
 		if nameMatches(name, base) {
@@ -553,6 +646,26 @@ func modelAPIs(name string) servingAPIs {
 		}
 	}
 	return bothAPIs
+}
+
+func warn(settings Settings, message string) {
+	if settings.WarningHandler != nil {
+		settings.WarningHandler(message)
+	} else {
+		slog.Warn(message)
+	}
+}
+
+func isCascade(name string) bool {
+	if modelAPIs(name) != voiceLiveOnly {
+		return false
+	}
+	for _, base := range []string{"phi4-mm-realtime", "phi4-mini", "gpt-4o", "gpt-4.1", "gpt-5"} {
+		if nameMatches(name, base) {
+			return true
+		}
+	}
+	return false
 }
 
 func nameMatches(name, base string) bool {

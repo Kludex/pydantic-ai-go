@@ -1,6 +1,11 @@
 package ai
 
-import "github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
+import (
+	"slices"
+	"time"
+
+	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
+)
 
 // ModelProfile describes model-specific output, message-preparation, and
 // context-window behavior. The zero value defaults reflected output to a
@@ -26,6 +31,15 @@ type ModelProfile struct {
 	// ContextWindow is the maximum combined input and output token count.
 	// Zero means the limit is unknown.
 	ContextWindow int
+	// DefaultCacheRetention is the provider's documented prompt-cache lifetime.
+	// Zero means the lifetime is unknown or depends on account configuration.
+	DefaultCacheRetention time.Duration
+	// SupportsCache reports request-side prompt-cache configuration support.
+	SupportsCache bool
+	// SupportsAutoCache reports server-managed moving cache boundaries.
+	SupportsAutoCache bool
+	// SupportedCacheRetentions lists honored request-side retention tiers, shortest first.
+	SupportedCacheRetentions []CacheRetention
 }
 
 // ModelProfiler is implemented by models that expose output, message-preparation,
@@ -62,11 +76,16 @@ func NewProfiledModel(model Model, profile ModelProfile) *ProfiledModel {
 		panic("ai: profiled model must not be nil")
 	}
 	validateModelProfile(profile)
+	profile.SupportedCacheRetentions = slices.Clone(profile.SupportedCacheRetentions)
 	return &ProfiledModel{ModelWrapper: WrapModel(model), profile: profile}
 }
 
 // ModelProfile returns the configured profile.
-func (model *ProfiledModel) ModelProfile() ModelProfile { return model.profile }
+func (model *ProfiledModel) ModelProfile() ModelProfile {
+	profile := model.profile
+	profile.SupportedCacheRetentions = slices.Clone(profile.SupportedCacheRetentions)
+	return profile
+}
 
 // ContextWindow returns the configured context window. Zero means unknown.
 func (model *ProfiledModel) ContextWindow() int { return model.profile.ContextWindow }
@@ -114,6 +133,79 @@ func modelProfile(model Model) ModelProfile {
 	return profile
 }
 
+// CacheOutlook predicts whether the next request can reuse a prompt cache.
+type CacheOutlook string
+
+const (
+	// CacheOutlookWarm means the latest response is within the expected retention window.
+	CacheOutlookWarm CacheOutlook = "warm"
+	// CacheOutlookCold means the expected retention window has elapsed.
+	CacheOutlookCold CacheOutlook = "cold"
+	// CacheOutlookUnknown means the history or model has no usable retention boundary.
+	CacheOutlookUnknown CacheOutlook = "unknown"
+)
+
+// PromptCacheOutlook predicts cache state from served history. An explicit
+// retention replaces the profile default. A zero now uses the current UTC time.
+func PromptCacheOutlook(
+	messages []ModelMessage, profile *ModelProfile, retention *time.Duration, now time.Time,
+) CacheOutlook {
+	lastResponse := -1
+	var timestamp time.Time
+	for index := len(messages) - 1; index >= 0; index-- {
+		if response, ok := messages[index].(ModelResponse); ok {
+			lastResponse = index
+			timestamp = response.Timestamp
+			break
+		}
+	}
+	if lastResponse < 0 || timestamp.IsZero() {
+		return CacheOutlookUnknown
+	}
+	expected := expectedCacheRetention(messages[:lastResponse], profile, retention)
+	if expected <= 0 {
+		return CacheOutlookUnknown
+	}
+	if now.IsZero() {
+		now = time.Now().UTC()
+	}
+	if now.Sub(timestamp) <= expected {
+		return CacheOutlookWarm
+	}
+	return CacheOutlookCold
+}
+
+func expectedCacheRetention(messages []ModelMessage, profile *ModelProfile, retention *time.Duration) time.Duration {
+	expected := time.Duration(0)
+	if retention != nil {
+		expected = *retention
+	} else if profile != nil {
+		expected = profile.DefaultCacheRetention
+	}
+	if expected <= 0 {
+		return 0
+	}
+	for _, message := range messages {
+		if request, ok := message.(ModelRequest); ok {
+			for _, part := range request.Parts {
+				if prompt, ok := part.(UserPromptPart); ok {
+					for _, content := range prompt.Contents {
+						if point, ok := content.(CachePoint); ok {
+							ttl, err := point.ResolvedTTL()
+							if err == nil && ttl == CachePointTTL1Hour && expected < time.Hour &&
+								(profile == nil || !profile.SupportsCache ||
+									slices.Contains(profile.SupportedCacheRetentions, CacheRetention1Hour)) {
+								expected = time.Hour
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return expected
+}
+
 func modelContextWindow(model Model) int {
 	if modelIsNil(model) {
 		return 0
@@ -140,5 +232,13 @@ func validateModelProfile(profile ModelProfile) {
 	}
 	if profile.ContextWindow < 0 {
 		panic("ai: model profile context window must not be negative")
+	}
+	if profile.DefaultCacheRetention < 0 {
+		panic("ai: model profile cache retention must not be negative")
+	}
+	for _, tier := range profile.SupportedCacheRetentions {
+		if tier == "" || tier == CacheRetentionDisabled || validateCacheConfig(&CacheConfig{Retention: tier}) != nil {
+			panic("ai: model profile cache tiers must be 5m, 30m, or 1h")
+		}
 	}
 }

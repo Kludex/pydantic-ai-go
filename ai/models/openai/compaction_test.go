@@ -258,7 +258,7 @@ func TestCompactMessagesErrors(t *testing.T) {
 		contains   string
 	}{
 		{name: "API", statusCode: http.StatusBadRequest, body: `bad`, contains: "status 400"},
-		{name: "parse", statusCode: http.StatusOK, body: `{`, contains: "parse response"},
+		{name: "parse", statusCode: http.StatusOK, body: `{`, contains: "decode response"},
 		{
 			name: "empty output", statusCode: http.StatusOK,
 			body:     `{"id":"compact","model":"gpt-5","status":"completed","output":[]}`,

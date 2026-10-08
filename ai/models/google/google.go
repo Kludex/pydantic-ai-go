@@ -149,7 +149,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	response, err := parseResponse(data, m.providerName, hasGoogleFileSearch(params.NativeTools))
+	response, err := parseResponse(data, m.providerName, m.name, hasGoogleFileSearch(params.NativeTools))
 	if response != nil {
 		response.ProviderName = m.providerName
 		response.ProviderURL = m.baseURL
@@ -217,10 +217,10 @@ func (m *Model) CountTokens(
 		TotalTokens *int `json:"totalTokens"`
 	}
 	if err := json.Unmarshal(data, &counted); err != nil {
-		return ai.Usage{}, fmt.Errorf("google: decode token count response: %w", err)
+		return ai.Usage{}, ai.NewModelTransportError(ctx, m, "decode token count response", err)
 	}
 	if counted.TotalTokens == nil {
-		return ai.Usage{}, fmt.Errorf("google: token count response omitted totalTokens")
+		return ai.Usage{}, &APIError{Body: "token count response omitted totalTokens"}
 	}
 	return ai.Usage{InputTokens: *counted.TotalTokens}, nil
 }
@@ -656,7 +656,7 @@ func (m *Model) buildPayload(
 		return nil, fmt.Errorf("google: Model Armor is only supported by Vertex AI")
 	}
 	req.ModelArmorConfig = armor
-	thinking, err := googleThinking(m.name, settings.Thinking)
+	thinking, err := googleThinking(m.name, m.transport, settings.Thinking)
 	if err != nil {
 		return nil, err
 	}
@@ -761,7 +761,7 @@ func googleServiceTier(transport Transport, tier ai.ServiceTier) (string, error)
 	}
 }
 
-func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingConfig, error) {
+func googleThinking(modelName string, transport Transport, settings *ai.ThinkingSettings) (*thinkingConfig, error) {
 	if settings == nil || settings.Level == "" && settings.TokenBudget == nil && settings.IncludeThoughts == nil ||
 		!googleSupportsThinking(modelName) {
 		return nil, nil
@@ -774,7 +774,7 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 			config.IncludeThoughts = &include
 		}
 		if usesThinkingLevel {
-			config.ThinkingLevel = googleThinkingLevel(modelName, "MINIMAL")
+			config.ThinkingLevel = googleThinkingLevel(modelName, transport, "MINIMAL")
 		} else {
 			budget := 0
 			config.ThinkingBudget = &budget
@@ -803,7 +803,7 @@ func googleThinking(modelName string, settings *ai.ThinkingSettings) (*thinkingC
 		if !ok {
 			return nil, fmt.Errorf("google: invalid thinking level %q", settings.Level)
 		}
-		config.ThinkingLevel = googleThinkingLevel(modelName, level)
+		config.ThinkingLevel = googleThinkingLevel(modelName, transport, level)
 		return config, nil
 	}
 	budgets := map[ai.ThinkingLevel]int{
@@ -828,11 +828,12 @@ func googleSupportsThinking(modelName string) bool {
 	return strings.Contains(strings.ToLower(modelName), "gemini-2.5") || googleIsModernModel(modelName)
 }
 
-func googleThinkingLevel(modelName, requested string) string {
+func googleThinkingLevel(modelName string, transport Transport, requested string) string {
 	var supported []string
 	name := strings.ToLower(modelName)
 	switch {
-	case strings.HasPrefix(name, "gemini-3.1-flash-lite-image"):
+	case transport == TransportGeminiAPI && (strings.HasPrefix(name, "gemini-3.1-flash-image") ||
+		strings.HasPrefix(name, "gemini-3.1-flash-lite-image")):
 		supported = []string{"MINIMAL", "HIGH"}
 	case strings.HasPrefix(name, "gemini-3.7-flash"), strings.HasPrefix(name, "gemini-3.8-flash"),
 		strings.HasPrefix(name, "gemini-3.1-pro-preview"):
@@ -1195,24 +1196,7 @@ func googleWebSearchParts(
 		return nil, nil
 	}
 	args, _ := json.Marshal(map[string]any{"queries": queries})
-	var results []map[string]any
-	if chunks, ok := metadata["groundingChunks"].([]any); ok {
-		for _, rawChunk := range chunks {
-			chunk, ok := rawChunk.(map[string]any)
-			if !ok {
-				continue
-			}
-			web, ok := chunk["web"].(map[string]any)
-			if !ok {
-				continue
-			}
-			result := make(map[string]any, len(web))
-			for key, value := range web {
-				result[key] = value
-			}
-			results = append(results, result)
-		}
-	}
+	results := googleWebSearchSources(metadata)
 	callID := responseID + ":web_search"
 	if responseID == "" {
 		callID = "web_search"
@@ -1375,10 +1359,10 @@ func googleFileSearchQuery(code string) (string, bool) {
 	return "", false
 }
 
-func parseResponse(data []byte, providerName string, fileSearchEnabled bool) (*ai.ModelResponse, error) {
+func parseResponse(data []byte, providerName, modelName string, fileSearchEnabled bool) (*ai.ModelResponse, error) {
 	var gr generateResponse
 	if err := json.Unmarshal(data, &gr); err != nil {
-		return nil, fmt.Errorf("google: parse response: %w", err)
+		return nil, &ai.ModelTransportError{ProviderName: providerName, Operation: "parse response", Err: err}
 	}
 	if len(gr.Candidates) == 0 {
 		if gr.PromptFeedback.BlockReason == "" {
@@ -1395,7 +1379,7 @@ func parseResponse(data []byte, providerName string, fileSearchEnabled bool) (*a
 			providerDetails["safety_ratings"] = gr.PromptFeedback.SafetyRatings
 		}
 		return &ai.ModelResponse{
-			ModelName: gr.ModelVersion, Usage: gr.UsageMetadata.usage(), ProviderDetails: providerDetails,
+			ModelName: gr.ModelVersion, Usage: gr.usage(modelName), ProviderDetails: providerDetails,
 			ProviderResponseID: gr.ResponseID, FinishReason: ai.FinishReasonContentFilter,
 			State: ai.ModelResponseStateComplete,
 		}, nil
@@ -1426,7 +1410,7 @@ func parseResponse(data []byte, providerName string, fileSearchEnabled bool) (*a
 		providerDetails = nil
 	}
 	resp := &ai.ModelResponse{
-		ModelName: gr.ModelVersion, Usage: gr.UsageMetadata.usage(), Timestamp: time.Now().UTC(),
+		ModelName: gr.ModelVersion, Usage: gr.usage(modelName), Timestamp: time.Now().UTC(),
 		ProviderDetails: providerDetails, ProviderResponseID: gr.ResponseID,
 		FinishReason: googleFinishReason(gr.Candidates[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}

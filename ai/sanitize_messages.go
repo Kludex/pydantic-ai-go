@@ -53,6 +53,10 @@ func (state *messageSanitizer) request(message ModelRequest) (ModelRequest, bool
 
 func (state *messageSanitizer) response(message ModelResponse) (ModelResponse, bool, error) {
 	cloned := cloneModelResponse(&message)
+	if cloned.WorkspaceRef != nil && !state.allowWorkspaceRefs {
+		cloned.WorkspaceRef = nil
+		state.strippedWorkspaceRefs++
+	}
 	parts := make([]ResponsePart, 0, len(cloned.Parts))
 	for _, responsePart := range cloned.Parts {
 		switch part := responsePart.(type) {

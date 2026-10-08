@@ -48,6 +48,10 @@ A string passed to `Send` asks the model to respond. Do not call `CreateResponse
 
 OpenAI reads `OPENAI_API_KEY`. Use `openai.WithAPIKey`, `openai.WithBaseURL`, `openai.WithHTTPClient`, and `openai.WithHeaders` when you need explicit transport configuration.
 
+## Use OpenAI GPT-Live
+
+Use `openai.NewLiveModel("gpt-live-1+gpt-5")` for GPT-Live's separate audio-driven protocol. Your instructions and tools run on the delegated Responses backend. See [GPT-Live](gpt-live.md) for a complete example, settings, usage, reconnect, and WebRTC limits.
+
 ## Use Azure OpenAI or Voice Live
 
 ```go
@@ -254,6 +258,9 @@ func main() {
 ```
 
 Gemini Live uses the official `google.golang.org/genai` SDK. Pass `google.WithClient` to reuse a configured SDK client. Use `google.WithVertex` for Vertex AI. `gemini-3.8-live` defaults tool declarations to asynchronous, so the adapter declares blocking tools explicitly. `gemini-3.8-live-extended-thinking` always uses asynchronous tools and defaults to low reasoning when you do not set an effort. Gemini supports image frames and Google Search, but it does not support manual turn control or text-only output on current speech models.
+
+!!! note "Native Gemini function history needs SDK support"
+    Seeded tool calls and results use readable text, including on `gemini-3.8-live`. The pinned `google.golang.org/genai` SDK does not expose `HistoryConfig` on `LiveConnectConfig`. Native function history needs that field to avoid triggering a reply during seeding. The adapter keeps the text fallback until the SDK supports it.
 
 When you disable input transcription, Gemini 3.x can still send transcript frames. The adapter discards them so user speech stays out of portable history.
 

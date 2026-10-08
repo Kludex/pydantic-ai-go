@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
@@ -150,18 +151,20 @@ func (m *Model) eventStream(
 				}, nil)
 				return
 			}
+			if !utf8.ValidString(data) {
+				yield(nil, &APIError{Body: "stream event is not valid UTF-8", ProviderName: m.providerName})
+				return
+			}
 			var chunk chatChunk
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				yield(nil, fmt.Errorf("openai: parse stream chunk: %w", err))
+				yield(nil, &APIError{Body: "decode stream event: " + err.Error(), ProviderName: m.providerName})
+				return
+			}
+			if chunk.Error != nil {
+				yield(nil, chunk.Error.apiError(m.providerName))
 				return
 			}
 			if m.chatCompatibility.ExtendedMetadata {
-				if chunk.Error != nil {
-					yield(nil, &APIError{
-						StatusCode: chunk.Error.Code, Body: chunk.Error.Message, ProviderName: m.providerName,
-					})
-					return
-				}
 				var envelope struct {
 					Choices json.RawMessage `json:"choices"`
 					Model   string          `json:"model"`

@@ -92,6 +92,41 @@ func TestMCPToolsetRunsToolsAndInstructions(t *testing.T) {
 	}
 }
 
+func TestMCPToolsetHidesAppOnlyTools(t *testing.T) {
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "apps", Version: "1"}, nil)
+	for _, tool := range []*mcpsdk.Tool{
+		{Name: "app", InputSchema: map[string]any{"type": "object"}, Meta: mcpsdk.Meta{
+			"ui": map[string]any{"visibility": []any{"app"}},
+		}},
+		{Name: "hidden", InputSchema: map[string]any{"type": "object"}, Meta: mcpsdk.Meta{
+			"ui": map[string]any{"visibility": []any{}},
+		}},
+		{Name: "shared", InputSchema: map[string]any{"type": "object"}, Meta: mcpsdk.Meta{
+			"ui": map[string]any{"visibility": []any{"app", "model"}},
+		}},
+		{Name: "metadata", InputSchema: map[string]any{"type": "object"}, Meta: mcpsdk.Meta{
+			"ui": map[string]any{"resourceUri": "ui://view"},
+		}},
+	} {
+		server.AddTool(tool, func(context.Context, *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+			return &mcpsdk.CallToolResult{}, nil
+		})
+	}
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, _ []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if len(params.Tools) != 2 || params.Tools[0].Name != "metadata" || params.Tools[1].Name != "shared" {
+			t.Fatalf("unexpected visible MCP tools: %+v", params.Tools)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[testDeps, string](model)
+	agent.AddToolset(NewToolset(serverFactory[testDeps](server)))
+	if _, err := agent.Run(t.Context(), "list", testDeps{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestMCPToolErrors(t *testing.T) {
 	for _, test := range []struct {
 		name      string

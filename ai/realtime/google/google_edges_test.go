@@ -95,7 +95,8 @@ func TestGoogleSeedErrors(t *testing.T) {
 		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
 			ai.BinaryContent{Data: []byte("pdf"), MediaType: "application/pdf"},
 		}}}},
-		ai.ModelRequest{Parts: []ai.RequestPart{ai.SpeechPart{Speaker: ai.SpeechSpeakerUser}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.SpeechPart{Speaker: ai.SpeechSpeakerUser,
+			Audio: &ai.BinaryContent{Data: []byte{0, 0}, MediaType: "audio/pcm"}}}},
 		ai.ModelResponse{Parts: []ai.ResponsePart{ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant}}},
 		ai.ModelResponse{Parts: []ai.ResponsePart{ai.FilePart{Content: ai.BinaryContent{Data: []byte("x"), MediaType: "image/png"}}}},
 		ai.ModelRequest{Parts: []ai.RequestPart{

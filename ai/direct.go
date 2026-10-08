@@ -276,7 +276,17 @@ func requestModelDirect(
 	streaming bool,
 	emit func(StreamEvent) bool,
 	observe func(*ModelResponse),
-) (*ModelResponse, error) {
+) (result *ModelResponse, requestErr error) {
+	var observation *modelRequestObservation
+	if instrumented := findInstrumentedModel(model); instrumented != nil && !modelRequestSpanActive(ctx) {
+		observation = &modelRequestObservation{marks: bindCacheMarks(latestConversationID(messages))}
+		ctx = context.WithValue(ctx, modelRequestObservationKey{}, observation)
+		runtime := *instrumented
+		runtime.ModelWrapper = WrapModel(model)
+		var request *instrumentedRequest
+		ctx, request = runtime.startRequest(ctx, messages, params)
+		defer func() { request.finish(ctx, result, requestErr, 0) }()
+	}
 	baseMessages := slices.Clone(messages)
 	var response *ModelResponse
 	if historyEndsSuspended(baseMessages) {
@@ -337,6 +347,9 @@ func requestModelDirect(
 			ctx, model, segmentMessages, params, streaming, segmentEmit, segmentObserve,
 		)
 		if segment != nil {
+			if observation != nil {
+				observation.record(model, messages, params, response, segment)
+			}
 			stampDirectResponse(model, segment)
 			fillResponseCost(ctx, segment)
 			if speechErr := validateResponseSpeech(segment); speechErr != nil && err == nil {
@@ -412,7 +425,7 @@ func requestDirectSegment(
 		if err != nil {
 			return nil, err
 		}
-		return accumulate(events, params, emit, observe)
+		return accumulate(observeRequestStream(ctx, events), params, emit, observe)
 	}
 	response, err := model.Request(ctx, messages, params)
 	if err != nil || response == nil {

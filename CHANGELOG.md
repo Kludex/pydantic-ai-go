@@ -8,6 +8,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- Send a generic System One question for option-described scalar outputs with no instructions. Set `systemone.Profile.RequiresInstructions` to false for compatible servers that permit omitted instructions.
+- Index local keyword tool-search terms and refresh the index when the corpus changes. Preserve undiscovered-first ranking and current corpus-order ties across concurrent runs.
+- Respect provider-honored cache tiers in cache outlook, preserve previous request boundaries after wide Bedrock and OpenRouter tool turns, and prefer explicit final Anthropic cache markers over automatic caching.
+- Add provider cache-outlook defaults, current OpenRouter routing values, current Anthropic output limits, and GPT-6.1 Sol behavior.
+- Reject forced tool choice in persistent OpenAI-protocol realtime sessions, support Vertex Gemini Live text output, expose realtime context-window usage, and classify dated Gemini 3.8 Live models correctly.
+- Accept TOML as text input, reject duplicate model tool-call IDs before execution, expose detached history repair, and hide MCP Apps tools that are not visible to the model.
 - Align TypeSafe Jev routing with decision-model behavior: named routes, speculative field questions, opt-in route thresholds, route handoffs, reasoning-aware history, route premises, and a 32,000-token context window. `typesafe.Settings.ToolCallThreshold` is deprecated and ignored; use `RouteThreshold` to hand low-confidence routes to a fallback model instead of silently selecting the output route.
 - Expose the current prompt and routed request to model selectors.
 - Price one-hour Anthropic cache writes, realtime image input, and duration-billed voice usage with dedicated usage counters.
@@ -29,6 +35,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Added
 
+- Portable prompt caching with `ModelSettings.Cache`, `CacheConfig`, and the composable `Caching` capability. Provider-local cache settings take precedence. Retention snaps to supported tiers, and stable-prefix-only caching avoids writing one-off conversations.
+- Once-per-conversation cache-configuration telemetry for long requests to models that need caching enabled explicitly. Harness-only upstream commits `d9a8a4bb` and `2132206f` remain permanently excluded with no Go code.
+- Serializable `Conversation` bundles that preserve history, cumulative usage, identity, and deferred requests across runs.
+- Core workspaces with local command and filesystem backends, read-only policy, trusted persisted references, and run-scoped selection.
+- System One decision models through `ai/models/systemone`, including custom and Ollama-compatible `/v1/systemone` endpoints.
 - TypeSafe Jev generation through `ai/models/typesafe` and provider-prefixed model inference.
 - Runtime described output choices through `Choice`, `NewChoices`, `NewStringChoices`, and `NewChoicesAgent`.
 - A once-per-process interactive first-run banner with resolved agent, model, output, tool, and capability details; coding-agent detection; CI, test, environment, API, and instrumentation suppression; and terminal CLI placement.
@@ -112,7 +123,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Deprecated
 
-- Nothing is deprecated.
+- `ResolvePromptCacheRetention` and `PromptCacheRetentionModel` are deprecated in favor of `ResolveCacheRetention` and `CacheRetentionModel`.
 
 ### Removed
 

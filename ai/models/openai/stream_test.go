@@ -234,6 +234,62 @@ func TestStreamKeepsTaggedThinkingOpenAcrossToolCall(t *testing.T) {
 	}
 }
 
+func TestStreamSeparatesNativeThinkingGenerations(t *testing.T) {
+	server := httptest.NewServer(sseHandler(t, []string{
+		`{"choices":[{"delta":{"content":"hello"}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"first"}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"lookup","arguments":"{}"}}]}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"second"},"finish_reason":"tool_calls"}]}`,
+		`[DONE]`,
+	}))
+	defer server.Close()
+	model := openai.NewModel(
+		"model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+		openai.WithChatCompatibility(openai.ChatCompatibility{ReasoningContent: true}),
+	)
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if thinking, ok := event.(ai.ThinkingDeltaEvent); ok {
+			ids = append(ids, thinking.PartID)
+		}
+	}
+	if len(ids) != 2 || ids[0] != "thinking" || ids[1] != "thinking:2" {
+		t.Fatalf("thinking generations were merged: %v", ids)
+	}
+}
+
+func TestStreamStopsWhileFlushingTaggedTextBeforeNativeThinking(t *testing.T) {
+	server := httptest.NewServer(sseHandler(t, []string{
+		`{"choices":[{"delta":{"content":"pending <thi"}}]}`,
+		`{"choices":[{"delta":{"reasoning_content":"reasoning"}}]}`,
+		`[DONE]`,
+	}))
+	defer server.Close()
+	model := openai.NewModel(
+		"model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+		openai.WithChatCompatibility(openai.ChatCompatibility{ReasoningContent: true}),
+	)
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if text, ok := event.(ai.TextDeltaEvent); ok && strings.Contains(text.Delta, "<thi") {
+			break
+		}
+	}
+}
+
 func TestStreamInterleavedToolCallDeltas(t *testing.T) {
 	model := newServer(t, sseHandler(t, []string{
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","function":{"name":"one","arguments":"{\"x\":"}}]}}]}`,

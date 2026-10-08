@@ -127,6 +127,7 @@ type RunInfo struct {
 	// ConversationID identifies related runs in one conversation.
 	ConversationID string
 
+	workspace        *Workspace
 	agentName        string
 	agentDescription string
 	usage            *Usage

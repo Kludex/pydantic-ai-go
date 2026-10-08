@@ -100,9 +100,10 @@ func TestModelWrapperDelegatesModelContract(t *testing.T) {
 	}
 	settings := wrapper.DefaultModelSettings()
 	settings.StopSequences[0] = "changed"
-	retention, retained := ai.ResolvePromptCacheRetention(wrapper, nil)
+	retention, retained := ai.ResolveCacheRetention(wrapper, nil)
+	legacyRetention, legacyRetained := ai.ResolvePromptCacheRetention(wrapper, nil)
 	if !underlying.opened || !underlying.closed || wrapper.DefaultModelSettings().StopSequences[0] != "stop" ||
-		retention != 42*time.Hour || !retained ||
+		retention != 42*time.Hour || !retained || legacyRetention != retention || legacyRetained != retained ||
 		!wrapper.SupportsToolSearchStrategy(ai.ToolSearchStrategyRegex) ||
 		wrapper.SupportsToolSearchStrategy(ai.ToolSearchStrategyBM25) ||
 		wrapper.NativeToolSearchProvider() != "provider" ||
@@ -206,6 +207,7 @@ var _ ai.Model = (*ai.ModelWrapper)(nil)
 var _ ai.StreamingModel = (*ai.ModelWrapper)(nil)
 var _ ai.ModelOpener = (*ai.ModelWrapper)(nil)
 var _ ai.ModelDefaultSettings = (*ai.ModelWrapper)(nil)
+var _ ai.CacheRetentionModel = (*ai.ModelWrapper)(nil)
 var _ ai.PromptCacheRetentionModel = (*ai.ModelWrapper)(nil)
 var _ ai.ToolSearchStrategyModel = (*ai.ModelWrapper)(nil)
 var _ ai.NativeToolSearchHistoryModel = (*ai.ModelWrapper)(nil)

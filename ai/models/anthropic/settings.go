@@ -69,6 +69,8 @@ type Settings struct {
 	Common ai.ModelSettings
 	// Cache enables automatic prompt-cache placement with this retention.
 	Cache CacheTTL
+	// CacheDiagnostics requests prefix-comparison diagnostics on the Claude API.
+	CacheDiagnostics bool
 	// CacheInstructions caches the final stable instruction boundary.
 	CacheInstructions CacheTTL
 	// CacheMessages caches recent message boundaries.
@@ -87,6 +89,7 @@ type Settings struct {
 
 const (
 	cacheSetting                = "anthropic_cache"
+	cacheDiagnosticsSetting     = "anthropic_cache_diagnostics"
 	cacheInstructionsSetting    = "anthropic_cache_instructions"
 	cacheMessagesSetting        = "anthropic_cache_messages"
 	cacheToolDefinitionsSetting = "anthropic_cache_tool_definitions"
@@ -97,6 +100,7 @@ const (
 
 type cacheSettings struct {
 	Automatic       CacheTTL
+	Diagnostics     bool
 	Instructions    CacheTTL
 	Messages        CacheTTL
 	ToolDefinitions CacheTTL
@@ -138,6 +142,15 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	extra := maps.Clone(common.ExtraBody)
 	if extra == nil {
 		extra = map[string]any{}
+	}
+	if _, exists := extra[cacheDiagnosticsSetting]; exists {
+		return ai.ModelSettings{}, fmt.Errorf("anthropic: setting field %q is reserved", cacheDiagnosticsSetting)
+	}
+	if settings.CacheDiagnostics {
+		if _, exists := extra["diagnostics"]; exists {
+			return ai.ModelSettings{}, fmt.Errorf("anthropic: diagnostics conflicts with typed settings")
+		}
+		extra[cacheDiagnosticsSetting] = true
 	}
 	for _, setting := range values {
 		if _, exists := extra[setting.name]; exists {
@@ -193,6 +206,14 @@ func extractCacheSettings(settings ai.ModelSettings) (ai.ModelSettings, cacheSet
 	settings = settings.Clone()
 	extra := maps.Clone(settings.ExtraBody)
 	cache := cacheSettings{}
+	if value, exists := extra[cacheDiagnosticsSetting]; exists {
+		delete(extra, cacheDiagnosticsSetting)
+		diagnostics, ok := value.(bool)
+		if !ok {
+			return ai.ModelSettings{}, cacheSettings{}, fmt.Errorf("anthropic: cache diagnostics must be a boolean")
+		}
+		cache.Diagnostics = diagnostics
+	}
 	values := []struct {
 		name        string
 		destination *CacheTTL
@@ -208,6 +229,9 @@ func extractCacheSettings(settings ai.ModelSettings) (ai.ModelSettings, cacheSet
 			continue
 		}
 		delete(extra, setting.name)
+		if disabled, ok := value.(bool); ok && !disabled {
+			continue
+		}
 		ttl, ok := value.(CacheTTL)
 		if !ok {
 			return ai.ModelSettings{}, cacheSettings{}, fmt.Errorf(

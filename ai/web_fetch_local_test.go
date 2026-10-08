@@ -103,6 +103,9 @@ func TestLocalWebFetchTextAndHTML(t *testing.T) {
 		case "/xml":
 			response.Header().Set("Content-Type", "application/xml")
 			_, _ = response.Write([]byte("<value>xml</value>"))
+		case "/toml":
+			response.Header().Set("Content-Type", "application/toml")
+			_, _ = response.Write([]byte(`name = "demo"`))
 		}
 	}))
 	t.Cleanup(server.Close)
@@ -146,6 +149,11 @@ func TestLocalWebFetchTextAndHTML(t *testing.T) {
 		"/xml": func(t *testing.T, result ai.WebFetchResult) {
 			if result.Content != "<value>xml</value>" {
 				t.Fatalf("unexpected XML result: %#v", result)
+			}
+		},
+		"/toml": func(t *testing.T, result ai.WebFetchResult) {
+			if result.Content != `name = "demo"` {
+				t.Fatalf("unexpected TOML result: %#v", result)
 			}
 		},
 	} {

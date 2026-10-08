@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
@@ -11,6 +12,52 @@ import (
 
 type profileOutput struct {
 	Value string `json:"value"`
+}
+
+func TestPromptCacheOutlook(t *testing.T) {
+	now := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	profile := ai.ModelProfile{DefaultCacheRetention: 5 * time.Minute}
+	history := func(age time.Duration, ttl ai.CachePointTTL) []ai.ModelMessage {
+		contents := []ai.UserContent{ai.TextContent{Text: "hello"}}
+		if ttl != "" {
+			contents = append(contents, ai.CachePoint{TTL: ttl})
+		}
+		return []ai.ModelMessage{
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: contents}}},
+			ai.ModelResponse{Timestamp: now.Add(-age), Parts: []ai.ResponsePart{ai.TextPart{Content: "hi"}}},
+		}
+	}
+	if got := ai.PromptCacheOutlook(history(5*time.Minute, ""), &profile, nil, now); got != ai.CacheOutlookWarm {
+		t.Fatalf("boundary outlook = %q", got)
+	}
+	if got := ai.PromptCacheOutlook(history(6*time.Minute, ""), &profile, nil, now); got != ai.CacheOutlookCold {
+		t.Fatalf("cold outlook = %q", got)
+	}
+	if got := ai.PromptCacheOutlook(history(30*time.Minute, ai.CachePointTTL1Hour), &profile, nil, now); got != ai.CacheOutlookWarm {
+		t.Fatalf("cache point outlook = %q", got)
+	}
+	hour := time.Hour
+	if got := ai.PromptCacheOutlook(history(30*time.Minute, ""), &profile, &hour, now); got != ai.CacheOutlookWarm {
+		t.Fatalf("explicit retention outlook = %q", got)
+	}
+	recent := history(time.Second, "")
+	recent[1] = ai.ModelResponse{Timestamp: time.Now().UTC(), Parts: []ai.ResponsePart{ai.TextPart{Content: "hi"}}}
+	if got := ai.PromptCacheOutlook(recent, &profile, nil, time.Time{}); got != ai.CacheOutlookWarm {
+		t.Fatalf("current-time outlook = %q", got)
+	}
+	if got := ai.PromptCacheOutlook(nil, &profile, nil, now); got != ai.CacheOutlookUnknown {
+		t.Fatalf("empty history outlook = %q", got)
+	}
+	unknown := ai.ModelProfile{}
+	if got := ai.PromptCacheOutlook(history(time.Minute, ""), &unknown, nil, now); got != ai.CacheOutlookUnknown {
+		t.Fatalf("unknown retention outlook = %q", got)
+	}
+	withUnsentPoint := append(history(30*time.Minute, ""), ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{ai.CachePoint{TTL: ai.CachePointTTL1Hour}}},
+	}})
+	if got := ai.PromptCacheOutlook(withUnsentPoint, &profile, nil, now); got != ai.CacheOutlookCold {
+		t.Fatalf("unsent cache point outlook = %q", got)
+	}
 }
 
 func TestModelProfileSelectsAutomaticOutputMode(t *testing.T) {
@@ -233,6 +280,11 @@ func TestProfileValidation(t *testing.T) {
 		"nil model": func() { ai.NewProfiledModel(nil, ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool}) },
 		"auto default": func() {
 			ai.NewProfiledModel(fakes.NewTestModel(), ai.ModelProfile{DefaultOutputMode: ai.OutputModeAuto})
+		},
+		"negative cache retention": func() {
+			ai.NewProfiledModel(fakes.NewTestModel(), ai.ModelProfile{
+				DefaultOutputMode: ai.OutputModeTool, DefaultCacheRetention: -time.Second,
+			})
 		},
 	}
 	for name, operation := range tests {

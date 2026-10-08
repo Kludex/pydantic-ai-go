@@ -55,6 +55,8 @@ type RunContext[Deps any] struct {
 	ModelSettings ModelSettings
 	// UsageLimits contains detached limits applied to this run.
 	UsageLimits UsageLimits
+	// Workspace provides this run's files and commands, or an unattached placeholder.
+	Workspace *Workspace
 
 	usage              *Usage
 	usageMu            *sync.Mutex

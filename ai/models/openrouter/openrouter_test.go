@@ -468,7 +468,9 @@ func TestOpenRouterPromptCaching(t *testing.T) {
 		t.Fatalf("unsupported cache settings leaked to OpenRouter: %s", encoded)
 	}
 
-	for _, modelName := range []string{"openai/gpt-5.6", "openai/gpt-6-sol", "openai/gpt-6-luna-20260922"} {
+	for _, modelName := range []string{
+		"openai/gpt-5.6", "openai/gpt-6-sol", "openai/gpt-6-luna-20260922", "openai/gpt-6.1-sol",
+	} {
 		request(modelName)
 		openAIMessages := bodies[len(bodies)-1]["messages"].([]any)
 		openAIContent := openAIMessages[len(openAIMessages)-1].(map[string]any)["content"].([]any)

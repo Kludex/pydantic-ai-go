@@ -107,29 +107,54 @@ func (r *run[Deps, Output]) validateOutputWithHooks(
 	decode func(any) (decodedOutput, error),
 ) (decodedOutput, error) {
 	var zero decodedOutput
-	rawOutput = cloneRawOutput(rawOutput)
-	for index, capability := range r.capabilities {
-		hook, ok := capability.(BeforeOutputValidationHook)
-		if !ok {
-			continue
-		}
-		var err error
-		rawOutput, err = hook.BeforeOutputValidation(
-			ctx, r.capabilityInfo(index), hookContext.Clone(), cloneRawOutput(rawOutput),
-		)
+	var state any
+	next := OutputValidationFunc(func(ctx context.Context, rawOutput any) (any, error) {
 		rawOutput = cloneRawOutput(rawOutput)
+		for index, capability := range r.capabilities {
+			hook, ok := capability.(BeforeOutputValidationHook)
+			if !ok {
+				continue
+			}
+			var err error
+			rawOutput, err = hook.BeforeOutputValidation(
+				ctx, r.capabilityInfo(index), hookContext.Clone(), cloneRawOutput(rawOutput),
+			)
+			rawOutput = cloneRawOutput(rawOutput)
+			if err != nil {
+				return zero, err
+			}
+		}
+		output, err := decode(rawOutput)
+		state = output.state
+		validated := output.value
+		if err != nil && !hookContext.Partial {
+			for index := len(r.capabilities) - 1; index >= 0; index-- {
+				hook, ok := r.capabilities[index].(OutputValidationErrorHook)
+				if !ok {
+					continue
+				}
+				validated, err = hook.OnOutputValidationError(
+					ctx, r.capabilityInfo(index), hookContext.Clone(), cloneRawOutput(rawOutput), err,
+				)
+				if err == nil {
+					break
+				}
+			}
+		}
 		if err != nil {
 			return zero, err
 		}
-	}
-	var state any
-	next := OutputValidationFunc(func(_ context.Context, rawOutput any) (any, error) {
-		output, err := decode(rawOutput)
-		if err != nil {
-			return nil, err
+		for index := len(r.capabilities) - 1; index >= 0; index-- {
+			hook, ok := r.capabilities[index].(AfterOutputValidationHook)
+			if !ok {
+				continue
+			}
+			validated, err = hook.AfterOutputValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), validated)
+			if err != nil {
+				return zero, err
+			}
 		}
-		state = output.state
-		return output.value, nil
+		return validated, nil
 	})
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(OutputValidationWrapper); ok {
@@ -143,32 +168,8 @@ func (r *run[Deps, Output]) validateOutputWithHooks(
 		}
 	}
 	validated, err := next(ctx, rawOutput)
-	if err != nil && !hookContext.Partial {
-		for index := len(r.capabilities) - 1; index >= 0; index-- {
-			hook, ok := r.capabilities[index].(OutputValidationErrorHook)
-			if !ok {
-				continue
-			}
-			validated, err = hook.OnOutputValidationError(
-				ctx, r.capabilityInfo(index), hookContext.Clone(), cloneRawOutput(rawOutput), err,
-			)
-			if err == nil {
-				break
-			}
-		}
-	}
 	if err != nil {
 		return zero, err
-	}
-	for index := len(r.capabilities) - 1; index >= 0; index-- {
-		hook, ok := r.capabilities[index].(AfterOutputValidationHook)
-		if !ok {
-			continue
-		}
-		validated, err = hook.AfterOutputValidation(ctx, r.capabilityInfo(index), hookContext.Clone(), validated)
-		if err != nil {
-			return zero, err
-		}
 	}
 	if r.agent.outputProcessor == nil {
 		if _, ok := validated.(Output); !ok {
@@ -185,41 +186,72 @@ func (r *run[Deps, Output]) processOutputWithHooks(
 	candidate decodedOutput,
 ) (Output, error) {
 	var zero Output
-	processed := candidate.value
-	var err error
-	for index, capability := range r.capabilities {
-		hook, ok := capability.(BeforeOutputProcessingHook)
-		if !ok {
-			continue
+	next := OutputProcessingFunc(func(ctx context.Context, processed any) (any, error) {
+		var err error
+		for index, capability := range r.capabilities {
+			hook, ok := capability.(BeforeOutputProcessingHook)
+			if !ok {
+				continue
+			}
+			processed, err = hook.BeforeOutputProcessing(ctx, r.capabilityInfo(index), hookContext.Clone(), processed)
+			if err != nil {
+				return zero, err
+			}
 		}
-		processed, err = hook.BeforeOutputProcessing(ctx, r.capabilityInfo(index), hookContext.Clone(), processed)
+		core := OutputProcessingFunc(func(processingCtx context.Context, processed any) (any, error) {
+			var value Output
+			var err error
+			if r.agent.outputProcessor != nil {
+				value, err = r.agent.outputProcessor(processingCtx, runContext, processed, candidate.state)
+				if err != nil {
+					return value, err
+				}
+			} else {
+				var ok bool
+				value, ok = processed.(Output)
+				if !ok {
+					return nil, fmt.Errorf(
+						"output processing input has type %T, expected %v", processed, reflect.TypeFor[Output](),
+					)
+				}
+			}
+			for _, validate := range r.agent.outputValidators {
+				if err := validate(processingCtx, runContext, value); err != nil {
+					return value, err
+				}
+			}
+			return value, nil
+		})
+		processed, err = core(ctx, processed)
+		var retry *RetryError
+		if err != nil && !errors.As(err, &retry) {
+			for index := len(r.capabilities) - 1; index >= 0; index-- {
+				hook, ok := r.capabilities[index].(OutputProcessingErrorHook)
+				if !ok {
+					continue
+				}
+				processed, err = hook.OnOutputProcessingError(
+					ctx, r.capabilityInfo(index), hookContext.Clone(), processed, err,
+				)
+				if err == nil {
+					break
+				}
+			}
+		}
 		if err != nil {
 			return zero, err
 		}
-	}
-	next := OutputProcessingFunc(func(processingCtx context.Context, processed any) (any, error) {
-		var value Output
-		var err error
-		if r.agent.outputProcessor != nil {
-			value, err = r.agent.outputProcessor(processingCtx, runContext, processed, candidate.state)
-			if err != nil {
-				return value, err
-			}
-		} else {
-			var ok bool
-			value, ok = processed.(Output)
+		for index := len(r.capabilities) - 1; index >= 0; index-- {
+			hook, ok := r.capabilities[index].(AfterOutputProcessingHook)
 			if !ok {
-				return nil, fmt.Errorf(
-					"output processing input has type %T, expected %v", processed, reflect.TypeFor[Output](),
-				)
+				continue
+			}
+			processed, err = hook.AfterOutputProcessing(ctx, r.capabilityInfo(index), hookContext.Clone(), processed)
+			if err != nil {
+				return zero, err
 			}
 		}
-		for _, validate := range r.agent.outputValidators {
-			if err := validate(processingCtx, runContext, value); err != nil {
-				return value, err
-			}
-		}
-		return value, nil
+		return processed, nil
 	})
 	for index := len(r.capabilities) - 1; index >= 0; index-- {
 		if wrapper, ok := r.capabilities[index].(OutputProcessingWrapper); ok {
@@ -230,34 +262,9 @@ func (r *run[Deps, Output]) processOutputWithHooks(
 			}
 		}
 	}
-	processed, err = next(ctx, processed)
-	var retry *RetryError
-	if err != nil && !errors.As(err, &retry) {
-		for index := len(r.capabilities) - 1; index >= 0; index-- {
-			hook, ok := r.capabilities[index].(OutputProcessingErrorHook)
-			if !ok {
-				continue
-			}
-			processed, err = hook.OnOutputProcessingError(
-				ctx, r.capabilityInfo(index), hookContext.Clone(), processed, err,
-			)
-			if err == nil {
-				break
-			}
-		}
-	}
+	processed, err := next(ctx, candidate.value)
 	if err != nil {
 		return zero, err
-	}
-	for index := len(r.capabilities) - 1; index >= 0; index-- {
-		hook, ok := r.capabilities[index].(AfterOutputProcessingHook)
-		if !ok {
-			continue
-		}
-		processed, err = hook.AfterOutputProcessing(ctx, r.capabilityInfo(index), hookContext.Clone(), processed)
-		if err != nil {
-			return zero, err
-		}
 	}
 	final, ok := processed.(Output)
 	if !ok {

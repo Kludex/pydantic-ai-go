@@ -79,8 +79,11 @@ func NewModel(name string, options ...Option) *Model {
 	profile.SupportsManualTurnControl = true
 	profile.SupportsInterruption = true
 	profile.SupportsSessionSeeding = true
+	profile.SupportsAsyncToolCalls = true
+	profile.AsyncToolCallMode = realtime.AsyncToolCallsAlways
 	profile.SupportsThinking = name == "grok-voice-latest" || strings.HasPrefix(name, "grok-voice-think-")
 	profile.EmitsInputSpeechEvents = true
+	profile.UsageExcludesContextWindow = true
 	profile.ContextWindow = contextwindow.Lookup(name, "x-ai", defaultBaseURL)
 	model := &Model{
 		name: name, apiKey: strings.TrimSpace(os.Getenv("XAI_API_KEY")), baseURL: defaultBaseURL,
@@ -117,6 +120,13 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 	if params.Settings.OutputModality == realtime.OutputModalityText {
 		return nil, fmt.Errorf("xai realtime: Grok Voice does not support text output")
 	}
+	if params.Settings.ToolChoice == realtime.ToolChoiceRequired {
+		return nil, fmt.Errorf("xai realtime: required tool choice is not supported for persistent sessions")
+	}
+	if params.Settings.ToolChoice != "" && params.Settings.ToolChoice != realtime.ToolChoiceAuto &&
+		params.Settings.ToolChoice != realtime.ToolChoiceNone {
+		return nil, fmt.Errorf("xai realtime: invalid tool choice %q", params.Settings.ToolChoice)
+	}
 	settings := model.resolveSettings(params.Settings)
 	state := &dialState{}
 	dial := func(ctx context.Context, history []ai.ModelMessage) (*websocket.Conn, string, error) {
@@ -138,6 +148,7 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
 		SupportsImages:             false,
 		OutputSampleRate:           model.profile.AudioOutputSampleRate,
+		ManualAudioTurns:           config["turn_detection"] == nil,
 	})
 }
 
@@ -287,7 +298,7 @@ func sessionConfig(
 	if common.ToolChoice != "" {
 		config["tool_choice"] = common.ToolChoice
 	}
-	if len(request.Tools) > 0 {
+	if len(request.Tools) > 0 && common.ToolChoice != realtime.ToolChoiceNone {
 		tools := make([]any, len(request.Tools))
 		for index, tool := range request.Tools {
 			tools[index] = map[string]any{
@@ -325,6 +336,12 @@ func mapEvent(data []byte, tracker *usageTracker, conversationID string) ([]real
 		return nil, fmt.Errorf("xai realtime: decode event: %w", err)
 	}
 	kind := stringValue(frame["type"])
+	if kind == "error" && stringValue(object(frame["error"])["type"]) == "max_duration" {
+		message := stringValue(object(frame["error"])["message"])
+		return []realtime.CodecEvent{realtime.SessionError{
+			Err: fmt.Errorf("xai realtime: %s", message), Recoverable: false,
+		}}, nil
+	}
 	if kind == "conversation.item.input_audio_transcription.updated" {
 		return []realtime.CodecEvent{realtime.InputTranscript{
 			Text: stringValue(frame["transcript"]), Cumulative: true, ItemID: stringValue(frame["item_id"]),

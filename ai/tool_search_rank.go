@@ -1,46 +1,65 @@
 package ai
 
 import (
+	"cmp"
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 var toolSearchTokenPattern = regexp.MustCompile(`[a-z0-9]+`)
 
-type scoredToolSearchMatch struct {
-	name         string
-	score        int
-	undiscovered bool
+type keywordTool struct{ name, description string }
+
+type keywordToolSearch struct {
+	mu       sync.Mutex
+	corpus   []keywordTool
+	postings map[string][]int
 }
 
-func defaultToolSearch(queries []string, tools []ToolDefinition, revealed []string) []string {
-	terms := toolSearchTerms(strings.Join(queries, " "))
-	revealedSet := make(map[string]struct{}, len(revealed))
-	for _, name := range revealed {
-		revealedSet[name] = struct{}{}
+func (search *keywordToolSearch) search(queries []string, tools []ToolDefinition, revealed []string) []string {
+	search.mu.Lock()
+	defer search.mu.Unlock()
+	corpus := make([]keywordTool, len(tools))
+	for index, tool := range tools {
+		corpus[index] = keywordTool{tool.Name, tool.Description}
 	}
-	var matches []scoredToolSearchMatch
-	for _, tool := range tools {
-		score := intersectionSize(terms, toolSearchTerms(tool.Name+" "+tool.Description))
-		if score == 0 {
-			continue
+	if !slices.Equal(corpus, search.corpus) {
+		search.corpus = corpus
+		search.postings = make(map[string][]int)
+		for index, tool := range corpus {
+			for term := range toolSearchTerms(tool.name + " " + tool.description) {
+				search.postings[term] = append(search.postings[term], index)
+			}
 		}
-		_, alreadyRevealed := revealedSet[tool.Name]
-		matches = append(matches, scoredToolSearchMatch{
-			name: tool.Name, score: score, undiscovered: !alreadyRevealed,
-		})
 	}
-	novelty := map[bool]int{false: 0, true: 1}
-	slices.SortStableFunc(matches, func(left, right scoredToolSearchMatch) int {
-		if difference := novelty[right.undiscovered] - novelty[left.undiscovered]; difference != 0 {
+	scores := make(map[int]int)
+	for term := range toolSearchTerms(strings.Join(queries, " ")) {
+		for _, index := range search.postings[term] {
+			scores[index]++
+		}
+	}
+	matches := make([]int, 0, len(scores))
+	for index := range scores {
+		matches = append(matches, index)
+	}
+	revealedSet := make(map[string]int, len(revealed))
+	for _, name := range revealed {
+		revealedSet[name] = 1
+	}
+	slices.SortFunc(matches, func(left, right int) int {
+		if difference := revealedSet[corpus[left].name] - revealedSet[corpus[right].name]; difference != 0 {
 			return difference
 		}
-		return right.score - left.score
+		if difference := scores[right] - scores[left]; difference != 0 {
+			return difference
+		}
+		return cmp.Compare(left, right)
 	})
 	names := make([]string, len(matches))
 	for index, match := range matches {
-		names[index] = match.name
+		names[index] = corpus[match].name
 	}
 	return names
 }
@@ -51,16 +70,6 @@ func toolSearchTerms(value string) map[string]struct{} {
 		terms[term] = struct{}{}
 	}
 	return terms
-}
-
-func intersectionSize(left, right map[string]struct{}) int {
-	count := 0
-	for value := range left {
-		if _, ok := right[value]; ok {
-			count++
-		}
-	}
-	return count
 }
 
 func validToolSearchMatches(names []string, tools []ToolDefinition, limit int) []string {

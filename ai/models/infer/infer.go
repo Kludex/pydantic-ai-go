@@ -24,6 +24,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/openaicodex"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
 	"github.com/Kludex/pydantic-ai-go/ai/models/snowflake"
+	"github.com/Kludex/pydantic-ai-go/ai/models/systemone"
 	"github.com/Kludex/pydantic-ai-go/ai/models/together"
 	"github.com/Kludex/pydantic-ai-go/ai/models/typesafe"
 	"github.com/Kludex/pydantic-ai-go/ai/models/vllm"
@@ -81,6 +82,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"ollama":      func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
 		"openrouter":  func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },
 		"snowflake":   func(name string) (ai.Model, error) { return snowflake.NewModel(name), nil },
+		"system-one":  func(name string) (ai.Model, error) { return systemone.NewModel(name) },
 		"together":    func(name string) (ai.Model, error) { return together.NewModel(name), nil },
 		"typesafe":    func(name string) (ai.Model, error) { return typesafe.NewModel(name), nil },
 		"vllm":        func(name string) (ai.Model, error) { return vllm.NewModel(name) },

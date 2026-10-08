@@ -4,6 +4,7 @@ import "slices"
 
 func (state *messageSanitizer) report() MessageSanitizationReport {
 	return MessageSanitizationReport{
+		StrippedWorkspaceRefs: state.strippedWorkspaceRefs,
 		StrippedSystemPrompts: state.strippedSystems, StrippedCompactionParts: state.strippedCompactions,
 		DroppedFileURLSchemes: sortedSet(state.droppedSchemes), ResetFileDownloadModes: sortedModeSet(state.resetModes),
 		DroppedUploadedFileProviders: sortedSet(state.droppedProviders),

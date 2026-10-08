@@ -19,6 +19,13 @@ func transformNode(node map[string]any, fn func(map[string]any)) {
 			transformNode(child, fn)
 		}
 	}
+	if children, ok := node["items"].([]any); ok {
+		for _, child := range children {
+			if child, ok := child.(map[string]any); ok {
+				transformNode(child, fn)
+			}
+		}
+	}
 	for _, key := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
 		if children, ok := node[key].([]any); ok {
 			for _, child := range children {

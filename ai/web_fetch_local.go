@@ -108,7 +108,7 @@ func NewLocalWebFetchTool[Deps any](config LocalWebFetchConfig) Tool[Deps] {
 				}, nil
 			}
 			decoded, err := charset.NewReader(bytes.NewReader(result.Data), result.ContentType)
-			if err != nil {
+			if err != nil { // pragma: no cover - download validation rejects unknown charset labels first.
 				return nil, Retryf("Failed to decode %s: %v", args.URL, err)
 			}
 			decodedText, _ := io.ReadAll(decoded)
@@ -149,8 +149,8 @@ func NewLocalWebFetchTool[Deps any](config LocalWebFetchConfig) Tool[Deps] {
 func webFetchTextMediaType(mediaType string) bool {
 	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" ||
 		mediaType == "application/xml" || mediaType == "application/xhtml+xml" ||
-		mediaType == "application/javascript" || strings.HasSuffix(mediaType, "+json") ||
-		strings.HasSuffix(mediaType, "+xml")
+		mediaType == "application/javascript" || mediaType == "application/toml" ||
+		strings.HasSuffix(mediaType, "+json") || strings.HasSuffix(mediaType, "+xml")
 }
 
 func webFetchHTMLTitle(document string) string {

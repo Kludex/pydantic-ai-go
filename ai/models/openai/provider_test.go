@@ -11,7 +11,6 @@ import (
 	"strconv"
 	"strings"
 	"testing"
-	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
@@ -157,17 +156,17 @@ func TestOpenAIPromptCacheRequestSettings(t *testing.T) {
 	if legacyOptions["mode"] != "explicit" || legacyContent[0].(map[string]any)["prompt_cache_breakpoint"] != nil {
 		t.Fatalf("legacy cache options or marker gate changed: %#v", bodies[3])
 	}
-	if duration, ok := ai.ResolvePromptCacheRetention(chat, nil); !ok || duration != 24*time.Hour {
+	if duration, ok := ai.ResolveCacheRetention(chat, nil); ok || duration != 0 {
 		t.Fatalf("unexpected chat retention: %s %v", duration, ok)
 	}
-	if duration, ok := ai.ResolvePromptCacheRetention(responses, nil); !ok || duration != 24*time.Hour {
+	if duration, ok := ai.ResolveCacheRetention(responses, nil); ok || duration != 0 {
 		t.Fatalf("unexpected Responses retention: %s %v", duration, ok)
 	}
 	memory, err := (openai.Settings{PromptCacheRetention: openai.PromptCacheRetentionInMemory}).Build()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if duration, ok := ai.ResolvePromptCacheRetention(chat, &memory); ok || duration != 0 {
+	if duration, ok := ai.ResolveCacheRetention(chat, &memory); ok || duration != 0 {
 		t.Fatalf("unexpected in-memory retention: %s %v", duration, ok)
 	}
 }
@@ -1146,7 +1145,7 @@ func TestOpenAIExtendedResponseVariants(t *testing.T) {
 		t.Fatalf("unexpected empty-choice error: %v", err)
 	}
 	_, err = model.Request(t.Context(), nil, ai.ModelRequestParams{})
-	if err == nil || !strings.Contains(err.Error(), "parse response") {
+	if err == nil || !strings.Contains(err.Error(), "decode response") {
 		t.Fatalf("unexpected malformed response error: %v", err)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strings"
 	"time"
 
@@ -237,6 +238,11 @@ func (t *runToolset[Deps]) Tools(ctx context.Context, _ *ai.RunContext[Deps]) ([
 	for tool, err := range t.session.Tools(readCtx, nil) {
 		if err != nil {
 			return nil, fmt.Errorf("ai/mcp: list tools: %w", err)
+		}
+		if ui, ok := tool.Meta["ui"].(map[string]any); ok {
+			if visibility, ok := ui["visibility"].([]any); ok && !slices.Contains(visibility, any("model")) {
+				continue
+			}
 		}
 		tools, err = t.appendTool(tools, tool)
 		if err != nil {

@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
@@ -86,12 +87,20 @@ func (m *ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
 
 // ModelProfile reports model behavior and the bundled context window when known.
 func (m *ResponsesModel) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{
+	profile := ai.ModelProfile{
 		DefaultOutputMode:             ai.OutputModeTool,
 		SupportsImageOutput:           true,
 		SupportsToolAvailabilityDelta: m.deferredToolSupport,
 		ContextWindow:                 m.contextWindow,
 	}
+	if m.providerName == "openai" && supportsOpenAIPromptCache(m.name) {
+		profile.DefaultCacheRetention = 30 * time.Minute
+		if m.providerName == "openai" {
+			profile.SupportsCache = true
+			profile.SupportedCacheRetentions = []ai.CacheRetention{ai.CacheRetention30Minutes}
+		}
+	}
+	return profile
 }
 
 // SupportsToolAvailabilityDelta reports whether this request enables hosted tool search.
@@ -100,7 +109,7 @@ func (m *ResponsesModel) SupportsToolAvailabilityDelta(params ai.ModelRequestPar
 		return false
 	}
 	for _, tool := range params.Tools {
-		if tool.Name == ai.ToolSearchName && tool.ToolKind == ai.ToolPartKindToolSearch {
+		if tool.ToolKind == ai.ToolPartKindToolSearch {
 			return true
 		}
 	}
@@ -121,11 +130,7 @@ func (m *ResponsesModel) DefaultModelSettings() ai.ModelSettings { return m.defa
 
 // PromptCacheRetention reports extended OpenAI prompt-cache retention.
 func (m *ResponsesModel) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
-	_, cache, err := extractPromptCacheSettings(settings)
-	if err != nil || cache.Retention != PromptCacheRetention24Hours {
-		return 0, false
-	}
-	return 24 * time.Hour, true
+	return cacheRetention(settings, m.ModelProfile())
 }
 
 // Request implements ai.Model.
@@ -173,7 +178,7 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 		}
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	response, err := parseResponsesResponse(data, payload.IncludeRawAnnotations)
+	response, err := parseResponsesResponse(data, payload.IncludeRawAnnotations, m.providerName)
 	if response != nil {
 		setResponsesProvider(response, m.providerName, m.baseURL)
 	}
@@ -272,7 +277,7 @@ func (m *ResponsesModel) CompactMessages(
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	compacted, err := parseResponsesResponse(data, false)
+	compacted, err := parseResponsesResponse(data, false, m.providerName)
 	if err != nil {
 		return nil, err
 	}
@@ -352,7 +357,7 @@ func (m *ResponsesModel) retrieveResponse(
 	if resp.StatusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data), ProviderName: m.providerName}
 	}
-	response, err := parseResponsesResponse(data, includeRawAnnotations)
+	response, err := parseResponsesResponse(data, includeRawAnnotations, m.providerName)
 	if response != nil {
 		setResponsesProvider(response, m.providerName, m.baseURL)
 	}
@@ -411,27 +416,32 @@ func setResponsesProvider(response *ai.ModelResponse, providerName, providerURL 
 }
 
 type responsesRequest struct {
-	Model                 string               `json:"model"`
-	Instructions          string               `json:"instructions,omitempty"`
-	Input                 []responsesInput     `json:"input"`
-	Tools                 []responsesTool      `json:"tools,omitempty"`
-	ToolChoice            any                  `json:"tool_choice,omitempty"`
-	ParallelToolCalls     *bool                `json:"parallel_tool_calls,omitempty"`
-	MaxTokens             int                  `json:"max_output_tokens,omitempty"`
-	Temperature           *float64             `json:"temperature,omitempty"`
-	TopP                  *float64             `json:"top_p,omitempty"`
-	Stream                bool                 `json:"stream,omitempty"`
-	Background            *bool                `json:"background,omitempty"`
-	Reasoning             *responsesReasoning  `json:"reasoning,omitempty"`
-	Text                  *responsesText       `json:"text,omitempty"`
-	TopLogprobs           *int                 `json:"top_logprobs,omitempty"`
-	Include               []string             `json:"include,omitempty"`
-	ServiceTier           ai.ServiceTier       `json:"service_tier,omitempty"`
-	PromptCacheKey        string               `json:"prompt_cache_key,omitempty"`
-	PromptCacheRetention  PromptCacheRetention `json:"prompt_cache_retention,omitempty"`
-	PromptCacheOptions    *PromptCacheOptions  `json:"prompt_cache_options,omitempty"`
-	IncludeRawAnnotations bool                 `json:"-"`
-	ExtraBody             map[string]any       `json:"-"`
+	Model                 string                       `json:"model"`
+	Instructions          string                       `json:"instructions,omitempty"`
+	Input                 []responsesInput             `json:"input"`
+	Tools                 []responsesTool              `json:"tools,omitempty"`
+	ToolChoice            any                          `json:"tool_choice,omitempty"`
+	ParallelToolCalls     *bool                        `json:"parallel_tool_calls,omitempty"`
+	MaxTokens             int                          `json:"max_output_tokens,omitempty"`
+	Temperature           *float64                     `json:"temperature,omitempty"`
+	TopP                  *float64                     `json:"top_p,omitempty"`
+	Stream                bool                         `json:"stream,omitempty"`
+	Background            *bool                        `json:"background,omitempty"`
+	Reasoning             *responsesReasoning          `json:"reasoning,omitempty"`
+	Text                  *responsesText               `json:"text,omitempty"`
+	TopLogprobs           *int                         `json:"top_logprobs,omitempty"`
+	Include               []string                     `json:"include,omitempty"`
+	ServiceTier           ai.ServiceTier               `json:"service_tier,omitempty"`
+	PromptCacheKey        string                       `json:"prompt_cache_key,omitempty"`
+	PromptCacheRetention  PromptCacheRetention         `json:"prompt_cache_retention,omitempty"`
+	PromptCacheOptions    *responsesPromptCacheOptions `json:"prompt_cache_options,omitempty"`
+	IncludeRawAnnotations bool                         `json:"-"`
+	ExtraBody             map[string]any               `json:"-"`
+}
+
+type responsesPromptCacheOptions struct {
+	PromptCacheOptions
+	ComparisonResponseID string `json:"comparison_response_id,omitempty"`
 }
 
 type responsesReasoning struct {
@@ -461,7 +471,7 @@ type responsesInput struct {
 	Arguments        any              `json:"arguments,omitempty"`
 	Action           json.RawMessage  `json:"action,omitempty"`
 	Namespace        string           `json:"namespace,omitempty"`
-	Output           string           `json:"output,omitempty"`
+	Output           any              `json:"output,omitempty"`
 	Execution        string           `json:"execution,omitempty"`
 	Status           string           `json:"status,omitempty"`
 	Phase            string           `json:"phase,omitempty"`
@@ -760,7 +770,11 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if err != nil {
 		return nil, err
 	}
-	settings, promptCache, err := extractPromptCacheSettings(params.Settings)
+	translated, err := translateCache(params.Settings, m.ModelProfile())
+	if err != nil {
+		return nil, err
+	}
+	settings, promptCache, err := extractPromptCacheSettings(translated)
 	if err != nil {
 		return nil, err
 	}
@@ -788,10 +802,29 @@ func (m *ResponsesModel) buildResponsesPayload(
 		ServiceTier:           serviceTier,
 		PromptCacheKey:        promptCache.Key,
 		PromptCacheRetention:  promptCache.Retention,
-		PromptCacheOptions:    promptCache.Options,
 		Include:               slices.Clone(responseSettings.Include),
 		IncludeRawAnnotations: responseSettings.IncludeRawAnnotations,
 		ExtraBody:             params.Settings.ExtraBody,
+	}
+	comparisonID := ""
+	if promptCache.Diagnostics && m.providerName == "openai" && supportsOpenAIPromptCache(m.name) {
+		for index := len(msgs) - 1; index >= 0; index-- {
+			response, ok := msgs[index].(ai.ModelResponse)
+			if !ok || response.ProviderName != m.providerName {
+				continue
+			}
+			compacted, _ := response.ProviderDetails["compaction"].(bool)
+			if !compacted && strings.HasPrefix(response.ProviderResponseID, "resp_") {
+				comparisonID = response.ProviderResponseID
+			}
+			break
+		}
+	}
+	if promptCache.Options != nil || comparisonID != "" {
+		req.PromptCacheOptions = &responsesPromptCacheOptions{ComparisonResponseID: comparisonID}
+		if promptCache.Options != nil {
+			req.PromptCacheOptions.PromptCacheOptions = *promptCache.Options
+		}
 	}
 	if params.Settings.Logprobs != nil && *params.Settings.Logprobs {
 		req.Include = append(req.Include, "message.output_text.logprobs")
@@ -808,7 +841,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 	}
 	var searchTool *ai.ToolDefinition
 	for _, tool := range params.Tools {
-		if tool.ToolKind == ai.ToolPartKindToolSearch && tool.Name == ai.ToolSearchName {
+		if tool.ToolKind == ai.ToolPartKindToolSearch {
 			definition := tool
 			searchTool = &definition
 			break
@@ -862,6 +895,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		phaseSupport:              responsesPhaseSupported(m.name, m.phaseSupport),
 		promptCacheBreakpoints:    supportsOpenAIPromptCache(m.name),
 		responsesReasoningContent: m.chatCompatibility.ResponsesReasoningContent,
+		storeDisabled:             params.Settings.ExtraBody["store"] == false,
 	}
 	for _, msg := range trimOpenAICompactionMessages(msgs, m.providerName) {
 		items, err := converter.convert(msg)
@@ -870,8 +904,79 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 		req.Input = append(req.Input, items...)
 	}
+	if promptCache.Instructions && supportsOpenAIPromptCache(m.name) &&
+		params.Settings.ExtraBody["previous_response_id"] == nil && params.Settings.ExtraBody["conversation"] == nil {
+		parts, static, eligible := cacheableInstructions(msgs, params)
+		for _, message := range msgs {
+			if response, ok := message.(ai.ModelResponse); ok {
+				for _, part := range response.Parts {
+					if compaction, ok := part.(ai.CompactionPart); ok &&
+						(compaction.ProviderName == "" || compaction.ProviderName == m.providerName) {
+						eligible = false
+					}
+				}
+			}
+		}
+		standing := 0
+		for standing < len(req.Input) && req.Input[standing].Role == "system" && req.Input[standing].Type == "" {
+			standing++
+		}
+		if target := standing + static - 1; eligible && target >= 0 {
+			instructions := make([]responsesInput, len(parts))
+			for index, part := range parts {
+				instructions[index] = responsesInput{Role: "system", Content: part.Content}
+			}
+			req.Input = slices.Concat(req.Input[:standing], instructions, req.Input[standing:])
+			req.Instructions = ""
+			if content, ok := req.Input[target].Content.(string); ok {
+				req.Input[target].Content = []responsesInputContent{{
+					Type: "input_text", Text: content,
+					PromptCacheBreakpoint: &openAIPromptCacheBreakpoint{Mode: "explicit"},
+				}}
+			}
+		}
+	}
+	for index := 0; index < len(req.Input); index++ {
+		content, ok := req.Input[index].Content.([]responsesInputContent)
+		if req.Input[index].Role != "user" || !ok || len(content) == 0 ||
+			content[0].Type != "input_text" || content[0].Text != "" || content[0].PromptCacheBreakpoint == nil {
+			continue
+		}
+		attached := false
+		for previous := index - 1; previous >= 0 && !attached; previous-- {
+			item := &req.Input[previous]
+			if item.Role == "assistant" {
+				continue
+			}
+			body := &item.Content
+			if item.Type == "function_call_output" {
+				body = &item.Output
+			}
+			switch value := (*body).(type) {
+			case string:
+				if value != "" {
+					*body = []responsesInputContent{{Type: "input_text", Text: value, PromptCacheBreakpoint: content[0].PromptCacheBreakpoint}}
+					attached = true
+				}
+			case []responsesInputContent:
+				if len(value) > 0 {
+					value[len(value)-1].PromptCacheBreakpoint = content[0].PromptCacheBreakpoint
+					attached = true
+				}
+			}
+		}
+		if !attached {
+			return nil, fmt.Errorf("openai: cache point must follow user content")
+		}
+		if len(content) == 1 {
+			req.Input = slices.Delete(req.Input, index, index+1)
+			index--
+		} else {
+			req.Input[index].Content = content[1:]
+		}
+	}
 	for _, tool := range params.Tools {
-		if activeToolSearch && (tool.Name == ai.ToolSearchName || tool.DeferLoading) {
+		if activeToolSearch && (tool.ToolKind == ai.ToolPartKindToolSearch || tool.DeferLoading) {
 			continue
 		}
 		converted, err := prepareResponsesFunctionTool(tool, m.strictToolSupport)
@@ -948,20 +1053,26 @@ type incompleteDetails struct {
 }
 
 type responsesResponse struct {
-	ID                string             `json:"id"`
-	Model             string             `json:"model"`
-	CreatedAt         float64            `json:"created_at"`
-	Status            string             `json:"status"`
-	Background        bool               `json:"background"`
-	ServiceTier       string             `json:"service_tier"`
-	IncompleteDetails *incompleteDetails `json:"incomplete_details"`
-	Error             *struct {
+	ID                     string             `json:"id"`
+	Model                  string             `json:"model"`
+	CreatedAt              float64            `json:"created_at"`
+	Status                 string             `json:"status"`
+	Background             bool               `json:"background"`
+	PromptCacheDiagnostics map[string]any     `json:"prompt_cache_diagnostics"`
+	ServiceTier            string             `json:"service_tier"`
+	IncompleteDetails      *incompleteDetails `json:"incomplete_details"`
+	Error                  *struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
 	} `json:"error"`
 	Output    []responsesOutputItem `json:"output"`
 	Citations []string              `json:"citations"`
 	Usage     responsesUsage        `json:"usage"`
+	ToolUsage struct {
+		WebSearch struct {
+			NumRequests *int `json:"num_requests"`
+		} `json:"web_search"`
+	} `json:"tool_usage"`
 }
 
 type responsesOutputItem struct {
@@ -1034,6 +1145,30 @@ func (u responsesUsage) usage() ai.Usage {
 	}
 }
 
+func (response responsesResponse) usage() ai.Usage {
+	usage := response.Usage.usage()
+	if response.Status == "queued" || response.Status == "in_progress" {
+		return usage
+	}
+	searches := 0
+	if count := response.ToolUsage.WebSearch.NumRequests; count != nil {
+		searches = *count
+	} else {
+		for _, item := range response.Output {
+			var action struct {
+				Type string `json:"type"`
+			}
+			if item.Type == "web_search_call" && json.Unmarshal(item.Action, &action) == nil && action.Type == "search" {
+				searches++
+			}
+		}
+	}
+	if searches > 0 {
+		usage.Details["web_search_requests"] = searches
+	}
+	return usage
+}
+
 func responsesPhaseSupported(modelName string, override *bool) bool {
 	if override != nil {
 		return *override
@@ -1064,9 +1199,9 @@ func openAIResponsesState(status string, background bool) ai.ModelResponseState 
 	}
 }
 
-func responsesMetadata(
-	status string, details *incompleteDetails, createdAt float64, background bool,
-) (string, map[string]any, time.Time, ai.ModelResponseState) {
+func (response responsesResponse) metadata() (string, map[string]any, time.Time, ai.ModelResponseState) {
+	status, details := response.Status, response.IncompleteDetails
+	createdAt, background := response.CreatedAt, response.Background
 	rawFinishReason := status
 	if details != nil {
 		rawFinishReason = details.Reason
@@ -1084,16 +1219,35 @@ func responsesMetadata(
 	if background {
 		providerDetails["background"] = true
 	}
+	if response.ServiceTier != "" {
+		providerDetails["service_tier"] = response.ServiceTier
+	}
+	if response.PromptCacheDiagnostics != nil {
+		providerDetails["prompt_cache_diagnostics"] = response.PromptCacheDiagnostics
+	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil
 	}
 	return rawFinishReason, providerDetails, timestamp, openAIResponsesState(status, background)
 }
 
-func parseResponsesResponse(data []byte, includeRawAnnotations bool) (*ai.ModelResponse, error) {
+func parseResponsesResponse(data []byte, includeRawAnnotations bool, providerName string) (*ai.ModelResponse, error) {
 	var rr responsesResponse
+	if !utf8.Valid(data) {
+		return nil, &APIError{Body: "response is not valid UTF-8", ProviderName: providerName}
+	}
 	if err := json.Unmarshal(data, &rr); err != nil {
-		return nil, fmt.Errorf("openai: parse response: %w", err)
+		return nil, &APIError{Body: "decode response: " + err.Error(), ProviderName: providerName}
+	}
+	if rr.Error != nil {
+		body := rr.Error.Message
+		if rr.Error.Code != "" {
+			body = rr.Error.Code + ": " + body
+		}
+		return nil, &APIError{Body: body, ProviderName: providerName}
+	}
+	if rr.Status == "failed" {
+		return nil, &APIError{Body: "Responses API reported a failed response", ProviderName: providerName}
 	}
 	return modelResponseFromResponses(rr, includeRawAnnotations)
 }
@@ -1280,17 +1434,9 @@ func responsesDataURI(value string) (ai.BinaryContent, error) {
 }
 
 func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool) (*ai.ModelResponse, error) {
-	rawFinishReason, providerDetails, timestamp, state := responsesMetadata(
-		rr.Status, rr.IncompleteDetails, rr.CreatedAt, rr.Background,
-	)
-	if rr.ServiceTier != "" {
-		if providerDetails == nil {
-			providerDetails = map[string]any{}
-		}
-		providerDetails["service_tier"] = rr.ServiceTier
-	}
+	rawFinishReason, providerDetails, timestamp, state := rr.metadata()
 	resp := &ai.ModelResponse{
-		ModelName: rr.Model, Usage: rr.Usage.usage(), Timestamp: timestamp, ProviderDetails: providerDetails,
+		ModelName: rr.Model, Usage: rr.usage(), Timestamp: timestamp, ProviderDetails: providerDetails,
 		ProviderResponseID: rr.ID, FinishReason: openAIResponsesFinishReason(rawFinishReason), State: state,
 	}
 	searchPairs, pairedOutputs := pairResponsesToolSearchItems(rr.Output)
@@ -1305,6 +1451,9 @@ func modelResponseFromResponses(rr responsesResponse, includeRawAnnotations bool
 					hasRefusal = true
 					refusal = content.Refusal
 				case "output_text":
+					if content.Text == "" {
+						continue
+					}
 					var details map[string]any
 					if len(content.Logprobs) > 0 {
 						details = map[string]any{"logprobs": content.Logprobs}

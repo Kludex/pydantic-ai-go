@@ -14,6 +14,7 @@ packages=(
     ./ai/internal/contextwindow
     ./ai/internal/download
     ./ai/internal/schema
+    ./ai/internal/promptcache
     ./ai/images
     ./ai/images/fakes
     ./ai/images/google
@@ -51,6 +52,9 @@ packages=(
     ./ai/models/mistral
     ./ai/models/ollama
     ./ai/models/snowflake
+    ./ai/models/systemone
+    ./ai/models/typesafe
+    ./ai/internal/decision
     ./ai/models/together
     ./ai/models/vllm
     ./ai/models/xai
@@ -69,7 +73,32 @@ packages=(
 )
 for pkg in "${packages[@]}"; do
     profile=$(mktemp)
-    go test "$pkg" -coverprofile="$profile" > /dev/null
+    if [ "$pkg" = "./ai/internal/decision" ]; then
+        go test ./ai/models/typesafe ./ai/models/systemone -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+    elif [ "$pkg" = "./ai/internal/promptcache" ]; then
+        go test ./ai/models/anthropic ./ai/models/bedrock ./ai/models/openai ./ai/models/openrouter \
+            -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+    else
+        go test "$pkg" -coverprofile="$profile" > /dev/null
+    fi
+    filtered=$(mktemp)
+    awk -v prefix="$(go list -m)/" '
+        NR == 1 { print; next }
+        {
+            split($1, location, ":")
+            file = substr(location[1], length(prefix) + 1)
+            split(location[2], position, ".")
+            if (!(file in loaded)) {
+                line = 0
+                while ((getline text < file) > 0) source[file, ++line] = text
+                close(file)
+                loaded[file] = 1
+            }
+            if (source[file, position[1]] ~ /\/\/ pragma: no cover - [[:alnum:]]/) next
+            print
+        }
+    ' "$profile" > "$filtered"
+    mv "$filtered" "$profile"
     total=$(go tool cover -func="$profile" | tail -1 | awk '{print $3}')
     if [ "$total" != "100.0%" ]; then
         echo "coverage for $pkg is $total, expected 100.0%"

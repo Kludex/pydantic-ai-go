@@ -76,6 +76,20 @@ func TestOpenAIStrictSchemaInference(t *testing.T) {
 			wantStrict: true,
 		},
 		{
+			name: "JSON pointer reference",
+			schema: map[string]any{
+				"type": "object", "additionalProperties": false, "required": []string{"from", "to"},
+				"properties": map[string]any{
+					"from": map[string]any{
+						"type": "object", "additionalProperties": false,
+						"properties": map[string]any{"street": map[string]any{"type": "string"}},
+						"required":   []string{"street"},
+					},
+					"to": map[string]any{"$ref": "#/properties/from"},
+				},
+			},
+		},
+		{
 			name: "tuple array",
 			schema: map[string]any{
 				"type": "object", "properties": map[string]any{"values": map[string]any{

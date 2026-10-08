@@ -40,7 +40,7 @@ func main() {
 
 The toolset opens a fresh MCP session for the run. It closes the session after the run completes, fails, pauses, or is canceled. This default prevents state and credentials from leaking between concurrent runs.
 
-The server's tools and instructions are refreshed before each model step. Tool input and output schemas, annotations, and metadata are preserved. `NewHTTPToolset` uses legacy SSE for URLs ending in `/sse` and Streamable HTTP for every other HTTP URL.
+The server's tools and instructions are refreshed before each model step. Tool input and output schemas, annotations, and metadata are preserved. Tools whose MCP Apps `_meta.ui.visibility` omits `model` remain hidden from the model. `NewHTTPToolset` uses legacy SSE for URLs ending in `/sse` and Streamable HTTP for every other HTTP URL.
 
 ## Prefer native MCP with a local fallback
 

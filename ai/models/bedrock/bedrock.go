@@ -155,7 +155,11 @@ func (model *Model) ProviderURL() string {
 func (model *Model) DefaultModelSettings() ai.ModelSettings { return model.defaultSettings.Clone() }
 
 // PromptCacheRetention reports the longest requested Bedrock cache lifetime.
-func (*Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+func (model *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Duration, bool) {
+	settings, err := translateCache(model.name, settings)
+	if err != nil {
+		return 0, false
+	}
 	_, cache, _, err := extractSettings(settings)
 	if err != nil {
 		return 0, false

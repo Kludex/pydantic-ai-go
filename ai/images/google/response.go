@@ -3,7 +3,6 @@ package google
 import (
 	"encoding/base64"
 	"encoding/json"
-	"fmt"
 	"strings"
 	"time"
 
@@ -65,7 +64,9 @@ var filteredReasons = map[string]bool{
 func (model *Model) parseResponse(prompt string, body []byte) (*images.Result, error) {
 	var response generateResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("google images: decode response: %w", err)
+		return nil, &ai.ModelTransportError{
+			ModelName: model.name, ProviderName: "google images", Operation: "decode response", Err: err,
+		}
 	}
 	generated := []images.GeneratedImage{}
 	for _, candidate := range response.Candidates {

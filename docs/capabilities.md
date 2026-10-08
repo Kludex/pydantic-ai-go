@@ -2,6 +2,10 @@
 
 A capability adds behavior at a semantic boundary in the agent loop. You can reuse it across agents without changing the model or tool implementation.
 
+## Prompt caching
+
+Use `ai.Caching{}` to enable portable prompt caching. Its zero value caches the stable prefix and conversation with provider defaults. See [Prompt caching](caching.md) for complete examples, costs, retention tiers, provider translation, and stable-prefix-only configuration.
+
 ## Compose built-in capabilities
 
 ```go

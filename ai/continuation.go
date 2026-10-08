@@ -73,6 +73,7 @@ func mergeModelResponses(existing, next *ModelResponse) (*ModelResponse, continu
 
 func cloneModelResponse(response *ModelResponse) *ModelResponse {
 	cloned := *response
+	cloned.WorkspaceRef = clonePointer(response.WorkspaceRef)
 	cloned.Parts = slices.Clone(response.Parts)
 	for index, part := range cloned.Parts {
 		switch part := part.(type) {

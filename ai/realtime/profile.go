@@ -3,10 +3,26 @@ package realtime
 // DefaultAudioSampleRate is the fallback PCM sample rate in hertz.
 const DefaultAudioSampleRate = 24000
 
+// AsyncToolCallMode describes whether generation can continue while tools run.
+type AsyncToolCallMode string
+
+const (
+	// AsyncToolCallsNever makes the model wait for tool results.
+	AsyncToolCallsNever AsyncToolCallMode = "never"
+	// AsyncToolCallsOptional lets the session choose whether the model waits.
+	AsyncToolCallsOptional AsyncToolCallMode = "optional"
+	// AsyncToolCallsAlways keeps generation active regardless of the session setting.
+	AsyncToolCallsAlways AsyncToolCallMode = "always"
+)
+
 // Profile describes operations supported by one realtime model.
 type Profile struct {
 	// SupportsImageInput allows discrete image or video frames.
 	SupportsImageInput bool
+	// ImageInputRequiresResponse requires images to start delegated work.
+	ImageInputRequiresResponse bool
+	// SynthesizesTurnBoundary reports that turn completion is inferred from silence.
+	SynthesizesTurnBoundary bool
 	// SupportsManualTurnControl allows commit, clear, and create-response commands.
 	SupportsManualTurnControl bool
 	// SupportsInterruption allows cancellation of active output.
@@ -27,6 +43,8 @@ type Profile struct {
 	SupportsThinking bool
 	// SupportsAsyncToolCalls allows generation while local tools run.
 	SupportsAsyncToolCalls bool
+	// AsyncToolCallMode reports whether asynchronous generation is optional or required.
+	AsyncToolCallMode AsyncToolCallMode
 	// SupportsToolReturnSchema allows native response schemas on function declarations.
 	SupportsToolReturnSchema bool
 	// EmitsInputSpeechEvents reports server-side speech boundaries.
@@ -40,12 +58,18 @@ type Profile struct {
 	// ContextWindow is the maximum combined input and output token count.
 	// Zero means the limit is unknown.
 	ContextWindow int
+	// UsageExcludesContextWindow prevents provider usage from being treated as current context occupancy.
+	UsageExcludesContextWindow bool
 }
 
 // ProfileOverride is a partial profile layer. Pointer fields distinguish omitted and zero values.
 type ProfileOverride struct {
 	// SupportsImageInput overrides image input support.
 	SupportsImageInput *bool
+	// ImageInputRequiresResponse overrides image response requirements.
+	ImageInputRequiresResponse *bool
+	// SynthesizesTurnBoundary overrides inferred turn completion.
+	SynthesizesTurnBoundary *bool
 	// SupportsManualTurnControl overrides manual turn support.
 	SupportsManualTurnControl *bool
 	// SupportsInterruption overrides response interruption support.
@@ -66,6 +90,8 @@ type ProfileOverride struct {
 	SupportsThinking *bool
 	// SupportsAsyncToolCalls overrides asynchronous tool support.
 	SupportsAsyncToolCalls *bool
+	// AsyncToolCallMode overrides the model's asynchronous generation behavior.
+	AsyncToolCallMode *AsyncToolCallMode
 	// SupportsToolReturnSchema overrides function response-schema support.
 	SupportsToolReturnSchema *bool
 	// EmitsInputSpeechEvents overrides speech-boundary reporting.
@@ -78,12 +104,15 @@ type ProfileOverride struct {
 	AudioOutputSampleRate int
 	// ContextWindow replaces the context window. Point to zero to keep it unknown.
 	ContextWindow *int
+	// UsageExcludesContextWindow overrides whether usage measures context occupancy.
+	UsageExcludesContextWindow *bool
 }
 
 // DefaultProfile returns conservative provider-neutral defaults.
 func DefaultProfile() Profile {
 	return Profile{
 		SupportsTextOutput:    true,
+		AsyncToolCallMode:     AsyncToolCallsNever,
 		SupportedNativeTools:  map[string]bool{},
 		AudioInputSampleRate:  DefaultAudioSampleRate,
 		AudioOutputSampleRate: DefaultAudioSampleRate,
@@ -99,6 +128,8 @@ func MergeProfile(base Profile, override ProfileOverride) Profile {
 		}
 	}
 	mergeBool(&base.SupportsImageInput, override.SupportsImageInput)
+	mergeBool(&base.ImageInputRequiresResponse, override.ImageInputRequiresResponse)
+	mergeBool(&base.SynthesizesTurnBoundary, override.SynthesizesTurnBoundary)
 	mergeBool(&base.SupportsManualTurnControl, override.SupportsManualTurnControl)
 	mergeBool(&base.SupportsInterruption, override.SupportsInterruption)
 	mergeBool(&base.SupportsOutputTruncation, override.SupportsOutputTruncation)
@@ -109,8 +140,12 @@ func MergeProfile(base Profile, override ProfileOverride) Profile {
 	mergeBool(&base.SupportsSeedingAudio, override.SupportsSeedingAudio)
 	mergeBool(&base.SupportsThinking, override.SupportsThinking)
 	mergeBool(&base.SupportsAsyncToolCalls, override.SupportsAsyncToolCalls)
+	if override.AsyncToolCallMode != nil {
+		base.AsyncToolCallMode = *override.AsyncToolCallMode
+	}
 	mergeBool(&base.SupportsToolReturnSchema, override.SupportsToolReturnSchema)
 	mergeBool(&base.EmitsInputSpeechEvents, override.EmitsInputSpeechEvents)
+	mergeBool(&base.UsageExcludesContextWindow, override.UsageExcludesContextWindow)
 	if override.SupportedNativeTools != nil {
 		base.SupportedNativeTools = cloneBoolMap(override.SupportedNativeTools)
 	}

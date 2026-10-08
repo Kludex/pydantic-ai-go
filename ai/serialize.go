@@ -65,6 +65,7 @@ type wireResponse struct {
 	ConversationID     string             `json:"conversation_id,omitempty"`
 	Metadata           map[string]any     `json:"metadata,omitempty"`
 	State              ModelResponseState `json:"state,omitempty"`
+	WorkspaceRef       *WorkspaceRef      `json:"workspace_ref,omitempty"`
 }
 
 type wirePart struct {
@@ -115,6 +116,7 @@ func marshalMessage(m ModelMessage) ([]byte, error) {
 			ProviderURL: msg.ProviderURL, ProviderDetails: msg.ProviderDetails,
 			ProviderResponseID: msg.ProviderResponseID, FinishReason: msg.FinishReason,
 			RunID: msg.RunID, ConversationID: msg.ConversationID, Metadata: msg.Metadata, State: msg.State,
+			WorkspaceRef: msg.WorkspaceRef,
 		}
 		if !msg.Usage.IsZero() {
 			u := msg.Usage
@@ -315,7 +317,7 @@ func unmarshalMessage(data []byte) (ModelMessage, error) {
 			ModelName: w.ModelName, ProviderName: w.ProviderName, ProviderURL: w.ProviderURL,
 			ProviderDetails: providerDetails, ProviderResponseID: providerResponseID,
 			FinishReason: w.FinishReason, RunID: w.RunID, ConversationID: w.ConversationID,
-			Metadata: w.Metadata, State: w.State,
+			Metadata: w.Metadata, State: w.State, WorkspaceRef: w.WorkspaceRef,
 		}
 		if w.Usage != nil {
 			msg.Usage = *w.Usage

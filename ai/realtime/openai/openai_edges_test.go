@@ -33,6 +33,22 @@ type errorReader struct{}
 func (errorReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 func (errorReader) Close() error             { return nil }
 
+func TestOpenAIRejectsForcedToolChoiceBeforeDial(t *testing.T) {
+	model := openairt.NewModel("gpt-realtime", openairt.WithAPIKey("key"))
+	_, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{
+		ToolChoice: realtime.ToolChoiceRequired,
+	}})
+	if err == nil || !strings.Contains(err.Error(), "required tool choice") {
+		t.Fatalf("unexpected forced tool error: %v", err)
+	}
+	_, err = model.CreateClientSecret(
+		t.Context(), "", nil, realtime.Settings{ToolChoice: realtime.ToolChoice("invalid")}, time.Minute,
+	)
+	if err == nil || !strings.Contains(err.Error(), "invalid tool choice") {
+		t.Fatalf("unexpected invalid tool error: %v", err)
+	}
+}
+
 func TestOpenAIConnectValidationAndPortableSettings(t *testing.T) {
 	if _, err := openairt.NewModel("", openairt.WithAPIKey("key")).Connect(t.Context(), realtime.ConnectParams{}); err == nil {
 		t.Fatal("expected model name error")
@@ -64,7 +80,7 @@ func TestOpenAIConnectValidationAndPortableSettings(t *testing.T) {
 		TurnDetection: &realtime.TurnDetection{
 			Enabled: true, Sensitivity: "high", PrefixPadding: time.Millisecond, SilenceDuration: 2 * time.Millisecond,
 		},
-		ParallelToolCalls: &no, ToolChoice: realtime.ToolChoiceRequired, Thinking: ai.ThinkingLevelHigh,
+		ParallelToolCalls: &no, ToolChoice: realtime.ToolChoiceAuto, Thinking: ai.ThinkingLevelHigh,
 	}})
 	if err != nil {
 		t.Fatal(err)

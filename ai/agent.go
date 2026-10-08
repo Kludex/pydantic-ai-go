@@ -638,6 +638,11 @@ type erasedTool struct {
 }
 
 type runConfig struct {
+	workspace         WorkspaceBackend
+	workspaceRef      *WorkspaceRef
+	newWorkspace      bool
+	conversation      *Conversation
+	historySet        bool
 	history           []ModelMessage
 	model             Model
 	settings          *ModelSettings
@@ -723,7 +728,10 @@ func WithRunTools[Deps any](tools ...Tool[Deps]) RunOption {
 
 // WithMessageHistory prepends prior conversation messages to the run.
 func WithMessageHistory(msgs []ModelMessage) RunOption {
-	return func(c *runConfig) { c.history = msgs }
+	return func(c *runConfig) {
+		c.history = msgs
+		c.historySet = true
+	}
 }
 
 // WithDeferredToolResults resolves pending calls in message history before
@@ -916,6 +924,7 @@ type RunResult[Output any] struct {
 	// Output is the typed final value. It is the zero value for deferred runs.
 	Output Output
 
+	workspace      *Workspace
 	usage          Usage
 	messages       []ModelMessage
 	newMessages    int
@@ -989,7 +998,7 @@ func (r *RunResult[Output]) Deferred() *DeferredToolRequests {
 	return &cloned
 }
 
-// Usage returns the tokens and requests consumed by the run.
+// Usage returns cumulative usage, including any usage carried by WithConversation.
 func (r *RunResult[Output]) Usage() Usage { return r.usage.Clone() }
 
 // RunID returns this run's stable identifier.

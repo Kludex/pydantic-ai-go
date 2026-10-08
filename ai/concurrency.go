@@ -225,6 +225,17 @@ func (model *ConcurrencyLimitedModel) CountTokens(
 	return CountModelTokens(ctx, model.UnwrapModel(), messages, params)
 }
 
+// CompactMessages holds one concurrency slot for explicit history compaction.
+func (model *ConcurrencyLimitedModel) CompactMessages(
+	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
+) (*ModelResponse, error) {
+	if err := model.limiter.Acquire(ctx, "model:"+model.Name()); err != nil {
+		return nil, err
+	}
+	defer model.limiter.Release()
+	return CompactModelMessages(ctx, model.UnwrapModel(), messages, params)
+}
+
 // StreamRequest holds one concurrency slot until the returned sequence ends.
 func (model *ConcurrencyLimitedModel) StreamRequest(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
@@ -233,8 +244,11 @@ func (model *ConcurrencyLimitedModel) StreamRequest(
 		return nil, err
 	}
 	events, err := model.ModelWrapper.StreamRequest(ctx, messages, params)
-	if err != nil {
+	if err != nil || events == nil {
 		model.limiter.Release()
+		if err == nil {
+			err = &UnexpectedModelBehaviorError{Message: "model returned no stream"}
+		}
 		return nil, err
 	}
 	return func(yield func(ModelStreamEvent, error) bool) {

@@ -144,14 +144,14 @@ func TestToolValidationAndExecutionHooksUseMiddlewareOrder(t *testing.T) {
 		t.Fatalf("unexpected hook result=%+v err=%v", result, err)
 	}
 	want := []string{
-		"outer:before-validation", "inner:before-validation",
-		"outer:validation-wrapper-before", "inner:validation-wrapper-before", "validator:5",
-		"inner:validation-wrapper-after", "outer:validation-wrapper-after",
+		"outer:validation-wrapper-before", "inner:validation-wrapper-before",
+		"outer:before-validation", "inner:before-validation", "validator:5",
 		"inner:after-validation", "outer:after-validation",
-		"outer:before-execution", "inner:before-execution",
-		"outer:execution-wrapper-before", "inner:execution-wrapper-before", "tool",
-		"inner:execution-wrapper-after", "outer:execution-wrapper-after",
+		"inner:validation-wrapper-after", "outer:validation-wrapper-after",
+		"outer:execution-wrapper-before", "inner:execution-wrapper-before",
+		"outer:before-execution", "inner:before-execution", "tool",
 		"inner:after-execution", "outer:after-execution",
+		"inner:execution-wrapper-after", "outer:execution-wrapper-after",
 	}
 	if !slices.Equal(log, want) {
 		t.Fatalf("unexpected hook order:\n got %v\nwant %v", log, want)

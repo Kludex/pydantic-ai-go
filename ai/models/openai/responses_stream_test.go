@@ -697,7 +697,7 @@ func TestResponsesStreamMetadataConsumerStop(t *testing.T) {
 	}
 }
 
-func TestResponsesStreamPhaseWithoutTextDelta(t *testing.T) {
+func TestResponsesStreamOmitsPhaseWithoutTextDelta(t *testing.T) {
 	model := newResponsesServer(t, sseHandler(t, []string{
 		`{"type":"response.output_item.added","item":{"id":"message","type":"message","phase":"final_answer"}}`,
 		`{"type":"response.output_text.done","item_id":"message"}`,
@@ -707,14 +707,10 @@ func TestResponsesStreamPhaseWithoutTextDelta(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var text ai.TextDeltaEvent
 	for _, event := range events {
-		if delta, ok := event.(ai.TextDeltaEvent); ok {
-			text = delta
+		if text, ok := event.(ai.TextDeltaEvent); ok {
+			t.Fatalf("empty phase-only text event was emitted: %+v", text)
 		}
-	}
-	if text.ID != "message" || text.ProviderDetails["phase"] != "final_answer" {
-		t.Fatalf("phase-only text event was lost: %+v", text)
 	}
 }
 
@@ -1322,7 +1318,7 @@ func TestResponsesStreamProtocolErrors(t *testing.T) {
 		{name: "malformed", chunks: []string{`not json`}, want: "parse Responses stream"},
 		{name: "error", chunks: []string{`{"type":"error","error":{"code":"busy","message":"later"}}`}, want: "busy"},
 		{name: "unknown", chunks: []string{`{"type":"mystery"}`}, want: "unknown Responses stream"},
-		{name: "invalid terminal output", chunks: []string{`{"type":"response.failed","response":{"status":"failed","output":[{"type":"mcp_approval_request"}]}}`}, want: "MCP approval requests"},
+		{name: "invalid terminal output", chunks: []string{`{"type":"response.failed","response":{"status":"failed","output":[{"type":"mcp_approval_request"}]}}`}, want: "failed response"},
 		{name: "missing completed", chunks: []string{`{"type":"response.in_progress"}`, `[DONE]`}, want: "without response.completed"},
 	}
 	for _, test := range tests {
@@ -1358,6 +1354,12 @@ func TestResponsesStreamTerminalFinishReasons(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			model := newResponsesServer(t, sseHandler(t, []string{test.chunk}))
 			events, err := collect(t, model, ai.ModelRequestParams{})
+			if name == "failed" {
+				if err == nil || !strings.Contains(err.Error(), "bad: request") {
+					t.Fatalf("unexpected failed-response error: %v", err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}

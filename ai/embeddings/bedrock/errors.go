@@ -1,8 +1,12 @@
 package bedrock
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 // APIError describes a failed Bedrock Runtime HTTP response.
@@ -22,3 +26,16 @@ func (err *APIError) Error() string {
 
 // Unwrap returns the underlying AWS SDK error.
 func (err *APIError) Unwrap() error { return err.Err }
+
+// IsModelAPIError marks provider failures as eligible for fallback.
+func (*APIError) IsModelAPIError() bool { return true }
+
+func (model *Model) invokeError(ctx context.Context, err error) error {
+	var apiError ai.ModelAPIError
+	if ctx.Err() != nil || errors.As(err, &apiError) {
+		return fmt.Errorf("bedrock embeddings: invoke %q: %w", model.modelName, err)
+	}
+	return &ai.ModelTransportError{
+		ModelName: model.modelName, ProviderName: "bedrock embeddings", Operation: "invoke", Err: err,
+	}
+}

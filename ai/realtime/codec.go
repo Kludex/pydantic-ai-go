@@ -108,8 +108,12 @@ type CodecEvent interface {
 type AudioDelta struct {
 	// Data contains raw little-endian mono PCM16 samples.
 	Data []byte
+	// ResponseID identifies the response that owns this audio.
+	ResponseID string
 	// ItemID identifies the provider output item when available.
 	ItemID string
+	// ContentIndex identifies the audio content within its provider item.
+	ContentIndex int
 }
 
 // RealtimeCodecEventKind identifies an audio delta.
@@ -119,6 +123,8 @@ func (AudioDelta) RealtimeCodecEventKind() string { return "audio-delta" }
 type OutputTranscript struct {
 	// Text is an incremental transcript piece or final snapshot.
 	Text string
+	// ResponseID identifies the response that owns this output.
+	ResponseID string
 	// Final reports that the provider finalized this transcript.
 	Final bool
 	// OutputText distinguishes plain text output from speech transcription.
@@ -149,6 +155,8 @@ func (InputTranscript) RealtimeCodecEventKind() string { return "input-transcrip
 type ToolCall struct {
 	// ToolCallID is the provider-assigned function call identifier.
 	ToolCallID string
+	// ResponseID identifies the response that requested the call.
+	ResponseID string
 	// ToolName is the advertised function name.
 	ToolName string
 	// Arguments contains raw JSON arguments.
@@ -190,6 +198,8 @@ func (ResponseDone) RealtimeCodecEventKind() string { return "response-done" }
 
 // SessionUsage carries response-scoped or session-scoped provider usage.
 type SessionUsage struct {
+	// ProviderDetails identifies the delegated model and response when applicable.
+	ProviderDetails map[string]any
 	// Usage contains normalized provider counters.
 	Usage ai.Usage
 	// ProviderResponseID identifies the response charged by this usage.
@@ -198,6 +208,8 @@ type SessionUsage struct {
 	FinishReason ai.FinishReason
 	// ResponseScoped includes the counters on the current ModelResponse.
 	ResponseScoped bool
+	// ContextWindowUsed is the provider-reported occupied fraction when available.
+	ContextWindowUsed *float64
 }
 
 // RealtimeCodecEventKind identifies provider usage.
@@ -334,6 +346,12 @@ type Connection interface {
 	Close(ctx context.Context) error
 }
 
+// SessionEndingConnection reports usage received only while ending owned media.
+// Stop consuming Events before calling EndSession.
+type SessionEndingConnection interface {
+	EndSession(ctx context.Context) iter.Seq2[SessionUsage, error]
+}
+
 // ConnectionInfo exposes optional negotiated provider state.
 type ConnectionInfo interface {
 	// ModelName returns the model reported by the provider.
@@ -343,6 +361,31 @@ type ConnectionInfo interface {
 	// ReconnectRestoresInFlightState reports whether reconnect preserves unfinished work.
 	ReconnectRestoresInFlightState() bool
 }
+
+// ReconnectingConnection reports whether capture may drop audio while a transport is replaced.
+type ReconnectingConnection interface {
+	IsReconnecting() bool
+	CanReconnect() bool
+}
+
+// DeferredAudioCommitConnection places user history where delayed commits reach the provider.
+type DeferredAudioCommitConnection interface {
+	DefersAudioCommit() bool
+	SetAudioCommitListener(listener func())
+}
+
+// ToolBatchConnection reports whether one reply answers every tool result in a response.
+type ToolBatchConnection interface {
+	AnswersToolCallsPerResponse() bool
+}
+
+// ResponseRequestsMerged releases requests answered together by one provider response.
+type ResponseRequestsMerged struct {
+	Count int
+}
+
+// RealtimeCodecEventKind identifies coalesced response requests.
+func (ResponseRequestsMerged) RealtimeCodecEventKind() string { return "response-requests-merged" }
 
 // SpeechInterruptionConnection reports server-side voice activity behavior.
 type SpeechInterruptionConnection interface {

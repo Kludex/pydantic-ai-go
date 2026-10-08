@@ -133,6 +133,9 @@ func reportPricingDiagnostic(ctx context.Context, response *ModelResponse, diagn
 func usageForPricing(usage Usage) genaiprices.Usage {
 	priced := make(genaiprices.Usage, len(usage.Details)+8)
 	for key, value := range usage.Details {
+		if _, explicit := usage.Details["web_searches"]; key == "web_search_requests" && explicit {
+			continue
+		}
 		priced[pricingUsageKey(key)] = float64(value)
 	}
 	setPricingUsage(priced, genaiprices.UsageInputTokens, usage.InputTokens)

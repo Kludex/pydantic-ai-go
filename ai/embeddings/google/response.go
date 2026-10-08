@@ -33,7 +33,9 @@ func (model *Model) parseResponse(
 ) (*embeddings.Result, error) {
 	var response embedResponse
 	if err := json.Unmarshal(body, &response); err != nil {
-		return nil, fmt.Errorf("google embeddings: decode response: %w", err)
+		return nil, &ai.ModelTransportError{
+			ModelName: model.name, ProviderName: "google embeddings", Operation: "decode response", Err: err,
+		}
 	}
 	items := response.Embeddings
 	if model.transport == modelgoogle.TransportVertexAI {

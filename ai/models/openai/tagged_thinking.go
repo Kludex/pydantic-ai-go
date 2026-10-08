@@ -128,6 +128,8 @@ func splitTaggedThinkingEvents(
 		splitters := map[string]*taggedSplitter{}
 		providers := map[string]string{}
 		var order []string
+		thinkingGeneration := 0
+		thinkingOpen := false
 		emit := func(partID, provider string, segments []taggedSegment) bool {
 			for _, segment := range segments {
 				segmentID := partID
@@ -159,6 +161,7 @@ func splitTaggedThinkingEvents(
 				return
 			}
 			if text, ok := event.(ai.TextDeltaEvent); ok {
+				thinkingOpen = false
 				splitter := splitters[text.PartID]
 				if splitter == nil {
 					splitter = &taggedSplitter{}
@@ -171,7 +174,25 @@ func splitTaggedThinkingEvents(
 				}
 				continue
 			}
+			if thinking, ok := event.(ai.ThinkingDeltaEvent); ok {
+				if thinking.PartID == "thinking" {
+					if !thinkingOpen {
+						thinkingGeneration++
+						thinkingOpen = true
+					}
+					if thinkingGeneration > 1 {
+						thinking.PartID = fmt.Sprintf("thinking:%d", thinkingGeneration)
+					}
+					event = thinking
+				}
+				for _, partID := range order {
+					if !emit(partID, providers[partID], splitters[partID].separateTextAfterTool()) {
+						return
+					}
+				}
+			}
 			if _, ok := event.(ai.ToolCallStartEvent); ok {
+				thinkingOpen = false
 				for _, partID := range order {
 					if !emit(partID, providers[partID], splitters[partID].separateTextAfterTool()) {
 						return

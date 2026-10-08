@@ -60,6 +60,7 @@ func TestDownloadedAndDirectContent(t *testing.T) {
 			ai.DocumentURL{
 				URL: server.URL + "/octet-pdf", MediaType: "application/pdf", ForceDownload: ai.FileDownloadAllowLocal,
 			},
+			ai.BinaryContent{Data: []byte("name = \"demo\""), MediaType: "application/toml", Identifier: "project"},
 		}},
 	}}}, ai.ModelRequestParams{AllowText: true})
 	if err != nil {
@@ -70,7 +71,7 @@ func TestDownloadedAndDirectContent(t *testing.T) {
 		t.Fatalf("plain content was not preserved: %#v", messages)
 	}
 	content := messages[1].(map[string]any)["content"].([]any)
-	if len(content) != 8 ||
+	if len(content) != 9 ||
 		!strings.HasPrefix(content[0].(map[string]any)["image_url"].(map[string]any)["url"].(string), "data:image/png;base64,") ||
 		content[1].(map[string]any)["image_url"].(map[string]any)["detail"] != "auto" ||
 		!strings.Contains(content[2].(map[string]any)["text"].(string), "downloaded text") ||
@@ -78,7 +79,8 @@ func TestDownloadedAndDirectContent(t *testing.T) {
 		content[4].(map[string]any)["document_url"] != "https://example.com/direct.pdf" ||
 		!strings.HasPrefix(content[5].(map[string]any)["image_url"].(map[string]any)["url"].(string), "data:image/png;base64,") ||
 		!strings.Contains(content[6].(map[string]any)["text"].(string), "octets") ||
-		!strings.HasPrefix(content[7].(map[string]any)["document_url"].(string), "data:application/pdf;base64,") {
+		!strings.HasPrefix(content[7].(map[string]any)["document_url"].(string), "data:application/pdf;base64,") ||
+		!strings.Contains(content[8].(map[string]any)["text"].(string), `name = "demo"`) {
 		t.Fatalf("unexpected downloaded content: %#v", content)
 	}
 	for _, item := range []ai.UserContent{

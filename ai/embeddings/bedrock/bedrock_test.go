@@ -286,7 +286,7 @@ func TestAWSClient(t *testing.T) {
 	status = http.StatusTooManyRequests
 	_, err = model.Embed(context.Background(), []string{"text"}, embeddings.InputTypeQuery, embeddings.Settings{})
 	var apiError *bedrock.APIError
-	if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusTooManyRequests ||
+	if !errors.As(err, &apiError) || !apiError.IsModelAPIError() || apiError.StatusCode != http.StatusTooManyRequests ||
 		apiError.Headers.Get("Retry-After") != "1" || !errors.Is(apiError, apiError.Err) ||
 		!strings.Contains(err.Error(), "HTTP 429") {
 		t.Fatalf("unexpected AWS HTTP error: %v", err)

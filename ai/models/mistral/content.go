@@ -135,7 +135,8 @@ func isTextLike(mediaType string) bool {
 	mediaType = strings.ToLower(mediaType)
 	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" ||
 		strings.HasSuffix(mediaType, "+json") || mediaType == "application/xml" ||
-		strings.HasSuffix(mediaType, "+xml") || mediaType == "application/yaml" || mediaType == "application/x-yaml"
+		strings.HasSuffix(mediaType, "+xml") || mediaType == "application/yaml" ||
+		mediaType == "application/x-yaml" || mediaType == "application/toml"
 }
 
 func inlineTextFile(data []byte, mediaType, identifier string) string {

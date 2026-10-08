@@ -111,6 +111,7 @@ func TestGemini38LiveProfilesAndConfiguration(t *testing.T) {
 		scheduling    genai.FunctionResponseScheduling
 	}{
 		{name: "gemini-3.8-live", behavior: genai.BehaviorBlocking},
+		{name: "publishers/google/models/gemini-3.8-live-2026-10-01", behavior: genai.BehaviorBlocking},
 		{
 			name: "models/gemini-3.8-live-extended-thinking", thinking: true,
 			behavior: genai.BehaviorNonBlocking, thinkingLevel: genai.ThinkingLevelLow,
@@ -142,6 +143,39 @@ func TestGemini38LiveProfilesAndConfiguration(t *testing.T) {
 			}
 			_ = connection.Close(t.Context())
 		})
+	}
+}
+
+func TestGoogleTextOutputAndAffectiveValidation(t *testing.T) {
+	live := newFakeSession()
+	connector := &fakeConnector{session: live}
+	model := googlert.NewModel(
+		"models/gemini-live-2.5-flash-2026-10", googlert.WithVertex("project", "global"),
+		googlert.WithConnector(connector),
+	)
+	if !model.Profile().SupportsTextOutput {
+		t.Fatal("Vertex Gemini Live text output profile was not recognized")
+	}
+	connection, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{
+		OutputModality: realtime.OutputModalityText,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(connector.config.ResponseModalities) != 1 || connector.config.ResponseModalities[0] != genai.ModalityText {
+		t.Fatalf("unexpected response modalities: %v", connector.config.ResponseModalities)
+	}
+	_ = connection.Close(t.Context())
+
+	affective := true
+	blockedConnector := &fakeConnector{session: newFakeSession()}
+	blocked := googlert.NewModel(
+		"gemini-3.8-live-preview-2026", googlert.WithConnector(blockedConnector),
+		googlert.WithSettings(googlert.Settings{AffectiveDialog: &affective}),
+	)
+	if _, err := blocked.Connect(t.Context(), realtime.ConnectParams{}); err == nil ||
+		!strings.Contains(err.Error(), "affective dialog") || blockedConnector.config != nil {
+		t.Fatalf("unexpected affective-dialog result: config=%v err=%v", blockedConnector.config, err)
 	}
 }
 

@@ -4,10 +4,52 @@ import (
 	"context"
 	"reflect"
 	"testing"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
+
+func TestRepairMessagesPublicAPI(t *testing.T) {
+	timestamp := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
+	history := []ai.ModelMessage{
+		ai.ModelResponse{Timestamp: timestamp, RunID: "run", ConversationID: "conversation", Parts: []ai.ResponsePart{
+			ai.ToolCallPart{ToolName: "first", ToolCallID: "first", Args: []byte(`{}`)},
+		}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.ToolCallPart{ToolName: "last", ToolCallID: "last", Args: []byte(`{}`)},
+		}},
+	}
+	preserved := ai.RepairMessages(history, ai.MessageRepairOptions{PreserveLastResponse: true})
+	if len(preserved) != 3 {
+		t.Fatalf("unexpected preserved history: %+v", preserved)
+	}
+	interrupted := preserved[1].(ai.ModelRequest)
+	assertSynthesizedReturn(t, interrupted.Parts[0], "first", "first")
+	if interrupted.Timestamp != timestamp || interrupted.RunID != "run" || interrupted.ConversationID != "conversation" {
+		t.Fatalf("synthesized request identity changed: %+v", interrupted)
+	}
+	if len(preserved[2].(ai.ModelResponse).ToolCalls()) != 1 {
+		t.Fatalf("last response was repaired: %+v", preserved)
+	}
+	closed := ai.RepairMessages(history, ai.MessageRepairOptions{})
+	if countSynthesizedReturns(closed) != 2 || countSynthesizedReturns(ai.RepairMessages(closed, ai.MessageRepairOptions{})) != 2 {
+		t.Fatalf("repair was not complete and idempotent: %+v", closed)
+	}
+	closed[0].(ai.ModelResponse).Parts[0] = ai.TextPart{Content: "changed"}
+	if _, ok := history[0].(ai.ModelResponse).Parts[0].(ai.ToolCallPart); !ok {
+		t.Fatal("repair shared response parts with its input")
+	}
+
+	merged := ai.RepairMessages([]ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "one"}}, Metadata: map[string]any{"one": 1}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "two"}}, Metadata: map[string]any{"two": 2}},
+	}, ai.MessageRepairOptions{})
+	request := merged[0].(ai.ModelRequest)
+	if request.Metadata["one"] != 1 || request.Metadata["two"] != 2 {
+		t.Fatalf("request metadata was not merged: %+v", request.Metadata)
+	}
+}
 
 func TestRunRepairsInteriorAndTrailingDanglingToolCalls(t *testing.T) {
 	history := []ai.ModelMessage{

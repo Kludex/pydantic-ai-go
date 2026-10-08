@@ -8,7 +8,7 @@ interactions:
         proto_minor: 1
         content_length: 181
         host: api.anthropic.com
-        body: '{"model":"claude-haiku-4-5","max_tokens":4096,"system":"Answer with a single word.","messages":[{"role":"user","content":[{"type":"text","text":"What is the capital of France?"}]}]}'
+        body: '{"model":"claude-haiku-4-5","max_tokens":64000,"system":"Answer with a single word.","messages":[{"role":"user","content":[{"type":"text","text":"What is the capital of France?"}]}]}'
         headers:
             Anthropic-Version:
                 - "2023-06-01"

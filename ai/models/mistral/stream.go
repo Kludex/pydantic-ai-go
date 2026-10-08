@@ -84,7 +84,7 @@ func (model *Model) eventStream(
 			}
 			var chunk chatResponse
 			if err := json.Unmarshal([]byte(data), &chunk); err != nil {
-				yield(nil, fmt.Errorf("mistral: parse stream chunk: %w", err))
+				yield(nil, ai.NewModelTransportError(ctx, model, "parse stream chunk", err))
 				return
 			}
 			if chunk.ID != "" {

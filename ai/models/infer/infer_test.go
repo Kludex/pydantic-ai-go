@@ -25,6 +25,7 @@ func TestModels(t *testing.T) {
 	t.Setenv("GITHUB_COPILOT_API_KEY", "token")
 	t.Setenv("TOGETHER_API_KEY", "token")
 	t.Setenv("TYPESAFE_API_KEY", "token")
+	t.Setenv("SYSTEM_ONE_BASE_URL", "http://localhost:8700")
 	codexHome := t.TempDir()
 	if err := os.WriteFile(filepath.Join(codexHome, "auth.json"), []byte(
 		`{"tokens":{"access_token":"access","refresh_token":"refresh","account_id":"account"}}`,
@@ -55,6 +56,7 @@ func TestModels(t *testing.T) {
 		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},
 		{"snowflake:claude-sonnet-4-6", "snowflake"},
+		{"system-one:clm-latest", "system-one"},
 		{"together:Qwen/Qwen3-32B", "together"},
 		{"typesafe:jev-latest", "typesafe"},
 		{"vllm:Qwen/Qwen3-32B", "vllm"},

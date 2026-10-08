@@ -95,6 +95,56 @@ func fullProfile() realtime.Profile {
 	return profile
 }
 
+func TestSessionContextWindowUsed(t *testing.T) {
+	connection := newFakeConnection()
+	profile := fullProfile()
+	profile.ContextWindow = 100
+	session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: profile}, realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection.events <- realtime.SessionUsage{
+		Usage: ai.Usage{InputTokens: 20, OutputTokens: 5}, ResponseScoped: true,
+	}
+	connection.events <- realtime.ResponseDone{}
+	deadline := time.Now().Add(time.Second)
+	for {
+		if used, ok := session.ContextWindowUsed(); ok && used == 0.25 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("context window fraction was not updated: %v", session.Usage())
+		}
+		time.Sleep(time.Millisecond)
+	}
+	zero := 0.0
+	connection.events <- realtime.SessionUsage{ContextWindowUsed: &zero}
+	connection.events <- realtime.ResponseDone{}
+	deadline = time.Now().Add(time.Second)
+	for {
+		if used, ok := session.ContextWindowUsed(); ok && used == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("reported zero context fraction was lost")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	connection.events <- realtime.OutputTranscript{Text: "done", Final: true, OutputText: true}
+	connection.events <- realtime.ResponseDone{}
+	deadline = time.Now().Add(time.Second)
+	for len(session.NewMessages()) == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if _, ok := session.ContextWindowUsed(); ok {
+		t.Fatal("zero-usage response retained a stale context fraction")
+	}
+	connection.end()
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestSessionPricesResponseUsage(t *testing.T) {
 	connection := newFakeConnection()
 	model := &pricedFakeModel{fakeModel: &fakeModel{connection: connection, profile: fullProfile()}}
@@ -114,6 +164,40 @@ func TestSessionPricesResponseUsage(t *testing.T) {
 	connection.end()
 	if err := session.Close(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestSessionContinuesConversation(t *testing.T) {
+	connection := newFakeConnection()
+	seed := ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "seed"}}, ConversationID: "thread"}
+	conversation := ai.Conversation{
+		Messages: []ai.ModelMessage{seed}, Usage: ai.Usage{Requests: 2, InputTokens: 10}, ConversationID: "thread",
+	}
+	model := &fakeModel{connection: connection, profile: fullProfile()}
+	session, err := realtime.Open(t.Context(), model, realtime.ConnectParams{Conversation: &conversation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conversation.Messages[0].(ai.ModelRequest).Parts[0] = ai.UserPromptPart{Content: "changed"}
+	if err := session.Send(t.Context(), "continue", realtime.WithResponse(false)); err != nil {
+		t.Fatal(err)
+	}
+	continued := session.Conversation()
+	if continued.ConversationID != "thread" || continued.Usage.Requests != 2 || len(continued.Messages) != 2 ||
+		continued.Messages[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart).Content != "seed" ||
+		continued.Messages[1].(ai.ModelRequest).ConversationID != "thread" {
+		t.Fatalf("unexpected continued conversation: %+v", continued)
+	}
+	connection.end()
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = realtime.Open(t.Context(), model, realtime.ConnectParams{
+		Messages: []ai.ModelMessage{seed}, Conversation: &conversation,
+	})
+	if err == nil || !strings.Contains(err.Error(), "cannot be combined") {
+		t.Fatalf("unexpected conversation conflict: %v", err)
 	}
 }
 

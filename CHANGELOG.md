@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-08
+
 ### Added
 
 - Portable prompt caching with `ModelSettings.Cache`, `CacheConfig`, and the composable `Caching` capability. Provider-local cache settings take precedence. Retention snaps to supported tiers, and stable-prefix-only caching avoids writing one-off conversations.
@@ -153,5 +155,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 - No security fixes have been released yet.
 
-[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Kludex/pydantic-ai-go/commits/v0.4.0

@@ -2,7 +2,9 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@f998089a30c03c8df9ed6da98353fa4c225a9770`.
+Audited upstream baseline: `pydantic/pydantic-ai@72d89d136b5d155e52f5c2b054175420459fb6f4`.
+
+The previous audited baseline (`f998089a30c03c8df9ed6da98353fa4c225a9770`) remains the depth-of-audit reference for parity claims already recorded below; this sync advanced the pin to the new upstream HEAD and reviewed every change between the two commits. Most new upstream work since `f998089a` lives in modules the Go port intentionally excludes or has not yet ported, so the per-feature `Implemented` rows below still describe parity against `f998089a` until follow-on ports complete. See the `agentic-ai-sync` PRs for the per-change review notes.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 
@@ -284,4 +286,4 @@ Status:
 
 ## Audit status
 
-The repository is audited through the baseline above. `.upstream-sync.json` records the same commit.
+The repository is audited through `f998089a30c03c8df9ed6da98353fa4c225a9770`. The pin in `.upstream-sync.json` was advanced to `72d89d136b5d155e52f5c2b054175420459fb6f4` after triaging the upstream diff; per-feature audit coverage of the new commits will follow in subsequent ports.

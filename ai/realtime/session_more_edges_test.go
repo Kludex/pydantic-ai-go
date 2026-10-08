@@ -161,27 +161,22 @@ func TestSessionTapOverflowAndCloseTimeout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	audioStarted := make(chan struct{})
 	audioBlocked := make(chan struct{})
 	audioCtx, cancelAudio := context.WithCancel(t.Context())
+	audio := session.StreamAudio(audioCtx)
 	go func() {
-		close(audioStarted)
-		for range session.StreamAudio(audioCtx) {
+		for range audio {
 			<-audioBlocked
 		}
 	}()
-	transcriptStarted := make(chan struct{})
 	transcriptBlocked := make(chan struct{})
 	transcriptCtx, cancelTranscript := context.WithCancel(t.Context())
+	transcripts := session.StreamTranscripts(transcriptCtx)
 	go func() {
-		close(transcriptStarted)
-		for range session.StreamTranscripts(transcriptCtx) {
+		for range transcripts {
 			<-transcriptBlocked
 		}
 	}()
-	<-audioStarted
-	<-transcriptStarted
-	time.Sleep(time.Millisecond)
 	drainDone := make(chan struct{})
 	go func() {
 		for range session.Events(t.Context()) {

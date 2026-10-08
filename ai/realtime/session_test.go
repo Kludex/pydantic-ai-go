@@ -248,36 +248,30 @@ func TestSessionLifecycle(t *testing.T) {
 		t.Fatalf("unexpected opened session state")
 	}
 
-	audioReady := make(chan struct{})
 	audioDone := make(chan []byte, 1)
 	audioCtx, cancelAudio := context.WithCancel(t.Context())
 	defer cancelAudio()
+	audio := session.StreamAudio(audioCtx)
 	go func() {
-		close(audioReady)
-		for chunk, err := range session.StreamAudio(audioCtx) {
+		for chunk, err := range audio {
 			if err == nil {
 				audioDone <- chunk
 				return
 			}
 		}
 	}()
-	transcriptReady := make(chan struct{})
 	transcriptDone := make(chan realtime.TranscriptUpdate, 1)
 	transcriptCtx, cancelTranscript := context.WithCancel(t.Context())
 	defer cancelTranscript()
+	transcripts := session.StreamTranscripts(transcriptCtx)
 	go func() {
-		close(transcriptReady)
-		for update, err := range session.StreamTranscripts(transcriptCtx) {
+		for update, err := range transcripts {
 			if err == nil {
 				transcriptDone <- update
 				return
 			}
 		}
 	}()
-	<-audioReady
-	<-transcriptReady
-	time.Sleep(time.Millisecond)
-
 	if err := session.Send(t.Context(), "hello"); err != nil {
 		t.Fatal(err)
 	}

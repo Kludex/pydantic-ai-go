@@ -331,6 +331,12 @@ func TestSessionLifecycle(t *testing.T) {
 	if !strings.Contains(toolResult.Output, "42") || len(toolResult.Content) != 1 {
 		t.Fatalf("unexpected tool result: %+v", toolResult)
 	}
+	if got := <-audioDone; !slices.Equal(got, pcm) {
+		t.Fatalf("unexpected audio tap: %v", got)
+	}
+	if got := <-transcriptDone; got.Transcript == "" {
+		t.Fatalf("unexpected transcript tap: %+v", got)
+	}
 	connection.events <- realtime.SessionUsage{
 		Usage:              ai.Usage{Requests: 1, InputTokens: 3, OutputTokens: 2},
 		ProviderResponseID: "response-1", FinishReason: ai.FinishReasonStop, ResponseScoped: true,
@@ -352,12 +358,6 @@ func TestSessionLifecycle(t *testing.T) {
 	}
 	if len(events) < 15 {
 		t.Fatalf("too few translated events: %d", len(events))
-	}
-	if got := <-audioDone; !slices.Equal(got, pcm) {
-		t.Fatalf("unexpected audio tap: %v", got)
-	}
-	if got := <-transcriptDone; got.Transcript == "" {
-		t.Fatalf("unexpected transcript tap: %+v", got)
 	}
 	if !session.Closed() || session.Usage().InputTokens != 3 {
 		t.Fatalf("unexpected final state: closed=%v usage=%+v", session.Closed(), session.Usage())

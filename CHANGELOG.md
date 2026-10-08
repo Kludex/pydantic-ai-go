@@ -6,6 +6,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+### Added
+
+- Portable prompt caching with `ModelSettings.Cache`, `CacheConfig`, and the composable `Caching` capability. Provider-local cache settings take precedence. Retention snaps to supported tiers, and stable-prefix-only caching avoids writing one-off conversations.
+- Once-per-conversation cache-configuration telemetry for long requests to models that need caching enabled explicitly. Harness-only upstream commits `d9a8a4bb` and `2132206f` remain permanently excluded with no Go code.
+- Serializable `Conversation` bundles that preserve history, cumulative usage, identity, and deferred requests across runs.
+- Core workspaces with local command and filesystem backends, read-only policy, trusted persisted references, and run-scoped selection.
+- System One decision models through `ai/models/systemone`, including custom and Ollama-compatible `/v1/systemone` endpoints.
+- TypeSafe Jev generation through `ai/models/typesafe` and provider-prefixed model inference.
+- Runtime described output choices through `Choice`, `NewChoices`, `NewStringChoices`, and `NewChoicesAgent`.
+- A once-per-process interactive first-run banner with resolved agent, model, output, tool, and capability details; coding-agent detection; CI, test, environment, API, and instrumentation suppression; and terminal CLI placement.
+
 ### Changed
 
 - Send a generic System One question for option-described scalar outputs with no instructions. Set `systemone.Profile.RequiresInstructions` to false for compatible servers that permit omitted instructions.
@@ -26,23 +37,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Extend TypeSafe Jev with bounded-number scaling, boolean option maps, ten-level rubric limits, recursive and fixed-array rejection, route descriptions and attribution, stable tool handoff history, and argument-bearing output functions.
 - Require JSON request media types by default in AG-UI and Vercel handlers, redact telemetry errors and instruction content when content capture is disabled, and harden local web fetching against equivalent domain spellings and invalid charsets.
 - Add stable `RunResult` JSON, realtime enqueue delivery events, playback draining and automatic response pricing, and Bedrock adaptive and `xhigh` thinking behavior.
-- `images.NewImageGenerationCapability` now returns `*images.ImageGenerationCapability[Deps]` so repeated declarations merge direct settings and native configuration. Pass it through `ai.WithCapabilities` as before. If you passed its result to `Agent.AddNativeOrLocal`, use `ai.WithCapabilities` instead.
-- Preserve separate OpenAI Chat text parts when streamed tool calls appear between text chunks, including tagged thinking streams.
-- Capabilities with stable IDs now combine within one registration layer and are replaced as complete wrapper subtrees by matching run capabilities. Invalid collisions and unsafe default merges fail before execution.
-- Dynamic image-generation and X-search fallback subagents now resolve the same native configuration as the outer path. Models without native tool-availability deltas receive provider-neutral synthetic search exchanges without splitting parallel result batches.
-- All library packages now live under `ai/`. The core package uses `github.com/Kludex/pydantic-ai-go/ai`, and subpackages use paths such as `github.com/Kludex/pydantic-ai-go/ai/models/openai`.
-- Browser chat now serves PydanticAI's official `@pydantic/ai-chat-ui` with cached remote or local HTML, model and native-tool selectors, approval continuation, and configuration and health endpoints. `webchat.Config.AllowedHosts` now permits only IP addresses and localhost by default; set it to `[]string{"*"}` only to restore unrestricted host access behind an authentication boundary.
+
+### Deprecated
+
+- `ResolvePromptCacheRetention` and `PromptCacheRetentionModel` are deprecated in favor of `ResolveCacheRetention` and `CacheRetentionModel`.
+
+### Fixed
+
+- Make standard and realtime message enqueueing safe against concurrent run or session completion, and reject retained contexts after shutdown.
+- Forward blocked domains to OpenAI Responses web search and pair multiple anonymous hosted tool-search calls and results in provider order.
+
+## [0.4.0] - 2026-09-14
 
 ### Added
 
-- Portable prompt caching with `ModelSettings.Cache`, `CacheConfig`, and the composable `Caching` capability. Provider-local cache settings take precedence. Retention snaps to supported tiers, and stable-prefix-only caching avoids writing one-off conversations.
-- Once-per-conversation cache-configuration telemetry for long requests to models that need caching enabled explicitly. Harness-only upstream commits `d9a8a4bb` and `2132206f` remain permanently excluded with no Go code.
-- Serializable `Conversation` bundles that preserve history, cumulative usage, identity, and deferred requests across runs.
-- Core workspaces with local command and filesystem backends, read-only policy, trusted persisted references, and run-scoped selection.
-- System One decision models through `ai/models/systemone`, including custom and Ollama-compatible `/v1/systemone` endpoints.
-- TypeSafe Jev generation through `ai/models/typesafe` and provider-prefixed model inference.
-- Runtime described output choices through `Choice`, `NewChoices`, `NewStringChoices`, and `NewChoicesAgent`.
-- A once-per-process interactive first-run banner with resolved agent, model, output, tool, and capability details; coding-agent detection; CI, test, environment, API, and instrumentation suppression; and terminal CLI placement.
 - Context-aware background pricing updates with immediate and hourly downloads, atomic last-good snapshots, shared workers, bounded responses, and caller-provided clients and error handling.
 - A typed agent loop with structured output, tools, retries, usage limits, cancellation, deferred execution, message enqueueing, manual runs, and synchronous or streamed results.
 - OpenAI Chat Completions and Responses, OpenAI Codex subscription authentication with OAuth PKCE and safe credential rotation, Amazon Bedrock Converse with streaming, native output, prompt caching, token counting, Nova code interpreter, inference profiles, guardrails, performance options, request metadata, and prompt variables, Anthropic Messages with legacy Bedrock InvokeModel generation, streaming, and token counting, Google Gemini and Vertex AI, Azure OpenAI, GitHub Copilot, vLLM, Groq, OpenRouter, and Z.AI model providers.
@@ -67,9 +75,15 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- `images.NewImageGenerationCapability` now returns `*images.ImageGenerationCapability[Deps]` so repeated declarations merge direct settings and native configuration. Pass it through `ai.WithCapabilities` as before. If you passed its result to `Agent.AddNativeOrLocal`, use `ai.WithCapabilities` instead.
+- Preserve separate OpenAI Chat text parts when streamed tool calls appear between text chunks, including tagged thinking streams.
+- Capabilities with stable IDs now combine within one registration layer and are replaced as complete wrapper subtrees by matching run capabilities. Invalid collisions and unsafe default merges fail before execution.
+- Dynamic image-generation and X-search fallback subagents now resolve the same native configuration as the outer path. Models without native tool-availability deltas receive provider-neutral synthetic search exchanges without splitting parallel result batches.
+- All library packages now live under `ai/`. The core package uses `github.com/Kludex/pydantic-ai-go/ai`, and subpackages use paths such as `github.com/Kludex/pydantic-ai-go/ai/models/openai`.
+- Browser chat now serves PydanticAI's official `@pydantic/ai-chat-ui` with cached remote or local HTML, model and native-tool selectors, approval continuation, and configuration and health endpoints. `webchat.Config.AllowedHosts` now permits only IP addresses and localhost by default; set it to `[]string{"*"}` only to restore unrestricted host access behind an authentication boundary.
 - Forward visible typed custom events through AG-UI and Vercel AI, and add capability-owned attribution, immediate decision dispatch, ordered listeners, listener timeouts, and durable event envelopes.
 - Preserve kind-colliding application tool-return maps, restore uploaded-file serialization defaults, and normalize Vercel URL and JavaScript binary tool outputs.
-- Resolve bundled standard and realtime model context windows from `genai-prices` v0.1.8 metadata, while preserving explicit and unknown profile values.
+- Resolve bundled standard and realtime model context windows from `genai-prices` v0.1.6 metadata, while preserving explicit and unknown profile values.
 - Add Logfire messages and JSON schemas to model and tool spans, including model-visible retry and terminal-failure results.
 - Widen Vercel AI `Chunk.Data` and `UIMessagePart.Data` from object-only maps to arbitrary JSON values. Existing map values remain valid.
 - Emit Vercel AI response metadata through the protocol's final `message-metadata` chunk instead of attaching it to `finish`.
@@ -123,7 +137,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Deprecated
 
-- `ResolvePromptCacheRetention` and `PromptCacheRetentionModel` are deprecated in favor of `ResolveCacheRetention` and `CacheRetentionModel`.
+- Nothing is deprecated.
 
 ### Removed
 
@@ -131,11 +145,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Fixed
 
-- Make standard and realtime message enqueueing safe against concurrent run or session completion, and reject retained contexts after shutdown.
-- Forward blocked domains to OpenAI Responses web search and pair multiple anonymous hosted tool-search calls and results in provider order.
+- Accept OpenAI Responses web-search progress events without aborting streamed runs.
 - Keep realtime sessions open when automatic barge-in is enabled for a model without interruption support.
 - Let a realtime tool close its session without racing the connection pump into waiting on that tool.
 
 ### Security
 
 - No security fixes have been released yet.
+
+[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/Kludex/pydantic-ai-go/commits/v0.4.0

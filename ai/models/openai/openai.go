@@ -747,6 +747,16 @@ func (m *Model) buildPayload(
 			req.Messages[index].Content = content[1:]
 		}
 	}
+	hasPromptCacheBreakpoint := false
+	for _, message := range req.Messages {
+		if content, ok := message.Content.([]contentPart); ok {
+			for _, part := range content {
+				hasPromptCacheBreakpoint = hasPromptCacheBreakpoint || part.PromptCacheBreakpoint != nil
+			}
+		}
+	}
+	keepImplicitCacheWithoutBreakpoints(&promptCache, hasPromptCacheBreakpoint)
+	req.PromptCacheOptions = promptCache.Options
 	if cache.MessagesTTL != "" && len(req.Messages) > 0 {
 		roles := make([]string, len(req.Messages))
 		counts := make([]int, len(req.Messages))

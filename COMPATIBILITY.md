@@ -53,14 +53,16 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `e6eee68add2178c45d0e5603ae57f52b248d0d7d` | Generic System One questions when options provide the meaning but instructions are absent; `systemone.Profile.RequiresInstructions` can explicitly disable the fallback |
 | `5855737715205bafee933f842b413f7cb483ffa1` | Indexed keyword tool-search corpus, invalidated by names, descriptions, membership, and order; concurrency-safe ranking preserves undiscovered-first and corpus-order ties |
 | `5274216031eeceef1523d78e835c34410e13b376` | Portable `ModelSettings.Cache`, `CacheConfig`, and `Caching`; provider-local precedence, retention snapping, stable-prefix-only caching, wide-turn boundaries, honored-tier outlook, and missing-configuration telemetry |
+| `db506e2ede9295885d8691c91d6c415fc717910b` | OpenAI stable-prefix-only caching keeps the implicit breakpoint when the final Chat or Responses request has no explicit breakpoint; caller-supplied provider options still take precedence |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 
-These harness-only commits are permanently excluded. No Go code is added for either:
+These upstream changes are permanently excluded. No Go code is added for them:
 
 - `d9a8a4bbee3f37d990a7a9e9bfdc71c8ddba4d33`: canonical session events in the gh-aw clai2 runner. This port does not own a harness runner.
 - `2132206fb5d6b7cbe0abaef6e17a4825bddde409`: relocate `MCPReadOnlyNoToolsWarning` to keep Python harness imports light. There is no corresponding library behavior or Go import-time warning mechanism.
 - `f55bfd2d7b190c68ac7f78371f5da89fa9b11164`: change Harness spend accrual around durable continuation retries. The core change only documents a private Python observer consumed by that version-pinned Harness package.
+- `36529f3a8ebc5a5675129fe6262223b9da0815ec`: cancel a Python graph stream when a parallel Harness `InputGuardrail` replaces it. This port has no Harness guardrail package or graph stream, and its synchronous Go `ModelRequestWrapper` contract does not expose a background handler task or `SkipModelRequest` replacement semantics.
 
 Upstream patches are reference data, not executable inputs. These additions do not introduce harness capability loading or self-extension.
 

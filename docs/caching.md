@@ -62,7 +62,7 @@ func main() {
 }
 ```
 
-`Messages: &messages` with `false` caches only static instructions and tool definitions. Use it when many short conversations share a long prefix but their individual messages will not be reused. A nil `Messages` defaults to `true`.
+`Messages: &messages` with `false` caches only static instructions and tool definitions when the provider can place a boundary. Use it when many short conversations share a long prefix but their individual messages will not be reused. A nil `Messages` defaults to `true`.
 
 ## Configure settings directly
 
@@ -124,12 +124,12 @@ Repeated `Caching` capabilities share the ID `caching`. The last configuration w
 | Bedrock Converse Nova | Instruction and conversation boundaries, five minutes | Cache instructions only |
 | OpenRouter Anthropic routes | Instruction, tool-definition, and conversation boundaries | Omit the conversation boundary |
 | OpenRouter Gemini 2.5 and later routes | Instruction and conversation boundaries; no TTL on the wire | Cache instructions only |
-| OpenAI GPT-5.6 and GPT-6 families | Implicit mode, thirty-minute TTL, static instruction boundary | Explicit mode with only the instruction boundary |
+| OpenAI GPT-5.6 and GPT-6 families | Implicit mode, thirty-minute TTL, static instruction boundary | Explicit mode with the instruction boundary; implicit mode when no explicit boundary can be placed |
 | Other models and implicitly caching providers | No portable translation | No effect |
 
 Bedrock grants the one-hour tier only to selected Claude models. Older Claude models snap to five minutes. Nova does not cache tool definitions.
 
-OpenAI Responses requests that continue a `previous_response_id` or a `conversation` cannot place an instruction boundary. In stable-prefix-only mode, those requests therefore add no library-managed cache boundary.
+OpenAI Responses requests that continue a `previous_response_id` or a `conversation` cannot place an instruction boundary. Dynamic or merged instructions can also prevent a boundary. In stable-prefix-only mode, these requests keep OpenAI's implicit boundary instead of disabling caching. An explicit `CachePoint` keeps the request in explicit mode.
 
 On Bedrock and OpenRouter, a wide tool turn can move the newest boundary beyond the provider's cache lookback. The previous request's tail gets a boundary too. Instruction and tool-definition boundaries take priority. Excess message boundaries are dropped oldest-first to stay within the four-boundary limit. An explicit marker at Anthropic's final cacheable block takes precedence over its automatic boundary.
 

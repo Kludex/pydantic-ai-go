@@ -25,7 +25,8 @@ const (
 type CacheConfig struct {
 	// Retention defaults to the provider's shortest tier. Unsupported tiers snap down, or up to the shortest tier.
 	Retention CacheRetention
-	// Messages defaults to true. False caches only static instructions and tool definitions.
+	// Messages defaults to true. False caches only static instructions and tool definitions
+	// when the provider can place a boundary.
 	Messages *bool
 }
 

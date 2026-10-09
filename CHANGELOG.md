@@ -6,6 +6,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+### Fixed
+
+- Keep OpenAI's implicit prompt cache when stable-prefix-only caching cannot place an explicit boundary.
+
 ## [0.5.0] - 2026-10-08
 
 ### Added

@@ -2,7 +2,7 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@f55bfd2d7b190c68ac7f78371f5da89fa9b11164`.
+Audited upstream baseline: `pydantic/pydantic-ai@36529f3a8ebc5a5675129fe6262223b9da0815ec`.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 
@@ -271,7 +271,7 @@ Status:
 - [x] Compatibility and semantic-versioning policy for public Go APIs, supported Go versions, persisted messages, providers, deprecations, and inspectable errors, plus an unreleased changelog.
 - [x] Public-API benchmarks cover loop overhead, streaming consumption, schema reflection, and eight-way parallel tool execution, with a reproducible `benchstat` comparison guide.
 - [x] Use the tagged `genai-prices` Go `v0.1.8` module release instead of a commit pseudo-version.
-- [x] Audited upstream through `f55bfd2d7b190c68ac7f78371f5da89fa9b11164`. The latest audit adds System One decisions, conversations, core workspaces, GPT-Live, portable caching and cache health, current model profiles, provider error parity, realtime lifecycle hardening, and indexed keyword tool search. Python typing, SDK dependency pins, Harness and product-site documentation, graph internals, and bundled workflow runtimes remain inapplicable.
+- [x] Audited upstream through `36529f3a8ebc5a5675129fe6262223b9da0815ec`. The latest audit keeps OpenAI implicit caching when stable-prefix-only caching cannot place a breakpoint. Python typing, SDK dependency pins, Harness and product-site documentation, graph internals, and bundled workflow runtimes remain inapplicable.
 - [x] Pin `.upstream-sync.json` to the audited upstream commit and source subpath.
 - [x] The daily `gh-aw` upstream-sync workflow is implemented in `.github/workflows/agentic-ai-sync.md` with its generated `.lock.yml`. It validates the pinned upstream repository, subpath, and SHA before ingesting an untrusted diff; runs behind the `AGENTIC_WORKFLOWS_ENABLED` kill switch with read-only permissions, bounded concurrency, network, time, turns, and safe outputs; allows one draft `[ai-sync]` pull request with required labels; validates formatting, build, vet, tests, and configured 100% coverage; advances `.upstream-sync.json`; and requires the project AI disclaimer. Shared checkout and rigor imports document the editing, dependency, history, cassette, and validation boundaries.
 
@@ -394,6 +394,8 @@ Status:
 - `e6eee68ad` is implemented by generic question fallback for otherwise instruction-less System One fields. `585573771` keeps the default keyword tool-search corpus indexed across repeated searches. `527421603` adds one provider-neutral cache setting and a composable caching capability over the existing provider-specific cache controls, retention outlook, and health telemetry.
 - `d9a8a4bbe` changes only the imported Harness gh-aw/CLAI runner, and `2132206fb` moves a Harness warning to keep Python imports light. Both are permanently inapplicable.
 - `f55bfd2d7` changes Harness `SpendLimits` continuation accrual. The only core edit documents an existing private Python observer for the version-pinned Harness package. This Go module does not ship Harness spend stores or bundled workflow retries, so no runtime change is applicable.
+- `db506e2ed` is implemented by inspecting the final OpenAI Chat or Responses wire input. Portable stable-prefix-only caching falls back to implicit mode only when no instruction or `CachePoint` breakpoint survived request preparation. Explicit provider options retain precedence.
+- `36529f3a8` cancels and replaces a Python graph stream when a parallel Harness `InputGuardrail` blocks. The Go port has no Harness guardrail or graph stream, and its synchronous `ModelRequestWrapper` contract has no background handler task or `SkipModelRequest` replacement behavior, so the change is permanently inapplicable.
 - The realtime commits in this range are implemented across the shared session core and provider packages: dated Gemini 3.8 matching, Gemini 2.5 Vertex text, retained media and native history, tool-round ordering, response identity, context-window usage, xAI manual-turn and terminal behavior, Azure Voice Live settings and warnings, audio bounds, reconnect settlement, WebRTC signaling and hangup, and the distinct GPT-Live delegated protocol. Provider recordings remain replay-only and credential-filtered.
 
 ## Audit status

@@ -975,6 +975,25 @@ func (m *ResponsesModel) buildResponsesPayload(
 			req.Input[index].Content = content[1:]
 		}
 	}
+	hasPromptCacheBreakpoint := false
+	for _, item := range req.Input {
+		body := item.Content
+		if item.Type == "function_call_output" {
+			body = item.Output
+		}
+		if content, ok := body.([]responsesInputContent); ok {
+			for _, part := range content {
+				hasPromptCacheBreakpoint = hasPromptCacheBreakpoint || part.PromptCacheBreakpoint != nil
+			}
+		}
+	}
+	keepImplicitCacheWithoutBreakpoints(&promptCache, hasPromptCacheBreakpoint)
+	if promptCache.Options != nil {
+		if req.PromptCacheOptions == nil {
+			req.PromptCacheOptions = &responsesPromptCacheOptions{}
+		}
+		req.PromptCacheOptions.PromptCacheOptions = *promptCache.Options
+	}
 	for _, tool := range params.Tools {
 		if activeToolSearch && (tool.ToolKind == ai.ToolPartKindToolSearch || tool.DeferLoading) {
 			continue

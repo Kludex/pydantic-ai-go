@@ -77,11 +77,17 @@ const (
 )
 
 type promptCacheSettings struct {
-	Key          string
-	Retention    PromptCacheRetention
-	Options      *PromptCacheOptions
-	Instructions bool
-	Diagnostics  bool
+	Key                string
+	Retention          PromptCacheRetention
+	Options            *PromptCacheOptions
+	Instructions       bool
+	Diagnostics        bool
+	portablePrefixOnly bool
+}
+
+type portablePromptCacheOptions struct {
+	PromptCacheOptions
+	prefixOnly bool
 }
 
 // Build returns detached portable settings accepted by agents and direct requests.
@@ -210,8 +216,14 @@ func extractPromptCacheSettings(settings ai.ModelSettings) (ai.ModelSettings, pr
 	}
 	if value, exists := extra[promptCacheOptionsSetting]; exists {
 		delete(extra, promptCacheOptionsSetting)
-		options, ok := value.(PromptCacheOptions)
-		if !ok {
+		var options PromptCacheOptions
+		switch value := value.(type) {
+		case PromptCacheOptions:
+			options = value
+		case portablePromptCacheOptions:
+			options = value.PromptCacheOptions
+			cache.portablePrefixOnly = value.prefixOnly
+		default:
 			return ai.ModelSettings{}, promptCacheSettings{}, fmt.Errorf(
 				"openai: prompt cache options must use PromptCacheOptions",
 			)

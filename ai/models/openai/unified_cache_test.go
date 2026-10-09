@@ -28,21 +28,27 @@ func TestUnifiedOpenAICaching(t *testing.T) {
 		defer server.Close()
 		noMessages := false
 		for _, test := range []struct {
-			name, model  string
-			cache        *ai.CacheConfig
-			local        bool
-			mode         string
-			continuation bool
+			name, model   string
+			cache         *ai.CacheConfig
+			local         bool
+			mode          string
+			dynamic       bool
+			continuation  bool
+			responsesOnly bool
 		}{
 			{name: "default", model: "gpt-5.6", cache: &ai.CacheConfig{}, mode: "implicit"},
 			{name: "snap up", model: "gpt-5.6", cache: &ai.CacheConfig{Retention: ai.CacheRetention5Minutes}, mode: "implicit"},
 			{name: "snap down", model: "gpt-6.1-sol", cache: &ai.CacheConfig{Retention: ai.CacheRetention1Hour}, mode: "implicit"},
 			{name: "stable prefix", model: "gpt-5.6", cache: &ai.CacheConfig{Messages: &noMessages}, mode: "explicit"},
-			{name: "server state", model: "gpt-5.6", cache: &ai.CacheConfig{Messages: &noMessages}, mode: "explicit", continuation: true},
+			{name: "dynamic instructions", model: "gpt-5.6", cache: &ai.CacheConfig{Messages: &noMessages}, mode: "implicit", dynamic: true},
+			{name: "server state", model: "gpt-5.6", cache: &ai.CacheConfig{Messages: &noMessages}, mode: "implicit", continuation: true, responsesOnly: true},
 			{name: "older implicit model", model: "gpt-5", cache: &ai.CacheConfig{}},
 			{name: "disabled", model: "gpt-5.6", cache: &ai.CacheConfig{Retention: ai.CacheRetentionDisabled}},
 			{name: "provider disabled", model: "gpt-5.6", cache: &ai.CacheConfig{}, local: true},
 		} {
+			if test.responsesOnly && !responses {
+				continue
+			}
 			t.Run(test.name, func(t *testing.T) {
 				settings := ai.ModelSettings{Cache: test.cache}
 				if test.local {
@@ -58,6 +64,9 @@ func TestUnifiedOpenAICaching(t *testing.T) {
 					model = openai.NewModel(test.model, openai.WithBaseURL(server.URL))
 				}
 				params := ai.ModelRequestParams{Instructions: "stable", Settings: settings}
+				if test.dynamic {
+					params.InstructionParts = []ai.InstructionPart{{Content: "stable", Dynamic: true}}
+				}
 				if _, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}, params); err != nil {
 					t.Fatal(err)
 				}
@@ -100,6 +109,28 @@ func TestUnifiedOpenAICaching(t *testing.T) {
 		} {
 			if _, known := ai.ResolveCacheRetention(model, &settings); known {
 				t.Fatal("noncaching or invalid options claimed retention")
+			}
+		}
+		if responses {
+			settings, err := (openai.Settings{
+				Common: ai.ModelSettings{Cache: &ai.CacheConfig{Messages: &noMessages}},
+				PromptCacheOptions: &openai.PromptCacheOptions{
+					Mode: openai.PromptCacheModeExplicit, TTL: openai.PromptCacheTTL30Minutes,
+				},
+				CacheInstructions: true,
+			}).Build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			settings.ExtraBody["previous_response_id"] = "r0"
+			if _, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Content: "hi"},
+			}}}, ai.ModelRequestParams{Instructions: "stable", Settings: settings}); err != nil {
+				t.Fatal(err)
+			}
+			options := body["prompt_cache_options"].(map[string]any)
+			if options["mode"] != "explicit" || options["ttl"] != "30m" {
+				t.Fatalf("explicit provider options lost precedence: %+v", options)
 			}
 		}
 	}

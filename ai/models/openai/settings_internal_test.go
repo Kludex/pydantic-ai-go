@@ -87,12 +87,17 @@ func TestPromptCacheSettingsValidation(t *testing.T) {
 			}
 		})
 	}
-	for name, value := range map[string]any{
-		promptCacheRetentionSetting: PromptCacheRetention("week"),
-		promptCacheOptionsSetting:   PromptCacheOptions{Mode: "manual"},
+	for _, invalid := range []struct {
+		title string
+		key   string
+		value any
+	}{
+		{title: "retention", key: promptCacheRetentionSetting, value: PromptCacheRetention("week")},
+		{title: "options value", key: promptCacheOptionsSetting, value: PromptCacheOptions{Mode: "manual"}},
+		{title: "options pointer", key: promptCacheOptionsSetting, value: &PromptCacheOptions{Mode: "manual"}},
 	} {
-		t.Run("extract invalid "+name, func(t *testing.T) {
-			_, _, err := extractPromptCacheSettings(ai.ModelSettings{ExtraBody: map[string]any{name: value}})
+		t.Run("extract invalid "+invalid.title, func(t *testing.T) {
+			_, _, err := extractPromptCacheSettings(ai.ModelSettings{ExtraBody: map[string]any{invalid.key: invalid.value}})
 			if err == nil || !strings.Contains(err.Error(), "invalid prompt cache") {
 				t.Fatalf("unexpected extraction validation error: %v", err)
 			}

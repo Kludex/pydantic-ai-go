@@ -26,6 +26,9 @@ type CacheConfig struct {
 	// Retention defaults to the provider's shortest tier. Unsupported tiers snap down, or up to the shortest tier.
 	Retention CacheRetention
 	// Messages defaults to true. False caches only static instructions and tool definitions.
+	// On OpenAI requests that cannot carry an instruction breakpoint, such as those continuing
+	// server-side state, the conversation is cached as well, as caching only the prefix would
+	// cache nothing.
 	Messages *bool
 }
 

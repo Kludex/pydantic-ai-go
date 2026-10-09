@@ -822,6 +822,7 @@ func (m *Model) buildPayload(
 	if err := limitChatCachePoints(req.Messages, req.Tools, cache.MaxPoints); err != nil {
 		return nil, err
 	}
+	keepImplicitCacheWithoutBreakpoints(&req.PromptCacheOptions, chatHasPromptCacheBreakpoint(req.Messages))
 	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		strict := true
 		schema, _, err := prepareOpenAISchema(params.OutputSchema, &strict)

@@ -210,17 +210,30 @@ func extractPromptCacheSettings(settings ai.ModelSettings) (ai.ModelSettings, pr
 	}
 	if value, exists := extra[promptCacheOptionsSetting]; exists {
 		delete(extra, promptCacheOptionsSetting)
-		options, ok := value.(PromptCacheOptions)
-		if !ok {
+		var options *PromptCacheOptions
+		switch typed := value.(type) {
+		case *PromptCacheOptions:
+			if typed != prefixOnlyCacheOptions && typed != implicitCacheOptions {
+				cloned := *typed
+				if err := validatePromptCacheOptions(&cloned); err != nil {
+					return ai.ModelSettings{}, promptCacheSettings{}, err
+				}
+				options = &cloned
+			} else {
+				options = typed
+			}
+		case PromptCacheOptions:
+			cloned, err := clonePromptCacheOptions(&typed)
+			if err != nil {
+				return ai.ModelSettings{}, promptCacheSettings{}, err
+			}
+			options = cloned
+		default:
 			return ai.ModelSettings{}, promptCacheSettings{}, fmt.Errorf(
 				"openai: prompt cache options must use PromptCacheOptions",
 			)
 		}
-		cloned, err := clonePromptCacheOptions(&options)
-		if err != nil {
-			return ai.ModelSettings{}, promptCacheSettings{}, err
-		}
-		cache.Options = cloned
+		cache.Options = options
 	}
 	if len(extra) == 0 {
 		extra = nil
@@ -234,17 +247,24 @@ func clonePromptCacheOptions(options *PromptCacheOptions) (*PromptCacheOptions, 
 		return nil, nil
 	}
 	cloned := *options
-	switch cloned.Mode {
-	case "", PromptCacheModeImplicit, PromptCacheModeExplicit:
-	default:
-		return nil, fmt.Errorf("openai: invalid prompt cache mode %q", cloned.Mode)
-	}
-	switch cloned.TTL {
-	case "", PromptCacheTTL30Minutes:
-	default:
-		return nil, fmt.Errorf("openai: invalid prompt cache TTL %q", cloned.TTL)
+	if err := validatePromptCacheOptions(&cloned); err != nil {
+		return nil, err
 	}
 	return &cloned, nil
+}
+
+func validatePromptCacheOptions(options *PromptCacheOptions) error {
+	switch options.Mode {
+	case "", PromptCacheModeImplicit, PromptCacheModeExplicit:
+	default:
+		return fmt.Errorf("openai: invalid prompt cache mode %q", options.Mode)
+	}
+	switch options.TTL {
+	case "", PromptCacheTTL30Minutes:
+	default:
+		return fmt.Errorf("openai: invalid prompt cache TTL %q", options.TTL)
+	}
+	return nil
 }
 
 func validatePromptCacheRetention(retention PromptCacheRetention) error {

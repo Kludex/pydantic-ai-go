@@ -50,6 +50,8 @@ func writerIsTerminal(writer io.Writer, honorForceColor bool) bool {
 	return terminal || honorForceColor && environmentSet("FORCE_COLOR")
 }
 
+// detectCodingAgent returns the name of the coding agent whose signal env var is set,
+// or empty when none match.
 func detectCodingAgent() string {
 	for _, agent := range bannerCodingAgents {
 		for _, signal := range agent.signals {

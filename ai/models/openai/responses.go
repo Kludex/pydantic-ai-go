@@ -822,9 +822,6 @@ func (m *ResponsesModel) buildResponsesPayload(
 	}
 	if promptCache.Options != nil || comparisonID != "" {
 		req.PromptCacheOptions = &responsesPromptCacheOptions{ComparisonResponseID: comparisonID}
-		if promptCache.Options != nil {
-			req.PromptCacheOptions.PromptCacheOptions = *promptCache.Options
-		}
 	}
 	if params.Settings.Logprobs != nil && *params.Settings.Logprobs {
 		req.Include = append(req.Include, "message.output_text.logprobs")
@@ -1037,6 +1034,10 @@ func (m *ResponsesModel) buildResponsesPayload(
 		req.Text = &responsesText{Format: responsesTextFormat{
 			Type: "json_schema", Name: "final_result", Schema: schema, Strict: strictFlag,
 		}}
+	}
+	keepImplicitCacheWithoutBreakpoints(&promptCache.Options, responsesHasPromptCacheBreakpoint(req.Input))
+	if req.PromptCacheOptions != nil && promptCache.Options != nil {
+		req.PromptCacheOptions.PromptCacheOptions = *promptCache.Options
 	}
 	return req, nil
 }

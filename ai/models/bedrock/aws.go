@@ -13,10 +13,24 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
+// DataRetentionHint explains the Bedrock account setting that models which
+// require human review, such as Claude Fable 5 and 5.1, need in order to
+// accept Anthropic's default data-retention mode. Cited when an AWS error
+// message references the data retention mode of the account.
+const DataRetentionHint = "Bedrock rejected this model under the account's data retention mode for this Region. " +
+	"Models that require human review, such as Claude Fable 5 and 5.1, need the account's data retention mode " +
+	"set to `aws_review` (or the legacy `provider_data_share`) with the Bedrock control plane's " +
+	"`PutAccountDataRetention` API, as it cannot be set per request. " +
+	"See https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html"
+
 // APIError reports an HTTP error returned by Bedrock Runtime.
 type APIError struct {
 	// StatusCode is the Bedrock HTTP response status.
 	StatusCode int
+	// Hint is an optional guidance line appended to Error when the AWS error
+	// message references a recoverable account setting, currently the data
+	// retention mode used by Claude Fable 5 and 5.1.
+	Hint string
 	// Err is the AWS SDK operation failure.
 	Err error
 }
@@ -26,7 +40,11 @@ func (err *APIError) Error() string {
 	if err.Err == nil {
 		return "bedrock: API request failed"
 	}
-	return "bedrock: " + err.Err.Error()
+	msg := "bedrock: " + err.Err.Error()
+	if err.Hint != "" {
+		msg += " " + err.Hint
+	}
+	return msg
 }
 
 // Unwrap returns the AWS SDK operation failure.
@@ -38,9 +56,23 @@ func (*APIError) IsModelAPIError() bool { return true }
 func modelError(ctx context.Context, model *Model, operation string, err error) error {
 	var responseError *smithyhttp.ResponseError
 	if errors.As(err, &responseError) {
-		return &APIError{StatusCode: responseError.HTTPStatusCode(), Err: err}
+		apiErr := &APIError{StatusCode: responseError.HTTPStatusCode(), Err: err}
+		if isDataRetentionError(err) {
+			apiErr.Hint = DataRetentionHint
+		}
+		return apiErr
 	}
 	return ai.NewModelTransportError(ctx, model, operation, err)
+}
+
+// isDataRetentionError reports whether the Bedrock error message references
+// the account's data retention mode. The Bedrock SDK formats the runtime
+// error message into `err.Error()` so a substring match is sufficient.
+func isDataRetentionError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "data retention mode")
 }
 
 func requestOptions(headers map[string]string) func(*bedrockruntime.Options) {

@@ -53,6 +53,8 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `e6eee68add2178c45d0e5603ae57f52b248d0d7d` | Generic System One questions when options provide the meaning but instructions are absent; `systemone.Profile.RequiresInstructions` can explicitly disable the fallback |
 | `5855737715205bafee933f842b413f7cb483ffa1` | Indexed keyword tool-search corpus, invalidated by names, descriptions, membership, and order; concurrency-safe ranking preserves undiscovered-first and corpus-order ties |
 | `5274216031eeceef1523d78e835c34410e13b376` | Portable `ModelSettings.Cache`, `CacheConfig`, and `Caching`; provider-local precedence, retention snapping, stable-prefix-only caching, wide-turn boundaries, honored-tier outlook, and missing-configuration telemetry |
+| `4e9d555f7` | Anthropic and Bedrock raise each catchment-breakpoint TTL to the longest TTL of a breakpoint after it (`promptcache.RaiseEarlierCacheTTLs`) |
+| `be23a9774` | Bedrock `APIError.Hint` appended to the error message when the AWS response references the account's data retention mode |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 

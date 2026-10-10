@@ -3,12 +3,14 @@ package anthropic_test
 import (
 	"encoding/json"
 	"net/http"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
 	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
 )
 
@@ -119,5 +121,43 @@ func TestLegacyBedrockUnifiedCacheWideTurn(t *testing.T) {
 		if _, err := model.Request(t.Context(), messages[:1], params); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+// TestPromptCacheHelperDriveRaiseEarlierCacheTTLs exercises the cache-TTL
+// ordering helper once per path so the model-side coverage script picks it
+// up. Anthropic rejects a request where a 1h cache breakpoint comes after a
+// 5m one; the helper walks breakpoints right-to-left and raises any earlier
+// cache point to the longest TTL on the right.
+func TestPromptCacheHelperDriveRaiseEarlierCacheTTLs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []promptcache.CacheTTL
+		want []promptcache.CacheTTL
+	}{
+		{name: "all five minutes", in: []promptcache.CacheTTL{
+			promptcache.CacheTTL5Minutes, promptcache.CacheTTL5Minutes, promptcache.CacheTTL5Minutes,
+		}, want: []promptcache.CacheTTL{
+			promptcache.CacheTTL5Minutes, promptcache.CacheTTL5Minutes, promptcache.CacheTTL5Minutes,
+		}},
+		{name: "trailing hour raises every earlier breakpoint", in: []promptcache.CacheTTL{
+			promptcache.CacheTTL5Minutes, promptcache.CacheTTL5Minutes, promptcache.CacheTTL1Hour,
+		}, want: []promptcache.CacheTTL{
+			promptcache.CacheTTL1Hour, promptcache.CacheTTL1Hour, promptcache.CacheTTL1Hour,
+		}},
+		{name: "leading hour unchanged", in: []promptcache.CacheTTL{
+			promptcache.CacheTTL1Hour, promptcache.CacheTTL5Minutes, promptcache.CacheTTL5Minutes,
+		}, want: []promptcache.CacheTTL{
+			promptcache.CacheTTL1Hour, promptcache.CacheTTL5Minutes, promptcache.CacheTTL5Minutes,
+		}},
+		{name: "empty", in: nil, want: nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := promptcache.RaiseEarlierCacheTTLs(tc.in)
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("RaiseEarlierCacheTTLs(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
 	}
 }

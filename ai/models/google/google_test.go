@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -852,6 +853,107 @@ func TestGoogleWebSearchGroundingMetadata(t *testing.T) {
 	}
 }
 
+func TestGoogleExplicitWebSearchSources(t *testing.T) {
+	grounding := `"groundingMetadata":{"webSearchQueries":["Go news"],"groundingChunks":[{"web":{"uri":"https://go.dev/blog","title":"Go Blog"}}]}`
+	responses := []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[
+			{"toolCall":{"id":"first","toolType":"GOOGLE_SEARCH_WEB","args":{"queries":["Go"]}}},
+			{"toolResponse":{"id":"first","toolType":"GOOGLE_SEARCH_WEB","response":{"search_suggestions":"<a>"}}},
+			{"thoughtSignature":"call","toolCall":{"id":"search","toolType":"GOOGLE_SEARCH_WEB","args":{"queries":["Go news"]}}},
+			{"thoughtSignature":"return","toolResponse":{"id":"search","toolType":"GOOGLE_SEARCH_WEB","response":{"search_suggestions":"<style>"}}},
+			{"text":"answer"}
+		]},` + grounding + `}]}`,
+		`{"candidates":[{"content":{"parts":[{"text":"next"}]}}]}`,
+		`{"candidates":[{"content":{"parts":[
+			{"toolCall":{"id":"search","toolType":"GOOGLE_SEARCH_WEB","args":{}}},
+			{"toolResponse":{"id":"search","toolType":"GOOGLE_SEARCH_WEB"}}
+		]},"groundingMetadata":{"webSearchQueries":["Go"]}}]}`,
+		`{"candidates":[{"content":{"parts":[
+			{"toolCall":{"id":"search","toolType":"GOOGLE_SEARCH_WEB","args":{}}},
+			{"toolResponse":{"id":"search","toolType":"GOOGLE_SEARCH_WEB"}}
+		]},` + grounding + `}]}`,
+	}
+	var body map[string]any
+	model := newNamedServer(t, "gemini-3-flash", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(responses[0]))
+		responses = responses[1:]
+	})
+	params := ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}}
+	response, err := model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := response.Parts[1].(ai.NativeToolReturnPart).Content.(map[string]any)
+	returned := response.Parts[3].(ai.NativeToolReturnPart)
+	content := returned.Content.(map[string]any)
+	sources := content["sources"].([]map[string]any)
+	if len(response.Parts) != 5 || first["sources"] != nil || returned.ToolCallID != "search" ||
+		content["search_suggestions"] != "<style>" || sources[0]["title"] != "Go Blog" ||
+		response.ProviderDetails["grounding_metadata"] == nil {
+		t.Fatalf("unexpected explicit search parts: %#v", response.Parts)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, params); err != nil {
+		t.Fatal(err)
+	}
+	parts := body["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	replayed := parts[3].(map[string]any)
+	toolResponse := replayed["toolResponse"].(map[string]any)
+	if replayed["thoughtSignature"] != "return" || toolResponse["id"] != "search" ||
+		!reflect.DeepEqual(toolResponse["response"], map[string]any{"search_suggestions": "<style>"}) {
+		t.Fatalf("explicit search replay changed the provider payload: %#v", replayed)
+	}
+	if content["sources"] == nil {
+		t.Fatal("replay mutated the history")
+	}
+	response, err = model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 2 || response.Parts[1].(ai.NativeToolReturnPart).Content != nil {
+		t.Fatalf("search without grounding chunks invented sources: %#v", response.Parts)
+	}
+	response, err = model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sources := response.Parts[1].(ai.NativeToolReturnPart).Content.(map[string]any)["sources"].([]map[string]any); len(sources) != 1 {
+		t.Fatalf("empty search response did not receive sources: %#v", response.Parts)
+	}
+}
+
+func TestGoogleLegacyWebSearchReplay(t *testing.T) {
+	responses := []string{
+		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"answer"}]},"groundingMetadata":{"webSearchQueries":["Go"],"groundingChunks":[{"web":{"uri":"https://go.dev","title":"Go"}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"text":"next"}]}}]}`,
+	}
+	var body map[string]any
+	model := newNamedServer(t, "gemini-3-flash", func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(responses[0]))
+		responses = responses[1:]
+	})
+	params := ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}}
+	response, err := model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 3 {
+		t.Fatalf("reconstructed search parts missing from history: %#v", response.Parts)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, params); err != nil {
+		t.Fatal(err)
+	}
+	parts := body["contents"].([]any)[0].(map[string]any)["parts"].([]any)
+	if len(parts) != 1 || parts[0].(map[string]any)["text"] != "answer" {
+		t.Fatalf("reconstructed search parts were replayed: %#v", parts)
+	}
+}
+
 func TestGoogleWebFetchURLContextMetadata(t *testing.T) {
 	responses := []string{
 		`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"answer"}]},"urlContextMetadata":{"urlMetadata":[1,{"retrievedUrl":"https://go.dev","urlRetrievalStatus":"URL_RETRIEVAL_STATUS_SUCCESS"},{"urlRetrievalStatus":"URL_RETRIEVAL_STATUS_ERROR"}]}}]}`,
@@ -941,9 +1043,8 @@ func TestGoogleFileSearchGroundingMetadata(t *testing.T) {
 		t.Fatal(err)
 	}
 	parts := body["contents"].([]any)[0].(map[string]any)["parts"].([]any)
-	if parts[0].(map[string]any)["toolCall"].(map[string]any)["toolType"] != "FILE_SEARCH" ||
-		parts[1].(map[string]any)["toolResponse"].(map[string]any)["toolType"] != "FILE_SEARCH" {
-		t.Fatalf("unexpected file search replay: %#v", parts)
+	if len(parts) != 1 || parts[0].(map[string]any)["text"] != "Paris" {
+		t.Fatalf("reconstructed file search was replayed: %#v", parts)
 	}
 	if response, err = model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
 		ai.FileSearchTool{FileStoreIDs: []string{"fileSearchStores/store"}},

@@ -73,6 +73,64 @@ Providers support different subsets of these fields. OpenAI Responses sends cont
 
 Gemini 3 can combine provider-native tools with function tools. Earlier Gemini models reject that combination before the HTTP request. Grounded Gemini responses retain complete `grounding_metadata` provider details while exposing search queries and returned web sources through normalized native-tool parts.
 
+### Read Gemini search sources
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/google"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		google.NewModel("gemini-3-flash"),
+		ai.WithNativeTools(ai.WebSearchTool{}),
+	)
+
+	result, err := agent.Run(context.Background(), "What changed in the latest Go release?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, message := range result.NewMessages() {
+		response, ok := message.(ai.ModelResponse)
+		if !ok {
+			continue
+		}
+		for _, part := range response.Parts {
+			returned, ok := part.(ai.NativeToolReturnPart)
+			if !ok || returned.ToolKind != ai.ToolPartKindWebSearch {
+				continue
+			}
+			switch content := returned.Content.(type) {
+			case map[string]any:
+				fmt.Println(content["sources"])
+			case []map[string]any:
+				fmt.Println(content)
+			}
+		}
+	}
+}
+```
+
+Each source is a grounding chunk's `web` object, such as `{"title": "go.dev", "uri": "https://..."}`. Where it lives depends on how Gemini reported the search:
+
+| Response | Search parts | Return content |
+| --- | --- | --- |
+| Gemini 3 explicit `toolCall` and `toolResponse` | Gemini's parts, with its IDs and thought signatures | Gemini's `toolResponse` object, such as `search_suggestions`, plus `sources` |
+| Grounding metadata only | Reconstructed with IDs such as `<response-id>:web_search` | The list of sources |
+
+Grounding metadata covers the whole response and does not say which search found which source, so only the last search return gets `sources`. A response without grounding chunks gets no `sources` key.
+
+Replay keeps the provider's tool history intact. A Gemini 3 search return goes back as the original `toolResponse` payload, ID, and thought signature, without `sources`. Parts reconstructed from grounding or URL context metadata stay in your history but are not sent back, because Gemini rejects tool IDs it did not issue.
+
+When streaming, Gemini sends grounding metadata with the final chunk, after the answer it grounds. Reconstructed search parts and the last explicit search return arrive at the end of the stream, so search events never interrupt the answer text.
+
 A required native tool fails before the provider request when the selected model adapter cannot render it. This prevents silent behavior changes. Set `Optional` only when your application has another valid path.
 
 ## Provide a local fallback
@@ -331,7 +389,7 @@ func main() {
 
 `FileSearchTool` references managed vector stores. OpenAI Responses sends `FileStoreIDs` as vector-store IDs. `WithResponsesFileSearchResults` requests the matched chunks in each normalized `NativeToolReturnPart`; leave it disabled when you only need the model's answer.
 
-Google sends the same IDs as Gemini file-search store names. Older Gemini responses are reconstructed from executable queries and grounding contexts. Gemini 3 responses preserve explicit provider call IDs and fill empty tool responses from later grounding metadata. Same-provider histories replay through Google `toolCall` and `toolResponse` parts.
+Google sends the same IDs as Gemini file-search store names. Older Gemini responses are reconstructed from executable queries and grounding contexts. Gemini 3 responses preserve explicit provider call IDs and fill empty tool responses from later grounding metadata. Same-provider histories replay explicit Gemini 3 parts through Google `toolCall` and `toolResponse` parts. Parts reconstructed from grounding metadata stay in history but are not replayed.
 
 `MaxNumResults`, `Instructions`, and `RetrievalMode` are portable fields reserved for providers that expose those controls. OpenAI and Google ignore them. xAI collections-search rendering remains provider-parity work.
 

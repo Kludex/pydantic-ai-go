@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"slices"
@@ -981,7 +982,7 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 			})
 		case ai.NativeToolCallPart:
 			toolType := googleNativeToolType(rp.ToolKind)
-			if rp.ProviderName != model.providerName || toolType == "" {
+			if rp.ProviderName != model.providerName || toolType == "" || googleReconstructedID(rp.ToolName, rp.ToolCallID) {
 				continue
 			}
 			args := map[string]any{}
@@ -996,11 +997,17 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 			})
 		case ai.NativeToolReturnPart:
 			toolType := googleNativeToolType(rp.ToolKind)
-			if rp.ProviderName != model.providerName || toolType == "" {
+			if rp.ProviderName != model.providerName || toolType == "" || googleReconstructedID(rp.ToolName, rp.ToolCallID) {
 				continue
 			}
+			response := rp.Content
+			if result, ok := response.(map[string]any); ok && rp.ToolKind == ai.ToolPartKindWebSearch {
+				result = maps.Clone(result)
+				delete(result, "sources")
+				response = result
+			}
 			parts = append(parts, part{
-				ToolResponse:     &googleToolResponse{ID: rp.ToolCallID, ToolType: toolType, Response: rp.Content},
+				ToolResponse:     &googleToolResponse{ID: rp.ToolCallID, ToolType: toolType, Response: response},
 				ThoughtSignature: model.googleThoughtSignature(rp.ProviderName, rp.ProviderDetails),
 			})
 		case ai.ToolCallPart:
@@ -1017,6 +1024,26 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]content, error) {
 		}
 	}
 	return []content{{Role: "model", Parts: parts}}, nil
+}
+
+// Gemini rejects the IDs the adapter invents when it reconstructs native tool parts from grounding metadata.
+func googleReconstructedID(toolName, id string) bool {
+	return id == toolName || strings.HasSuffix(id, ":"+toolName)
+}
+
+// googleWebSearchResult adds the grounding sources to Gemini's search response. Replay removes them again.
+func googleWebSearchResult(response any, metadata map[string]any) any {
+	sources := googleWebSearchSources(metadata)
+	if len(sources) == 0 {
+		return response
+	}
+	raw, _ := response.(map[string]any)
+	result := maps.Clone(raw)
+	if result == nil {
+		result = map[string]any{}
+	}
+	result["sources"] = sources
+	return result
 }
 
 func googleNativeToolType(kind ai.ToolPartKind) string {
@@ -1392,6 +1419,27 @@ func googleFileSearchParts(
 	return call, result
 }
 
+// googleServerCalls pairs Gemini tool responses with their calls, oldest first per kind, because Gemini can omit IDs.
+type googleServerCalls map[ai.ToolPartKind][]string
+
+func (calls googleServerCalls) add(kind ai.ToolPartKind, id string) {
+	calls[kind] = append(calls[kind], id)
+}
+
+func (calls googleServerCalls) pair(kind ai.ToolPartKind, id string) string {
+	pending := calls[kind]
+	index := 0
+	if id != "" {
+		index = slices.Index(pending, id)
+	}
+	if index < 0 || len(pending) == 0 {
+		return id
+	}
+	id = pending[index]
+	calls[kind] = slices.Delete(pending, index, index+1)
+	return id
+}
+
 func googleNativeCallID(id, responseID, toolType string, index int) string {
 	if id != "" {
 		return id
@@ -1523,8 +1571,9 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 		}
 	}
 	lastCodeCallID := ""
-	lastServerCallIDs := map[ai.ToolPartKind]string{}
+	serverCalls := googleServerCalls{}
 	mediaCallWithoutID := -1
+	lastWebSearchReturn := -1
 	for index, p := range gr.Candidates[0].Content.Parts {
 		partProviderName, providerDetails := googlePartMetadata(p.ThoughtSignature, providerName)
 		switch {
@@ -1576,6 +1625,7 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 			callID := googleNativeCallID(p.ToolCall.ID, gr.ResponseID, googleToolType(name, p.ToolCall.ToolType), index)
 			args, _ := json.Marshal(p.ToolCall.Args)
 			if name == googleMediaProcessingToolName {
+				delete(serverCalls, kind)
 				mediaCallWithoutID = -1
 				if p.ToolCall.ID == "" {
 					mediaCallWithoutID = len(resp.Parts)
@@ -1585,22 +1635,20 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 				ToolName: name, Args: args, ToolCallID: callID, ToolKind: kind,
 				ProviderName: providerName, ProviderDetails: providerDetails,
 			})
-			lastServerCallIDs[kind] = callID
+			serverCalls.add(kind, callID)
 		case p.ToolResponse != nil:
 			name, kind, ok := googleNativeToolIdentity(p.ToolResponse.ToolType, p.ToolResponse.Response)
 			if !ok {
 				return nil, fmt.Errorf("google: unknown native tool type %q", p.ToolResponse.ToolType)
 			}
-			callID := p.ToolResponse.ID
-			if callID == "" {
-				callID = lastServerCallIDs[kind]
-			} else if name == googleMediaProcessingToolName && mediaCallWithoutID >= 0 {
+			callID := serverCalls.pair(kind, p.ToolResponse.ID)
+			if p.ToolResponse.ID != "" && name == googleMediaProcessingToolName && mediaCallWithoutID >= 0 {
 				call := resp.Parts[mediaCallWithoutID].(ai.NativeToolCallPart)
 				call.ToolCallID = callID
 				resp.Parts[mediaCallWithoutID] = call
 			}
 			if name == googleMediaProcessingToolName {
-				delete(lastServerCallIDs, kind)
+				delete(serverCalls, kind)
 				mediaCallWithoutID = -1
 			}
 			callID = googleNativeCallID(callID, gr.ResponseID, googleToolType(name, p.ToolResponse.ToolType), index)
@@ -1609,6 +1657,9 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 				if contexts := googleFileSearchContexts(gr.Candidates[0].GroundingMetadata); len(contexts) > 0 {
 					response = contexts
 				}
+			}
+			if kind == ai.ToolPartKindWebSearch {
+				lastWebSearchReturn = len(resp.Parts)
 			}
 			resp.Parts = append(resp.Parts, ai.NativeToolReturnPart{
 				ToolName: name, ToolCallID: callID, ToolKind: kind, Content: response,
@@ -1641,6 +1692,11 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 				Content: p.Text, ProviderName: partProviderName, ProviderDetails: providerDetails,
 			})
 		}
+	}
+	if lastWebSearchReturn >= 0 {
+		returned := resp.Parts[lastWebSearchReturn].(ai.NativeToolReturnPart)
+		returned.Content = googleWebSearchResult(returned.Content, gr.Candidates[0].GroundingMetadata)
+		resp.Parts[lastWebSearchReturn] = returned
 	}
 	return resp, nil
 }

@@ -41,11 +41,7 @@ func TestFirstRunBanner(t *testing.T) {
 	oldArgs := os.Args
 	os.Args = []string{"banner-app"}
 	t.Cleanup(func() { os.Args = oldArgs })
-	for _, name := range []string{
-		"CI", "PYDANTIC_AI_NO_BANNER", "FORCE_COLOR", "NO_COLOR", "AI_AGENT", "AGENT", "PI_CODING_AGENT",
-	} {
-		unsetenv(t, name)
-	}
+	clearenv(t)
 
 	probe := ai.NewAgent[struct{}, string](fakes.NewTestModel())
 	suppressed := &bytes.Buffer{}
@@ -183,6 +179,20 @@ func TestFirstRunBanner(t *testing.T) {
 			t.Fatalf("banner line exceeds 100 columns: %q", line)
 		}
 	}
+}
+
+// clearenv keeps a coding agent running the tests from changing which banner paths run.
+func clearenv(t *testing.T) {
+	t.Helper()
+	environment := os.Environ()
+	os.Clearenv()
+	t.Cleanup(func() {
+		os.Clearenv()
+		for _, entry := range environment {
+			name, value, _ := strings.Cut(entry, "=")
+			_ = os.Setenv(name, value)
+		}
+	})
 }
 
 func unsetenv(t *testing.T, name string) {

@@ -7,6 +7,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -488,23 +489,34 @@ func TestGoogleStreamWebFetchConsumerBreak(t *testing.T) {
 }
 
 func TestGoogleStreamWebSearchConsumerBreak(t *testing.T) {
-	model := newServer(t, googleSSE(t, []string{
-		`{"responseId":"response","candidates":[{"groundingMetadata":{"webSearchQueries":["query"]}}]}`,
-	}))
-	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	seen := 0
-	for _, err := range stream {
-		if err != nil {
-			t.Fatal(err)
+	legacy := `{"responseId":"response","candidates":[{"groundingMetadata":{"webSearchQueries":["query"]}}]}`
+	explicit := `{"candidates":[{"content":{"parts":[{"toolCall":{"id":"a","toolType":"GOOGLE_SEARCH_WEB","args":{}}},{"toolResponse":{"id":"a","toolType":"GOOGLE_SEARCH_WEB","response":{}}},{"toolCall":{"id":"b","toolType":"GOOGLE_SEARCH_WEB","args":{}}},{"toolResponse":{"id":"b","toolType":"GOOGLE_SEARCH_WEB","response":{}}}]}}]}`
+	for name, test := range map[string]struct {
+		chunk  string
+		events int
+	}{"legacy": {legacy, 3}, "explicit": {explicit, 6}} {
+		for breakAfter := 1; breakAfter <= test.events; breakAfter++ {
+			t.Run(fmt.Sprintf("%s event %d", name, breakAfter), func(t *testing.T) {
+				stream, err := newServer(t, googleSSE(t, []string{test.chunk})).
+					StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen := 0
+				for _, err := range stream {
+					if err != nil {
+						t.Fatal(err)
+					}
+					seen++
+					if seen == breakAfter {
+						break
+					}
+				}
+				if seen != breakAfter {
+					t.Fatalf("stream yielded %d events before break", seen)
+				}
+			})
 		}
-		seen++
-		break
-	}
-	if seen != 1 {
-		t.Fatalf("stream yielded %d events before break", seen)
 	}
 }
 
@@ -1016,6 +1028,168 @@ func TestGoogleStreamLongDecodeResumption(t *testing.T) {
 			response, err := streamGoogleLongDecode(t, model)
 			if !test.check(response, err) || fmt.Sprint(*tokens) != test.tokens {
 				t.Fatalf("unexpected result: %+v %v tokens=%v", response, err, *tokens)
+			}
+		})
+	}
+}
+
+func TestGoogleNativeToolReturnsPairWithCalls(t *testing.T) {
+	parts := []string{
+		`{"toolCall":{"toolType":"GOOGLE_SEARCH_WEB","args":{"queries":["a"]}}},{"toolCall":{"toolType":"URL_CONTEXT","args":{}}}`,
+		`{"toolCall":{"toolType":"GOOGLE_SEARCH_WEB","args":{"queries":["b"]}}}`,
+		`{"toolResponse":{"toolType":"GOOGLE_SEARCH_WEB","response":{"n":"a"}}},{"toolResponse":{"toolType":"URL_CONTEXT","response":{}}}`,
+		`{"toolResponse":{"toolType":"GOOGLE_SEARCH_WEB","response":{"n":"b"}}}`,
+		`{"toolCall":{"id":"c","toolType":"GOOGLE_SEARCH_WEB","args":{}}},{"toolResponse":{"id":"c","toolType":"GOOGLE_SEARCH_WEB","response":{}}}`,
+	}
+	for responseID, prefix := range map[string]string{`"responseId":"response",`: "response:", "": ""} {
+		want := []string{
+			prefix + "google_search_web:0", prefix + "url_context:1", prefix + "google_search_web:2",
+			prefix + "google_search_web:0", prefix + "url_context:1", prefix + "google_search_web:2", "c", "c",
+		}
+		slices.Sort(want)
+		check := func(t *testing.T, response *ai.ModelResponse) {
+			t.Helper()
+			var got []string
+			for _, part := range response.Parts {
+				switch part := part.(type) {
+				case ai.NativeToolCallPart:
+					got = append(got, part.ToolCallID)
+				case ai.NativeToolReturnPart:
+					got = append(got, part.ToolCallID)
+				}
+			}
+			slices.Sort(got)
+			if !slices.Equal(got, want) {
+				t.Fatalf("native tool IDs = %v, want %v", got, want)
+			}
+		}
+		t.Run("request "+prefix, func(t *testing.T) {
+			model := newNamedServer(t, "gemini-3", func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(w, `{%s"candidates":[{"content":{"parts":[%s]}}]}`, responseID, strings.Join(parts, ","))
+			})
+			response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(t, response)
+		})
+		t.Run("stream "+prefix, func(t *testing.T) {
+			chunks := make([]string, len(parts))
+			for index, part := range parts {
+				chunks[index] = fmt.Sprintf(`{%s"candidates":[{"content":{"parts":[%s]}}]}`, responseID, part)
+			}
+			stream, err := newNamedServer(t, "gemini-3", googleSSE(t, chunks)).
+				StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var callIDs []string
+			response, err := ai.CollectModelStream(func(yield func(ai.ModelStreamEvent, error) bool) {
+				for event, err := range stream {
+					switch event := event.(type) {
+					case ai.ToolCallStartEvent:
+						callIDs = append(callIDs, event.ToolCallID)
+					case ai.NativeToolReturnEvent:
+						if !slices.Contains(callIDs, event.Part.ToolCallID) {
+							t.Errorf("return %q does not match a streamed call: %v", event.Part.ToolCallID, callIDs)
+						}
+					}
+					if !yield(event, err) {
+						return
+					}
+				}
+			}, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			check(t, response)
+		})
+	}
+}
+
+func TestGoogleStreamWebSearchAfterText(t *testing.T) {
+	grounding := `"groundingMetadata":{"webSearchQueries":["Go"],"groundingChunks":[{"web":{"uri":"https://go.dev","title":"Go"}}]}`
+	tests := map[string]struct {
+		chunks  []string
+		returns int
+		content func(any) bool
+	}{
+		"legacy": {
+			chunks: []string{
+				`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"Go "}]}}]}`,
+				`{"responseId":"response","candidates":[{"content":{"parts":[{"text":"news"}]},` + grounding + `}]}`,
+			},
+			returns: 1,
+			content: func(content any) bool { return content.([]map[string]any)[0]["title"] == "Go" },
+		},
+		"explicit": {
+			chunks: []string{
+				`{"candidates":[{"content":{"parts":[{"toolCall":{"id":"first","toolType":"GOOGLE_SEARCH_WEB","args":{}}},{"toolResponse":{"id":"first","toolType":"GOOGLE_SEARCH_WEB","response":{"n":1}}},{"toolCall":{"id":"search","toolType":"GOOGLE_SEARCH_WEB","args":{}}},{"thoughtSignature":"return","toolResponse":{"id":"search","toolType":"GOOGLE_SEARCH_WEB","response":{"search_suggestions":"<style>"}}}]}}]}`,
+				`{"candidates":[{"content":{"parts":[{"text":"Go "}]}}]}`,
+				`{"candidates":[{"content":{"parts":[{"text":"news"}]},` + grounding + `}]}`,
+			},
+			returns: 2,
+			content: func(content any) bool {
+				result := content.(map[string]any)
+				return result["search_suggestions"] == "<style>" && result["sources"].([]map[string]any)[0]["uri"] == "https://go.dev"
+			},
+		},
+		"explicit without grounding": {
+			chunks: []string{
+				`{"candidates":[{"content":{"parts":[{"toolCall":{"id":"search","toolType":"GOOGLE_SEARCH_WEB","args":{}}},{"toolResponse":{"id":"search","toolType":"GOOGLE_SEARCH_WEB","response":{"search_suggestions":"<style>"}}}]}}]}`,
+				`{"candidates":[{"content":{"parts":[{"text":"Go news"}]},"groundingMetadata":{"webSearchQueries":["Go"]}}]}`,
+			},
+			returns: 1,
+			content: func(content any) bool {
+				return reflect.DeepEqual(content, map[string]any{"search_suggestions": "<style>"})
+			},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			stream, err := newNamedServer(t, "gemini-3-flash", googleSSE(t, test.chunks)).
+				StreamRequest(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			toolStarted := false
+			response, err := ai.CollectModelStream(func(yield func(ai.ModelStreamEvent, error) bool) {
+				for event, err := range stream {
+					switch event.(type) {
+					case ai.ToolCallStartEvent:
+						toolStarted = name == "legacy"
+					case ai.TextDeltaEvent:
+						if toolStarted {
+							t.Errorf("answer text followed a search event: %#v", event)
+						}
+					}
+					if !yield(event, err) {
+						return
+					}
+				}
+			}, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var text string
+			var returns []ai.NativeToolReturnPart
+			for _, part := range response.Parts {
+				switch part := part.(type) {
+				case ai.TextPart:
+					text += part.Content
+				case ai.NativeToolReturnPart:
+					returns = append(returns, part)
+				}
+			}
+			last := returns[len(returns)-1]
+			if text != "Go news" || len(returns) != test.returns || !test.content(last.Content) || response.ProviderDetails["grounding_metadata"] == nil {
+				t.Fatalf("unexpected streamed search: %#v", response.Parts)
+			}
+			if len(returns) > 1 && !reflect.DeepEqual(returns[0].Content, map[string]any{"n": float64(1)}) {
+				t.Fatalf("an earlier search return received the sources: %#v", returns[0])
+			}
+			if _, ok := response.Parts[len(response.Parts)-1].(ai.NativeToolReturnPart); !ok {
+				t.Fatalf("search return arrived before the grounded answer: %#v", response.Parts)
 			}
 		})
 	}

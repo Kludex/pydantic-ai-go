@@ -78,7 +78,6 @@ func (m *Model) eventStream(
 		finishReason := ""
 		trafficType := ""
 		responseTimestamp := time.Now().UTC()
-		webSearchEmitted := false
 		var logprobs map[string]any
 		var avgLogprobs *float64
 		blockReason := ""
@@ -91,7 +90,9 @@ func (m *Model) eventStream(
 		explicitNativeTools := false
 		lastCodeCallID := ""
 		lastFileSearchCallID := ""
+		serverCalls := googleServerCalls{}
 		var pendingFileSearchReturns []ai.NativeToolReturnPart
+		var pendingWebSearchReturn *ai.NativeToolReturnPart
 		codeCallIndex := 0
 		fileSearchIndex := 0
 		fileIndex := 0
@@ -170,17 +171,6 @@ func (m *Model) eventStream(
 					break
 				}
 			}
-			if !explicitNativeTools && !webSearchEmitted {
-				call, returned := googleWebSearchParts(
-					chunk.Candidates[0].GroundingMetadata, responseID, m.providerName, responseTimestamp,
-				)
-				if call != nil {
-					if !emitGoogleNativeTool(yield, call, returned) {
-						return
-					}
-					webSearchEmitted = true
-				}
-			}
 			if !explicitNativeTools && !webFetchEmitted {
 				call, returned := googleWebFetchParts(
 					chunk.Candidates[0].URLContextMetadata, responseID, m.providerName, responseTimestamp,
@@ -234,6 +224,7 @@ func (m *Model) eventStream(
 					if !emitGoogleNativeCall(yield, &call) {
 						return
 					}
+					serverCalls.add(kind, callID)
 					if kind == ai.ToolPartKindFileSearch {
 						lastFileSearchCallID = callID
 					}
@@ -244,10 +235,7 @@ func (m *Model) eventStream(
 						return
 					}
 					callID := part.ToolResponse.ID
-					switch {
-					case callID == "" && kind == ai.ToolPartKindFileSearch && lastFileSearchCallID != "":
-						callID = lastFileSearchCallID
-					case name == googleMediaProcessingToolName:
+					if name == googleMediaProcessingToolName {
 						if callID == "" {
 							callID = mediaCallID
 						}
@@ -256,8 +244,10 @@ func (m *Model) eventStream(
 						if !fillMediaCall(callID) {
 							return
 						}
-					default:
-						callID = googleNativeCallID(callID, responseID, part.ToolResponse.ToolType, fileSearchIndex)
+					} else {
+						callID = googleNativeCallID(
+							serverCalls.pair(kind, callID), responseID, part.ToolResponse.ToolType, fileSearchIndex,
+						)
 					}
 					_, providerDetails := googlePartMetadata(part.ThoughtSignature, m.providerName)
 					returned := ai.NativeToolReturnPart{
@@ -266,6 +256,16 @@ func (m *Model) eventStream(
 					}
 					if kind == ai.ToolPartKindFileSearch && returned.Content == nil {
 						pendingFileSearchReturns = append(pendingFileSearchReturns, returned)
+						continue
+					}
+					if kind == ai.ToolPartKindWebSearch {
+						// Only the last search return gets the sources, which arrive with the final chunk.
+						if pendingWebSearchReturn != nil && !yield(ai.NativeToolReturnEvent{
+							PartID: "return:" + pendingWebSearchReturn.ToolCallID, Part: *pendingWebSearchReturn,
+						}, nil) {
+							return
+						}
+						pendingWebSearchReturn = &returned
 						continue
 					}
 					if !yield(ai.NativeToolReturnEvent{PartID: "return:" + callID, Part: returned}, nil) {
@@ -394,6 +394,21 @@ func (m *Model) eventStream(
 			if !yield(ai.NativeToolReturnEvent{
 				PartID: "return:" + pending.ToolCallID, Part: pending,
 			}, nil) {
+				return
+			}
+		}
+		if pendingWebSearchReturn != nil {
+			pendingWebSearchReturn.Content = googleWebSearchResult(pendingWebSearchReturn.Content, groundingMetadata)
+			if !yield(ai.NativeToolReturnEvent{
+				PartID: "return:" + pendingWebSearchReturn.ToolCallID, Part: *pendingWebSearchReturn,
+			}, nil) {
+				return
+			}
+		}
+		if !explicitNativeTools {
+			// Gemini sends search grounding after the text it grounds, so the search parts follow the answer.
+			call, returned := googleWebSearchParts(groundingMetadata, responseID, m.providerName, responseTimestamp)
+			if call != nil && !emitGoogleNativeTool(yield, call, returned) {
 				return
 			}
 		}

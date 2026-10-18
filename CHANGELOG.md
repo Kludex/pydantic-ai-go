@@ -63,6 +63,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Repair repeated tool-call IDs within one response first in, first out.
 - Keep OpenAI Responses tool-call arguments that arrive only in, or disagree with, `done` events.
 - Treat media types with parameters, such as `text/plain; charset=utf-8`, as text-like.
+- Pair Gemini native tool returns without IDs with their calls, first in, first out per tool kind, in both static and streamed responses.
+- Add grounding `sources` to the last Gemini 3 Google Search return while replaying Gemini's original `toolResponse`, stop replaying search, URL context, and file search parts reconstructed from metadata, and stream reconstructed search parts after the answer they ground.
 - Persist extensionless file URLs with a `null` media type instead of failing.
 
 ## [0.5.0] - 2026-10-08

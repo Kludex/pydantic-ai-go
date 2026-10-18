@@ -163,6 +163,8 @@ func main() {
 
 Consume one stream view only. Use `Events` for lifecycle events or `Outputs` for typed partial output snapshots. Cancel the context to stop the request.
 
+`RunStream` ends the run at the first output that matches the output type, so your consumer gets the final answer as soon as it starts. That output can be text, an output tool call, or a deferred tool call. When the same response also calls function tools, they still run, but their results are not sent back to the model. To run to completion while observing every event, register a listener with `AddEventListener` and call `Run`, or drive the run step by step with `StartRun`.
+
 ## Continue a conversation
 
 Pass the previous result's messages into the next run:

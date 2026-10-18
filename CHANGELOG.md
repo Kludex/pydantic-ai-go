@@ -51,6 +51,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Fixed
 
+- Document that `RunStream` ends the run at the first matching output, and how to run to completion while observing events.
+- Keep the first-run banner tests independent of coding-agent environment variables.
 - Replay Gemini tool-call thought signatures (`extra_content`) through OpenAI-compatible Chat Completions, and backfill an empty thinking field on current-turn tool calls.
 - Attach a leading OpenRouter `CachePoint` to the previous user message instead of failing.
 - Accept a `CachePoint` after a replayed Anthropic MCP tool result.

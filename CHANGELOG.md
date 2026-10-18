@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-18
+
 ### Added
 
 - Meta Muse models through `ai/models/meta` (`NewModel` on the Responses API, `NewChatModel` on Chat Completions) and the `meta:` inference prefix.
@@ -30,7 +32,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
-- An expired deadline on the run's context ends the run like `RunContext.Cancel` and returns a `*RunCancelledError` that keeps completed history, usage, and metadata, and also matches `context.DeadlineExceeded`. `RunCancelledError.Unwrap` now returns `[]error`; use `errors.Is` and `errors.As` instead of `errors.Unwrap`.
+- **Breaking:** an expired deadline on the run's context ends the run like `RunContext.Cancel` and returns a `*RunCancelledError` that keeps completed history, usage, and metadata, and also matches `context.DeadlineExceeded`. `RunCancelledError.Unwrap` now returns `[]error`; use `errors.Is` and `errors.As` instead of `errors.Unwrap`.
 - `FallbackModel` falls back when a stream fails before its first event.
 - `RunStream` returns `UnexpectedModelBehaviorError` when a model request hook asks to retry a response it already streamed as final output. `Run` and `StartRun` still retry it.
 - `ReinjectSystemPrompt{ReplaceExisting: true}` replaces only the system prompts the run started with and keeps ones added during the run.
@@ -52,7 +54,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 ### Fixed
 
 - Document that `RunStream` ends the run at the first matching output, and how to run to completion while observing events.
-- Keep the first-run banner tests independent of coding-agent environment variables.
 - Replay Gemini tool-call thought signatures (`extra_content`) through OpenAI-compatible Chat Completions, and backfill an empty thinking field on current-turn tool calls.
 - Attach a leading OpenRouter `CachePoint` to the previous user message instead of failing.
 - Accept a `CachePoint` after a replayed Anthropic MCP tool result.
@@ -216,6 +217,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 - No security fixes have been released yet.
 
-[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Kludex/pydantic-ai-go/commits/v0.4.0

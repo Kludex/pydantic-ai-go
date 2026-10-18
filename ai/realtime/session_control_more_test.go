@@ -3,6 +3,7 @@ package realtime_test
 import (
 	"context"
 	"errors"
+	"iter"
 	"testing"
 	"time"
 
@@ -170,9 +171,7 @@ func TestWaitForPlayback(t *testing.T) {
 	_ = session.Close(t.Context())
 
 	session, connection = openSessionWithProfile(t, fullProfile())
-	_ = session.StreamAudio(t.Context())
-	connection.events <- realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "assistant"}
-	time.Sleep(time.Millisecond)
+	streamOneChunk(t, session, connection)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err := session.WaitForPlayback(ctx); !errors.Is(err, context.Canceled) {
@@ -250,9 +249,7 @@ func TestInterruptAtAudioBranches(t *testing.T) {
 		profile := fullProfile()
 		profile.SupportsOutputTruncation = false
 		session, connection := openSessionWithProfile(t, profile)
-		_ = session.StreamAudio(t.Context())
-		connection.events <- realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "assistant"}
-		time.Sleep(time.Millisecond)
+		streamOneChunk(t, session, connection)
 		interrupted, err := session.InterruptAtAudio(t.Context(), 0)
 		if err != nil || !interrupted {
 			t.Fatalf("interrupted=%v err=%v", interrupted, err)
@@ -316,9 +313,7 @@ func TestInterruptAtAudioBranches(t *testing.T) {
 
 	t.Run("send failure", func(t *testing.T) {
 		session, connection := openSessionWithProfile(t, fullProfile())
-		_ = session.StreamAudio(t.Context())
-		connection.events <- realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "assistant"}
-		time.Sleep(time.Millisecond)
+		streamOneChunk(t, session, connection)
 		connection.err = errors.New("send failed")
 		if _, err := session.InterruptAtAudio(t.Context(), 0); err == nil {
 			t.Fatal("expected send error")
@@ -420,6 +415,17 @@ func TestEnqueueSendFailureEndsSession(t *testing.T) {
 	}
 	connection.err = nil
 	_ = session.Close(t.Context())
+}
+
+// streamOneChunk returns once the session has delivered one assistant audio chunk to a playback stream.
+func streamOneChunk(t *testing.T, session *realtime.Session, connection *fakeConnection) {
+	t.Helper()
+	next, stop := iter.Pull2(session.StreamAudio(t.Context()))
+	t.Cleanup(stop)
+	connection.events <- realtime.AudioDelta{Data: []byte{1, 0}, ItemID: "assistant"}
+	if chunk, err, ok := next(); !ok || err != nil || len(chunk) == 0 {
+		t.Fatalf("audio chunk not delivered: %v %v", chunk, err)
+	}
 }
 
 func openSessionWithProfile(t *testing.T, profile realtime.Profile, options ...realtime.SessionOption) (*realtime.Session, *fakeConnection) {

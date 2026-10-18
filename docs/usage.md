@@ -42,9 +42,9 @@ func main() {
 }
 ```
 
-`RequestLimit` is checked before generation. A limit of one permits exactly one model request.
+`RequestLimit` is checked before generation. A limit of one permits one model response that the agent acts on. A fallback attempt or suspended-response continuation does not consume another request slot.
 
-Token and cost limits are checked after each response by default. The provider has already processed that request when a post-response limit fails.
+Token and cost limits are checked after each response by default. The provider has already processed that request when a post-response limit fails. Tokens and cost from responses rejected by `FallbackModel` still count, even though their content does not enter history.
 
 ## Count before generation
 

@@ -636,19 +636,23 @@ type trackedToolCall struct {
 
 func repairDanglingToolCalls(messages []ModelMessage, preserveDangling bool) ([]ModelMessage, []RequestPart) {
 	tracked := make([]*trackedToolCall, 0)
-	open := map[string]*trackedToolCall{}
+	open := map[string][]*trackedToolCall{}
 	for index, message := range messages {
 		switch message := message.(type) {
 		case ModelResponse:
 			for _, call := range message.ToolCalls() {
 				key := toolCallMatchKey(call.ToolName, call.ToolCallID)
-				if shadowed := open[key]; shadowed != nil {
-					shadowed.active = false
-					shadowed.dangling = true
+				pending := open[key]
+				if len(pending) > 0 && pending[len(pending)-1].responseIndex != index {
+					for _, shadowed := range pending {
+						shadowed.active = false
+						shadowed.dangling = true
+					}
+					pending = nil
 				}
 				item := &trackedToolCall{responseIndex: index, call: call, active: true}
 				tracked = append(tracked, item)
-				open[key] = item
+				open[key] = append(pending, item)
 			}
 		case ModelRequest:
 			for _, part := range message.Parts {
@@ -657,9 +661,10 @@ func repairDanglingToolCalls(messages []ModelMessage, preserveDangling bool) ([]
 					continue
 				}
 				key := toolCallMatchKey(toolName, toolCallID)
-				if item := open[key]; item != nil {
-					item.active = false
-					delete(open, key)
+				pending := open[key]
+				if len(pending) > 0 {
+					pending[0].active = false
+					open[key] = pending[1:]
 				}
 			}
 		}
@@ -2352,6 +2357,13 @@ func (r *run[Deps, Output]) doModelRequest(
 			observation.record(r.model, msgs, params, response, segment)
 		}
 		if err != nil {
+			var exhausted *FallbackExhaustedError
+			if errors.As(err, &exhausted) {
+				r.addUsage(modelRequestAttemptsUsage(exhausted.Attempts()))
+				if limitErr := r.rc.UsageLimits.check(r.usageSnapshot()); limitErr != nil {
+					return nil, errors.Join(limitErr, err)
+				}
+			}
 			prior := response
 			partial := response
 			if segment != nil {
@@ -2406,6 +2418,7 @@ func (r *run[Deps, Output]) doModelRequest(
 		}
 		if response.State == ModelResponseStateSuspended {
 			projected := r.usageSnapshot()
+			projected.Add(modelRequestAttemptsUsage(response.FailedAttempts))
 			projected.Add(response.Usage)
 			if err := r.rc.UsageLimits.check(projected); err != nil {
 				r.cancelSuspendedResponse(response)
@@ -2478,6 +2491,7 @@ func (r *run[Deps, Output]) publishUsage(response *ModelResponse) {
 	if response != nil {
 		priced := cloneModelResponse(response)
 		fillResponseCost(r.ctx, priced)
+		usage.Add(modelRequestAttemptsUsage(priced.FailedAttempts))
 		usage.Add(priced.Usage)
 	}
 	r.observeUsage(usage)
@@ -2526,6 +2540,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			if resp != nil {
 				resp = cloneModelResponse(resp)
 				fillResponseCost(ctx, resp)
+				r.addUsage(modelRequestAttemptsUsage(resp.FailedAttempts))
 				r.addUsage(resp.Usage)
 				r.publishUsage(nil)
 				if applyErr := r.applyResponseToolKinds(resp); applyErr != nil {
@@ -2544,6 +2559,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		}
 		resp = cloneModelResponse(resp)
 		fillResponseCost(ctx, resp)
+		r.addUsage(modelRequestAttemptsUsage(resp.FailedAttempts))
 		r.addUsage(resp.Usage)
 		r.publishUsage(nil)
 		if err := r.applyResponseToolKinds(resp); err != nil {

@@ -65,6 +65,7 @@ func mergeModelResponses(existing, next *ModelResponse) (*ModelResponse, continu
 			merged.ProviderResponseID = existing.ProviderResponseID
 		}
 	}
+	merged.FailedAttempts = append(cloneModelRequestAttempts(existing.FailedAttempts), merged.FailedAttempts...)
 	merged.ProviderDetails = mergeProviderDetails(existing.ProviderDetails, merged.ProviderDetails)
 	merged.Metadata = mergeProviderDetails(existing.Metadata, merged.Metadata)
 	stripReplacePreviousResponseMarker(merged.Metadata)
@@ -109,9 +110,24 @@ func cloneModelResponse(response *ModelResponse) *ModelResponse {
 		}
 	}
 	cloned.Usage = response.Usage.Clone()
+	cloned.FailedAttempts = cloneModelRequestAttempts(response.FailedAttempts)
 	cloned.ProviderDetails = cloneSchemaMap(response.ProviderDetails)
 	cloned.Metadata = cloneSchemaMap(response.Metadata)
 	return &cloned
+}
+
+func cloneModelRequestAttempts(attempts []ModelRequestAttempt) []ModelRequestAttempt {
+	if len(attempts) == 0 {
+		return nil
+	}
+	cloned := slices.Clone(attempts)
+	for index := range cloned {
+		if attempts[index].Usage != nil {
+			usage := attempts[index].Usage.Clone()
+			cloned[index].Usage = &usage
+		}
+	}
+	return cloned
 }
 
 func hasReplacePreviousResponseMarker(metadata map[string]any) bool {

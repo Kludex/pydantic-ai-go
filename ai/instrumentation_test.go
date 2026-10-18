@@ -21,6 +21,66 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+type providerRequestModel struct {
+	requestModel
+	provider string
+}
+
+func (model providerRequestModel) ProviderName() string { return model.provider }
+func (providerRequestModel) ProviderURL() string        { return "https://provider.test" }
+
+func TestFallbackAttemptInstrumentation(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tracerProvider.Shutdown(t.Context()) })
+
+	failure := providerRequestModel{provider: "first-provider", requestModel: requestModel{name: "first", request: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return nil, &fallbackAPIError{"offline"}
+	}}}
+	cost := 0.25
+	rejected := providerRequestModel{provider: "second-provider", requestModel: requestModel{name: "second", request: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "reject"}},
+			Usage: ai.Usage{InputTokens: 4, CostUSD: &cost}}, nil
+	}}}
+	accepted := providerRequestModel{provider: "third-provider", requestModel: requestModel{name: "third", request: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	}}}
+	fallback := ai.NewFallbackModel(failure, ai.WithFallbackModels(rejected, accepted),
+		ai.WithFallbackOnError(func(_ context.Context, err error) (bool, error) {
+			var apiError ai.ModelAPIError
+			return errors.As(err, &apiError), nil
+		}),
+		ai.WithFallbackOnResponse(func(_ context.Context, response *ai.ModelResponse) (bool, error) {
+			return response.Text() == "reject", nil
+		}),
+	)
+	model := ai.NewInstrumentedModel(fallback, ai.WithInstrumentationTracerProvider(tracerProvider))
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil || response.Text() != "done" {
+		t.Fatalf("fallback instrumentation request = %+v, %v", response, err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 3 {
+		t.Fatalf("fallback attempt spans = %+v", spans)
+	}
+	for index, span := range spans[:2] {
+		attributes := instrumentationSpanAttributes(span.Attributes)
+		if span.Status.Code != codes.Error || attributes["pydantic_ai.model_request.attempt"] != int64(index) {
+			t.Fatalf("attempt %d = %+v attributes=%+v", index, span, attributes)
+		}
+	}
+	attributes := instrumentationSpanAttributes(spans[1].Attributes)
+	if attributes["gen_ai.provider.name"] != "second-provider" || attributes["operation.cost"] != cost {
+		t.Fatalf("rejected attempt attributes = %+v", attributes)
+	}
+}
+
 func TestInstrumentedModelRequest(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))

@@ -642,7 +642,7 @@ func mapsClone(value map[string]any) map[string]any {
 	return result
 }
 
-func messageState(messages []ai.ModelMessage) (any, error) {
+func messageState(messages []ai.ModelMessage, images *[]any) (any, error) {
 	latestMessage, latestPart := -1, -1
 	for messageIndex, message := range messages {
 		request, ok := message.(ai.ModelRequest)
@@ -682,14 +682,14 @@ func messageState(messages []ai.ModelMessage) (any, error) {
 		case ai.ModelRequest:
 			for partIndex, part := range message.Parts {
 				if prompt, ok := part.(ai.UserPromptPart); ok && messageIndex == latestMessage {
-					text, err := promptText(prompt)
+					text, err := promptText(prompt, images)
 					if err != nil {
 						return nil, err
 					}
 					texts = append(texts, text)
 					continue
 				}
-				entry, err := requestStateEntry(part)
+				entry, err := requestStateEntry(part, images)
 				if err != nil {
 					return nil, err
 				}
@@ -700,7 +700,7 @@ func messageState(messages []ai.ModelMessage) (any, error) {
 				}
 			}
 		case ai.ModelResponse:
-			entries, err := responseStateEntries(message)
+			entries, err := responseStateEntries(message, images)
 			if err != nil {
 				return nil, err
 			}
@@ -727,12 +727,12 @@ func messageState(messages []ai.ModelMessage) (any, error) {
 	return state, nil
 }
 
-func requestStateEntry(part ai.RequestPart) (any, error) {
+func requestStateEntry(part ai.RequestPart, images *[]any) (any, error) {
 	switch part := part.(type) {
 	case ai.SystemPromptPart:
 		return map[string]any{"system": part.Content}, nil
 	case ai.UserPromptPart:
-		text, err := promptText(part)
+		text, err := promptText(part, images)
 		return map[string]any{"user": text}, err
 	case ai.ToolReturnPart:
 		return map[string]any{
@@ -745,7 +745,7 @@ func requestStateEntry(part ai.RequestPart) (any, error) {
 	}
 }
 
-func responseStateEntries(message ai.ModelResponse) ([]any, error) {
+func responseStateEntries(message ai.ModelResponse, images *[]any) ([]any, error) {
 	entries := make([]any, 0, len(message.Parts))
 	for _, part := range message.Parts {
 		switch part := part.(type) {
@@ -768,13 +768,34 @@ func responseStateEntries(message ai.ModelResponse) ([]any, error) {
 				entries = append(entries, map[string]any{"summary": part.Content})
 			}
 		case ai.FilePart:
-			return nil, fmt.Errorf("decision: files are not supported")
+			label, err := decisionImageLabel(part.Content, images)
+			if err != nil {
+				return nil, err
+			}
+			entries = append(entries, map[string]any{"assistant": label})
 		}
 	}
 	return entries, nil
 }
 
-func promptText(part ai.UserPromptPart) (string, error) {
+func decisionImageLabel(input any, images *[]any) (string, error) {
+	if images == nil {
+		return "", fmt.Errorf("decision: files are not supported")
+	}
+	switch input := input.(type) {
+	case ai.BinaryContent:
+		if !strings.HasPrefix(strings.ToLower(input.MediaType), "image/") {
+			return "", fmt.Errorf("decision: only image files are supported")
+		}
+	case ai.ImageURL:
+	default: // pragma: no cover - callers pass only binary images or image URLs.
+		return "", fmt.Errorf("decision: only image files are supported")
+	}
+	*images = append(*images, input)
+	return fmt.Sprintf("<image %d>", len(*images)), nil
+}
+
+func promptText(part ai.UserPromptPart, images *[]any) (string, error) {
 	if len(part.Contents) == 0 {
 		return part.Content, nil
 	}
@@ -784,8 +805,20 @@ func promptText(part ai.UserPromptPart) (string, error) {
 		case ai.TextContent:
 			texts = append(texts, content.Text)
 		case ai.CachePoint:
+		case ai.BinaryContent:
+			label, err := decisionImageLabel(content, images)
+			if err != nil {
+				return "", err
+			}
+			texts = append(texts, label)
+		case ai.ImageURL:
+			label, err := decisionImageLabel(content, images)
+			if err != nil {
+				return "", err
+			}
+			texts = append(texts, label)
 		default:
-			return "", fmt.Errorf("decision: files are not supported")
+			return "", fmt.Errorf("decision: only text and image input is supported")
 		}
 	}
 	return strings.Join(texts, "\n\n"), nil

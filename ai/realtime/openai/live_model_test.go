@@ -214,6 +214,50 @@ func TestLiveWebRTCAndHangUp(t *testing.T) {
 	}
 }
 
+func TestLiveWebRTCContinuesTheOfferedHistory(t *testing.T) {
+	var offered any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/attach") {
+			var offer map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&offer)
+			offered = offer["session"].(map[string]any)["input"]
+			_, _ = io.WriteString(w, `{"session":{"id":"id"},"transport":{"sdp":"answer"}}`)
+			return
+		}
+		socket, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = socket.CloseNow() }()
+		input := []any{map[string]any{"role": "user", "content": []any{map[string]any{"type": "input_text", "text": "Book  a\ntable"}}}}
+		_ = writeFrame(r.Context(), socket, map[string]any{"type": "session.started", "session": map[string]any{"id": "id", "model": "gpt-live-1", "input": input}})
+		_, _, _ = socket.Read(r.Context())
+	}))
+	defer server.Close()
+	model := openairt.NewLiveModel("gpt-live-1", openairt.WithAPIKey("key"), openairt.WithBaseURL(server.URL+"/v1"))
+	history := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Book a table"}}}}
+
+	answer, err := model.AnswerWebRTCOfferWithHistory(t.Context(), "offer", "", nil, realtime.Settings{}, history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := offered.([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["text"]; text != "Book a table" {
+		t.Fatalf("offer input: %v", offered)
+	}
+	connection, err := model.ConnectWebRTC(t.Context(), answer.Session, realtime.ConnectParams{Messages: history})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = connection.Close(t.Context())
+
+	other := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Cancel it"}}}}
+	for _, messages := range [][]ai.ModelMessage{nil, other} {
+		if _, err := model.ConnectWebRTC(t.Context(), answer.Session, realtime.ConnectParams{Messages: messages}); err == nil || !strings.Contains(err.Error(), "same messages") {
+			t.Fatalf("mismatched history %v: %v", messages, err)
+		}
+	}
+}
+
 func TestLiveWebRTCValidation(t *testing.T) {
 	if _, err := openairt.NewModel("gpt-realtime", openairt.WithAPIKey("key")).CreateClientSecret(t.Context(), "", nil, realtime.Settings{ToolChoice: realtime.ToolChoiceRequired}, 0); err == nil {
 		t.Fatal("required persistent tool choice accepted")

@@ -92,6 +92,8 @@ Set `azure_voice_live` in `realtime.Settings.Provider` or use `azure.WithSetting
 
 Azure OpenAI supports ephemeral client secrets and WebRTC through `CreateClientSecret`, `AnswerWebRTCOffer`, and `ConnectWebRTC`. Voice Live uses a different signaling protocol and rejects those methods.
 
+`azure_voice_live_turn_detection` accepts server VAD and Azure semantic VAD maps. End-of-utterance detection is accepted only by cascade models and fails before the WebSocket connection otherwise. `azure_voice_live_noise_reduction` configures Azure deep suppression or near/far-field processing. `azure_voice_live_echo_cancellation` enables server echo cancellation. On cascade models, the portable `openai_input_noise_reduction` setting maps to Azure deep suppression.
+
 ## Stream audio
 
 ```go
@@ -293,7 +295,7 @@ func main() {
 }
 ```
 
-xAI reads `XAI_API_KEY`. Grok Voice always produces speech. It supports interruption but not output truncation. Reconnects use xAI conversation IDs so the provider restores the session without replaying local history.
+xAI reads `XAI_API_KEY`. Grok Voice always produces speech. It supports interruption but not output truncation. A reconnect starts a new provider conversation and replays finalized local history. xAI's native conversation resumption is not used because it drops typed user turns and tool calls.
 
 ## Resolve application providers
 
@@ -301,7 +303,7 @@ Pass `infer.WithProvider` to `infer.Model` when credentials or endpoints come fr
 
 ## Reconnect
 
-Set `Settings.Reconnect` to recover from dropped WebSocket sessions. OpenAI starts a configured replacement connection and replays finalized portable history. xAI resumes its provider conversation ID. Gemini uses the latest official SDK session-resumption handle.
+Set `Settings.Reconnect` to recover from dropped WebSocket sessions. OpenAI, Azure OpenAI, and xAI start configured replacement connections and replay finalized portable history. Gemini uses the latest official SDK session-resumption handle.
 
 A reconnect emits `SessionReconnectEvent`. `StateRestored` reports whether the provider restored in-flight state. Bounded attempts and total reconnect limits prevent a failing provider from reconnecting forever.
 

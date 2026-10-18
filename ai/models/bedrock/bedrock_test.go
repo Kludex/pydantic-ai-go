@@ -344,6 +344,10 @@ func TestModelErrorsAndResponseShapes(t *testing.T) {
 			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusTooManyRequests}},
 			Err:      errors.New("throttled"),
 		}, match: "throttled"},
+		{name: "data retention", err: &smithyhttp.ResponseError{
+			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusBadRequest}},
+			Err:      errors.New("data retention mode default is not available"),
+		}, match: "PutAccountDataRetention"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -359,10 +363,15 @@ func TestModelErrorsAndResponseShapes(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.match) {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if test.name == "api" {
+			if test.name == "api" || test.name == "data retention" {
 				var apiError *bedrock.APIError
-				if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusTooManyRequests ||
-					!apiError.IsModelAPIError() || !errors.Is(err, test.err) {
+				wantStatus := http.StatusTooManyRequests
+				if test.name == "data retention" {
+					wantStatus = http.StatusBadRequest
+				}
+				if !errors.As(err, &apiError) || apiError.StatusCode != wantStatus ||
+					!apiError.IsModelAPIError() || !errors.Is(err, test.err) ||
+					(test.name == "data retention") != (apiError.Hint != "") {
 					t.Fatalf("unexpected API error: %#v", err)
 				}
 			}

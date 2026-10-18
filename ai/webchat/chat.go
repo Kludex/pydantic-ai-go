@@ -44,8 +44,9 @@ func newChatHandler[Deps, Output any](
 			return
 		}
 		var input vercel.RequestData
-		if err := json.Unmarshal(body, &input); err != nil {
-			writeJSONError(response, http.StatusBadRequest, "invalid Vercel AI request")
+		if err := json.Unmarshal(body, &input); err != nil ||
+			input.Trigger != "submit-message" && input.Trigger != "regenerate-message" {
+			writeJSONError(response, http.StatusUnprocessableEntity, "invalid Vercel AI request")
 			return
 		}
 		selected, err := configuration.runOptions(input.Model, input.BuiltinTools)

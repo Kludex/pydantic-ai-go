@@ -895,8 +895,8 @@ func TestErrors(t *testing.T) {
 		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte("not json"))
 		})
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
-			t.Fatal("expected parse error")
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); !errors.As(err, new(ai.ModelAPIError)) {
+			t.Fatalf("expected model API error, got %v", err)
 		}
 	})
 	t.Run("unknown content block", func(t *testing.T) {
@@ -1228,16 +1228,12 @@ func TestAnthropicCachePoints(t *testing.T) {
 	old := wireMessages[0].(map[string]any)["content"].([]any)
 	newer := wireMessages[1].(map[string]any)["content"].([]any)
 	if old[0].(map[string]any)["cache_control"] != nil ||
-		old[1].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" {
+		old[1].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
 		t.Fatalf("old Anthropic cache points were not limited: %#v", old)
 	}
 	for index, block := range newer {
 		cache := block.(map[string]any)["cache_control"].(map[string]any)
-		want := "5m"
-		if index == 2 {
-			want = "1h"
-		}
-		if cache["type"] != "ephemeral" || cache["ttl"] != want {
+		if cache["type"] != "ephemeral" || cache["ttl"] != "1h" {
 			t.Fatalf("unexpected Anthropic cache point %d: %#v", index, block)
 		}
 	}
@@ -1313,7 +1309,7 @@ func TestAnthropicPromptCacheSettings(t *testing.T) {
 		tools := body["tools"].([]any)
 		blocks := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
 		if automatic != nil || body["custom"] != true ||
-			system[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "5m" ||
+			system[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" ||
 			system[1].(map[string]any)["cache_control"] != nil ||
 			tools[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
 			t.Fatalf("unexpected Anthropic cache settings: %#v", body)
@@ -1876,6 +1872,7 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 		{name: "extended high", model: "claude-opus-4-7", level: ai.ThinkingLevelXHigh, thinking: "adaptive", effort: "xhigh", temperature: true},
 		{name: "unqualified adaptive", model: "claude-fable-5", level: ai.ThinkingLevelEnabled, thinking: "adaptive", temperature: true},
 		{name: "Opus 5.5", model: "claude-opus-5-5", level: ai.ThinkingLevelXHigh, thinking: "adaptive", effort: "xhigh", temperature: true},
+		{name: "Haiku 5.5", model: "claude-haiku-5-5", level: ai.ThinkingLevelXHigh, thinking: "adaptive", effort: "xhigh", temperature: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1983,6 +1980,9 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 		}}},
 		"disabled maximum": {model: "claude-opus-5", settings: mustAnthropicSettings(t, anthropic.Settings{
 			Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}, Effort: anthropic.EffortMax,
+		})},
+		"Haiku disabled xhigh": {model: "claude-haiku-5-5", settings: mustAnthropicSettings(t, anthropic.Settings{
+			Common: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}, Effort: anthropic.EffortXHigh,
 		})},
 	} {
 		t.Run(name, func(t *testing.T) {

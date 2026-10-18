@@ -54,7 +54,13 @@ func isCompleteNestedFileContent(kind string, content map[string]any) bool {
 	}
 	switch kind {
 	case "image-url", "video-url", "audio-url", "document-url":
-		return nonEmptyString("url") && nonEmptyString("media_type")
+		mediaType, carriesMediaType := content["media_type"]
+		if text, ok := mediaType.(string); ok {
+			carriesMediaType = text != ""
+		} else {
+			carriesMediaType = carriesMediaType && mediaType == nil
+		}
+		return nonEmptyString("url") && carriesMediaType
 	case "binary":
 		return nonEmptyString("media_type") && content["data"] != nil
 	case "uploaded-file":

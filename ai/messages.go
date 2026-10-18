@@ -81,6 +81,34 @@ const (
 	ModelResponseStateInterrupted ModelResponseState = "interrupted"
 )
 
+// ModelRequestAttemptOutcome describes why a model attempt did not answer.
+type ModelRequestAttemptOutcome string
+
+const (
+	// ModelRequestAttemptError means the request returned an error.
+	ModelRequestAttemptError ModelRequestAttemptOutcome = "error"
+	// ModelRequestAttemptRejected means a fallback response predicate rejected the response.
+	ModelRequestAttemptRejected ModelRequestAttemptOutcome = "rejected"
+)
+
+// ModelRequestAttempt records an earlier model attempt that failed or was rejected.
+type ModelRequestAttempt struct {
+	// ModelName identifies the attempted model.
+	ModelName string
+	// ProviderName identifies the attempted provider when known.
+	ProviderName string
+	// Outcome describes why the attempt did not answer.
+	Outcome ModelRequestAttemptOutcome
+	// Error describes the request error. It is empty for rejected responses.
+	Error string
+	// Timestamp is when the attempt started.
+	Timestamp time.Time
+	// Duration is how long the attempt took.
+	Duration time.Duration
+	// Usage contains billed usage for a rejected response. Nil means unknown.
+	Usage *Usage
+}
+
 // ModelResponse is a message received from the model.
 type ModelResponse struct {
 	// Parts contains detached model output in provider order.
@@ -111,6 +139,9 @@ type ModelResponse struct {
 	State ModelResponseState
 	// WorkspaceRef records the environment used by this run, for trusted continuation.
 	WorkspaceRef *WorkspaceRef
+	// FailedAttempts records earlier attempts at this logical request in order.
+	// Their usage is excluded from Usage but included in run token and cost totals.
+	FailedAttempts []ModelRequestAttempt
 
 	pricingAttempted bool
 }

@@ -222,6 +222,28 @@ func TestWorkspaceRunAccessAndPersistence(t *testing.T) {
 	}
 }
 
+func TestWorkspaceStreamResultIsLive(t *testing.T) {
+	ctx := context.Background()
+	_, w, _ := localWorkspace(t)
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.AddTool(agent, "write", func(ctx context.Context, rc *ai.RunContext[struct{}], _ struct{}) (string, error) {
+		return "written", rc.Workspace.WriteText(ctx, "tool", "streamed")
+	})
+	stream := agent.RunStream(ctx, "write", struct{}{}, ai.WithRunWorkspace(w))
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	result := stream.Result()
+	if result == nil || result.Workspace().Backend() != w.Backend() {
+		t.Fatalf("stream result workspace: %#v", result)
+	}
+	if text, err := result.Workspace().ReadText(ctx, "tool"); err != nil || text != "streamed" {
+		t.Fatalf("post-stream file: %q %v", text, err)
+	}
+}
+
 func TestWorkspaceOptionValidation(t *testing.T) {
 	for name, option := range map[string]func(){
 		"typed nil facade": func() { ai.NewWorkspace((*ai.LocalWorkspaceBackend)(nil)) },

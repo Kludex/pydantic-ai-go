@@ -329,6 +329,7 @@ func (r *run[Deps, Output]) suspendedSnapshot() *SuspendedRun {
 	messages := cloneModelMessages(r.messages)
 	messages = append(messages, *cloneModelResponse(response))
 	usage := r.usage.Clone()
+	usage.Add(modelRequestAttemptsUsage(response.FailedAttempts))
 	usage.Add(response.Usage)
 	return &SuspendedRun{response: *response, messages: messages, usage: usage}
 }
@@ -463,6 +464,7 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 			ProviderName: response.ProviderName, ProviderURL: response.ProviderURL,
 			ProviderDetails: cloneSchemaMap(response.ProviderDetails), Metadata: cloneSchemaMap(response.Metadata),
 			ProviderResponseID: response.ProviderResponseID, FinishReason: response.FinishReason, State: state,
+			FailedAttempts: cloneModelRequestAttempts(response.FailedAttempts),
 		}, nil)
 	}
 }

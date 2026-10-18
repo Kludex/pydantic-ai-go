@@ -126,6 +126,7 @@ type responsesStreamEvent struct {
 	Type              string              `json:"type"`
 	SequenceNumber    *int                `json:"sequence_number"`
 	Delta             string              `json:"delta"`
+	Arguments         json.RawMessage     `json:"arguments"`
 	Refusal           string              `json:"refusal"`
 	Logprobs          []map[string]any    `json:"logprobs"`
 	Annotation        map[string]any      `json:"annotation"`
@@ -166,6 +167,8 @@ func (m *ResponsesModel) responsesEventStream(
 		textStarted := make(map[string]bool)
 		imageFiles := make(map[string]bool)
 		mcpListReturns := make(map[string]struct{})
+		functionCallArgs := make(map[string]string)
+		finalizedFunctionCalls := make(map[string]bool)
 		if seed != nil {
 			if sequence, ok := seed.ProviderDetails["sequence_number"].(int); ok {
 				lastSequence = &sequence
@@ -333,12 +336,14 @@ func (m *ResponsesModel) responsesEventStream(
 					}, nil) {
 						return
 					}
+					functionCallArgs[partID] = ""
 					if len(event.Item.Arguments) > 0 && string(event.Item.Arguments) != `""` {
 						arguments, err := normalizeResponsesArguments(event.Item.Arguments)
 						if err != nil {
 							yield(nil, err)
 							return
 						}
+						functionCallArgs[partID] = string(arguments)
 						if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(arguments)}, nil) {
 							return
 						}
@@ -458,7 +463,41 @@ func (m *ResponsesModel) responsesEventStream(
 						return
 					}
 				}
-			case "response.function_call_arguments.delta", "response.mcp_call_arguments.delta":
+			case "response.function_call_arguments.delta":
+				partID := responsesToolPartID(event)
+				arguments, started := functionCallArgs[partID]
+				if !started || finalizedFunctionCalls[partID] {
+					continue
+				}
+				functionCallArgs[partID] = arguments + event.Delta
+				if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: event.Delta}, nil) {
+					return
+				}
+			case "response.function_call_arguments.done":
+				partID := responsesToolPartID(event)
+				received, started := functionCallArgs[partID]
+				if !started || finalizedFunctionCalls[partID] {
+					continue
+				}
+				finalArguments, err := responsesDoneArguments(event.Arguments)
+				if err != nil {
+					yield(nil, err)
+					return
+				}
+				if finalArguments == "" {
+					continue
+				}
+				finalizedFunctionCalls[partID] = true
+				if finalArguments == received {
+					continue
+				}
+				if strings.HasPrefix(finalArguments, received) {
+					functionCallArgs[partID] = finalArguments
+					if !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: strings.TrimPrefix(finalArguments, received)}, nil) {
+						return
+					}
+				}
+			case "response.mcp_call_arguments.delta":
 				if !yield(ai.ToolCallDeltaEvent{PartID: responsesToolPartID(event), ArgsDelta: event.Delta}, nil) {
 					return
 				}
@@ -492,6 +531,44 @@ func (m *ResponsesModel) responsesEventStream(
 					return
 				}
 			case "response.output_item.done":
+				if event.Item.Type == "function_call" {
+					partID := responsesToolPartID(event)
+					finalArguments, err := responsesDoneArguments(event.Item.Arguments)
+					if err != nil {
+						yield(nil, err)
+						return
+					}
+					received, started := functionCallArgs[partID]
+					if !started {
+						emittedParts = true
+						var providerDetails map[string]any
+						if event.Item.Namespace != "" {
+							providerDetails = map[string]any{"namespace": event.Item.Namespace}
+						}
+						if !yield(ai.ToolCallStartEvent{
+							PartID: partID, ToolName: event.Item.Name, ToolCallID: responsesCallID(event.Item.CallID),
+							ID: event.Item.ID, ProviderName: m.providerName, ProviderDetails: providerDetails,
+						}, nil) {
+							return
+						}
+						functionCallArgs[partID] = finalArguments
+						finalizedFunctionCalls[partID] = true
+						if finalArguments != "" && !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: finalArguments}, nil) {
+							return
+						}
+					} else if !finalizedFunctionCalls[partID] && finalArguments != "" {
+						finalizedFunctionCalls[partID] = true
+						if strings.HasPrefix(finalArguments, received) && finalArguments != received {
+							functionCallArgs[partID] = finalArguments
+							if !yield(ai.ToolCallDeltaEvent{
+								PartID: partID, ArgsDelta: strings.TrimPrefix(finalArguments, received),
+							}, nil) {
+								return
+							}
+						}
+					}
+					continue
+				}
 				if event.Item.Type == "code_interpreter_call" {
 					_, files, returned, err := responsesCodeExecutionParts(event.Item, responseTimestamp)
 					if err != nil {
@@ -762,7 +839,6 @@ func (m *ResponsesModel) responsesEventStream(
 				return
 			case "response.created", "response.in_progress", "response.queued",
 				"response.content_part.added", "response.content_part.done",
-				"response.function_call_arguments.done",
 				"response.code_interpreter_call.in_progress", "response.code_interpreter_call.interpreting",
 				"response.code_interpreter_call.completed",
 				"response.image_generation_call.generating", "response.image_generation_call.in_progress",
@@ -906,6 +982,17 @@ func responsesCodeArgumentPrefix(item responsesOutputItem) string {
 	container, _ := json.Marshal(item.ContainerID)
 	code, _ := json.Marshal(item.Code)
 	return `{"container_id":` + string(container) + `,"code":` + string(code[:len(code)-1])
+}
+
+func responsesDoneArguments(raw json.RawMessage) (string, error) {
+	if len(raw) == 0 || string(raw) == "null" || string(raw) == `""` {
+		return "", nil
+	}
+	arguments, err := normalizeResponsesArguments(raw)
+	if err != nil {
+		return "", err
+	}
+	return string(arguments), nil
 }
 
 func responsesToolPartID(event responsesStreamEvent) string {

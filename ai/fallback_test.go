@@ -17,6 +17,10 @@ type fallbackAPIError struct{ message string }
 func (err *fallbackAPIError) Error() string     { return err.message }
 func (*fallbackAPIError) IsModelAPIError() bool { return true }
 
+type emptyFallbackError struct{}
+
+func (emptyFallbackError) Error() string { return "" }
+
 type fallbackStreamingContinuationModel struct {
 	streamingRequestModel
 	cancelCount int
@@ -170,8 +174,116 @@ func TestFallbackModelCustomErrorAndResponsePolicies(t *testing.T) {
 		}),
 	)
 	response, err = fallback.Request(t.Context(), nil, ai.ModelRequestParams{})
-	if err != nil || response.Text() != "accept" || response.Usage.CostUSD == nil || *response.Usage.CostUSD != 0.75 {
+	if err != nil || response.Text() != "accept" || response.Usage.CostUSD == nil || *response.Usage.CostUSD != 0.5 ||
+		len(response.FailedAttempts) != 1 || response.FailedAttempts[0].Usage == nil ||
+		response.FailedAttempts[0].Usage.CostUSD == nil || *response.FailedAttempts[0].Usage.CostUSD != 0.25 {
 		t.Fatalf("response fallback failed: response=%+v err=%v", response, err)
+	}
+}
+
+func TestModelRequestAttemptValidation(t *testing.T) {
+	_, err := ai.UnmarshalMessages([]byte(`[{"kind":"response","parts":[],"failed_attempts":[{"model_name":"m","outcome":"future","timestamp":"2026-10-10T00:00:00Z","duration":0}]}]`))
+	if err == nil || !strings.Contains(err.Error(), "attempt outcome") {
+		t.Fatalf("invalid attempt outcome = %v", err)
+	}
+}
+
+func TestFallbackAttemptsCountUsageAndRoundTrip(t *testing.T) {
+	rejectedCost, acceptedCost := 0.1, 0.2
+	model := ai.NewFallbackModel(
+		requestModel{name: "rejected", request: func(
+			context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "reject"}},
+				Usage: ai.Usage{Requests: 1, InputTokens: 60, OutputTokens: 6, CostUSD: &rejectedCost}}, nil
+		}},
+		ai.WithFallbackModels(requestModel{name: "accepted", request: func(
+			context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "accept"}},
+				Usage: ai.Usage{Requests: 1, InputTokens: 20, OutputTokens: 2, CostUSD: &acceptedCost}}, nil
+		}}),
+		ai.WithFallbackOnResponse(func(_ context.Context, response *ai.ModelResponse) (bool, error) {
+			return response.Text() == "reject", nil
+		}),
+	)
+	result, err := ai.NewAgent[struct{}, string](model).Run(t.Context(), "go", struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := result.Usage()
+	if usage.Requests != 1 || usage.InputTokens != 80 || usage.OutputTokens != 8 ||
+		usage.CostUSD == nil || *usage.CostUSD < 0.299999 || *usage.CostUSD > 0.300001 {
+		t.Fatalf("fallback attempt usage = %+v", usage)
+	}
+	response := result.Messages()[len(result.Messages())-1].(ai.ModelResponse)
+	if len(response.FailedAttempts) != 1 || response.FailedAttempts[0].Outcome != ai.ModelRequestAttemptRejected ||
+		response.FailedAttempts[0].Usage == nil || response.Usage.InputTokens != 20 {
+		t.Fatalf("fallback attempts = %+v response usage=%+v", response.FailedAttempts, response.Usage)
+	}
+	encoded, err := ai.MarshalMessages(result.Messages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := ai.UnmarshalMessages(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	roundTripped := decoded[len(decoded)-1].(ai.ModelResponse).FailedAttempts
+	if len(roundTripped) != 1 || roundTripped[0].Usage == nil || roundTripped[0].Usage.InputTokens != 60 ||
+		roundTripped[0].Duration < 0 {
+		t.Fatalf("round-tripped attempts = %+v", roundTripped)
+	}
+
+	limit := ai.NewAgent[struct{}, string](model, ai.WithUsageLimits(ai.UsageLimits{InputTokenLimit: 70}))
+	if _, err := limit.Run(t.Context(), "go", struct{}{}); !errors.Is(err, ai.ErrUsageLimitExceeded) {
+		t.Fatalf("fallback attempt usage did not enforce limit: %v", err)
+	}
+}
+
+func TestNestedFallbackAttemptsAndExhaustedUsage(t *testing.T) {
+	failing := func(name string, err error) ai.Model {
+		return requestModel{name: name, request: func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+			return nil, err
+		}}
+	}
+	inner := ai.NewFallbackModel(failing("one", &fallbackAPIError{"one"}), ai.WithFallbackModels(
+		failing("two", &fallbackAPIError{"two"}),
+	))
+	outer := ai.NewFallbackModel(inner,
+		ai.WithFallbackModels(fallbackTextModel("backup", "done", nil)),
+		ai.WithFallbackOnError(func(_ context.Context, err error) (bool, error) {
+			var exhausted *ai.FallbackExhaustedError
+			return errors.As(err, &exhausted), nil
+		}),
+	)
+	response, err := outer.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil || len(response.FailedAttempts) != 3 || response.FailedAttempts[2].ModelName != inner.Name() {
+		t.Fatalf("nested fallback attempts = %+v, %v", response, err)
+	}
+
+	usageModel := ai.NewFallbackModel(
+		requestModel{name: "a", request: func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "no"}}, Usage: ai.Usage{InputTokens: 60}}, nil
+		}},
+		ai.WithFallbackModels(requestModel{name: "b", request: func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "no"}}, Usage: ai.Usage{InputTokens: 60}}, nil
+		}}),
+		ai.WithFallbackOnResponse(func(context.Context, *ai.ModelResponse) (bool, error) { return true, nil }),
+	)
+	agent := ai.NewAgent[struct{}, string](usageModel, ai.WithUsageLimits(ai.UsageLimits{InputTokenLimit: 70}))
+	_, err = agent.Run(t.Context(), "go", struct{}{})
+	if !errors.Is(err, ai.ErrUsageLimitExceeded) || !errors.Is(err, ai.ErrFallbackExhausted) {
+		t.Fatalf("exhausted fallback usage = %v", err)
+	}
+
+	empty := ai.NewFallbackModel(failing("empty", emptyFallbackError{}),
+		ai.WithFallbackModels(fallbackTextModel("ok", "ok", nil)),
+		ai.WithFallbackOnError(func(context.Context, error) (bool, error) { return true, nil }),
+	)
+	response, err = empty.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil || response.FailedAttempts[0].Error != "emptyFallbackError" {
+		t.Fatalf("empty fallback error = %+v, %v", response, err)
 	}
 }
 

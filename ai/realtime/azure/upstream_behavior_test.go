@@ -57,9 +57,18 @@ func TestVoiceLiveSettingsAndWarnings(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			connection, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{Thinking: test.thinking, Provider: map[string]any{
+			providerSettings := map[string]any{
 				"azure_voice_live_voice": test.voice, "azure_voice_live_temperature": test.temperature,
-			}}})
+				"azure_voice_live_echo_cancellation": true,
+			}
+			if test.name == "gpt-5" {
+				providerSettings["openai_input_noise_reduction"] = "near_field"
+			} else {
+				providerSettings["azure_voice_live_noise_reduction"] = "near_field"
+			}
+			connection, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{
+				Thinking: test.thinking, Provider: providerSettings,
+			}})
 			if test.invalid {
 				if err == nil {
 					t.Fatal("accepted invalid temperature")
@@ -81,6 +90,14 @@ func TestVoiceLiveSettingsAndWarnings(t *testing.T) {
 			} else if config["temperature"] != test.temperature {
 				t.Fatalf("temperature: %+v", config)
 			}
+			wantNoise := "near_field"
+			if test.name == "gpt-5" {
+				wantNoise = "azure_deep_noise_suppression"
+			}
+			if config["input_audio_noise_reduction"].(map[string]any)["type"] != wantNoise ||
+				config["input_audio_echo_cancellation"].(map[string]any)["type"] != "server_echo_cancellation" {
+				t.Fatalf("audio processing: %+v", config)
+			}
 			for event, eventErr := range connection.Events(t.Context()) {
 				if eventErr != nil {
 					t.Fatal(eventErr)
@@ -97,6 +114,21 @@ func TestVoiceLiveSettingsAndWarnings(t *testing.T) {
 				t.Fatal("provider warning was dropped")
 			}
 		})
+	}
+}
+
+func TestVoiceLiveEndOfUtteranceRequiresCascade(t *testing.T) {
+	model, err := azurert.NewModel("gpt-realtime-2", azurert.Config{
+		Endpoint: "https://example.com", APIKey: "key", VoiceLiveEndpoint: "https://example.com", VoiceLiveAPIKey: "key",
+	}, azurert.WithSettings(azurert.Settings{VoiceLive: true, VoiceLiveTurnDetection: map[string]any{
+		"type": "server_vad", "end_of_utterance_detection": map[string]any{"model": "semantic_detection_v1"},
+	}}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Connect(t.Context(), realtime.ConnectParams{}); err == nil ||
+		!strings.Contains(err.Error(), "end-of-utterance detection") {
+		t.Fatalf("non-cascade end-of-utterance detection = %v", err)
 	}
 }
 

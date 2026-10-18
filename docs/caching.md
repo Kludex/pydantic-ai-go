@@ -133,6 +133,8 @@ OpenAI Responses requests that continue a `previous_response_id` or a `conversat
 
 On Bedrock and OpenRouter, a wide tool turn can move the newest boundary beyond the provider's cache lookback. The previous request's tail gets a boundary too. Instruction and tool-definition boundaries take priority. Excess message boundaries are dropped oldest-first to stay within the four-boundary limit. An explicit marker at Anthropic's final cacheable block takes precedence over its automatic boundary.
 
+Anthropic requires longer cache lifetimes to appear before shorter ones. The same rule applies through Bedrock and OpenRouter. If a one-hour boundary follows a five-minute boundary, the adapter raises the earlier boundary to one hour. It does not shorten the lifetime you requested or change later five-minute boundaries.
+
 ## Retention and health
 
 Use `ai.ResolveCacheRetention` with the model and settings to resolve the active requested lifetime. It respects provider-local precedence. `ai.PromptCacheOutlook` uses that lifetime or `ModelProfile.DefaultCacheRetention` to classify served history as warm, cold, or unknown. A marker's TTL extends the estimate only when the profile says the provider honors that tier. OpenAI ignores a marker's one-hour TTL.

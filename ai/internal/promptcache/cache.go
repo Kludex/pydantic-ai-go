@@ -20,7 +20,7 @@ func HasSettings(settings ai.ModelSettings, keys ...string) bool {
 func BedrockRetentions(name string) []ai.CacheRetention {
 	tiers := []ai.CacheRetention{ai.CacheRetention5Minutes}
 	for _, prefix := range []string{
-		"claude-fable-5", "claude-haiku-4-5", "claude-mythos-5", "claude-opus-4-5", "claude-opus-4-6",
+		"claude-fable-5", "claude-haiku-4-5", "claude-haiku-5-5", "claude-mythos-5", "claude-opus-4-5", "claude-opus-4-6",
 		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-5",
 	} {
 		if strings.Contains(name, prefix) {
@@ -28,6 +28,19 @@ func BedrockRetentions(name string) []ai.CacheRetention {
 		}
 	}
 	return tiers
+}
+
+// RaiseEarlierTTLs raises each five-minute boundary before a later one-hour boundary.
+func RaiseEarlierTTLs(ttls []string) []string {
+	raised := make([]string, len(ttls))
+	longest := "5m"
+	for index := len(ttls) - 1; index >= 0; index-- {
+		if ttls[index] == "1h" {
+			longest = "1h"
+		}
+		raised[index] = longest
+	}
+	return raised
 }
 
 // PreviousTail locates the prior request boundary when at least eighteen blocks follow it.

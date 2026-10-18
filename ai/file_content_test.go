@@ -10,6 +10,61 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
 
+func TestBinaryContentFromDataURIErrors(t *testing.T) {
+	for _, value := range []string{
+		"not-data", "data:text/plain,hello", "data:;base64,aGk=", "data:text/plain;base64,%zz", "data:text/plain;base64,!",
+	} {
+		if _, err := ai.BinaryContentFromDataURI(value); err == nil {
+			t.Fatalf("invalid data URI %q was accepted", value)
+		}
+	}
+}
+
+func TestBinaryContentFromDataURI(t *testing.T) {
+	for value, want := range map[string][]byte{
+		"data:image/png;base64,/w==":                    {0xff},
+		"data:image/png;base64,%2Fw%3D%3D":              {0xff},
+		"data:application/octet-stream;base64,A%42%2BC": {0x00, 0x1f, 0x82},
+	} {
+		content, err := ai.BinaryContentFromDataURI(value)
+		if err != nil || string(content.Data) != string(want) {
+			t.Fatalf("decode %q = %x, %v; want %x", value, content.Data, err, want)
+		}
+	}
+	content, err := ai.BinaryContentFromDataURI("data:application/json;charset=utf-8;base64,eyJhIjoxfQ==")
+	if err != nil || content.MediaType != "application/json;charset=utf-8" || string(content.Data) != `{"a":1}` {
+		t.Fatalf("parameterized data URI = %+v, %v", content, err)
+	}
+}
+
+func TestExtensionlessFileURLsSerializeNullMediaType(t *testing.T) {
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.ImageURL{URL: "https://example.com/image"}, ai.VideoURL{URL: "https://example.com/video"},
+		ai.AudioURL{URL: "https://example.com/audio"}, ai.DocumentURL{URL: "https://example.com/document"},
+	}}}}}
+	encoded, err := ai.MarshalMessages(messages)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire []struct {
+		Parts []struct {
+			Content []map[string]any `json:"content"`
+		} `json:"parts"`
+	}
+	if err := json.Unmarshal(encoded, &wire); err != nil {
+		t.Fatal(err)
+	}
+	for _, content := range wire[0].Parts[0].Content {
+		if mediaType, exists := content["media_type"]; !exists || mediaType != nil {
+			t.Fatalf("extensionless URL media type = %#v", content)
+		}
+	}
+	decoded, err := ai.UnmarshalMessages(encoded)
+	if err != nil || len(decoded[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart).Contents) != 4 {
+		t.Fatalf("extensionless URL round trip = %+v, %v", decoded, err)
+	}
+}
+
 func TestFileContentProperties(t *testing.T) {
 	for rawURL, want := range map[string]string{
 		"https://example.com/photo.JPG?download=1": "image/jpeg",
@@ -203,13 +258,18 @@ func TestBinaryResponseContentIsDetachedAndSerializable(t *testing.T) {
 }
 
 func TestFileContentSerializationErrors(t *testing.T) {
+	if _, err := json.Marshal(ai.ImageURL{URL: "%"}); err == nil {
+		t.Fatal("malformed URL serialized")
+	}
+	if _, err := json.Marshal(ai.ImageURL{
+		URL: "https://example.com/image", VendorMetadata: map[string]any{"invalid": func() {}},
+	}); err == nil {
+		t.Fatal("invalid extensionless URL metadata serialized")
+	}
 	for name, content := range map[string]ai.UserContent{
-		"image media":    ai.ImageURL{URL: "https://example.com/image"},
-		"image mode":     ai.ImageURL{URL: "https://example.com/image.png", ForceDownload: "invalid"},
-		"audio media":    ai.AudioURL{URL: "https://example.com/audio"},
-		"audio mode":     ai.AudioURL{URL: "https://example.com/audio.mp3", ForceDownload: "invalid"},
-		"document media": ai.DocumentURL{URL: "https://example.com/document"},
-		"document mode":  ai.DocumentURL{URL: "https://example.com/document.pdf", ForceDownload: "invalid"},
+		"image mode":    ai.ImageURL{URL: "https://example.com/image.png", ForceDownload: "invalid"},
+		"audio mode":    ai.AudioURL{URL: "https://example.com/audio.mp3", ForceDownload: "invalid"},
+		"document mode": ai.DocumentURL{URL: "https://example.com/document.pdf", ForceDownload: "invalid"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ai.MarshalMessages([]ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{

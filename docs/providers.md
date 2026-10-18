@@ -375,6 +375,41 @@ Copilot model availability depends on your subscription. The adapter sends model
 
 Use `githubcopilot.WithBaseURL` for an enterprise host or local proxy. The default integration headers match GitHub's Copilot clients. A caller-provided HTTP client remains caller-owned.
 
+## OpenAI Decisions
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    ai "github.com/Kludex/pydantic-ai-go/ai"
+    "github.com/Kludex/pydantic-ai-go/ai/models/openaidecisions"
+)
+
+type Handling struct {
+    Verdict string `json:"verdict" jsonschema:"enum=run,enum=reject,enum=ask,description=How should this command be handled?"`
+    Irreversible bool `json:"irreversible" jsonschema_description:"Would running this destroy data or expose secrets?"`
+}
+
+func main() {
+    model := openaidecisions.NewModel("gpt-6-luna")
+    agent := ai.NewAgent[struct{}, Handling](model)
+    result, err := agent.Run(context.Background(), "Delete production and publish its credentials.", struct{}{})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result.Output.Verdict, result.Output.Irreversible)
+}
+```
+
+Set `OPENAI_API_KEY`. You can also use the `openai-decisions:` inference prefix. The adapter calls `/v1/decisions`, not Chat Completions or Responses. It asks predicate, choice, and score questions derived from the same typed output schemas as TypeSafe Jev.
+
+OpenAI Decisions accepts image evidence. Pass `ImageURL` or image `BinaryContent` values through `RunParts`. URLs are downloaded safely before transport. The endpoint accepts at most 128 images, 200 questions, 255 choice options, and 10 score levels. Limits fail before transport. Large multi-route requests ask for the route first and fill its fields in a second request.
+
+Use `openaidecisions.Settings` for boolean and route thresholds. `UnfillableRoute` and `UnsureRoute` implement `DecisionHandOff`, so `NewFallbackModel` can hand uncertain steps to a language model. A refused question returns `ContentFilterError`.
+
 ## System One decision models
 
 See [System One decision models](system-one.md) for a complete example, endpoint configuration, thresholds, model limits, and errors. You use `systemone.NewModel` or the `system-one:` inference prefix for any server exposing `POST /v1/systemone`, including local decision models served by Ollama.
@@ -944,13 +979,13 @@ func main() {
 }
 ```
 
-Claude Sonnet 4.6+, Opus 4.6+, Fable 5 and 5.1, and Mythos 5 and 5.1 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budgets and effort levels fail before transport. Sampling settings rejected by the selected model are omitted.
+Claude Haiku 5.5, Sonnet 4.6+, Opus 4.6+, Fable 5 and 5.1, and Mythos 5 and 5.1 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budgets and effort levels fail before transport. Sampling settings rejected by the selected model are omitted.
 
 Claude Opus 5.5 cannot disable thinking. `ThinkingLevelDisabled` omits the `thinking` field and preserves an explicit effort, so Anthropic uses adaptive thinking. Lower the effort when you need a faster response.
 
 Claude Fable 5.1 and Opus 5.5 reject forced tool choices. A required output tool falls back to `tool_choice: auto`. The model can ignore it, so output validation and retry limits still apply.
 
-Claude Fable 5.1 and Opus 5.5 can reject a signed thinking block when the preceding instructions or tools changed. The adapter retries that request once with `prefix_mismatch_behavior: drop_block`. Anthropic reports the drop in `ModelResponse.ProviderDetails["input_transformations"]`, and later requests in the same normalized history preserve the recovery setting. Keep dynamic instructions and tool order stable when possible because the changed prefix also prevents prompt-cache reuse.
+Claude Fable 5.1, Opus 5.5, Sonnet 5.5, and Haiku 5.5 can reject a signed thinking block when the preceding instructions or tools changed. The adapter retries that request once with `prefix_mismatch_behavior: drop_block`. Anthropic reports the drop in `ModelResponse.ProviderDetails["input_transformations"]`, and later requests in the same normalized history preserve the recovery setting. Keep dynamic instructions and tool order stable when possible because the changed prefix also prevents prompt-cache reuse.
 
 ### Prompt caching
 

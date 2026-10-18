@@ -19,14 +19,20 @@ type APIError struct {
 	StatusCode int
 	// Err is the AWS SDK operation failure.
 	Err error
+	// Hint gives provider-specific remediation guidance when available.
+	Hint string
 }
 
 // Error describes the failed Bedrock request.
 func (err *APIError) Error() string {
-	if err.Err == nil {
-		return "bedrock: API request failed"
+	message := "bedrock: API request failed"
+	if err.Err != nil {
+		message = "bedrock: " + err.Err.Error()
 	}
-	return "bedrock: " + err.Err.Error()
+	if err.Hint != "" {
+		message += ". " + err.Hint
+	}
+	return message
 }
 
 // Unwrap returns the AWS SDK operation failure.
@@ -38,7 +44,11 @@ func (*APIError) IsModelAPIError() bool { return true }
 func modelError(ctx context.Context, model *Model, operation string, err error) error {
 	var responseError *smithyhttp.ResponseError
 	if errors.As(err, &responseError) {
-		return &APIError{StatusCode: responseError.HTTPStatusCode(), Err: err}
+		hint := ""
+		if strings.Contains(strings.ToLower(err.Error()), "data retention mode") {
+			hint = "Bedrock rejected this model under the account's data retention mode for this Region. Models that require human review, such as Claude Fable 5 and 5.1, need the mode set to aws_review or provider_data_share through the Bedrock control plane PutAccountDataRetention API. See https://docs.aws.amazon.com/bedrock/latest/userguide/data-retention.html"
+		}
+		return &APIError{StatusCode: responseError.HTTPStatusCode(), Err: err, Hint: hint}
 	}
 	return ai.NewModelTransportError(ctx, model, operation, err)
 }

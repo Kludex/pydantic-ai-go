@@ -168,6 +168,8 @@ func TestResponsesCountTokensErrors(t *testing.T) {
 				t.Context(), messages, ai.ModelRequestParams{},
 			); err == nil || !strings.Contains(err.Error(), test.contains) {
 				t.Fatalf("unexpected token count error: %v", err)
+			} else if test.name == "decode" && !errors.As(err, new(ai.ModelAPIError)) {
+				t.Fatalf("decode error is not a model API error: %T", err)
 			}
 		})
 	}
@@ -1779,8 +1781,8 @@ func TestResponsesErrors(t *testing.T) {
 	})
 	t.Run("invalid json", func(t *testing.T) {
 		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("not json")) })
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil {
-			t.Fatal("expected parse error")
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); !errors.As(err, new(ai.ModelAPIError)) {
+			t.Fatalf("expected model API error, got %v", err)
 		}
 	})
 	t.Run("unknown message type", func(t *testing.T) {

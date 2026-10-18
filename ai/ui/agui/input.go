@@ -539,15 +539,10 @@ func inputURL(
 }
 
 func decodeDataURL(value string, vendorMetadata map[string]any) (ai.UserContent, error) {
-	header, payload, found := strings.Cut(strings.TrimPrefix(value, "data:"), ",")
-	if !found || !strings.HasSuffix(header, ";base64") {
-		return nil, fmt.Errorf("agui: binary data URL must contain base64 data")
-	}
-	data, err := base64.StdEncoding.DecodeString(payload)
+	content, err := ai.BinaryContentFromDataURI(value)
 	if err != nil {
 		return nil, fmt.Errorf("agui: decode binary data URL: %w", err)
 	}
-	return ai.BinaryContent{
-		Data: data, MediaType: strings.TrimSuffix(header, ";base64"), VendorMetadata: cloneMap(vendorMetadata),
-	}, nil
+	content.VendorMetadata = cloneMap(vendorMetadata)
+	return content, nil
 }

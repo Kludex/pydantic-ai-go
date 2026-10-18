@@ -111,10 +111,34 @@ func TestTypedSettingsAndNativeOutput(t *testing.T) {
 	}
 }
 
+func TestBedrockRaisesEarlierCacheTTL(t *testing.T) {
+	settings, err := (bedrock.Settings{CacheInstructions: bedrock.CacheTTL5Minutes}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &fakeClient{converse: func(
+		input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		instruction := input.System[1].(*types.SystemContentBlockMemberCachePoint)
+		message := input.Messages[0].Content[1].(*types.ContentBlockMemberCachePoint)
+		if instruction.Value.Ttl != types.CacheTTLOneHour || message.Value.Ttl != types.CacheTTLOneHour {
+			t.Fatalf("cache TTL order = instruction %q message %q", instruction.Value.Ttl, message.Value.Ttl)
+		}
+		return completeOutput(types.StopReasonEndTurn), nil
+	}}
+	model := bedrock.NewModel("anthropic.claude-sonnet-4-5", bedrock.WithClient(client))
+	_, err = model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{ai.TextContent{Text: "context"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour}}},
+	}}}, ai.ModelRequestParams{Instructions: "system", Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestOpenAIConverseDropsUnsupportedSampling(t *testing.T) {
 	for _, name := range []string{
 		"us.openai.gpt-5.6-sol", "us.openai.gpt-5.6-luna", "us.openai.gpt-5.6-terra",
-		"global.openai.gpt-6-sol", "global.openai.gpt-6-luna", "global.openai.gpt-6-astra",
+		"global.openai.gpt-6-sol", "global.openai.gpt-6-luna", "global.openai.gpt-6-astra", "global.openai.gpt-6.1-sol",
 	} {
 		t.Run(name, func(t *testing.T) {
 			client := &fakeClient{converse: func(

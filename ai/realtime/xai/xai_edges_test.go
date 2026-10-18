@@ -187,13 +187,13 @@ func TestXAISessionUpdateSerializationError(t *testing.T) {
 	}
 }
 
-func TestXAIReconnectUsesConversationID(t *testing.T) {
+func TestXAIReconnectStartsNewConversation(t *testing.T) {
 	var calls atomic.Int32
 	seenResume := make(chan bool, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		call := calls.Add(1)
 		if call == 2 {
-			seenResume <- request.URL.Query().Get("conversation_id") == "conversation"
+			seenResume <- request.URL.Query().Get("conversation_id") == ""
 		}
 		socket, err := websocket.Accept(writer, request, nil)
 		if err != nil {
@@ -250,7 +250,7 @@ func TestXAIReconnectUsesConversationID(t *testing.T) {
 		t.Fatalf("new conversation did not reset billed seconds: %g", billedSeconds)
 	}
 	if !<-seenResume {
-		t.Fatal("reconnect omitted conversation ID")
+		t.Fatal("reconnect reused the incomplete provider conversation")
 	}
 	_ = connection.Close(t.Context())
 }

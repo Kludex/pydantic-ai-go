@@ -70,6 +70,8 @@ Override `StreamRequest` separately when behavior must inspect individual stream
 
 Wrapper order is explicit. The outer constructor sees the operation first. For example, `NewInstrumentedModel(NewConcurrencyLimitedModel(model, gate))` includes queue wait time in the request span. Reverse the order when you want telemetry to begin only after admission.
 
+`FallbackModel` records each failed or rejected candidate in `ModelResponse.FailedAttempts`. Each `ModelRequestAttempt` includes the model, provider, outcome, timing, error, and billed usage when a response was rejected. Attempt usage counts toward run token and cost limits, but not `RequestLimit`. Persisted messages retain these records. Instrumentation emits an error child span for each attempt while the recovered request span reports the model that answered.
+
 `ModelWrapper` delegates all optional interfaces implemented by the wrapped model. A custom wrapper should override only behavior it changes. Use `UnwrapModel` when profile detection or diagnostics need the innermost concrete model. Cyclic or nil wrapper chains return the outer model instead of looping.
 
 ## Choose a capability or a wrapper

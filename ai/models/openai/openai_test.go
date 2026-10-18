@@ -604,8 +604,9 @@ func TestParseErrors(t *testing.T) {
 		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(body))
 		})
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
-			t.Fatalf("%s: expected error", name)
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+		if err == nil || name == "invalid json" && !errors.As(err, new(ai.ModelAPIError)) {
+			t.Fatalf("%s: unexpected error %v", name, err)
 		}
 	}
 }
@@ -810,11 +811,16 @@ func TestChatFileContent(t *testing.T) {
 		ai.BinaryContent{Data: []byte("config"), MediaType: "text/plain", Identifier: "config"},
 		ai.BinaryContent{Data: []byte("name = \"demo\""), MediaType: "application/toml", Identifier: "project"},
 		ai.UploadedFile{FileID: "file-report", ProviderName: "openai", MediaType: "application/pdf"},
+		ai.BinaryContent{Data: []byte("x"), MediaType: "application/json; charset=utf-8", Identifier: "j"},
 	}}}}}
 	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
 		t.Fatal(err)
 	}
 	parts := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if parts[9].(map[string]any)["type"] != "text" || parts[9].(map[string]any)["text"] !=
+		"-----BEGIN FILE id=\"j\" type=\"application/json; charset=utf-8\"-----\nx\n-----END FILE id=\"j\"-----" {
+		t.Fatalf("parameterized JSON media type was not inlined as text: %#v", parts[9])
+	}
 	if parts[0].(map[string]any)["input_audio"].(map[string]any)["data"] != "ZmlsZQ==" ||
 		parts[0].(map[string]any)["input_audio"].(map[string]any)["format"] != "mp3" ||
 		parts[1].(map[string]any)["file"].(map[string]any)["file_data"] !=

@@ -20,6 +20,7 @@ func (c usageLimitsCapability) WrapModelRequest(
 	}
 	fillResponseCost(ctx, resp)
 	projected := current
+	projected.Add(modelRequestAttemptsUsage(resp.FailedAttempts))
 	projected.Add(resp.Usage)
 	if err := c.limits.check(projected); err != nil {
 		return nil, err

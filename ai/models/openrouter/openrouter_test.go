@@ -480,6 +480,34 @@ func TestOpenRouterPromptCaching(t *testing.T) {
 			}
 		}
 	}
+
+	short, err := (openrouter.Settings{
+		CacheInstructions: openrouter.CacheTTL5Minutes, CacheToolDefinitions: openrouter.CacheTTL5Minutes,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := openrouter.NewModel(
+		"anthropic/claude-sonnet-4.6", openrouter.WithBaseURL(server.URL), openrouter.WithHTTPClient(server.Client()),
+	)
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{ai.TextContent{Text: "late"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour}}},
+	}}}, ai.ModelRequestParams{
+		Instructions: "static",
+		Tools:        []ai.ToolDefinition{{Name: "local", Schema: map[string]any{"type": "object"}}},
+		Settings:     short,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	raised := bodies[len(bodies)-1]
+	raisedMessages := raised["messages"].([]any)
+	system := raisedMessages[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	late := raisedMessages[1].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if system["cache_control"].(map[string]any)["ttl"] != "1h" ||
+		raised["tools"].([]any)[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" ||
+		late["cache_control"].(map[string]any)["ttl"] != "1h" {
+		t.Fatalf("earlier 5m breakpoints were not raised: %#v", raised)
+	}
 }
 
 func TestOpenRouterResponseVariants(t *testing.T) {

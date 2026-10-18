@@ -708,6 +708,39 @@ func addAnthropicMessageCachePoint(messages []messageParam, ttl CacheTTL) {
 	}
 }
 
+func raiseAnthropicCacheTTLs(request *messagesRequest) {
+	controls := make([]*anthropicPromptCacheControl, 0, 5)
+	for index := range request.Tools {
+		if request.Tools[index].CacheControl != nil {
+			controls = append(controls, request.Tools[index].CacheControl)
+		}
+	}
+	if blocks, ok := request.System.([]contentBlock); ok {
+		for index := range blocks {
+			if blocks[index].CacheControl != nil {
+				controls = append(controls, blocks[index].CacheControl)
+			}
+		}
+	}
+	for messageIndex := range request.Messages {
+		for blockIndex := range request.Messages[messageIndex].Content {
+			if control := request.Messages[messageIndex].Content[blockIndex].CacheControl; control != nil {
+				controls = append(controls, control)
+			}
+		}
+	}
+	if request.CacheControl != nil {
+		controls = append(controls, request.CacheControl)
+	}
+	ttls := make([]string, len(controls))
+	for index, control := range controls {
+		ttls[index] = string(control.TTL)
+	}
+	for index, ttl := range promptcache.RaiseEarlierTTLs(ttls) {
+		controls[index].TTL = ai.CachePointTTL(ttl)
+	}
+}
+
 func limitAnthropicCachePoints(request *messagesRequest, automatic bool) error {
 	maximum := 4
 	if automatic {
@@ -876,7 +909,7 @@ func anthropicEffort(modelName string, level ai.ThinkingLevel) Effort {
 func anthropicSupportsAdaptiveThinking(modelName string) bool {
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-sonnet-4-6", "claude-sonnet-5",
-		"claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+		"claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-haiku-5-5",
 	} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
@@ -888,7 +921,7 @@ func anthropicSupportsAdaptiveThinking(modelName string) bool {
 func anthropicDisallowsBudgetThinking(modelName string) bool {
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-opus-4-7", "claude-opus-4-8",
-		"claude-opus-5", "claude-sonnet-5",
+		"claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5",
 	} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
@@ -904,7 +937,7 @@ func anthropicDisallowsSamplingSettings(modelName string) bool {
 func defaultAnthropicMaxTokens(modelName string) int {
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
-		"claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5",
+		"claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-haiku-5-5",
 	} {
 		if strings.HasPrefix(modelName, prefix) {
 			return 128000
@@ -940,7 +973,7 @@ func anthropicSupportsForcedToolChoice(modelName string) bool {
 
 func anthropicBindsThinkingBlocks(modelName string) bool {
 	modelName = strings.ToLower(modelName)
-	for _, prefix := range []string{"claude-fable-5-1", "claude-opus-5-5"} {
+	for _, prefix := range []string{"claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
 		}
@@ -951,7 +984,7 @@ func anthropicBindsThinkingBlocks(modelName string) bool {
 func anthropicSupportsXHighEffort(modelName string) bool {
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-opus-4-7", "claude-opus-4-8",
-		"claude-opus-5", "claude-sonnet-5",
+		"claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5",
 	} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
@@ -964,6 +997,7 @@ func anthropicSupportsAdvisor(modelName string) bool {
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-opus-4-6", "claude-opus-4-7",
 		"claude-opus-4-8", "claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-haiku-4-5",
+		"claude-haiku-5-5",
 	} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
@@ -991,7 +1025,7 @@ func anthropicCodeExecutionToolVersion(
 
 func anthropicSupportsLatestCodeExecution(modelName string) bool {
 	for _, prefix := range []string{
-		"claude-fable-5", "claude-mythos-5", "claude-sonnet-4-5",
+		"claude-fable-5", "claude-mythos-5", "claude-haiku-5-5", "claude-sonnet-4-5",
 		"claude-sonnet-4-6", "claude-sonnet-5", "claude-opus-4-5", "claude-opus-4-6",
 		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
 	} {
@@ -1006,6 +1040,7 @@ func anthropicSupportsDynamicFiltering(modelName string) bool {
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-mythos-preview", "claude-sonnet-4-6",
 		"claude-sonnet-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+		"claude-haiku-5-5",
 	} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
@@ -1390,12 +1425,16 @@ func (m *Model) buildPayload(
 		}
 		req.OutputConfig.Format = &anthropicOutputFormat{Type: "json_schema", Schema: params.OutputSchema}
 	}
-	return req, limitAnthropicCachePoints(req, req.CacheControl != nil)
+	if err := limitAnthropicCachePoints(req, req.CacheControl != nil); err != nil { // pragma: no cover - fixed boundaries cannot exceed four slots.
+		return nil, err
+	}
+	raiseAnthropicCacheTTLs(req)
+	return req, nil
 }
 
 func supportsAnthropicNativeOutput(modelName string) bool {
 	for _, prefix := range []string{
-		"claude-fable-5", "claude-mythos-5", "claude-haiku-4-5", "claude-sonnet-4-5",
+		"claude-fable-5", "claude-mythos-5", "claude-haiku-4-5", "claude-haiku-5-5", "claude-sonnet-4-5",
 		"claude-sonnet-4-6", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
 		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5",
 	} {
@@ -1579,7 +1618,8 @@ func anthropicThinking(
 		settings.Level == "" && settings.TokenBudget == nil {
 		if settings != nil && settings.Level == ai.ThinkingLevelDisabled &&
 			(configuredEffort == EffortXHigh || configuredEffort == EffortMax) &&
-			strings.HasPrefix(modelName, "claude-opus-5") && !strings.HasPrefix(modelName, "claude-opus-5-5") {
+			(strings.HasPrefix(modelName, "claude-haiku-5-5") ||
+				strings.HasPrefix(modelName, "claude-opus-5") && !strings.HasPrefix(modelName, "claude-opus-5-5")) {
 			return nil, "", fmt.Errorf(
 				"anthropic: model %q does not support effort %q while thinking is disabled", modelName, configuredEffort,
 			)
@@ -2027,7 +2067,7 @@ func anthropicToolSearchReplayResult(
 
 func supportsDeferredTools(name string) bool {
 	for _, prefix := range []string{
-		"claude-haiku-4-5", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-5",
+		"claude-haiku-4-5", "claude-haiku-5-5", "claude-sonnet-4-5", "claude-sonnet-4-6", "claude-sonnet-5",
 		"claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
 	} {
 		if strings.HasPrefix(name, prefix) {
@@ -2039,7 +2079,7 @@ func supportsDeferredTools(name string) bool {
 
 func supportsStrictTools(name string) bool {
 	for _, prefix := range []string{
-		"claude-fable-5", "claude-mythos-5", "claude-haiku-4-5", "claude-sonnet-4-5",
+		"claude-fable-5", "claude-mythos-5", "claude-haiku-4-5", "claude-haiku-5-5", "claude-sonnet-4-5",
 		"claude-sonnet-4-6", "claude-opus-4-1", "claude-opus-4-5", "claude-opus-4-6",
 		"claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5",
 	} {

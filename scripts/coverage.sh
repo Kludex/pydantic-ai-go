@@ -35,6 +35,7 @@ packages=(
     ./ai/models/fakes
     ./ai/models/openai
     ./ai/models/openaicodex
+    ./ai/models/openaidecisions
     ./ai/models/openrouter
     ./ai/models/anthropic
     ./ai/models/azure
@@ -74,7 +75,8 @@ packages=(
 for pkg in "${packages[@]}"; do
     profile=$(mktemp)
     if [ "$pkg" = "./ai/internal/decision" ]; then
-        go test ./ai/models/typesafe ./ai/models/systemone -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+        go test ./ai/models/typesafe ./ai/models/systemone ./ai/models/openaidecisions \
+            -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     elif [ "$pkg" = "./ai/internal/promptcache" ]; then
         go test ./ai/models/anthropic ./ai/models/bedrock ./ai/models/openai ./ai/models/openrouter \
             -coverpkg="$pkg" -coverprofile="$profile" > /dev/null

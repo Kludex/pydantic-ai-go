@@ -50,19 +50,11 @@ func userFile(part UIMessagePart) (ai.UserContent, error) {
 }
 
 func binaryFile(dataURI string) (ai.BinaryContent, error) {
-	header, payload, found := strings.Cut(strings.TrimPrefix(dataURI, "data:"), ",")
-	if !found || !strings.HasSuffix(header, ";base64") {
-		return ai.BinaryContent{}, fmt.Errorf("vercel: file data URL must contain base64 data")
-	}
-	mediaType := strings.TrimSuffix(header, ";base64")
-	if mediaType == "" {
-		return ai.BinaryContent{}, fmt.Errorf("vercel: file data URL must contain a media type")
-	}
-	data, err := base64.StdEncoding.DecodeString(payload)
+	content, err := ai.BinaryContentFromDataURI(dataURI)
 	if err != nil {
 		return ai.BinaryContent{}, fmt.Errorf("vercel: decode file data URL: %w", err)
 	}
-	return ai.BinaryContent{Data: data, MediaType: mediaType}, nil
+	return content, nil
 }
 
 func normalizeClientToolReturnContent(value any) any {

@@ -83,6 +83,14 @@ func (connection *LiveConnection) redialSession(ctx context.Context) (bool, erro
 		clear(connection.delegations)
 		clear(connection.reasoning)
 		connection.seconds = 0
+		now := time.Now()
+		if connection.inputAudioEnd.After(now) {
+			connection.inputAudioEnd = now
+		}
+		if connection.audioEnd.After(now) {
+			connection.audioEnd = now
+		}
+		connection.nextIdleFrame = time.Time{}
 		connection.ended = false
 		connection.redial = false
 		connection.startReader()

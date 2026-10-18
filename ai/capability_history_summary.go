@@ -3,6 +3,7 @@ package ai
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -67,7 +68,7 @@ func (summarizer HistorySummarizer) BeforeModelRequest(
 	if err != nil {
 		return request, fmt.Errorf("ai: summarize history: %w", err)
 	}
-	if summary.Content == "" {
+	if strings.TrimSpace(summary.Content) == "" {
 		return request, fmt.Errorf("ai: history summary must not be empty")
 	}
 	compacted := make([]ModelMessage, 0, len(request.Messages)-split+1)

@@ -125,11 +125,11 @@ func (fallback *FallbackModel) Request(
 ) (*ModelResponse, error) {
 	failures := make([]error, 0, len(fallback.models))
 	rejected := make([]*ModelResponse, 0)
-	rejectedCost := 0.0
-	hasRejectedCost := false
+	attempts := make([]ModelRequestAttempt, 0, len(fallback.models))
 	rewound := false
 
 	if model := fallback.pinnedModel(messages); model != nil {
+		started := time.Now()
 		response, err := fallback.requestModel(ctx, model, messages, params)
 		if err == nil && response == nil {
 			err = &UnexpectedModelBehaviorError{Message: "fallback model returned no response"}
@@ -149,9 +149,11 @@ func (fallback *FallbackModel) Request(
 		messages = rewindFallbackMessages(messages)
 		rewound = true
 		failures = append(failures, err)
+		fallback.recordAttempt(ctx, &attempts, model, err, response, started)
 	}
 
 	for _, model := range fallback.models {
+		started := time.Now()
 		response, err := fallback.requestModel(ctx, model, messages, params)
 		if err != nil {
 			shouldFallback, predicateErr := fallback.shouldFallbackError(ctx, err)
@@ -162,6 +164,7 @@ func (fallback *FallbackModel) Request(
 				return response, err
 			}
 			failures = append(failures, err)
+			fallback.recordAttempt(ctx, &attempts, model, err, response, started)
 			continue
 		}
 		if response == nil {
@@ -174,24 +177,14 @@ func (fallback *FallbackModel) Request(
 		}
 		if reject {
 			fillResponseCost(ctx, response)
-			if response.Usage.CostUSD != nil {
-				rejectedCost += *response.Usage.CostUSD
-				hasRejectedCost = true
-			}
 			rejected = append(rejected, cloneModelResponse(response))
+			fallback.recordAttempt(ctx, &attempts, model, nil, response, started)
 			continue
 		}
-		if hasRejectedCost {
-			fillResponseCost(ctx, response)
-			cost := rejectedCost
-			if response.Usage.CostUSD != nil {
-				cost += *response.Usage.CostUSD
-			}
-			response.Usage.CostUSD = &cost
-		}
+		response.FailedAttempts = append(cloneModelRequestAttempts(attempts), response.FailedAttempts...)
 		return response, nil
 	}
-	return nil, newFallbackExhaustedError(failures, rejected)
+	return nil, newFallbackExhaustedError(failures, rejected, attempts)
 }
 
 // StreamRequest tries the next model only when opening a stream fails. Errors
@@ -200,11 +193,13 @@ func (fallback *FallbackModel) StreamRequest(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
 ) (iter.Seq2[ModelStreamEvent, error], error) {
 	failures := make([]error, 0, len(fallback.models))
+	attempts := make([]ModelRequestAttempt, 0, len(fallback.models))
 	rewound := false
 	if model := fallback.pinnedModel(messages); model != nil {
+		started := time.Now()
 		events, err := fallback.streamModel(ctx, model, messages, params)
 		if err == nil {
-			return fallback.stampStream(events, model, false), nil
+			return fallback.stampStream(events, model, false, attempts), nil
 		}
 		shouldFallback, predicateErr := fallback.shouldFallbackError(ctx, err)
 		if predicateErr != nil {
@@ -217,11 +212,13 @@ func (fallback *FallbackModel) StreamRequest(
 		messages = rewindFallbackMessages(messages)
 		rewound = true
 		failures = append(failures, err)
+		fallback.recordAttempt(ctx, &attempts, model, err, nil, started)
 	}
 	for _, model := range fallback.models {
+		started := time.Now()
 		events, err := fallback.streamModel(ctx, model, messages, params)
 		if err == nil {
-			return fallback.stampStream(events, model, rewound), nil
+			return fallback.stampStream(events, model, rewound, attempts), nil
 		}
 		shouldFallback, predicateErr := fallback.shouldFallbackError(ctx, err)
 		if predicateErr != nil {
@@ -231,8 +228,9 @@ func (fallback *FallbackModel) StreamRequest(
 			return nil, err
 		}
 		failures = append(failures, err)
+		fallback.recordAttempt(ctx, &attempts, model, err, nil, started)
 	}
-	return nil, newFallbackExhaustedError(failures, nil)
+	return nil, newFallbackExhaustedError(failures, nil, attempts)
 }
 
 // OpenModel opens every model and returns a reverse-order closer.
@@ -395,6 +393,62 @@ func (fallback *FallbackModel) shouldFallbackResponse(
 	return false, nil
 }
 
+func (fallback *FallbackModel) recordAttempt(
+	ctx context.Context,
+	attempts *[]ModelRequestAttempt,
+	model Model,
+	requestErr error,
+	response *ModelResponse,
+	started time.Time,
+) {
+	if response != nil {
+		*attempts = append(*attempts, cloneModelRequestAttempts(response.FailedAttempts)...)
+	} else {
+		var exhausted *FallbackExhaustedError
+		if errors.As(requestErr, &exhausted) {
+			*attempts = append(*attempts, exhausted.Attempts()...)
+		}
+	}
+	attempt := ModelRequestAttempt{
+		ModelName: model.Name(), ProviderName: fallbackProviderName(model),
+		Outcome: ModelRequestAttemptError, Timestamp: started.UTC(), Duration: time.Since(started),
+	}
+	if requestErr != nil {
+		attempt.Error = describeFallbackError(requestErr)
+	} else {
+		attempt.Outcome = ModelRequestAttemptRejected
+		fillResponseCost(ctx, response)
+		attempt.ModelName = response.ModelName
+		attempt.ProviderName = response.ProviderName
+		if attempt.ProviderName == "" {
+			attempt.ProviderName = fallbackProviderName(model)
+		}
+		usage := response.Usage.Clone()
+		attempt.Usage = &usage
+	}
+	*attempts = append(*attempts, attempt)
+	recordModelRequestAttempt(ctx, attempt, requestErr, response, len(*attempts)-1)
+}
+
+func fallbackProviderName(model Model) string {
+	if identified, ok := model.(ModelProviderIdentity); ok {
+		return identified.ProviderName()
+	}
+	return ""
+}
+
+func describeFallbackError(err error) string {
+	typeName := fmt.Sprintf("%T", err)
+	name := strings.TrimPrefix(typeName, "*")
+	if index := strings.LastIndex(name, "."); index >= 0 {
+		name = name[index+1:]
+	}
+	if message := err.Error(); message != "" {
+		return name + ": " + message
+	}
+	return name
+}
+
 func (fallback *FallbackModel) stampResponse(response *ModelResponse, model Model, replace bool) {
 	stampDirectResponse(model, response)
 	if response.State == ModelResponseStateSuspended {
@@ -406,7 +460,7 @@ func (fallback *FallbackModel) stampResponse(response *ModelResponse, model Mode
 }
 
 func (fallback *FallbackModel) stampStream(
-	events iter.Seq2[ModelStreamEvent, error], model Model, replace bool,
+	events iter.Seq2[ModelStreamEvent, error], model Model, replace bool, attempts []ModelRequestAttempt,
 ) iter.Seq2[ModelStreamEvent, error] {
 	return func(yield func(ModelStreamEvent, error) bool) {
 		for event, err := range events {
@@ -425,6 +479,7 @@ func (fallback *FallbackModel) stampStream(
 				if replace {
 					typed.Metadata = stampedFallbackMetadata(typed.Metadata, "replace_previous_response", true)
 				}
+				typed.FailedAttempts = append(cloneModelRequestAttempts(attempts), typed.FailedAttempts...)
 				event = typed
 			case FinishEvent:
 				if typed.ModelName == "" {
@@ -436,6 +491,7 @@ func (fallback *FallbackModel) stampStream(
 				if replace {
 					typed.Metadata = stampedFallbackMetadata(typed.Metadata, "replace_previous_response", true)
 				}
+				typed.FailedAttempts = append(cloneModelRequestAttempts(attempts), typed.FailedAttempts...)
 				event = typed
 			}
 			if !yield(event, nil) {
@@ -516,14 +572,20 @@ func closeFallbackModels(ctx context.Context, closers []ModelCloseFunc) error {
 type FallbackExhaustedError struct {
 	failures []error
 	rejected []*ModelResponse
+	attempts []ModelRequestAttempt
 }
 
-func newFallbackExhaustedError(failures []error, rejected []*ModelResponse) *FallbackExhaustedError {
+func newFallbackExhaustedError(
+	failures []error, rejected []*ModelResponse, attempts []ModelRequestAttempt,
+) *FallbackExhaustedError {
 	cloned := make([]*ModelResponse, len(rejected))
 	for index, response := range rejected {
 		cloned[index] = cloneModelResponse(response)
 	}
-	return &FallbackExhaustedError{failures: append([]error(nil), failures...), rejected: cloned}
+	return &FallbackExhaustedError{
+		failures: append([]error(nil), failures...), rejected: cloned,
+		attempts: cloneModelRequestAttempts(attempts),
+	}
 }
 
 // Error summarizes failed and rejected fallback candidates.
@@ -539,6 +601,11 @@ func (err *FallbackExhaustedError) Unwrap() []error {
 // Failures returns the model errors in attempt order.
 func (err *FallbackExhaustedError) Failures() []error {
 	return append([]error(nil), err.failures...)
+}
+
+// Attempts returns detached failed and rejected attempts in order.
+func (err *FallbackExhaustedError) Attempts() []ModelRequestAttempt {
+	return cloneModelRequestAttempts(err.attempts)
 }
 
 // RejectedResponses returns detached rejected responses in attempt order.

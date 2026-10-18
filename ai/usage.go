@@ -137,6 +137,20 @@ func (u *Usage) Add(other Usage) {
 	}
 }
 
+func modelRequestAttemptsUsage(attempts []ModelRequestAttempt) Usage {
+	var usage Usage
+	for _, attempt := range attempts {
+		if attempt.Usage == nil {
+			continue
+		}
+		attributed := attempt.Usage.Clone()
+		attributed.Requests = 0
+		attributed.ToolCalls = 0
+		usage.Add(attributed)
+	}
+	return usage
+}
+
 // UsageLimits bounds a run. The zero value means unlimited.
 type UsageLimits struct {
 	// RequestLimit caps model generation requests. Zero disables the limit.

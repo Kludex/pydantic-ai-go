@@ -292,6 +292,11 @@ func (model *InstrumentedModel) startOperation(
 	spanCtx, span := model.tracer.Start(
 		ctx, operation+" "+model.Name(), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attributes...),
 	)
+	if operation == "chat" {
+		spanCtx = context.WithValue(spanCtx, modelRequestAttemptRecorderKey{}, &modelRequestAttemptRecorder{
+			tracer: model.tracer, parent: span, includeContent: model.includeContent,
+		})
+	}
 	if operation == "compact" {
 		spanCtx = context.WithValue(spanCtx, compactionSpanContextKey{}, true)
 	} else {

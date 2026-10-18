@@ -35,7 +35,13 @@ $ AWS_REGION=us-east-1 go run ./examples/bedrock
 
 `NewModel` loads the default AWS SDK configuration on the first operation. This keeps construction free of network and credential-provider work. Concurrent calls share the loaded client. `RunStream` uses `ConverseStream` when the client supports it and emits normalized text, reasoning, and function-tool events.
 
-You can pass a foundation model ID, an inference profile ID, or an ARN. Bedrock validates whether that resource supports the Converse API.
+You can pass a foundation model ID, an inference profile ID, or an ARN. Bedrock validates whether that resource supports the Converse API. GPT-5.6 Sol, Luna, and Terra, GPT-6 Sol, Luna, and Astra, and GPT-6.1 Sol use Converse without unsupported temperature or top-p fields.
+
+## Configure data retention for Claude Fable
+
+Claude Fable 5 and 5.1 require the account's data retention mode in the selected Region to be `aws_review` or the legacy `provider_data_share`. You configure this through the Bedrock control plane. It cannot be changed per request.
+
+When Bedrock rejects a request for this reason, `APIError.Hint` explains the required `PutAccountDataRetention` change and links to the AWS data retention documentation. The original AWS error remains available through `errors.As` and `errors.Unwrap`.
 
 ## Count input tokens
 

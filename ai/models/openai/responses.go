@@ -239,7 +239,7 @@ func (m *ResponsesModel) CountTokens(
 		InputTokens int `json:"input_tokens"`
 	}
 	if err := json.Unmarshal(data, &counted); err != nil {
-		return ai.Usage{}, fmt.Errorf("openai: decode token count response: %w", err)
+		return ai.Usage{}, &APIError{Body: "decode token count response: " + err.Error(), ProviderName: m.providerName}
 	}
 	return ai.Usage{InputTokens: counted.InputTokens}, nil
 }
@@ -989,7 +989,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 	}
 	keepImplicitCacheWithoutBreakpoints(&promptCache, hasPromptCacheBreakpoint)
 	if promptCache.Options != nil {
-		if req.PromptCacheOptions == nil {
+		if req.PromptCacheOptions == nil { // pragma: no cover - options initialize this request field above.
 			req.PromptCacheOptions = &responsesPromptCacheOptions{}
 		}
 		req.PromptCacheOptions.PromptCacheOptions = *promptCache.Options

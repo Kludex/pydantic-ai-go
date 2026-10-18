@@ -11,6 +11,15 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
 
+func TestNewContentFilterError(t *testing.T) {
+	response := ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "partial"}}}
+	err := ai.NewContentFilterError("blocked", response)
+	response.Parts[0] = ai.TextPart{Content: "mutated"}
+	if err.Message != "blocked" || err.Response().Text() != "partial" || len(err.Body()) == 0 {
+		t.Fatalf("content filter error = %+v", err)
+	}
+}
+
 func TestEmptyContentFilterResponseFails(t *testing.T) {
 	model := fakes.NewFunctionModel(func(
 		context.Context, []ai.ModelMessage, ai.ModelRequestParams,

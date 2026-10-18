@@ -191,6 +191,13 @@ type ContentFilterError struct {
 	body     []byte
 }
 
+// NewContentFilterError returns an inspectable content-filter error with a detached response.
+func NewContentFilterError(message string, response ModelResponse) *ContentFilterError {
+	cloned := cloneModelResponse(&response)
+	body, _ := MarshalMessages([]ModelMessage{*cloned})
+	return &ContentFilterError{Message: message, response: *cloned, body: body}
+}
+
 // Error describes the content-filter decision.
 func (e *ContentFilterError) Error() string { return "ai: " + e.Message }
 

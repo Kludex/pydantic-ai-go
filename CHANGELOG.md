@@ -6,9 +6,34 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+### Added
+
+- OpenAI Decisions through `ai/models/openaidecisions` and the `openai-decisions:` inference prefix, with image input and request limits checked before transport.
+- `ModelResponse.FailedAttempts`, `ModelRequestAttempt`, and `FallbackExhaustedError.Attempts` record each failed or rejected `FallbackModel` attempt with its model, provider, timing, error, and usage.
+- `BinaryContentFromDataURI` decodes base64 data URIs, including percent-encoded payloads.
+- `NewContentFilterError` builds an inspectable content-filter error from a response.
+- GPT-Live `LiveSettings.IdleAudio` and `openai_live_idle_audio` stream silence so text-only sessions work without a microphone.
+- GPT-Live `LiveModel.AnswerWebRTCOfferWithHistory` continues a conversation on a WebRTC call. `ConnectWebRTC` accepts the same history and rejects a sideband whose history differs.
+- Azure Voice Live semantic VAD, end-of-utterance detection, noise suppression, and echo cancellation settings.
+- `APIError.Hint` explains the Bedrock data retention mode that Claude Fable 5 and 5.1 require.
+
+### Changed
+
+- Tokens and cost of responses a `FallbackModel` rejected count toward run usage and token and cost limits, but not `RequestLimit`. Rejected cost is no longer folded into the accepted response's `Usage.CostUSD`.
+- xAI realtime reconnects start a new provider conversation and replay local history, because xAI conversation resumption drops typed user turns and tool calls.
+- Anthropic automatic caching also caches instructions and tool definitions. Anthropic, Bedrock, and OpenRouter raise an earlier cache boundary to a later, longer lifetime.
+- `webchat` returns 422 instead of 400 or a streamed error for undecodable requests and unsupported triggers.
+- Support GPT-6.1 Sol on Bedrock Converse and Claude Haiku 5.5.
+- OpenAI Decisions keeps a single output type's questions beside the route question when speculating on every route would exceed the question limit.
+
 ### Fixed
 
 - Keep OpenAI's implicit prompt cache when stable-prefix-only caching cannot place an explicit boundary.
+- Return fallback-eligible model API errors for non-JSON 200 responses from OpenAI Responses token counting, and wrap transport failures from Google, Mistral, Cohere, Anthropic, and Bedrock in `ModelTransportError`.
+- Repair repeated tool-call IDs within one response first in, first out.
+- Keep OpenAI Responses tool-call arguments that arrive only in, or disagree with, `done` events.
+- Treat media types with parameters, such as `text/plain; charset=utf-8`, as text-like.
+- Persist extensionless file URLs with a `null` media type instead of failing.
 
 ## [0.5.0] - 2026-10-08
 

@@ -132,7 +132,8 @@ func dataURI(mediaType string, data []byte) string {
 }
 
 func isTextLike(mediaType string) bool {
-	mediaType = strings.ToLower(mediaType)
+	mediaType, _, _ = strings.Cut(mediaType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
 	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" ||
 		strings.HasSuffix(mediaType, "+json") || mediaType == "application/xml" ||
 		strings.HasSuffix(mediaType, "+xml") || mediaType == "application/yaml" ||

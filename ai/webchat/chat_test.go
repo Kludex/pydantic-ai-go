@@ -22,16 +22,18 @@ func TestChatRequestValidation(t *testing.T) {
 		}
 	}
 
-	request := request(http.MethodPost, "/api/chat", `{`)
-	request.Header.Set("Content-Type", "application/json; charset=utf-8")
-	response := serve(handler, request)
-	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "invalid Vercel AI request") {
-		t.Fatalf("unexpected malformed request response: %d %s", response.Code, response.Body.String())
+	for _, body := range []string{`{`, "\xff", `{}`, `{"trigger":"other"}`, `{"trigger":"submit-message","messages":"wrong"}`} {
+		request := request(http.MethodPost, "/api/chat", body)
+		request.Header.Set("Content-Type", "application/json; charset=utf-8")
+		response := serve(handler, request)
+		if response.Code != http.StatusUnprocessableEntity || !strings.Contains(response.Body.String(), "invalid Vercel AI request") {
+			t.Fatalf("body %q returned %d: %s", body, response.Code, response.Body.String())
+		}
 	}
 
-	request = jsonRequest(http.MethodPost, "/api/chat", `{}`)
+	request := jsonRequest(http.MethodPost, "/api/chat", `{}`)
 	request.Body = errorReadCloser{}
-	response = serve(handler, request)
+	response := serve(handler, request)
 	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "read request body") {
 		t.Fatalf("unexpected read error response: %d %s", response.Code, response.Body.String())
 	}
@@ -42,7 +44,7 @@ func TestChatRequestValidation(t *testing.T) {
 		t.Fatalf("unexpected oversized response: %d %s", response.Code, response.Body.String())
 	}
 
-	response = serve(handler, jsonRequest(http.MethodPost, "/api/chat", `{}`))
+	response = serve(handler, jsonRequest(http.MethodPost, "/api/chat", `{"trigger":"submit-message","messages":[]}`))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"type":"error"`) {
 		t.Fatalf("adapter error was not streamed: %d %s", response.Code, response.Body.String())
 	}

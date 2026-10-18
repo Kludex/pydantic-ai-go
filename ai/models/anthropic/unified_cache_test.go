@@ -55,7 +55,9 @@ func TestUnifiedAnthropicCaching(t *testing.T) {
 					t.Fatalf("static boundaries=%+v", body)
 				}
 			default:
-				if body["cache_control"].(map[string]any)["ttl"] != test.ttl {
+				if body["cache_control"].(map[string]any)["ttl"] != test.ttl ||
+					body["system"].([]any)[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != test.ttl ||
+					body["tools"].([]any)[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != test.ttl {
 					t.Fatalf("cache=%+v", body)
 				}
 			}
@@ -81,6 +83,16 @@ func TestUnifiedAnthropicCaching(t *testing.T) {
 	}
 	if _, known := model.PromptCacheRetention(bad); known {
 		t.Fatal("invalid retention claimed")
+	}
+	hour := ai.ModelSettings{Cache: &ai.CacheConfig{Retention: ai.CacheRetention1Hour}}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{
+		Contents: []ai.UserContent{ai.TextContent{Text: "early"}, ai.CachePoint{}, ai.TextContent{Text: "late"}},
+	}}}}, ai.ModelRequestParams{Settings: hour}); err != nil {
+		t.Fatal(err)
+	}
+	early := body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+	if early["cache_control"].(map[string]any)["ttl"] != "1h" || body["cache_control"].(map[string]any)["ttl"] != "1h" {
+		t.Fatalf("earlier 5m breakpoint was not raised: %+v", body)
 	}
 }
 

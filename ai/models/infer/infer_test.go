@@ -40,6 +40,7 @@ func TestModels(t *testing.T) {
 		{"openai:gpt-5-mini", "openai"},
 		{"openai-responses:gpt-5-mini", "openai"},
 		{"openai-codex:gpt-5.6-luna", "openai-codex"},
+		{"openai-decisions:gpt-6-luna", "openai-decisions"},
 		{"anthropic:claude-sonnet-4-5", "anthropic"},
 		{"google:gemini-2.5-flash", "google"},
 		{"github-copilot:claude-haiku-4.5", "github-copilot"},

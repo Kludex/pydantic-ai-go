@@ -126,8 +126,7 @@ func TestVideoURLSerializationValidation(t *testing.T) {
 		t.Fatalf("safe video did not serialize: data=%s err=%v", encoded, err)
 	}
 	for name, video := range map[string]ai.VideoURL{
-		"media type": {URL: "https://example.com/video"},
-		"mode":       {URL: "https://example.com/video.mp4", ForceDownload: "invalid"},
+		"mode": {URL: "https://example.com/video.mp4", ForceDownload: "invalid"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := ai.MarshalMessages([]ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{

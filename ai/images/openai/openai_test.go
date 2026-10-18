@@ -207,7 +207,7 @@ func TestResponseAndInputErrors(t *testing.T) {
 		"gpt-image-2", imageopenai.WithBaseURL(server.URL), imageopenai.WithHTTPClient(server.Client()),
 	).Generate(t.Context(), "draw", nil, images.Settings{})
 	server.Close()
-	if err == nil || !strings.Contains(err.Error(), "decode response") {
+	if !errors.As(err, new(ai.ModelAPIError)) || !strings.Contains(err.Error(), "decode response") {
 		t.Fatalf("unexpected decode error: %v", err)
 	}
 

@@ -76,7 +76,9 @@ func main() {
 }
 ```
 
-`DocumentURL` and `AudioURL` infer their media types from common file extensions. Set `MediaType` when a URL has no extension. Each type provides `ResolvedIdentifier()` for a stable six-character file identifier.
+`DocumentURL` and `AudioURL` infer their media types from common file extensions. Set `MediaType` when a provider needs one and the URL has no extension. Persisted history writes `media_type: null` for an extensionless URL, so you can save and reload a request even when its provider consumes the URL directly. Each type provides `ResolvedIdentifier()` for a stable six-character file identifier.
+
+Use `BinaryContentFromDataURI` to decode a base64 data URI. It preserves media type parameters such as `charset=utf-8` and accepts percent-encoded base64 payloads.
 
 OpenAI Responses sends document and audio URLs as `input_file`. Forced downloads become base64 file data. OpenAI Chat Completions downloads audio and accepts MP3 or WAV data. It downloads documents, sends supported binary documents as files, and wraps text-like documents in stable file delimiters.
 

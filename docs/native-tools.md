@@ -56,7 +56,20 @@ OpenAI Responses omits raw provider annotations by default. Set `Settings.Includ
 | `ExternalWebAccess` | Allow or forbid live web access where supported. `nil` uses the provider default. |
 | `Optional` | Omit the tool instead of failing when the selected provider does not support it. |
 
-Providers support different subsets of these fields. OpenAI Responses sends context size, location, allowed and blocked domains, and external web access. Anthropic sends location, allowed and blocked domains, and maximum uses. It selects `web_search_20260209` for models with dynamic filtering and `web_search_20250305` otherwise. Gemini currently sends only the native `googleSearch` declaration. Unsupported portable fields are left out of each request.
+Providers support different subsets of these fields. OpenAI Responses sends context size, location, allowed and blocked domains, and external web access. Anthropic sends location, allowed and blocked domains, and maximum uses. It selects `web_search_20260209` for models with dynamic filtering and `web_search_20250305` otherwise. Gemini currently sends only the native `googleSearch` declaration. Fields that only tune results, such as `SearchContextSize` and `UserLocation`, are left out of requests to providers that don't support them.
+
+`AllowedDomains`, `BlockedDomains`, `MaxUses`, and a false `ExternalWebAccess` restrict what the search may do, so they are never dropped silently. When one is set and the model can't apply it, `SupportsNativeTool` reports false and the tool counts as unsupported: its local fallback runs if one is registered, an `Optional` tool is left out, and otherwise the request fails before it reaches the provider, naming the settings.
+
+| Provider | Applies |
+| --- | --- |
+| OpenAI Responses | `AllowedDomains`, `BlockedDomains`, `ExternalWebAccess` |
+| OpenAI Chat | none |
+| Anthropic | `AllowedDomains`, `BlockedDomains`, `MaxUses` |
+| OpenRouter | `AllowedDomains`, `BlockedDomains`, `MaxUses` |
+| xAI | `AllowedDomains`, `BlockedDomains` |
+| Groq | `AllowedDomains`, `BlockedDomains` |
+| Google and Gemini Live | none |
+| GPT-Live | `AllowedDomains`, `BlockedDomains`, `ExternalWebAccess` |
 
 Gemini 3 can combine provider-native tools with function tools. Earlier Gemini models reject that combination before the HTTP request. Grounded Gemini responses retain complete `grounding_metadata` provider details while exposing search queries and returned web sources through normalized native-tool parts.
 
@@ -270,7 +283,7 @@ func main() {
 }
 ```
 
-`WebFetchTool` lets Anthropic or Gemini retrieve URL content. Anthropic sends domain filters, maximum uses, content limits, and citation configuration. Gemini renders the portable tool as `urlContext` and leaves unsupported settings out.
+`WebFetchTool` lets Anthropic or Gemini retrieve URL content. Anthropic sends domain filters, maximum uses, content limits, and citation configuration. Gemini renders the portable tool as `urlContext` and leaves content limits and citations out. Gemini can't apply `AllowedDomains`, `BlockedDomains`, or `MaxUses`, so a web fetch tool with one of them set counts as unsupported there, like a [restricted search](#configure-search).
 
 `NewWebFetchCapabilityWithLocal` adds the built-in local fallback shown above. It validates each URL and redirect, resolves every destination before dialing, blocks private and cloud-metadata addresses, limits compressed and decompressed bodies, converts HTML to Markdown, formats JSON, and returns other media as binary model content. Native domain filters override the local config so both paths enforce the same boundary.
 
@@ -504,7 +517,7 @@ func main() {
 }
 ```
 
-Only files whose `ProviderName` matches the selected provider are attached. Anthropic places uploads on every user turn except a turn containing only tool results. This keeps uploads in the active generation turn without breaking native tool pairing. It reuses the response container ID and retries once without a history-derived ID when an expired container returns a server error.
+Only files whose `ProviderName` matches the selected provider are attached. Anthropic places uploads on every user turn except a turn containing only tool results. This keeps uploads in the active generation turn without breaking native tool pairing. It reuses the response container ID and retries once without a history-derived ID when an expired container returns a server error or a `Container not found` 404.
 
 Anthropic native web-search counts are preserved as `Usage.Details["web_search_requests"]` and included in automatic pricing.
 

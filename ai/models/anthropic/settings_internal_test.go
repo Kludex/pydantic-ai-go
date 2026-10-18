@@ -125,12 +125,12 @@ func TestCachePlacementEdges(t *testing.T) {
 	}
 
 	messages := []messageParam{{Role: "assistant", Content: []contentBlock{{Type: "thinking"}}}}
-	addAnthropicMessageCachePoint(messages, CacheTTL5Minutes)
+	addAnthropicMessageCachePoint(messages, CacheTTL5Minutes, nil)
 	if messages[0].Content[0].CacheControl != nil {
 		t.Fatal("unsupported message block received cache control")
 	}
 	messages[0].Content = append(messages[0].Content, contentBlock{Type: "text", Text: "answer"})
-	addAnthropicMessageCachePoint(messages, CacheTTL5Minutes)
+	addAnthropicMessageCachePoint(messages, CacheTTL5Minutes, nil)
 	if messages[0].Content[1].CacheControl == nil {
 		t.Fatal("cacheable message block did not receive cache control")
 	}

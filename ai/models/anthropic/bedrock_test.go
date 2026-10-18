@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -169,10 +170,55 @@ func TestLegacyBedrockToolSearchProfile(t *testing.T) {
 	}
 }
 
+func TestLegacyBedrockStructuredOutput(t *testing.T) {
+	strict := true
+	schema := map[string]any{"type": "object"}
+	params := ai.ModelRequestParams{
+		Tools:      []ai.ToolDefinition{{Name: "add", Schema: schema, Strict: &strict}},
+		OutputMode: ai.OutputModeNative, OutputSchema: schema,
+	}
+	for name, served := range map[string]bool{
+		"global.anthropic.claude-sonnet-4-6": true, "us.anthropic.claude-opus-4-7": false,
+		"global.anthropic.claude-sonnet-5": false, "anthropic.claude-3-5-haiku-20241022-v1:0": false,
+	} {
+		var body map[string]any
+		client := &legacyBedrockClient{invoke: func(input *bedrockruntime.InvokeModelInput) (*bedrockruntime.InvokeModelOutput, error) {
+			if err := json.Unmarshal(input.Body, &body); err != nil {
+				t.Fatal(err)
+			}
+			return &bedrockruntime.InvokeModelOutput{Body: []byte(`{"model":"model","content":[],"usage":{}}`)}, nil
+		}}
+		model := anthropic.NewLegacyBedrockModel(name, anthropic.LegacyBedrockConfig{Client: client})
+		_, err := model.Request(context.Background(), nil, params)
+		if served != (err == nil) {
+			t.Fatalf("%s: unexpected native output error: %v", name, err)
+		}
+		textOnly := params
+		textOnly.OutputSchema = nil
+		if _, err := model.Request(context.Background(), nil, textOnly); err != nil {
+			t.Fatal(err)
+		}
+		if sent := body["tools"].([]any)[0].(map[string]any)["strict"] == true; sent != served {
+			t.Fatalf("%s: unexpected strict tools %#v", name, body["tools"])
+		}
+	}
+	overridden := anthropic.NewLegacyBedrockModel("anthropic.claude-sonnet-5", anthropic.LegacyBedrockConfig{
+		Client: &legacyBedrockClient{invoke: func(input *bedrockruntime.InvokeModelInput) (*bedrockruntime.InvokeModelOutput, error) {
+			if !strings.Contains(string(input.Body), `"strict":true`) {
+				t.Fatalf("WithStrictToolSupport did not override the Bedrock default: %s", input.Body)
+			}
+			return &bedrockruntime.InvokeModelOutput{Body: []byte(`{"model":"model","content":[],"usage":{}}`)}, nil
+		}},
+	}, anthropic.WithStrictToolSupport(true))
+	if _, err := overridden.Request(context.Background(), nil, ai.ModelRequestParams{Tools: params.Tools}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestLegacyBedrockAWSClientHeaders(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Header.Get("x-custom") != "present" {
-			t.Errorf("custom header missing: %v", request.Header)
+		if request.Header.Get("x-custom") != "present" || request.Header.Get("anthropic-beta") != "" {
+			t.Errorf("unexpected headers: %v", request.Header)
 		}
 		if strings.HasSuffix(request.URL.Path, "/converse-stream") || strings.HasSuffix(request.URL.Path, "/invoke-with-response-stream") {
 			response.Header().Set("Content-Type", "application/vnd.amazon.eventstream")
@@ -193,7 +239,9 @@ func TestLegacyBedrockAWSClientHeaders(t *testing.T) {
 	model := anthropic.NewLegacyBedrockModel("model", anthropic.LegacyBedrockConfig{
 		Client: client, ProviderURL: server.URL,
 	})
-	params := ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraHeaders: map[string]string{"x-custom": "present"}}}
+	params := ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraHeaders: map[string]string{
+		"x-custom": "present", "anthropic-beta": "custom-beta",
+	}}}
 	_, err := model.Request(context.Background(), nil, params)
 	if err != nil {
 		t.Fatal(err)
@@ -225,6 +273,37 @@ func TestLegacyBedrockAWSClientHeaders(t *testing.T) {
 	failureModel := anthropic.NewLegacyBedrockModel("model", anthropic.LegacyBedrockConfig{Client: failureClient})
 	if _, err := failureModel.StreamRequest(context.Background(), nil, ai.ModelRequestParams{}); err == nil {
 		t.Fatal("expected AWS stream-open error")
+	}
+
+	var bodies []map[string]any
+	staleServer := httptest.NewTLSServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		response.Header().Set("Content-Type", "application/json")
+		if len(bodies) == 1 {
+			response.Header().Set("X-Amzn-ErrorType", "ValidationException")
+			response.WriteHeader(http.StatusBadRequest)
+			_, _ = response.Write([]byte(`{"message":"messages.1.content.0: The block is bound to a different conversation"}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"content":[],"usage":{}}`))
+	}))
+	defer staleServer.Close()
+	staleModel := anthropic.NewLegacyBedrockModel("us.anthropic.claude-fable-5-1-v1:0", anthropic.LegacyBedrockConfig{
+		Client: bedrockruntime.NewFromConfig(aws.Config{
+			Region: "us-east-1", BaseEndpoint: aws.String(staleServer.URL), HTTPClient: staleServer.Client(),
+			Credentials: credentials.NewStaticCredentialsProvider("key", "secret", ""),
+		}),
+	})
+	if _, err := staleModel.Request(context.Background(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if len(bodies) != 2 || bodies[1]["thinking"] == nil ||
+		!reflect.DeepEqual(bodies[1]["anthropic_beta"], []any{"custom-beta", "thinking-binding-controls-2026-08-01"}) {
+		t.Fatalf("unexpected AWS stale-thinking recovery: %#v", bodies)
 	}
 }
 
@@ -317,4 +396,86 @@ func assertPanic(t *testing.T, function func()) {
 		}
 	}()
 	function()
+}
+
+func TestLegacyBedrockStaleThinkingRecovery(t *testing.T) {
+	stale := &smithyhttp.ResponseError{
+		Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusBadRequest}},
+		Err:      errors.New("ValidationException: The block is bound to a different conversation"),
+	}
+	params := ai.ModelRequestParams{Settings: ai.ModelSettings{ExtraHeaders: map[string]string{
+		"Anthropic-Beta": "custom-beta",
+	}}}
+	for _, test := range []struct {
+		model   string
+		retries bool
+	}{
+		{model: "us.anthropic.claude-fable-5-1-v1:0", retries: true},
+		{model: "anthropic.claude-opus-5-5", retries: true},
+		{model: "us.anthropic.claude-sonnet-4-6"},
+	} {
+		t.Run(test.model, func(t *testing.T) {
+			var bodies []map[string]any
+			fail := func(raw []byte) error {
+				var body map[string]any
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Fatal(err)
+				}
+				bodies = append(bodies, body)
+				if test.retries && len(bodies)%2 == 0 {
+					return nil
+				}
+				return stale
+			}
+			client := &streamingLegacyBedrockClient{legacyBedrockClient: &legacyBedrockClient{
+				invoke: func(input *bedrockruntime.InvokeModelInput) (*bedrockruntime.InvokeModelOutput, error) {
+					if err := fail(input.Body); err != nil {
+						return nil, err
+					}
+					return &bedrockruntime.InvokeModelOutput{Body: []byte(`{"content":[],"usage":{}}`)}, nil
+				},
+				count: func(input *bedrockruntime.CountTokensInput) (*bedrockruntime.CountTokensOutput, error) {
+					if err := fail(input.Input.(*types.CountTokensInputMemberInvokeModel).Value.Body); err != nil {
+						return nil, err
+					}
+					return &bedrockruntime.CountTokensOutput{InputTokens: aws.Int32(1)}, nil
+				},
+			}, stream: func(input *bedrockruntime.InvokeModelWithResponseStreamInput) (anthropic.LegacyBedrockEventStream, error) {
+				if err := fail(input.Body); err != nil {
+					return nil, err
+				}
+				return newLegacyEventStream(legacyChunk(`{"type":"message_stop"}`)), nil
+			}}
+			model := anthropic.NewLegacyBedrockModel(test.model, anthropic.LegacyBedrockConfig{Client: client})
+			_, requestErr := model.Request(t.Context(), nil, params)
+			_, countErr := model.CountTokens(t.Context(), nil, params)
+			_, streamErr := model.StreamRequest(t.Context(), nil, params)
+			for _, err := range []error{requestErr, countErr, streamErr} {
+				var apiErr *anthropic.APIError
+				if test.retries != (err == nil) || !test.retries && (!errors.As(err, &apiErr) || apiErr.StatusCode != 400) {
+					t.Fatalf("unexpected stale-thinking result: %v", err)
+				}
+			}
+			if !test.retries {
+				if len(bodies) != 3 || bodies[0]["thinking"] != nil ||
+					!reflect.DeepEqual(bodies[0]["anthropic_beta"], []any{"custom-beta"}) {
+					t.Fatalf("unexpected requests without a binding model: %#v", bodies)
+				}
+				return
+			}
+			for index, body := range bodies {
+				thinking, _ := body["thinking"].(map[string]any)
+				betas := []any{"custom-beta"}
+				if index%2 == 1 {
+					betas = append(betas, "thinking-binding-controls-2026-08-01")
+					if thinking["block_binding"].(map[string]any)["prefix_mismatch_behavior"] != "drop_block" {
+						t.Fatalf("retry %d did not drop stale thinking: %#v", index, body)
+					}
+				}
+				if len(bodies) != 6 || !reflect.DeepEqual(body["anthropic_beta"], betas) {
+					t.Fatalf("unexpected legacy Bedrock body %d: %#v", index, body)
+				}
+			}
+		})
+	}
 }

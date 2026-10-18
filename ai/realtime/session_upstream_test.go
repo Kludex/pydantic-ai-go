@@ -3,6 +3,7 @@ package realtime_test
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -320,4 +321,355 @@ func TestToolCanCloseSession(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("tool deadlocked while closing its session")
 	}
+}
+
+func TestLateTranscriptKeepsOnePartPerOutputItem(t *testing.T) {
+	type step struct {
+		item, text string
+		final      bool
+		outputText bool
+	}
+	delta := func(item, text string) step { return step{item: item, text: text} }
+	done := func(item, text string) step { return step{item: item, text: text, final: true} }
+	textual := func(steps ...step) []step {
+		for index := range steps {
+			steps[index].outputText = true
+		}
+		return steps
+	}
+	cases := []struct {
+		name    string
+		steps   []step
+		history []string
+		stream  []string
+	}{
+		{
+			name:    "in order",
+			steps:   []step{delta("a", "Hello world."), done("a", "Hello world."), delta("b", "Bonjour."), done("b", "Bonjour.")},
+			history: []string{"speech Hello world.", "speech Bonjour."},
+			stream:  []string{"start 0 ", "delta 0 Hello world.", "end 0 Hello world.", "start 1 ", "delta 1 Bonjour.", "end 1 Bonjour."},
+		},
+		{
+			name:    "late done",
+			steps:   []step{delta("a", "Hello"), delta("a", " world."), delta("b", "Bonjour"), delta("b", " tout le monde."), done("a", "Hello world."), done("b", "Bonjour tout le monde.")},
+			history: []string{"speech Hello world.", "speech Bonjour tout le monde."},
+			stream:  []string{"start 0 ", "delta 0 Hello", "delta 0  world.", "end 0 Hello world.", "start 1 ", "delta 1 Bonjour", "delta 1  tout le monde.", "end 1 Bonjour tout le monde."},
+		},
+		{
+			name:    "late done empty",
+			steps:   []step{delta("a", "Hello world."), delta("b", "Bonjour."), done("a", ""), done("b", "Bonjour.")},
+			history: []string{"speech Hello world.", "speech Bonjour."},
+			stream:  []string{"start 0 ", "delta 0 Hello world.", "end 0 Hello world.", "start 1 ", "delta 1 Bonjour.", "end 1 Bonjour."},
+		},
+		{
+			name:    "late deltas",
+			steps:   []step{delta("a", "Hello"), delta("b", "Bonjour."), delta("a", " there"), delta("a", " world."), done("a", "Hello there world."), done("b", "Bonjour.")},
+			history: []string{"speech Hello there world.", "speech Bonjour."},
+			stream: []string{
+				"start 0 ", "delta 0 Hello", "end 0 Hello", "start 1 ", "delta 1 Bonjour.",
+				"start 0 Hello", "delta 0  there", "end 0 Hello there", "start 0 Hello there", "delta 0  world.", "end 0 Hello there world.",
+				"end 1 Bonjour.",
+			},
+		},
+		{
+			name:    "late delta of the other modality",
+			steps:   []step{delta("a", "Hello"), delta("b", "Bonjour."), {item: "a", text: " world.", outputText: true}, done("a", "Hello world."), done("b", "Bonjour.")},
+			history: []string{"speech Hello", "speech Bonjour.", "text  world.", "speech Hello world."},
+			stream: []string{
+				"start 0 ", "delta 0 Hello", "end 0 Hello", "start 1 ", "delta 1 Bonjour.", "end 1 Bonjour.",
+				"start 2 ", "delta 2  world.", "end 2  world.", "start 3 ", "delta 3 Hello world.", "end 3 Hello world.",
+			},
+		},
+		{
+			name:    "late text output",
+			steps:   textual(delta("a", "Hello"), delta("b", "Bonjour."), delta("a", " world."), done("a", "Hello world."), done("b", "Bonjour.")),
+			history: []string{"text Hello world.", "text Bonjour."},
+			stream:  []string{"start 0 ", "delta 0 Hello", "end 0 Hello", "start 1 ", "delta 1 Bonjour.", "start 0 Hello", "delta 0  world.", "end 0 Hello world.", "end 1 Bonjour."},
+		},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			connection := newFakeConnection()
+			session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: fullProfile()}, realtime.ConnectParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = session.Close(t.Context()) }()
+			for _, step := range test.steps {
+				connection.events <- realtime.OutputTranscript{Text: step.text, ItemID: step.item, Final: step.final, OutputText: step.outputText}
+			}
+			connection.events <- realtime.ResponseDone{}
+			var stream []string
+			for event, err := range session.Events(t.Context()) {
+				if err != nil {
+					t.Fatal(err)
+				}
+				switch event := event.(type) {
+				case ai.PartStartEvent:
+					stream = append(stream, fmt.Sprintf("start %d %s", event.Index, partText(event.Part)))
+				case ai.PartDeltaEvent:
+					text := ""
+					switch delta := event.Delta.(type) {
+					case ai.TextPartDelta:
+						text = delta.ContentDelta
+					case ai.SpeechPartDelta:
+						text = delta.TranscriptDelta
+					}
+					stream = append(stream, fmt.Sprintf("delta %d %s", event.Index, text))
+				case ai.PartEndEvent:
+					stream = append(stream, fmt.Sprintf("end %d %s", event.Index, partText(event.Part)))
+				}
+				if _, ok := event.(realtime.TurnCompleteEvent); ok {
+					break
+				}
+			}
+			var history []string
+			for _, message := range session.NewMessages() {
+				if response, ok := message.(ai.ModelResponse); ok {
+					for _, part := range response.Parts {
+						kind := "text"
+						if _, ok := part.(ai.SpeechPart); ok {
+							kind = "speech"
+						}
+						history = append(history, kind+" "+partText(part))
+					}
+				}
+			}
+			if !slices.Equal(history, test.history) {
+				t.Errorf("history:\n%q\nwant\n%q", history, test.history)
+			}
+			if !slices.Equal(stream, test.stream) {
+				t.Errorf("stream:\n%q\nwant\n%q", stream, test.stream)
+			}
+		})
+	}
+}
+
+func partText(part ai.ResponsePart) string {
+	switch part := part.(type) {
+	case ai.TextPart:
+		return part.Content
+	case ai.SpeechPart:
+		if part.Transcript != nil {
+			return *part.Transcript
+		}
+	}
+	return ""
+}
+
+func TestLateTranscriptRestartsSpeechPartWithoutItsAudio(t *testing.T) {
+	connection := newFakeConnection()
+	session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: fullProfile()}, realtime.ConnectParams{}, realtime.WithAudioRetention(realtime.AudioRetentionOutput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = session.Close(t.Context()) }()
+	transcripts := session.StreamTranscripts(t.Context())
+	connection.events <- realtime.AudioDelta{Data: make([]byte, 480), ItemID: "a"}
+	connection.events <- realtime.OutputTranscript{Text: "Hello", ItemID: "a"}
+	connection.events <- realtime.OutputTranscript{Text: "Bonjour.", ItemID: "b"}
+	connection.events <- realtime.OutputTranscript{Text: "Hello world.", ItemID: "a", Final: true}
+	connection.events <- realtime.OutputTranscript{Text: "Bonjour.", ItemID: "b", Final: true}
+	connection.events <- realtime.ResponseDone{}
+	var stream []string
+	for event, err := range session.Events(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case ai.PartStartEvent:
+			stream = append(stream, fmt.Sprintf("start %s %t", partText(event.Part), event.Part.(ai.SpeechPart).Audio != nil))
+		case ai.PartEndEvent:
+			stream = append(stream, fmt.Sprintf("end %s %t", partText(event.Part), event.Part.(ai.SpeechPart).Audio != nil))
+		}
+		if _, ok := event.(realtime.TurnCompleteEvent); ok {
+			break
+		}
+	}
+	want := []string{"start  false", "end Hello true", "start  false", "start Hello false", "end Hello world. true", "end Bonjour. false"}
+	if !slices.Equal(stream, want) {
+		t.Fatalf("stream: %q", stream)
+	}
+	var recorded []string
+	for _, message := range session.NewMessages() {
+		if response, ok := message.(ai.ModelResponse); ok {
+			for _, part := range response.Parts {
+				recorded = append(recorded, fmt.Sprintf("%s %t", partText(part), part.(ai.SpeechPart).Audio != nil))
+			}
+		}
+	}
+	if !slices.Equal(recorded, []string{"Hello world. true", "Bonjour. false"}) {
+		t.Fatalf("recorded: %q", recorded)
+	}
+	var updates []string
+	for update, err := range transcripts {
+		if err != nil {
+			t.Fatal(err)
+		}
+		updates = append(updates, fmt.Sprintf("%d %q %q", update.Index, update.Delta, update.Transcript))
+		if len(updates) == 3 {
+			break
+		}
+	}
+	if !slices.Equal(updates, []string{`0 "Hello" "Hello"`, `1 "Bonjour." "Bonjour."`, `0 " world." "Hello world."`}) {
+		t.Fatalf("transcripts: %q", updates)
+	}
+}
+
+func TestInterruptAtAudioCutsRepliesAheadOfPlayback(t *testing.T) {
+	chunk := make([]byte, 4800)
+	speak := func(connection *fakeConnection, itemID string) {
+		connection.events <- realtime.AudioDelta{Data: chunk, ItemID: itemID}
+		connection.events <- realtime.AudioDelta{Data: chunk, ItemID: itemID}
+		connection.events <- realtime.OutputTranscript{Text: "said " + itemID, ItemID: itemID, Final: true}
+	}
+	until := func(t *testing.T, session *realtime.Session, count int, match func(realtime.Event) bool) {
+		t.Helper()
+		for event, err := range session.Events(t.Context()) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if match(event) {
+				if count--; count == 0 {
+					return
+				}
+			}
+		}
+	}
+	turns := func(event realtime.Event) bool {
+		_, ok := event.(realtime.TurnCompleteEvent)
+		return ok
+	}
+	cuts := func(messages []ai.ModelMessage) []string {
+		var cuts []string
+		for _, message := range messages {
+			if response, ok := message.(ai.ModelResponse); ok {
+				cut := string(response.State)
+				for _, part := range response.Parts {
+					if speech := part.(ai.SpeechPart); speech.InterruptedAtMS != nil {
+						cut += fmt.Sprintf(" %d", *speech.InterruptedAtMS)
+					} else {
+						cut += " -"
+					}
+				}
+				cuts = append(cuts, cut)
+			}
+		}
+		return cuts
+	}
+	interrupt := func(t *testing.T, session *realtime.Session, connection *fakeConnection, played int) []realtime.Input {
+		t.Helper()
+		if interrupted, err := session.InterruptAtAudio(t.Context(), played); err != nil || !interrupted {
+			t.Fatalf("interrupted=%v err=%v", interrupted, err)
+		}
+		var sent []realtime.Input
+		for len(connection.sent) > 0 {
+			sent = append(sent, <-connection.sent)
+		}
+		return sent
+	}
+	open := func(t *testing.T) (*realtime.Session, *fakeConnection) {
+		session, connection := openSessionWithProfile(t, fullProfile())
+		t.Cleanup(func() { _ = session.Close(t.Context()) })
+		_ = session.StreamAudio(t.Context())
+		return session, connection
+	}
+
+	t.Run("finished replies", func(t *testing.T) {
+		session, connection := open(t)
+		speak(connection, "a")
+		connection.events <- realtime.ResponseDone{}
+		speak(connection, "b")
+		connection.events <- realtime.ResponseDone{}
+		until(t, session, 2, turns)
+		before := session.Messages()
+
+		sent := interrupt(t, session, connection, len(chunk))
+		want := []realtime.Input{
+			realtime.TruncateOutput{AudioEndMilliseconds: 100, ItemID: "a"},
+			realtime.TruncateOutput{AudioEndMilliseconds: 0, ItemID: "b"},
+			realtime.CancelResponse{},
+		}
+		if !slices.Equal(sent, want) {
+			t.Fatalf("sent %#v", sent)
+		}
+		if got := cuts(session.Messages()); !slices.Equal(got, []string{"interrupted 100", "interrupted 0"}) {
+			t.Fatalf("history %q", got)
+		}
+		if got := cuts(before); !slices.Equal(got, []string{"complete -", "complete -"}) {
+			t.Fatalf("snapshot %q", got)
+		}
+	})
+
+	t.Run("reply under way", func(t *testing.T) {
+		session, connection := open(t)
+		connection.events <- realtime.AudioDelta{Data: chunk, ItemID: "a"}
+		connection.events <- realtime.AudioDelta{Data: chunk, ItemID: "a"}
+		until(t, session, 2, func(event realtime.Event) bool {
+			_, ok := event.(ai.PartDeltaEvent)
+			return ok
+		})
+
+		sent := interrupt(t, session, connection, len(chunk))
+		if !slices.Equal(sent, []realtime.Input{realtime.TruncateOutput{AudioEndMilliseconds: 100, ItemID: "a"}, realtime.CancelResponse{}}) {
+			t.Fatalf("sent %#v", sent)
+		}
+		connection.events <- realtime.ResponseDone{Interrupted: true}
+		until(t, session, 1, turns)
+		if got := cuts(session.Messages()); !slices.Equal(got, []string{"interrupted 100"}) {
+			t.Fatalf("history %q", got)
+		}
+	})
+
+	t.Run("reply before a reconnect", func(t *testing.T) {
+		session, connection := open(t)
+		speak(connection, "a")
+		connection.events <- realtime.ResponseDone{}
+		connection.events <- realtime.SessionReconnected{}
+		until(t, session, 1, func(event realtime.Event) bool {
+			_, ok := event.(realtime.SessionReconnectEvent)
+			return ok
+		})
+
+		sent := interrupt(t, session, connection, len(chunk))
+		if !slices.Equal(sent, []realtime.Input{realtime.TruncateOutput{AudioEndMilliseconds: 100, ItemID: "a"}, realtime.CancelResponse{}}) {
+			t.Fatalf("sent %#v", sent)
+		}
+		if got := cuts(session.Messages()); !slices.Equal(got, []string{"complete -"}) {
+			t.Fatalf("history %q", got)
+		}
+	})
+
+	t.Run("replies without item ids", func(t *testing.T) {
+		session, connection := open(t)
+		for range 2 {
+			connection.events <- realtime.AudioDelta{Data: chunk}
+			connection.events <- realtime.ResponseDone{}
+		}
+		until(t, session, 2, turns)
+
+		sent := interrupt(t, session, connection, 0)
+		if !slices.Equal(sent, []realtime.Input{realtime.TruncateOutput{AudioEndMilliseconds: 0}, realtime.CancelResponse{}}) {
+			t.Fatalf("sent %#v", sent)
+		}
+	})
+
+	t.Run("only the latest items", func(t *testing.T) {
+		session, connection := open(t)
+		connection.sent = make(chan realtime.Input, 64)
+		for item := range 33 {
+			connection.events <- realtime.AudioDelta{Data: chunk, ItemID: fmt.Sprint(item)}
+			connection.events <- realtime.ResponseDone{}
+		}
+		until(t, session, 33, turns)
+
+		sent := interrupt(t, session, connection, 0)
+		if len(sent) != 33 || sent[0] != (realtime.TruncateOutput{ItemID: "1"}) {
+			t.Fatalf("sent %#v", sent)
+		}
+		history := cuts(session.Messages())
+		if history[0] != "complete -" || history[1] != "interrupted 0" || history[32] != "interrupted 0" {
+			t.Fatalf("history %q", history)
+		}
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"iter"
+	"log/slog"
 	"reflect"
 	"strings"
 	"testing"
@@ -895,3 +896,222 @@ var _ ai.ToolSearchStrategyModel = (*ai.FallbackModel)(nil)
 var _ ai.NativeToolSearchHistoryModel = (*ai.FallbackModel)(nil)
 var _ ai.ModelContinuationDelayer = (*ai.FallbackModel)(nil)
 var _ ai.SuspendedResponseCanceler = (*ai.FallbackModel)(nil)
+
+func fallbackStreamModel(name string, events ...any) streamingRequestModel {
+	return streamingRequestModel{
+		Model: fallbackTextModel(name, "unused", nil),
+		stream: func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+			return func(yield func(ai.ModelStreamEvent, error) bool) {
+				for _, item := range events {
+					var keepGoing bool
+					if err, ok := item.(error); ok {
+						keepGoing = yield(nil, err)
+					} else {
+						keepGoing = yield(item.(ai.ModelStreamEvent), nil)
+					}
+					if !keepGoing {
+						return
+					}
+				}
+			}, nil
+		},
+	}
+}
+
+func collectFallbackStream(t *testing.T, events iter.Seq2[ai.ModelStreamEvent, error]) ([]ai.ModelStreamEvent, error) {
+	t.Helper()
+	var collected []ai.ModelStreamEvent
+	for event, err := range events {
+		if err != nil {
+			return collected, err
+		}
+		collected = append(collected, event)
+	}
+	return collected, nil
+}
+
+func TestFallbackModelStreamErrorBeforeFirstEvent(t *testing.T) {
+	overloaded := &fallbackAPIError{message: "overloaded"}
+	failing := fallbackStreamModel("failing", ai.ResponseMetadataEvent{ProviderResponseID: "resp_1"}, overloaded)
+	backup := fallbackStreamModel("backup", ai.TextDeltaEvent{Delta: "hello"}, ai.FinishEvent{})
+
+	t.Run("falls back and replays the next stream", func(t *testing.T) {
+		events, err := ai.NewFallbackModel(failing, ai.WithFallbackModels(backup)).StreamRequest(
+			t.Context(), nil, ai.ModelRequestParams{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		collected, err := collectFallbackStream(t, events)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(collected) != 2 || collected[0].(ai.TextDeltaEvent).Delta != "hello" {
+			t.Fatalf("unexpected events: %#v", collected)
+		}
+		finish := collected[1].(ai.FinishEvent)
+		if finish.ModelName != "backup" || len(finish.FailedAttempts) != 1 ||
+			finish.FailedAttempts[0].ModelName != "failing" || finish.FailedAttempts[0].Error != "fallbackAPIError: overloaded" {
+			t.Fatalf("unexpected finish: %+v", finish)
+		}
+	})
+
+	t.Run("all fail", func(t *testing.T) {
+		_, err := ai.NewFallbackModel(failing, ai.WithFallbackModels(failing)).StreamRequest(
+			t.Context(), nil, ai.ModelRequestParams{},
+		)
+		var exhausted *ai.FallbackExhaustedError
+		if !errors.As(err, &exhausted) || len(exhausted.Failures()) != 2 {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+
+	t.Run("ineligible error reaches the consumer", func(t *testing.T) {
+		stop := errors.New("stop")
+		model := fallbackStreamModel("primary", ai.ResponseMetadataEvent{ProviderResponseID: "resp_1"}, stop)
+		events, err := ai.NewFallbackModel(model, ai.WithFallbackModels(backup)).StreamRequest(
+			t.Context(), nil, ai.ModelRequestParams{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		collected, err := collectFallbackStream(t, events)
+		if !errors.Is(err, stop) || len(collected) != 1 ||
+			collected[0].(ai.ResponseMetadataEvent).ProviderResponseID != "resp_1" {
+			t.Fatalf("unexpected stream: %#v %v", collected, err)
+		}
+	})
+
+	t.Run("error after the first event propagates", func(t *testing.T) {
+		model := fallbackStreamModel("primary", ai.TextDeltaEvent{Delta: "hello"}, overloaded)
+		events, err := ai.NewFallbackModel(model, ai.WithFallbackModels(backup)).StreamRequest(
+			t.Context(), nil, ai.ModelRequestParams{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		collected, err := collectFallbackStream(t, events)
+		if !errors.Is(err, overloaded) || len(collected) != 1 {
+			t.Fatalf("unexpected stream: %#v %v", collected, err)
+		}
+	})
+
+	t.Run("empty stream is handed over", func(t *testing.T) {
+		events, err := ai.NewFallbackModel(fallbackStreamModel("empty"), ai.WithFallbackModels(backup)).StreamRequest(
+			t.Context(), nil, ai.ModelRequestParams{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if collected, err := collectFallbackStream(t, events); err != nil || len(collected) != 0 {
+			t.Fatalf("unexpected stream: %#v %v", collected, err)
+		}
+	})
+
+	t.Run("stopping early closes the model stream", func(t *testing.T) {
+		closed := false
+		model := streamingRequestModel{
+			Model: fallbackTextModel("primary", "unused", nil),
+			stream: func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (iter.Seq2[ai.ModelStreamEvent, error], error) {
+				return func(yield func(ai.ModelStreamEvent, error) bool) {
+					defer func() { closed = true }()
+					if yield(ai.ResponseMetadataEvent{}, nil) && yield(ai.TextDeltaEvent{Delta: "a"}, nil) {
+						yield(ai.TextDeltaEvent{Delta: "b"}, nil)
+					}
+				}, nil
+			},
+		}
+		events, err := ai.NewFallbackModel(model).StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if closed {
+			t.Fatal("stream closed before it was consumed")
+		}
+		for range events {
+			break
+		}
+		if !closed {
+			t.Fatal("stream was not closed")
+		}
+	})
+
+	t.Run("pinned continuation falls back", func(t *testing.T) {
+		history := []ai.ModelMessage{ai.ModelResponse{
+			State:    ai.ModelResponseStateSuspended,
+			Metadata: map[string]any{"__pydantic_ai__": map[string]any{"fallback_model_id": "pinned"}},
+		}}
+		pinned := &fallbackStreamingContinuationModel{
+			streamingRequestModel: fallbackStreamModel("pinned", ai.ResponseMetadataEvent{}, overloaded),
+		}
+		events, err := ai.NewFallbackModel(pinned, ai.WithFallbackModels(backup)).StreamRequest(
+			t.Context(), history, ai.ModelRequestParams{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		collected, err := collectFallbackStream(t, events)
+		if err != nil || collected[len(collected)-1].(ai.FinishEvent).ModelName != "backup" || pinned.cancelCount != 1 {
+			t.Fatalf("pinned stream did not fall back: %#v %v", collected, err)
+		}
+	})
+
+	t.Run("pinned ineligible error reaches the consumer", func(t *testing.T) {
+		history := []ai.ModelMessage{ai.ModelResponse{
+			State:    ai.ModelResponseStateSuspended,
+			Metadata: map[string]any{"__pydantic_ai__": map[string]any{"fallback_model_id": "pinned"}},
+		}}
+		stop := errors.New("stop")
+		events, err := ai.NewFallbackModel(fallbackStreamModel("pinned", stop)).StreamRequest(
+			t.Context(), history, ai.ModelRequestParams{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := collectFallbackStream(t, events); !errors.Is(err, stop) {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestFallbackModelWarnsWhenStreamingSkipsResponsePredicates(t *testing.T) {
+	reject := ai.WithFallbackOnResponse(func(_ context.Context, response *ai.ModelResponse) (bool, error) {
+		return response.Text() == "primary", nil
+	})
+	primary := fallbackStreamModel("primary", ai.TextDeltaEvent{Delta: "primary"}, ai.FinishEvent{})
+	primary.Model = fallbackTextModel("primary", "primary", nil)
+
+	var warnings []string
+	agent := ai.NewAgent[struct{}, string](ai.NewFallbackModel(
+		primary, ai.WithFallbackModels(fallbackTextModel("backup", "backup", nil)), reject,
+		ai.WithFallbackWarningHandler(func(message string) { warnings = append(warnings, message) }),
+	))
+	result, err := agent.Run(t.Context(), "hello", struct{}{})
+	if err != nil || result.Output != "backup" || len(warnings) != 0 {
+		t.Fatalf("non-streamed request: output=%v err=%v warnings=%v", result, err, warnings)
+	}
+	stream := agent.RunStream(t.Context(), "hello", struct{}{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if stream.Result().Output != "primary" || len(warnings) != 1 ||
+		!strings.Contains(warnings[0], "response predicates are not applied to streamed requests") {
+		t.Fatalf("streamed request: output=%q warnings=%v", stream.Result().Output, warnings)
+	}
+
+	var logged strings.Builder
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(previous)
+	events, err := ai.NewFallbackModel(primary, reject).StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range events {
+	}
+	if !strings.Contains(logged.String(), "level=WARN") {
+		t.Fatalf("warning was not logged: %q", logged.String())
+	}
+}

@@ -38,18 +38,10 @@ func TestChatWebSearch(t *testing.T) {
 	defer server.Close()
 
 	location := &ai.WebSearchUserLocation{City: "Utrecht", Country: "NL"}
-	externalWebAccess := false
 	model := openai.NewModel(
 		"gpt-4o-search-preview", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
 	)
-	webSearch := ai.WebSearchTool{
-		SearchContextSize: ai.WebSearchContextLow,
-		UserLocation:      location,
-		AllowedDomains:    []string{"example.com"},
-		BlockedDomains:    []string{"blocked.example"},
-		MaxUses:           2,
-		ExternalWebAccess: &externalWebAccess,
-	}
+	webSearch := ai.WebSearchTool{SearchContextSize: ai.WebSearchContextLow, UserLocation: location}
 	agent := ai.NewAgent[struct{}, string](model, ai.WithNativeTools(webSearch))
 	agent.AddTool(ai.NewSimpleTool[struct{}]("local_search", func(context.Context, struct{}) (string, error) {
 		return "local", nil
@@ -70,9 +62,7 @@ func TestChatWebSearch(t *testing.T) {
 	firstLocation := first["user_location"].(map[string]any)
 	firstApproximate := firstLocation["approximate"].(map[string]any)
 	if first["search_context_size"] != "low" || firstLocation["type"] != "approximate" ||
-		firstApproximate["city"] != "Utrecht" || firstApproximate["country"] != "NL" ||
-		first["allowed_domains"] != nil || first["blocked_domains"] != nil || first["max_uses"] != nil ||
-		first["external_web_access"] != nil || bodies[0]["tools"] != nil {
+		firstApproximate["city"] != "Utrecht" || firstApproximate["country"] != "NL" || bodies[0]["tools"] != nil {
 		t.Fatalf("unexpected static web search options: %#v", bodies[0])
 	}
 	second := bodies[1]["web_search_options"].(map[string]any)

@@ -136,7 +136,7 @@ func TestRunRepairsInteriorAndTrailingDanglingToolCalls(t *testing.T) {
 	if len(interior) != 6 {
 		t.Fatalf("interior request was not repaired: %+v", interior)
 	}
-	assertSynthesizedReturn(t, interior[2], "a", "a-1")
+	assertSynthesizedReturn(t, interior[0], "a", "a-1")
 	assertSynthesizedReturn(t, interior[3], "future", "future-1")
 	if _, ok := interior[4].(ai.RetryPromptPart); !ok {
 		t.Fatalf("synthesized result was not inserted before user-facing feedback: %+v", interior)

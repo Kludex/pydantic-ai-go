@@ -302,4 +302,7 @@ type StreamConfig struct {
 	RunID string
 	// PreserveFileData emits generated files through reserved activity snapshots.
 	PreserveFileData bool
+	// AllowSystemPrompts streams enqueued system prompts. Leave it false when the server owns them:
+	// the client's copy would be stripped on the way back in, so sending it would only disclose it.
+	AllowSystemPrompts bool
 }

@@ -214,6 +214,35 @@ func TestDeferredToolSearchUsesCodexResponsesDialect(t *testing.T) {
 	}
 }
 
+func TestCodexIgnoresCacheSettings(t *testing.T) {
+	var requestBody map[string]any
+	model := newModel(t, roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if err := json.NewDecoder(request.Body).Decode(&requestBody); err != nil {
+			t.Fatal(err)
+		}
+		return codexSSE("Hello"), nil
+	}))
+	settings, err := (openai.Settings{
+		Common: ai.ModelSettings{Cache: &ai.CacheConfig{}}, CacheInstructions: true,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Contents: []ai.UserContent{ai.TextContent{Text: "Say hello."}, ai.CachePoint{}}},
+	}}}, ai.ModelRequestParams{Instructions: "Reply with one word.", Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, exists := requestBody["prompt_cache_options"]; exists || requestBody["instructions"] != "Reply with one word." {
+		t.Fatalf("unexpected cache settings: %#v", requestBody)
+	}
+	input, _ := json.Marshal(requestBody["input"])
+	if string(input) != `[{"content":[{"text":"Say hello.","type":"input_text"}],"role":"user"}]` {
+		t.Fatalf("unexpected input: %s", input)
+	}
+}
+
 func TestStreamSettingsAndConversationFallbacks(t *testing.T) {
 	var bodies []map[string]any
 	var headers []http.Header

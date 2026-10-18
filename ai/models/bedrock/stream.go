@@ -196,7 +196,10 @@ func (model *Model) streamEvents(ctx context.Context, stream EventStream) iter.S
 					continue
 				}
 				content := any(result.content)
-				if len(result.content) == 1 {
+				switch len(result.content) {
+				case 0:
+					content = nil
+				case 1:
 					content = result.content[0]
 				}
 				outcome := ai.ToolReturnOutcomeSuccess

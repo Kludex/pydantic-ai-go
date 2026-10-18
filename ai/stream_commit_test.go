@@ -341,6 +341,90 @@ func TestRunStreamValidationFailuresDoNotRetry(t *testing.T) {
 	}
 }
 
+func TestRunStreamModelRequestHookCannotRetryStreamedOutput(t *testing.T) {
+	model := newStreamingModel(func(messages []ai.ModelMessage) []ai.ModelStreamEvent {
+		text := "bad response"
+		if request, ok := messages[len(messages)-1].(ai.ModelRequest); ok {
+			if _, retrying := request.Parts[0].(ai.RetryPromptPart); retrying {
+				text = "good response"
+			}
+		}
+		return []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: text}, ai.FinishEvent{}}
+	})
+	reject := ai.AfterModelRequestFunc(func(
+		_ context.Context, _ *ai.RunInfo, _ ai.ModelRequestContext, response *ai.ModelResponse,
+	) (*ai.ModelResponse, error) {
+		if response.Text() == "bad response" {
+			return response, ai.Retryf("try again")
+		}
+		return response, nil
+	})
+	_, err := consumeRunStream(t, ai.NewAgent[deps, string](model, ai.WithCapabilities(reject)))
+	var unexpected *ai.UnexpectedModelBehaviorError
+	if !errors.As(err, &unexpected) || !strings.Contains(err.Error(), "retries are not supported") {
+		t.Fatalf("unexpected hook retry error %v", err)
+	}
+	var texts []string
+	agent := ai.NewAgent[deps, string](model, ai.WithCapabilities(reject))
+	agent.AddEventListener(func(_ context.Context, _ *ai.RunContext[deps], event ai.StreamEvent) error {
+		if end, ok := event.(ai.PartEndEvent); ok {
+			if text, ok := end.Part.(ai.TextPart); ok {
+				texts = append(texts, text.Content)
+			}
+		}
+		return nil
+	})
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil || result.Output != "good response" || !slices.Equal(texts, []string{"bad response", "good response"}) {
+		t.Fatalf("event stream did not retry: %v, %v, %q", result, err, texts)
+	}
+	outputTool := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{
+			ai.ToolCallStartEvent{ToolName: "final_result", ToolCallID: "final"},
+			ai.ToolCallDeltaEvent{ArgsDelta: `{"city":"Paris","temp_c":1}`},
+			ai.FinishEvent{},
+		}
+	})
+	rejectAll := ai.AfterModelRequestFunc(func(
+		_ context.Context, _ *ai.RunInfo, _ ai.ModelRequestContext, response *ai.ModelResponse,
+	) (*ai.ModelResponse, error) {
+		return response, ai.Retryf("try again")
+	})
+	_, err = consumeRunStream(t, ai.NewAgent[deps, weather](outputTool, ai.WithCapabilities(rejectAll)))
+	if !errors.As(err, &unexpected) || !strings.Contains(err.Error(), "retries are not supported") {
+		t.Fatalf("unexpected output tool hook retry error %v", err)
+	}
+}
+
+func TestRunStreamModelRequestHookRetriesResponseWithoutOutput(t *testing.T) {
+	requests := 0
+	model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		requests++
+		if requests == 1 {
+			return []ai.ModelStreamEvent{
+				ai.ToolCallStartEvent{ToolName: "lookup", ToolCallID: "l"},
+				ai.ToolCallDeltaEvent{ArgsDelta: `{}`},
+				ai.FinishEvent{},
+			}
+		}
+		return []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: "done"}, ai.FinishEvent{}}
+	})
+	reject := ai.AfterModelRequestFunc(func(
+		_ context.Context, _ *ai.RunInfo, _ ai.ModelRequestContext, response *ai.ModelResponse,
+	) (*ai.ModelResponse, error) {
+		if len(response.ToolCalls()) > 0 {
+			return response, ai.Retryf("try again")
+		}
+		return response, nil
+	})
+	agent := ai.NewAgent[deps, string](model, ai.WithCapabilities(reject))
+	ai.AddSimpleTool(agent, "lookup", func(context.Context, struct{}) (string, error) { return "found", nil })
+	result, err := consumeRunStream(t, agent)
+	if err != nil || result.Output != "done" || requests != 2 {
+		t.Fatalf("rejected tool calls were not retried: %v, %v, %d requests", result, err, requests)
+	}
+}
+
 func TestRunStreamValidatorFailures(t *testing.T) {
 	tests := []struct {
 		name       string

@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"reflect"
+	"strings"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime"
@@ -62,7 +64,8 @@ func NewLegacyBedrockModel(name string, config LegacyBedrockConfig, options ...O
 	if legacyBedrockClientIsNil(config.Client) {
 		panic("anthropic: legacy Bedrock client must not be nil")
 	}
-	model := NewModel(name, options...)
+	structured := WithStrictToolSupport(legacyBedrockSupportsStructuredOutput(name))
+	model := NewModel(name, append([]Option{structured}, options...)...)
 	if sdkClient, ok := config.Client.(*bedrockruntime.Client); ok {
 		model.legacyBedrockClient = &legacyAWSClient{client: sdkClient}
 	} else {
@@ -70,6 +73,22 @@ func NewLegacyBedrockModel(name string, config LegacyBedrockConfig, options ...O
 	}
 	model.baseURL = config.ProviderURL
 	return model
+}
+
+// legacyBedrockSupportsStructuredOutput excludes Claude models whose structured output Bedrock withholds.
+func legacyBedrockSupportsStructuredOutput(name string) bool {
+	if _, bare, found := strings.Cut(name, "anthropic."); found {
+		name = bare
+	}
+	for _, prefix := range []string{
+		"claude-opus-4-1", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5",
+		"claude-sonnet-5", "claude-haiku-5-5", "claude-fable-5",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return false
+		}
+	}
+	return supportsAnthropicNativeOutput(name)
 }
 
 type legacyAWSRuntimeClient interface {
@@ -107,16 +126,19 @@ func (client *legacyAWSClient) InvokeModelWithResponseStream(
 func (model *Model) requestLegacyBedrock(
 	ctx context.Context, payload *messagesRequest, headers map[string]string,
 ) (*ai.ModelResponse, error) {
-	body, err := legacyBedrockBody(payload)
+	var output *bedrockruntime.InvokeModelOutput
+	err := model.invokeLegacyBedrock(payload, headers, func(body []byte) (err error) {
+		output, err = model.legacyBedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
+			ModelId: aws.String(model.name), Body: body,
+			ContentType: aws.String("application/json"), Accept: aws.String("application/json"),
+		}, legacyBedrockOptions(headers))
+		if err != nil {
+			return model.legacyBedrockError(ctx, "request", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	output, err := model.legacyBedrockClient.InvokeModel(ctx, &bedrockruntime.InvokeModelInput{
-		ModelId: aws.String(model.name), Body: body,
-		ContentType: aws.String("application/json"), Accept: aws.String("application/json"),
-	}, legacyBedrockOptions(headers))
-	if err != nil {
-		return nil, model.legacyBedrockError(ctx, "request", err)
 	}
 	if output == nil {
 		return nil, fmt.Errorf("anthropic: legacy Bedrock response is nil")
@@ -132,16 +154,19 @@ func (model *Model) requestLegacyBedrock(
 func (model *Model) countLegacyBedrock(
 	ctx context.Context, payload *messagesRequest, headers map[string]string,
 ) (ai.Usage, error) {
-	body, err := legacyBedrockBody(payload)
+	var output *bedrockruntime.CountTokensOutput
+	err := model.invokeLegacyBedrock(payload, headers, func(body []byte) (err error) {
+		output, err = model.legacyBedrockClient.CountTokens(ctx, &bedrockruntime.CountTokensInput{
+			ModelId: aws.String(model.name),
+			Input:   &types.CountTokensInputMemberInvokeModel{Value: types.InvokeModelTokensRequest{Body: body}},
+		}, legacyBedrockOptions(headers))
+		if err != nil {
+			return model.legacyBedrockError(ctx, "token count request", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return ai.Usage{}, err
-	}
-	output, err := model.legacyBedrockClient.CountTokens(ctx, &bedrockruntime.CountTokensInput{
-		ModelId: aws.String(model.name),
-		Input:   &types.CountTokensInputMemberInvokeModel{Value: types.InvokeModelTokensRequest{Body: body}},
-	}, legacyBedrockOptions(headers))
-	if err != nil {
-		return ai.Usage{}, model.legacyBedrockError(ctx, "token count request", err)
 	}
 	if output == nil || output.InputTokens == nil {
 		return ai.Usage{}, fmt.Errorf("anthropic: legacy Bedrock token count response omitted inputTokens")
@@ -149,7 +174,25 @@ func (model *Model) countLegacyBedrock(
 	return ai.Usage{InputTokens: int(*output.InputTokens)}, nil
 }
 
-func legacyBedrockBody(payload *messagesRequest) ([]byte, error) {
+// invokeLegacyBedrock sends payload once more with stale thinking blocks dropped when Bedrock rejects them.
+func (model *Model) invokeLegacyBedrock(
+	payload *messagesRequest, headers map[string]string, invoke func(body []byte) error,
+) error {
+	for {
+		body, err := legacyBedrockBody(payload, headers)
+		if err != nil {
+			return err
+		}
+		err = invoke(body)
+		var apiErr *APIError
+		if !errors.As(err, &apiErr) || !anthropicStaleThinkingError(model.name, apiErr.StatusCode, apiErr.Body, payload) {
+			return err
+		}
+		enableAnthropicStaleThinkingDrop(payload)
+	}
+}
+
+func legacyBedrockBody(payload *messagesRequest, headers map[string]string) ([]byte, error) {
 	body, err := marshalRequest(payload, payload.ExtraBody)
 	if err != nil {
 		return nil, fmt.Errorf("anthropic: marshal legacy Bedrock request: %w", err)
@@ -158,6 +201,15 @@ func legacyBedrockBody(payload *messagesRequest) ([]byte, error) {
 	_ = json.Unmarshal(body, &fields)
 	delete(fields, "model")
 	fields["anthropic_version"] = "bedrock-2023-05-31"
+	requested := http.Header{}
+	for name, value := range headers {
+		requested.Set(name, value)
+	}
+	if _, set := fields["anthropic_beta"]; !set {
+		if betas := anthropicBetas(requested.Get("anthropic-beta"), payload); len(betas) > 0 {
+			fields["anthropic_beta"] = betas
+		}
+	}
 	encoded, _ := json.Marshal(fields)
 	return encoded, nil
 }
@@ -165,7 +217,9 @@ func legacyBedrockBody(payload *messagesRequest) ([]byte, error) {
 func legacyBedrockOptions(headers map[string]string) func(*bedrockruntime.Options) {
 	cloned := make(map[string]string, len(headers))
 	for name, value := range headers {
-		cloned[name] = value
+		if !strings.EqualFold(name, "anthropic-beta") {
+			cloned[name] = value
+		}
 	}
 	return func(options *bedrockruntime.Options) {
 		if len(cloned) == 0 {

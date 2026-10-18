@@ -351,3 +351,15 @@ func TestVLLMUnsupportedThinkingIsOmitted(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	for name, want := range map[string]int{"mistralai/Mistral-Small-3.2-24B": 9, "Mistral-7B": 9, "Qwen/Qwen3-8B": 0} {
+		model, err := vllm.NewModel(name, vllm.WithBaseURL("http://localhost:8000/v1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := model.ModelProfile().ToolCallIDLength; got != want {
+			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
+		}
+	}
+}

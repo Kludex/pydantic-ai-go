@@ -217,3 +217,11 @@ func TestOllamaCloudRejectsNativeOutput(t *testing.T) {
 		t.Fatal("expected cloud host rejection")
 	}
 }
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	for name, want := range map[string]int{"mistral-small3.2": 9, "qwen3": 0} {
+		if got := ollama.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
+			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
+		}
+	}
+}

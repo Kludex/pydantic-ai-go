@@ -18,6 +18,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
 	"github.com/Kludex/pydantic-ai-go/ai/models/huggingface"
+	"github.com/Kludex/pydantic-ai-go/ai/models/meta"
 	"github.com/Kludex/pydantic-ai-go/ai/models/mistral"
 	"github.com/Kludex/pydantic-ai-go/ai/models/ollama"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
@@ -80,6 +81,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		},
 		"groq":        func(name string) (ai.Model, error) { return groq.NewModel(name), nil },
 		"huggingface": func(name string) (ai.Model, error) { return huggingface.NewModel(name), nil },
+		"meta":        func(name string) (ai.Model, error) { return meta.NewModel(name), nil },
 		"mistral":     func(name string) (ai.Model, error) { return mistral.NewModel(name), nil },
 		"ollama":      func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
 		"openrouter":  func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },

@@ -28,6 +28,7 @@ type modelRequestObservation struct {
 	params       ModelRequestParams
 	response     *ModelResponse
 	finalSegment *ModelResponse
+	resumed      *ModelResponse
 	started      time.Time
 	firstChunk   time.Duration
 }

@@ -80,6 +80,8 @@ Concurrent delegated tools add usage safely. The final total includes each speci
 
 Pass the tool's `context.Context` into the specialist. A parent deadline or cancellation then stops the entire active call tree. The specialist still owns its derived run cancellation, so cancelling only that run does not directly cancel its parent.
 
+When the parent's deadline passes, the parent returns its own `*RunCancelledError` with its own history, matching `context.DeadlineExceeded`. Derive a shorter deadline with `context.WithTimeout(ctx, d)` to give the specialist less time. It cannot extend the parent's. When only the specialist's deadline passes, it returns a `*RunCancelledError` like any other specialist error. Convert it with `ToolFailedf` so the parent model sees a failed tool call instead of the whole run ending.
+
 Returning an ordinary specialist error aborts the parent run. Convert a recoverable specialist failure to `ToolFailedf` when the parent model should receive the failure and choose another action. Preserve `ErrUsageLimitExceeded` when a limit must remain terminal.
 
 Name both agents with `WithAgentName`. Instrumentation then distinguishes parent and specialist spans without changing the delegation API.

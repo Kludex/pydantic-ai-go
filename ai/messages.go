@@ -247,6 +247,28 @@ type SystemPromptPart struct {
 	Timestamp time.Time
 	// DynamicRef identifies a registered prompt reevaluated during history reuse.
 	DynamicRef string
+	// Scope says how long the model sees the prompt. The zero value means SystemPromptScopeConversation.
+	Scope SystemPromptScope
+}
+
+// SystemPromptScope says how long the model sees a SystemPromptPart.
+type SystemPromptScope string
+
+const (
+	// SystemPromptScopeConversation shows the prompt from where it sits in the
+	// history for the rest of the conversation.
+	SystemPromptScopeConversation SystemPromptScope = "conversation"
+	// SystemPromptScopeRequest shows the prompt only for the model request it is
+	// part of, including a continuation of that request. The prompt stays in the
+	// message history, but once a later request exists the model no longer sees it.
+	// Use it for a nudge about the current moment, like a reminder against
+	// instruction fade, not for something that stays true.
+	SystemPromptScopeRequest SystemPromptScope = "request"
+)
+
+func isRequestScoped(part RequestPart) bool {
+	system, ok := part.(SystemPromptPart)
+	return ok && system.Scope == SystemPromptScopeRequest
 }
 
 func (SystemPromptPart) requestPartKind() string { return "system-prompt" }
@@ -367,6 +389,14 @@ const (
 // SynthesizedToolReturnMetadataKey marks tool returns created while repairing
 // incomplete history rather than produced by tool execution.
 const SynthesizedToolReturnMetadataKey = "pydantic_ai_synthesized_tool_return"
+
+// MCPAppMetadataKey holds the MCP Apps record that ai/mcp attaches to the
+// return of a tool with a UI resource. The model never sees it; the AG-UI
+// and Vercel AI adapters forward it to the frontend. The record is a
+// map[string]any with "resource_uri" (string), "tool_input" (the model's
+// arguments), "result" (the full MCP CallToolResult in wire form), and
+// "toolset_id" (string, empty when the toolset has no ID).
+const MCPAppMetadataKey = "mcp_app"
 
 // ToolReturn separates the value sent as a tool result from additional user
 // content and application-only metadata. Return it directly from a function

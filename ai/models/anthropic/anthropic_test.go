@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1049,12 +1051,79 @@ func TestAssistantHistoryWithMixedParts(t *testing.T) {
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
 		t.Fatal(err)
 	}
-	blocks := gotBody["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	messages := gotBody["messages"].([]any)
+	carried := messages[0].(map[string]any)
+	if carried["role"] != "user" || carried["content"].([]any)[0].(map[string]any)["text"] !=
+		"<assistant_thinking>\nhidden\n</assistant_thinking>" {
+		t.Fatalf("expected thinking carried in a user turn, got %v", carried)
+	}
+	blocks := messages[1].(map[string]any)["content"].([]any)
 	if len(blocks) != 2 {
-		t.Fatalf("expected text + tool_use (thinking dropped), got %v", blocks)
+		t.Fatalf("expected text + tool_use, got %v", blocks)
 	}
 	if blocks[1].(map[string]any)["type"] != "tool_use" {
 		t.Fatalf("unexpected blocks %v", blocks)
+	}
+}
+
+func TestNonNativeThinkingIsCarriedWithAttribution(t *testing.T) {
+	var gotBody struct {
+		Messages []struct {
+			Role    string `json:"role"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"messages"`
+	}
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	if !model.ModelProfile().MimicsAssistantMessageFormatting {
+		t.Fatal("Claude profile should mimic assistant formatting")
+	}
+	msgs := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}},
+		ai.ModelResponse{ModelName: `gpt"5`, ProviderName: "openai", Parts: []ai.ResponsePart{
+			ai.ThinkingPart{Content: "about </assistant_thinking> and < / ASSISTANT_THINKING>", ProviderName: "openai"},
+			ai.ThinkingPart{Content: "", Signature: "redacted", ProviderName: "openai"},
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "again"}}},
+	}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(gotBody.Messages) != 3 {
+		t.Fatalf("expected the empty assistant turn to be dropped, got %+v", gotBody.Messages)
+	}
+	carried := gotBody.Messages[1]
+	want := "<assistant_thinking model=\"gpt&quot;5\" provider=\"openai\">\n" +
+		"about &lt;/assistant_thinking> and &lt; / ASSISTANT_THINKING>\n</assistant_thinking>"
+	if carried.Role != "user" || len(carried.Content) != 1 || carried.Content[0].Text != want {
+		t.Fatalf("carried = %+v", carried)
+	}
+}
+
+func TestNonNativeThinkingStaysInAssistantTurnWhenMimicryDisabled(t *testing.T) {
+	var gotBody map[string]any
+	model := newServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	}, anthropic.WithMimicsAssistantMessageFormatting(false))
+	msgs := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.ThinkingPart{Content: "hidden"}}}}
+	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	messages := gotBody["messages"].([]any)
+	assistant := messages[0].(map[string]any)
+	block := assistant["content"].([]any)[0].(map[string]any)
+	if len(messages) != 1 || assistant["role"] != "assistant" || block["text"] != "<thinking>\nhidden\n</thinking>" {
+		t.Fatalf("messages = %v", messages)
 	}
 }
 
@@ -1251,6 +1320,59 @@ func TestAnthropicCachePoints(t *testing.T) {
 	if len(wireMessages) != 1 ||
 		wireMessages[0].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"].(map[string]any)["ttl"] != "1h" {
 		t.Fatalf("leading cache point did not attach to prior content: %#v", wireMessages)
+	}
+}
+
+func TestAnthropicCachePointAfterReplayedMCPToolResult(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		body = nil
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	})
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "What is the repository?"}}},
+		ai.ModelResponse{ProviderName: "anthropic", Parts: []ai.ResponsePart{
+			ai.NativeToolCallPart{
+				ToolName: "mcp_server:deepwiki", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+				Args:         json.RawMessage(`{"action":"call_tool","tool_name":"ask_question","tool_args":{}}`),
+				ProviderName: "anthropic",
+			},
+			ai.NativeToolReturnPart{
+				ToolName: "mcp_server:deepwiki", ToolCallID: "call", ToolKind: ai.ToolPartKindMCPServer,
+				Content: map[string]any{
+					"content": []any{map[string]any{"type": "text", "text": "An agent framework."}}, "is_error": false,
+				},
+				ProviderName: "anthropic",
+			},
+		}},
+	}
+	messageSettings, err := (anthropic.Settings{CacheMessages: anthropic.CacheTTL5Minutes}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		messages []ai.ModelMessage
+		settings ai.ModelSettings
+	}{
+		"explicit": {messages: append(slices.Clone(history), ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Contents: []ai.UserContent{ai.CachePoint{}, ai.TextContent{Text: "Summarize that."}}},
+		}})},
+		"messages": {messages: history, settings: messageSettings},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), test.messages, ai.ModelRequestParams{Settings: test.settings})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := body["messages"].([]any)[1].(map[string]any)["content"].([]any)[1].(map[string]any)
+			if result["type"] != "mcp_tool_result" ||
+				!reflect.DeepEqual(result["cache_control"], map[string]any{"type": "ephemeral", "ttl": "5m"}) {
+				t.Fatalf("cache point did not land on the replayed MCP result: %#v", body["messages"])
+			}
+		})
 	}
 }
 
@@ -2012,48 +2134,68 @@ func TestAnthropicAdaptiveThinkingProfiles(t *testing.T) {
 }
 
 func TestAnthropicContainerUploadsAndRecovery(t *testing.T) {
-	calls := 0
-	var bodies []map[string]any
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		calls++
-		var body map[string]any
-		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		bodies = append(bodies, body)
-		if calls == 1 {
-			response.WriteHeader(http.StatusInternalServerError)
-			_, _ = response.Write([]byte(`{"type":"error","error":{"type":"api_error","message":"Internal server error"}}`))
-			return
-		}
-		_, _ = response.Write([]byte(`{"id":"response","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}],"usage":{}}`))
-	}))
-	defer server.Close()
-	model := anthropic.NewModel("claude-sonnet-4-6", anthropic.WithBaseURL(server.URL),
-		anthropic.WithHTTPClient(server.Client()))
-	history := []ai.ModelMessage{
-		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "first"}}},
-		ai.ModelResponse{ProviderName: "anthropic", ProviderDetails: map[string]any{"container_id": "expired"}},
-		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "second"}}},
-	}
-	_, err := model.Request(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
-		ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file-1", ProviderName: "anthropic"}}},
-	}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(bodies) != 2 || bodies[0]["container"] != "expired" || bodies[1]["container"] != nil {
-		t.Fatalf("unexpected container retry: %#v", bodies)
-	}
-	for _, raw := range bodies[0]["messages"].([]any) {
-		message := raw.(map[string]any)
-		if message["role"] != "user" {
-			continue
-		}
-		content := message["content"].([]any)
-		if content[len(content)-1].(map[string]any)["type"] != "container_upload" {
-			t.Fatalf("container upload missing from user turn: %#v", message)
-		}
+	for name, failure := range map[string]struct {
+		status int
+		body   string
+		calls  int
+	}{
+		"server error": {
+			status: http.StatusInternalServerError, calls: 2,
+			body: `{"type":"error","error":{"type":"api_error","message":"Internal server error"}}`,
+		},
+		"container not found": {
+			status: http.StatusNotFound, calls: 2,
+			body: `{"type":"error","error":{"type":"not_found_error","message":"Container not found: expired"}}`,
+		},
+		"Bedrock container not found": {
+			status: http.StatusNotFound, calls: 2, body: `{"message":"Container not found: expired"}`,
+		},
+		"other not found": {
+			status: http.StatusNotFound, calls: 1,
+			body: `{"type":"error","error":{"type":"not_found_error","message":"model: claude-sonnet-4-6"}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var bodies []map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				bodies = append(bodies, body)
+				if len(bodies) == 1 {
+					response.WriteHeader(failure.status)
+					_, _ = response.Write([]byte(failure.body))
+					return
+				}
+				_, _ = response.Write([]byte(`{"id":"response","model":"claude-sonnet-4-6","content":[{"type":"text","text":"done"}],"usage":{}}`))
+			}))
+			defer server.Close()
+			model := anthropic.NewModel("claude-sonnet-4-6", anthropic.WithBaseURL(server.URL),
+				anthropic.WithHTTPClient(server.Client()))
+			history := []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "first"}}},
+				ai.ModelResponse{ProviderName: "anthropic", ProviderDetails: map[string]any{"container_id": "expired"}},
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "second"}}},
+			}
+			_, err := model.Request(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+				ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file-1", ProviderName: "anthropic"}}},
+			}})
+			if (err != nil) != (failure.calls == 1) || len(bodies) != failure.calls || bodies[0]["container"] != "expired" ||
+				failure.calls == 2 && bodies[1]["container"] != nil {
+				t.Fatalf("unexpected container retry: err=%v bodies=%#v", err, bodies)
+			}
+			for _, raw := range bodies[0]["messages"].([]any) {
+				message := raw.(map[string]any)
+				if message["role"] != "user" {
+					continue
+				}
+				content := message["content"].([]any)
+				if content[len(content)-1].(map[string]any)["type"] != "container_upload" {
+					t.Fatalf("container upload missing from user turn: %#v", message)
+				}
+			}
+		})
 	}
 }
 
@@ -3294,5 +3436,90 @@ func TestAnthropicReplaysForeignNativeSearchLocally(t *testing.T) {
 	tools := body["tools"].([]any)
 	if tools[len(tools)-1].(map[string]any)["name"] != "tool_search_tool_bm25" {
 		t.Fatalf("current search did not remain hosted: %+v", tools)
+	}
+}
+
+func TestAnthropicRequestScopedSystemPrompts(t *testing.T) {
+	var body map[string]any
+	var beta string
+	handler := func(response http.ResponseWriter, request *http.Request) {
+		beta = request.Header.Get("anthropic-beta")
+		body = nil
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	}
+	reminder := func(content string) ai.SystemPromptPart {
+		return ai.SystemPromptPart{Content: content, Scope: ai.SystemPromptScopeRequest}
+	}
+	settings, err := (anthropic.Settings{CacheMessages: anthropic.CacheTTL5Minutes}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := newNamedServer(t, "claude-opus-5", handler)
+	if !native.ModelProfile().SupportsRequestScopedSystemPrompts {
+		t.Fatal("claude-opus-5 should clear request-scoped prompts natively")
+	}
+	messages := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "first"}, reminder("old")}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{reminder("alone")}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "again"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{reminder("now")}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}}},
+	}
+	if _, err := native.Request(t.Context(), messages, ai.ModelRequestParams{Settings: settings}); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(beta, "mid-conversation-system-clear-at-2026-08-21") {
+		t.Fatalf("missing clear_at beta: %q", beta)
+	}
+	got, err := json.Marshal(body["messages"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `[{"content":[{"text":"first","type":"text"}],"role":"user"},` +
+		`{"clear_at":"next_user_message","content":[{"text":"old","type":"text"}],"role":"system"},` +
+		`{"content":[{"text":"done","type":"text"}],"role":"assistant"},` +
+		`{"content":[{"text":".","type":"text"}],"role":"user"},` +
+		`{"clear_at":"next_user_message","content":[{"text":"alone","type":"text"}],"role":"system"},` +
+		`{"content":[{"text":"again","type":"text"}],"role":"assistant"},` +
+		`{"content":[{"cache_control":{"ttl":"5m","type":"ephemeral"},"text":"go","type":"text"}],"role":"user"},` +
+		`{"clear_at":"next_user_message","content":[{"text":"now","type":"text"}],"role":"system"}]`
+	if string(got) != want {
+		t.Fatalf("unexpected request-scoped messages:\n got %s\nwant %s", got, want)
+	}
+
+	optedOut := anthropic.NewModel("claude-opus-5", anthropic.WithRequestScopedSystemPrompts(false))
+	if optedOut.ModelProfile().SupportsRequestScopedSystemPrompts {
+		t.Fatal("opt-out did not disable native request-scoped prompts")
+	}
+
+	automatic, err := (anthropic.Settings{Cache: anthropic.CacheTTL5Minutes}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	fallback := newServer(t, handler)
+	messages = []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}, reminder("remind")}},
+	}
+	if _, err := fallback.Request(t.Context(), messages, ai.ModelRequestParams{Settings: automatic}); err != nil {
+		t.Fatal(err)
+	}
+	blocks := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if strings.Contains(beta, "clear-at") || body["cache_control"] == nil ||
+		blocks[0].(map[string]any)["cache_control"] == nil || blocks[1].(map[string]any)["cache_control"] != nil {
+		t.Fatalf("cache breakpoint was not placed before the request-scoped prompt: %q %#v", beta, body)
+	}
+
+	messages = append(messages, ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "partial"}}})
+	if _, err := fallback.Request(t.Context(), messages, ai.ModelRequestParams{Settings: automatic}); err != nil {
+		t.Fatal(err)
+	}
+	wire := body["messages"].([]any)
+	resumed := wire[len(wire)-1].(map[string]any)["content"].([]any)
+	if resumed[0].(map[string]any)["cache_control"] == nil {
+		t.Fatalf("a resumed response lost its cache breakpoint: %#v", wire)
 	}
 }

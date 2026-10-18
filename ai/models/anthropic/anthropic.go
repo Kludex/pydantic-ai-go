@@ -19,6 +19,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/thinking"
 )
 
 const defaultMaxTokens = 16384
@@ -31,6 +32,8 @@ type Model struct {
 	httpClient          *http.Client
 	strictToolSupport   bool
 	deferredToolSupport bool
+	carryThinking       bool
+	requestScoped       bool
 	schemaWarning       func(SchemaWarning)
 	defaultSettings     ai.ModelSettings
 	legacyBedrockClient LegacyBedrockClient
@@ -45,11 +48,19 @@ func (m *Model) ModelProfile() ai.ModelProfile {
 	}
 	return ai.ModelProfile{
 		SupportsCache: true, SupportsAutoCache: m.legacyBedrockClient == nil, SupportedCacheRetentions: tiers,
-		DefaultOutputMode:             ai.OutputModeTool,
-		SupportsToolAvailabilityDelta: m.deferredToolSupport,
-		ContextWindow:                 m.contextWindow,
-		DefaultCacheRetention:         5 * time.Minute,
+		DefaultOutputMode:                  ai.OutputModeTool,
+		SupportsToolAvailabilityDelta:      m.deferredToolSupport,
+		MimicsAssistantMessageFormatting:   m.carryThinking,
+		SupportsRequestScopedSystemPrompts: m.clearsRequestScopedPrompts(),
+		ContextWindow:                      m.contextWindow,
+		DefaultCacheRetention:              5 * time.Minute,
 	}
+}
+
+// clearsRequestScopedPrompts excludes the legacy Bedrock client, which sends no
+// anthropic-beta, and the API rejects clear_at without it.
+func (m *Model) clearsRequestScopedPrompts() bool {
+	return m.requestScoped && m.legacyBedrockClient == nil
 }
 
 // SupportsToolAvailabilityDelta reports whether this request can render native tool additions.
@@ -87,6 +98,22 @@ func WithDeferredToolSupport(enabled bool) Option {
 	return func(m *Model) { m.deferredToolSupport = enabled }
 }
 
+// WithMimicsAssistantMessageFormatting overrides whether Claude copies markup from
+// earlier assistant turns into its answers. It is enabled by default, so reasoning
+// without a valid Anthropic signature is sent in a user turn ahead of the assistant
+// turn. Disable it to send that reasoning in <thinking> tags in the assistant turn.
+func WithMimicsAssistantMessageFormatting(enabled bool) Option {
+	return func(m *Model) { m.carryThinking = enabled }
+}
+
+// WithRequestScopedSystemPrompts overrides whether request-scoped system
+// prompts are sent as system entries the API clears itself, under the
+// mid-conversation-system-clear-at-2026-08-21 beta. Disable it for an account
+// without access to the beta: each prompt is then sent only with its own request.
+func WithRequestScopedSystemPrompts(enabled bool) Option {
+	return func(m *Model) { m.requestScoped = enabled }
+}
+
 // SchemaWarning describes a lossy strict-schema conversion.
 type SchemaWarning struct {
 	// ToolName identifies the transformed definition.
@@ -111,6 +138,8 @@ func NewModel(name string, opts ...Option) *Model {
 		httpClient:          http.DefaultClient,
 		strictToolSupport:   supportsStrictTools(name),
 		deferredToolSupport: supportsDeferredTools(name),
+		carryThinking:       true,
+		requestScoped:       supportsRequestScopedSystemPrompts(name),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -130,8 +159,10 @@ func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
 		return false
 	}
-	switch tool.CloneNativeTool().(type) {
-	case ai.WebSearchTool, ai.WebFetchTool, ai.CodeExecutionTool, ai.MemoryTool, ai.MCPServerTool:
+	switch tool := tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool:
+		return tool.ExternalWebAccess == nil || *tool.ExternalWebAccess
+	case ai.WebFetchTool, ai.CodeExecutionTool, ai.MemoryTool, ai.MCPServerTool:
 		return true
 	case ai.AdvisorTool:
 		return anthropicSupportsAdvisor(m.name)
@@ -207,7 +238,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if err != nil {
 		return nil, err
 	}
-	if statusCode == http.StatusInternalServerError && payload.ContainerFromHistory &&
+	if anthropicExpiredContainer(statusCode, data) && payload.ContainerFromHistory &&
 		messagesHaveContainerUploads(payload.Messages) {
 		payload.Container = nil
 		statusCode, data, err = send()
@@ -215,7 +246,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 			return nil, err
 		}
 	}
-	if anthropicStaleThinkingError(m.name, statusCode, data, payload) {
+	if anthropicStaleThinkingError(m.name, statusCode, anthropicErrorMessage(data), payload) {
 		enableAnthropicStaleThinkingDrop(payload)
 		statusCode, data, err = send()
 		if err != nil {
@@ -308,7 +339,7 @@ func (m *Model) CountTokens(
 	if err != nil {
 		return ai.Usage{}, err
 	}
-	if anthropicStaleThinkingError(m.name, statusCode, data, payload) {
+	if anthropicStaleThinkingError(m.name, statusCode, anthropicErrorMessage(data), payload) {
 		enableAnthropicStaleThinkingDrop(payload)
 		statusCode, data, err = send()
 		if err != nil {
@@ -334,32 +365,30 @@ func (m *Model) setRequestHeaders(req *http.Request, payload *messagesRequest, s
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", m.apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
-	betas := strings.FieldsFunc(req.Header.Get("anthropic-beta"), func(r rune) bool {
-		return r == ',' || r == ' '
-	})
-	if payload.ToolAdditions && !slices.Contains(betas, "mid-conversation-tool-changes-2026-07-01") {
-		betas = append(betas, "mid-conversation-tool-changes-2026-07-01")
-	}
-	if payload.Compaction && !slices.Contains(betas, "compact-2026-01-12") {
-		betas = append(betas, "compact-2026-01-12")
-	}
-	for _, beta := range payload.Betas {
-		if !slices.Contains(betas, beta) {
-			betas = append(betas, beta)
-		}
-	}
-	if len(betas) > 0 {
-		unique := make([]string, 0, len(betas))
-		for _, beta := range betas {
-			if !slices.Contains(unique, beta) {
-				unique = append(unique, beta)
-			}
-		}
-		req.Header.Set("anthropic-beta", strings.Join(unique, ","))
+	if betas := anthropicBetas(req.Header.Get("anthropic-beta"), payload); len(betas) > 0 {
+		req.Header.Set("anthropic-beta", strings.Join(betas, ","))
 	}
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
+}
+
+func anthropicBetas(requested string, payload *messagesRequest) []string {
+	betas := strings.FieldsFunc(requested, func(r rune) bool { return r == ',' || r == ' ' })
+	if payload.ToolAdditions {
+		betas = append(betas, "mid-conversation-tool-changes-2026-07-01")
+	}
+	if payload.Compaction {
+		betas = append(betas, "compact-2026-01-12")
+	}
+	betas = append(betas, payload.Betas...)
+	unique := make([]string, 0, len(betas))
+	for _, beta := range betas {
+		if !slices.Contains(unique, beta) {
+			unique = append(unique, beta)
+		}
+	}
+	return unique
 }
 
 // APIError is a non-200 response from the Anthropic API.
@@ -442,6 +471,7 @@ type thinkingBlockBinding struct {
 type messageParam struct {
 	Role    string         `json:"role"`
 	Content []contentBlock `json:"content"`
+	ClearAt string         `json:"clear_at,omitempty"`
 }
 
 type contentBlock struct {
@@ -660,6 +690,10 @@ func resolveAnthropicCachePoints(messages *[]messageParam) error {
 	var lastBlock *contentBlock
 	resolved := make([]messageParam, 0, len(*messages))
 	for _, message := range *messages {
+		if message.ClearAt != "" {
+			resolved = append(resolved, message)
+			continue
+		}
 		content := make([]contentBlock, 0, len(message.Content))
 		hadMarker := false
 		for _, block := range message.Content {
@@ -668,9 +702,7 @@ func resolveAnthropicCachePoints(messages *[]messageParam) error {
 				if lastBlock == nil {
 					return fmt.Errorf("anthropic: cache point must follow user content")
 				}
-				switch lastBlock.Type {
-				case "text", "tool_use", "server_tool_use", "image", "tool_result", "document", "tool_addition":
-				default:
+				if !anthropicCacheable(lastBlock.Type) {
 					return fmt.Errorf("anthropic: cache control not supported for content type %q", lastBlock.Type)
 				}
 				lastBlock.CacheControl = block.CacheControl
@@ -691,21 +723,102 @@ func resolveAnthropicCachePoints(messages *[]messageParam) error {
 	return nil
 }
 
-func addAnthropicMessageCachePoint(messages []messageParam, ttl CacheTTL) {
-	if len(messages) == 0 {
+// addAnthropicMessageCachePoint marks the last block the next request still
+// sends: it skips clear_at entries, which cannot carry one, and the trailing
+// text blocks rendering scopedTail, which the next request leaves out.
+func addAnthropicMessageCachePoint(messages []messageParam, ttl CacheTTL, scopedTail []string) {
+	last := lastLastingMessage(messages)
+	if last < 0 {
 		return
 	}
-	blocks := messages[len(messages)-1].Content
+	blocks := messages[last].Content
+	for len(blocks) > 0 && len(scopedTail) > 0 {
+		block := blocks[len(blocks)-1]
+		if block.Type != "text" || block.Text != scopedTail[len(scopedTail)-1] {
+			break
+		}
+		blocks = blocks[:len(blocks)-1]
+		scopedTail = scopedTail[:len(scopedTail)-1]
+	}
 	for index := len(blocks) - 1; index >= 0; index-- {
 		if blocks[index].CacheControl != nil {
 			return
 		}
-		switch blocks[index].Type {
-		case "text", "tool_use", "server_tool_use", "image", "tool_result", "document", "tool_addition":
+		if anthropicCacheable(blocks[index].Type) {
 			blocks[index].CacheControl = promptCacheControl(ttl)
 			return
 		}
 	}
+}
+
+func anthropicCacheable(blockType string) bool {
+	switch blockType {
+	case "text", "tool_use", "server_tool_use", "image", "tool_result", "document", "tool_addition", "mcp_tool_result":
+		return true
+	}
+	return false
+}
+
+func lastLastingMessage(messages []messageParam) int {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].ClearAt == "" {
+			return index
+		}
+	}
+	return -1
+}
+
+func isRequestScoped(part ai.RequestPart) bool {
+	system, ok := part.(ai.SystemPromptPart)
+	return ok && system.Scope == ai.SystemPromptScopeRequest
+}
+
+// requestScopedTail returns the request-scoped prompts ending the last request,
+// where preparation moves them for a model that cannot clear them itself.
+func requestScopedTail(messages []ai.ModelMessage) []string {
+	for index := len(messages) - 1; index >= 0; index-- {
+		request, ok := messages[index].(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		start := len(request.Parts)
+		for start > 0 && isRequestScoped(request.Parts[start-1]) {
+			start--
+		}
+		tail := make([]string, 0, len(request.Parts)-start)
+		for _, part := range request.Parts[start:] {
+			tail = append(tail, part.(ai.SystemPromptPart).Content)
+		}
+		return tail
+	}
+	return nil
+}
+
+// placeAnthropicSystemMessages moves each system entry past the user turns
+// after it, since the API accepts one only right before an assistant turn or
+// at the end, and gives an entry that follows no user turn one to follow.
+func placeAnthropicSystemMessages(messages []messageParam) []messageParam {
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role != "system" {
+			continue
+		}
+		target := index + 1
+		for target < len(messages) && messages[target].Role == "user" {
+			target++
+		}
+		entry := messages[index]
+		copy(messages[index:], messages[index+1:target])
+		messages[target-1] = entry
+	}
+	for index := len(messages) - 1; index >= 0; index-- {
+		if messages[index].Role != "system" || index > 0 && messages[index-1].Role != "assistant" {
+			continue
+		}
+		messages = slices.Insert(messages, index, messageParam{
+			Role: "user", Content: []contentBlock{{Type: "text", Text: "."}},
+		})
+	}
+	return messages
 }
 
 func raiseAnthropicCacheTTLs(request *messagesRequest) {
@@ -973,8 +1086,23 @@ func anthropicSupportsForcedToolChoice(modelName string) bool {
 
 func anthropicBindsThinkingBlocks(modelName string) bool {
 	modelName = strings.ToLower(modelName)
+	if _, bedrockName, found := strings.Cut(modelName, "anthropic."); found {
+		modelName = bedrockName
+	}
 	for _, prefix := range []string{"claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"} {
 		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func supportsRequestScopedSystemPrompts(modelName string) bool {
+	modelName = strings.ToLower(modelName)
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5-5", "claude-haiku-5-5",
+	} {
+		if strings.Contains(modelName, prefix) {
 			return true
 		}
 	}
@@ -1198,6 +1326,18 @@ func (m *Model) buildPayload(
 		!slices.Contains(nativeBetas, "thinking-binding-controls-2026-08-01") {
 		nativeBetas = append(nativeBetas, "thinking-binding-controls-2026-08-01")
 	}
+	requestScoped := m.clearsRequestScopedPrompts()
+	var scopedTail []string
+	if requestScoped {
+		if slices.ContainsFunc(msgs, func(message ai.ModelMessage) bool {
+			request, ok := message.(ai.ModelRequest)
+			return ok && slices.ContainsFunc(request.Parts, isRequestScoped)
+		}) {
+			nativeBetas = append(nativeBetas, "mid-conversation-system-clear-at-2026-08-21")
+		}
+	} else {
+		scopedTail = requestScopedTail(msgs)
+	}
 	req := &messagesRequest{
 		Model:                m.name,
 		Tools:                nativeTools,
@@ -1301,12 +1441,13 @@ func (m *Model) buildPayload(
 		}
 	}
 	for _, msg := range trimmedMessages {
-		converted, err := convertMessage(ctx, msg, deferredNames, advisorActive)
+		converted, err := convertMessage(ctx, msg, deferredNames, advisorActive, m.carryThinking, requestScoped)
 		if err != nil {
 			return nil, err
 		}
 		req.Messages = append(req.Messages, converted...)
 	}
+	req.Messages = placeAnthropicSystemMessages(req.Messages)
 	if uploads := anthropicContainerUploads(params.NativeTools); len(uploads) > 0 {
 		for index := range req.Messages {
 			if req.Messages[index].Role != "user" || anthropicToolResultsOnly(req.Messages[index].Content) {
@@ -1330,21 +1471,22 @@ func (m *Model) buildPayload(
 				roles[index], counts[index] = message.Role, len(message.Content)
 			}
 			if previous := promptcache.PreviousTail(roles, counts); previous >= 0 {
-				addAnthropicMessageCachePoint(req.Messages[:previous+1], cache.Messages)
+				addAnthropicMessageCachePoint(req.Messages[:previous+1], cache.Messages, nil)
 			}
 		}
-		addAnthropicMessageCachePoint(req.Messages, cache.Messages)
+		addAnthropicMessageCachePoint(req.Messages, cache.Messages, scopedTail)
+	} else if cache.Automatic != "" && len(scopedTail) > 0 {
+		addAnthropicMessageCachePoint(req.Messages, cache.Automatic, scopedTail)
 	}
-	if len(req.Messages) > 0 {
-		blocks := req.Messages[len(req.Messages)-1].Content
+	if last := lastLastingMessage(req.Messages); last >= 0 {
+		blocks := req.Messages[last].Content
 		for index := len(blocks) - 1; index >= 0; index-- {
 			if blocks[index].CacheControl != nil {
 				req.CacheControl = nil
 				break
 			}
-			switch blocks[index].Type {
-			case "text", "tool_use", "server_tool_use", "image", "tool_result", "document", "tool_addition":
-				index = -1
+			if anthropicCacheable(blocks[index].Type) {
+				break
 			}
 		}
 	}
@@ -1417,7 +1559,11 @@ func (m *Model) buildPayload(
 		req.ToolChoice.DisableParallelToolUse = &disable
 	}
 	if params.OutputSchema != nil && params.OutputMode == ai.OutputModeNative {
-		if !supportsAnthropicNativeOutput(m.name) {
+		supported := supportsAnthropicNativeOutput(m.name)
+		if m.legacyBedrockClient != nil {
+			supported = legacyBedrockSupportsStructuredOutput(m.name)
+		}
+		if !supported {
 			return nil, fmt.Errorf("anthropic: model %q does not support native JSON output", m.name)
 		}
 		if req.OutputConfig == nil {
@@ -1507,7 +1653,29 @@ func messagesHaveContainerUploads(messages []messageParam) bool {
 	return false
 }
 
-func anthropicStaleThinkingError(modelName string, statusCode int, data []byte, payload *messagesRequest) bool {
+func anthropicExpiredContainer(statusCode int, data []byte) bool {
+	return statusCode == http.StatusInternalServerError ||
+		statusCode == http.StatusNotFound && strings.HasPrefix(anthropicErrorMessage(data), "Container not found")
+}
+
+// anthropicErrorMessage reads the direct API's nested error message or Bedrock's top-level one.
+func anthropicErrorMessage(data []byte) string {
+	var body struct {
+		Message string `json:"message"`
+		Error   *struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &body) != nil {
+		return ""
+	}
+	if body.Error != nil {
+		return body.Error.Message
+	}
+	return body.Message
+}
+
+func anthropicStaleThinkingError(modelName string, statusCode int, message string, payload *messagesRequest) bool {
 	if !anthropicBindsThinkingBlocks(modelName) || statusCode != http.StatusBadRequest ||
 		payload.Thinking != nil && payload.Thinking.BlockBinding != nil {
 		return false
@@ -1517,13 +1685,7 @@ func anthropicStaleThinkingError(modelName string, statusCode int, data []byte, 
 			return false
 		}
 	}
-	var body struct {
-		Error struct {
-			Message string `json:"message"`
-		} `json:"error"`
-	}
-	return json.Unmarshal(data, &body) == nil &&
-		strings.Contains(body.Error.Message, "The block is bound to a different conversation")
+	return strings.Contains(message, "The block is bound to a different conversation")
 }
 
 func enableAnthropicStaleThinkingDrop(payload *messagesRequest) {
@@ -1695,28 +1857,33 @@ func hasStableAnthropicTool(params ai.ModelRequestParams) bool {
 }
 
 func convertMessage(
-	ctx context.Context, msg ai.ModelMessage, deferredNames map[string]struct{}, advisorActive bool,
+	ctx context.Context, msg ai.ModelMessage, deferredNames map[string]struct{},
+	advisorActive, carryThinking, requestScoped bool,
 ) ([]messageParam, error) {
 	switch m := msg.(type) {
 	case ai.ModelRequest:
-		return convertRequest(ctx, m, deferredNames)
+		return convertRequest(ctx, m, deferredNames, requestScoped)
 	case ai.ModelResponse:
-		return convertResponse(m, deferredNames, advisorActive)
+		return convertResponse(m, deferredNames, advisorActive, carryThinking)
 	default:
 		return nil, fmt.Errorf("anthropic: unknown message type %T", msg)
 	}
 }
 
 func convertRequest(
-	ctx context.Context, m ai.ModelRequest, deferredNames map[string]struct{},
+	ctx context.Context, m ai.ModelRequest, deferredNames map[string]struct{}, requestScoped bool,
 ) ([]messageParam, error) {
-	var blocks []contentBlock
+	var blocks, scoped []contentBlock
 	searchReveals := make(map[string]struct{})
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.SpeechPart:
 			return nil, ai.ErrUnpreparedSpeech
 		case ai.SystemPromptPart:
+			if requestScoped && p.Scope == ai.SystemPromptScopeRequest {
+				scoped = append(scoped, contentBlock{Type: "text", Text: p.Content})
+				continue
+			}
 			// Anthropic takes the system prompt at the top level; a
 			// system part in history becomes user-visible context.
 			blocks = append(blocks, contentBlock{Type: "text", Text: p.Content})
@@ -1779,7 +1946,14 @@ func convertRequest(
 			return nil, fmt.Errorf("anthropic: unknown request part type %T", part)
 		}
 	}
-	return []messageParam{{Role: "user", Content: blocks}}, nil
+	if len(scoped) == 0 {
+		return []messageParam{{Role: "user", Content: blocks}}, nil
+	}
+	system := messageParam{Role: "system", Content: scoped, ClearAt: "next_user_message"}
+	if len(blocks) == 0 {
+		return []messageParam{system}, nil
+	}
+	return []messageParam{{Role: "user", Content: blocks}, system}, nil
 }
 
 func anthropicToolSearchResult(
@@ -1833,9 +2007,9 @@ func trimAnthropicCompactionMessages(messages []ai.ModelMessage) ([]ai.ModelMess
 }
 
 func convertResponse(
-	m ai.ModelResponse, deferredNames map[string]struct{}, advisorActive bool,
+	m ai.ModelResponse, deferredNames map[string]struct{}, advisorActive, carryThinking bool,
 ) ([]messageParam, error) {
-	var blocks []contentBlock
+	var blocks, carried []contentBlock
 	for _, part := range m.Parts {
 		switch p := part.(type) {
 		case ai.SpeechPart:
@@ -1850,8 +2024,17 @@ func convertResponse(
 				})
 			}
 		case ai.ThinkingPart:
-			if p.Signature != "" && (p.ProviderName == "" || p.ProviderName == "anthropic") {
+			switch {
+			case p.Signature != "" && (p.ProviderName == "" || p.ProviderName == "anthropic"):
 				blocks = append(blocks, contentBlock{Type: "thinking", Thinking: &p.Content, Signature: p.Signature})
+			case p.Content == "":
+			case carryThinking:
+				// Claude copies thinking tags it sees in assistant turns into the answers users read.
+				carried = append(carried, contentBlock{
+					Type: "text", Text: thinking.Carried(p.Content, m.ModelName, m.ProviderName),
+				})
+			default:
+				blocks = append(blocks, contentBlock{Type: "text", Text: "<thinking>\n" + p.Content + "\n</thinking>"})
 			}
 		case ai.ToolCallPart:
 			blocks = append(blocks, contentBlock{Type: "tool_use", ID: p.ToolCallID, Name: p.ToolName, Input: p.Args})
@@ -2020,6 +2203,13 @@ func convertResponse(
 				Type: "tool_search_tool_result", ToolUseID: p.ToolCallID, Content: content,
 			})
 		}
+	}
+	if len(carried) > 0 {
+		messages := []messageParam{{Role: "user", Content: carried}}
+		if len(blocks) > 0 {
+			messages = append(messages, messageParam{Role: "assistant", Content: blocks})
+		}
+		return messages, nil
 	}
 	return []messageParam{{Role: "assistant", Content: blocks}}, nil
 }

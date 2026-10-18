@@ -1576,6 +1576,19 @@ func TestResponsesDeferredToolSupportCanBeDisabled(t *testing.T) {
 		tools[0].(map[string]any)["name"] != ai.ToolSearchName {
 		t.Fatalf("deferred support override was ignored: %+v", tools)
 	}
+	for _, name := range []string{"gpt-5.4-nano", "openai.gpt-5.4-nano-2026-03-17"} {
+		if nano := openai.NewResponsesModel(name); nano.NativeToolSearchProvider() != "" {
+			t.Fatalf("%s was granted native tool search", name)
+		}
+	}
+	for _, model := range []*openai.ResponsesModel{
+		openai.NewResponsesModel("gpt-5.4"),
+		openai.NewResponsesModel("gpt-5.4-nano", openai.WithDeferredToolSupport(true)),
+	} {
+		if model.NativeToolSearchProvider() != "openai" {
+			t.Fatalf("%s lost native tool search", model.Name())
+		}
+	}
 }
 
 func TestResponsesNativeDeferredErrors(t *testing.T) {
@@ -1922,6 +1935,31 @@ func TestResponsesCompatibleReasoningContentHistory(t *testing.T) {
 	item := body["input"].([]any)[0].(map[string]any)
 	if item["content"].([]any)[0].(map[string]any)["text"] != "private" {
 		t.Fatalf("reasoning content was not replayed: %#v", body)
+	}
+}
+
+func TestResponsesCompatibleEncryptedReasoningKeepsSampling(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = response.Write([]byte(`{"id":"response","model":"compatible","status":"completed","output":[],"usage":{}}`))
+	}, openai.WithChatCompatibility(openai.ChatCompatibility{
+		ResponsesEncryptedReasoning: true, SamplingWithReasoning: true,
+	}))
+	temperature := 0.2
+	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}, ai.ModelRequestParams{
+		Settings: ai.ModelSettings{
+			Temperature: &temperature, Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["temperature"] != 0.2 || body["reasoning"].(map[string]any)["effort"] != "minimal" ||
+		fmt.Sprint(body["include"]) != "[reasoning.encrypted_content]" {
+		t.Fatalf("unexpected request: %#v", body)
 	}
 }
 

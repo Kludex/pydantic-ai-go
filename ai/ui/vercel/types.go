@@ -66,6 +66,8 @@ const (
 	ChunkDataCompaction ChunkType = "data-compaction"
 	// ChunkDataToolAvailability carries tools revealed by an earlier result.
 	ChunkDataToolAvailability ChunkType = "data-tool-availability-delta"
+	// ChunkDataEnqueuedMessages carries messages delivered by Enqueue as history the client keeps but does not render.
+	ChunkDataEnqueuedMessages ChunkType = "data-enqueued-messages"
 )
 
 // Chunk is one JSON Vercel AI UI message stream value.
@@ -223,6 +225,9 @@ type StreamConfig struct {
 	SDKVersion int
 	// ServerMessageID overrides the generated assistant message ID.
 	ServerMessageID string
+	// AllowSystemPrompts streams enqueued system prompts. Leave it false when the server owns them:
+	// the client's copy would be stripped on the way back in, so sending it would only disclose it.
+	AllowSystemPrompts bool
 }
 
 // Config controls Vercel AI protocol and trust behavior.

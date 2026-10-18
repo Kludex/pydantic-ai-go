@@ -127,22 +127,23 @@ type RunInfo struct {
 	// ConversationID identifies related runs in one conversation.
 	ConversationID string
 
-	workspace        *Workspace
-	agentName        string
-	agentDescription string
-	usage            *Usage
-	usageMu          *sync.Mutex
-	toolCalls        *atomic.Int64
-	messages         *[]ModelMessage
-	newMessages      int
-	prompt           UserPromptPart
-	metadata         *runMetadataState
-	model            func() Model
-	systemPrompts    func(context.Context) ([]SystemPromptPart, error)
-	capabilityID     string
-	toolName         string
-	toolCallID       string
-	emitEvent        func(StreamEvent, string, string, string) error
+	workspace             *Workspace
+	agentName             string
+	agentDescription      string
+	usage                 *Usage
+	usageMu               *sync.Mutex
+	toolCalls             *atomic.Int64
+	messages              *[]ModelMessage
+	newMessages           int
+	prompt                UserPromptPart
+	metadata              *runMetadataState
+	model                 func() Model
+	systemPrompts         func(context.Context) ([]SystemPromptPart, error)
+	startingSystemPrompts *[]SystemPromptPart
+	capabilityID          string
+	toolName              string
+	toolCallID            string
+	emitEvent             func(StreamEvent, string, string, string) error
 }
 
 // AgentName returns the configured application agent name.

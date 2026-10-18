@@ -879,3 +879,40 @@ func instrumentationSpanAttributes(values []attribute.KeyValue) map[string]any {
 	}
 	return attributes
 }
+
+func TestResumedChatSpanReportsOnlyWhatTheRequestBilled(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tracerProvider.Shutdown(t.Context()) })
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}}},
+		ai.ModelResponse{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "a"}}, ModelName: "model", ProviderResponseID: "r1",
+			State: ai.ModelResponseStateSuspended, Usage: ai.Usage{Requests: 1, InputTokens: 5, OutputTokens: 2},
+		},
+	}
+	model := &continuationModel{responses: []*ai.ModelResponse{{
+		Parts: []ai.ResponsePart{ai.TextPart{Content: "b"}}, ModelName: "model", ProviderResponseID: "r2",
+		Usage: ai.Usage{Requests: 1, InputTokens: 8, OutputTokens: 6},
+	}}}
+	agent := ai.NewAgent[deps, string](
+		ai.NewInstrumentedModel(model, ai.WithInstrumentationTracerProvider(tracerProvider)),
+	)
+	if _, err := agent.Resume(t.Context(), history, deps{}); err != nil {
+		t.Fatal(err)
+	}
+	chats := 0
+	for _, span := range exporter.GetSpans() {
+		if !strings.HasPrefix(span.Name, "chat ") {
+			continue
+		}
+		chats++
+		attributes := instrumentationSpanAttributes(span.Attributes)
+		if attributes["gen_ai.usage.input_tokens"] != int64(8) || attributes["gen_ai.usage.output_tokens"] != int64(6) {
+			t.Fatalf("chat span attributes = %+v", attributes)
+		}
+	}
+	if chats != 1 {
+		t.Fatalf("chat spans = %d, want 1", chats)
+	}
+}

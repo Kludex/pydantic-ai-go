@@ -58,6 +58,13 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `7db7a4d8c4b7b7b85b8636cf0b6e3305bafb5167` | `ai/models/openaidecisions` with image input and pre-transport limits |
 | `9dc19d568a1303b32a6b2c9a432ed23f2540b329` | `LiveModel.AnswerWebRTCOfferWithHistory` seeds GPT-Live history through the offer, and `ConnectWebRTC` rejects a sideband whose history differs |
 | `9e0099f70e862f82d7c1eaced2116762cde028e5` | `webchat` returns 422 for undecodable requests and unsupported triggers |
+| `209e15e1c2b87d0b40059940b1b15e96fce240fe` | An expired run-context deadline ends the run like `RunContext.Cancel`; `RunCancelledError` also matches `context.DeadlineExceeded`, and its `Unwrap` returns `[]error` |
+| `687ed343c152a96a48db60d5c5cfde31ae31f185` | `SystemPromptPart.Scope` and `SystemPromptScopeRequest`, sent natively as Anthropic `clear_at` system entries |
+| `7de6c8099d8c1fa2ad45b03e5195ff2d16ff738b` | `ModelProfile.ToolCallIDLength` replaces unfit tool call IDs in requests with stable hashes; Mistral models use nine characters |
+| `8a93bcbb23c09e4987d73edd3bcce6c57d74568e` | `ModelProfile.MimicsAssistantMessageFormatting` carries foreign reasoning in a user turn on Anthropic and Bedrock Claude |
+| `281549b20d70b04212145c5c23728e922e639dc7` | Native tools whose constraints a model cannot apply report unsupported, so local fallbacks run |
+| `dd5749fe17623975885a3aaeb9c21ae33f5f5f6d` | `ai/models/meta` and the `meta:` inference prefix |
+| `69b8fb456fd594c9c4512b54d6052d648dc41dcc` | Responses are priced with their string provider details as `genai-prices` price context, including the reported service tier |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 
@@ -71,6 +78,10 @@ These upstream changes are permanently excluded. No Go code is added for them:
 - `90051ef7f6441552fa731e7bf6feb8cf3aa0ef42` and `3742e5c52f262dbb26200942192ace319ea40e74`: Python schema-def merging and `Agent.output_json_schema` introspection. Go namespaces union `$defs` and has no output-schema introspection API.
 - `18a7211d0b79dfcd9554f85384d0db24b9ba8f0e`: list-form `tool_choice` naming output tools. Go exposes no portable list-form tool choice.
 - `299bd60a76117cee235c751d69ee369751435e66`: a private request-context observer read by Harness `SpendLimits`. Go run usage already counts rejected attempts.
+
+- `4e0d5caf19632884f4759bbfd1c42fe3f3889216` and `bbe2790190c2d7c704fa80a338bed9a70938f988`: Python's public realtime lifecycle contract and session-core tool dispatch with `request_limit`. Go's `realtime.Session` already owns dispatch and boundaries through `CodecEvent`s; adopting the Python contract would add required methods to `realtime.Connection`.
+- `d585ba81623ee6b12015ff91ba7ff2dea1a928ee`: `ModelSettings['max_retries']` for provider SDK retries. Go adapters use direct HTTP with caller-owned clients and the `ai/retries` transport.
+- `c0128863f56fc5d034cc894aac8d9a720da477df`: `xai_sdk` gRPC tool-result replay. Go's xAI adapter uses the Responses HTTP API.
 
 Upstream patches are reference data, not executable inputs. These additions do not introduce harness capability loading or self-extension.
 

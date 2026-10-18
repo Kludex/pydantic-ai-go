@@ -585,6 +585,11 @@ func TestCompoundWebSearch(t *testing.T) {
 	if model.SupportsNativeTool(nilSearch) || groq.NewModel("model").SupportsNativeTool(search) {
 		t.Fatal("unsupported search was accepted")
 	}
+	cached := false
+	if model.SupportsNativeTool(ai.WebSearchTool{MaxUses: 1}) ||
+		model.SupportsNativeTool(ai.WebSearchTool{ExternalWebAccess: &cached}) {
+		t.Fatal("search with an unapplied restriction was accepted")
+	}
 }
 
 func TestCompoundWebSearchValidation(t *testing.T) {
@@ -693,6 +698,14 @@ func TestSettingsValidation(t *testing.T) {
 	} {
 		if _, err := (groq.Settings{ReasoningEffort: effort}).Build(); err != nil {
 			t.Fatal(err)
+		}
+	}
+}
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	for name, want := range map[string]int{"mistral-saba-24b": 9, "llama-3.3-70b-versatile": 0} {
+		if got := groq.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
+			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -304,3 +305,29 @@ func handshakeServer(
 func wsBase(serverURL string) string { return "ws" + strings.TrimPrefix(serverURL, "http") + "/v1" }
 
 var _ io.ReadCloser = errorReader{}
+
+func TestOpenAISeedItemsMarkInterruptedSpeech(t *testing.T) {
+	cut, check, leaves, empty := "Sure, the morning flight", "Let me check.", "It leaves at", ""
+	heard, none := 640, 0
+	items := openairt.SeedItems([]ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &cut, InterruptedAtMS: &heard},
+		}},
+		ai.ModelResponse{State: ai.ModelResponseStateInterrupted, Parts: []ai.ResponsePart{
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &check},
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &leaves},
+		}},
+		ai.ModelResponse{State: ai.ModelResponseStateInterrupted, Parts: []ai.ResponsePart{
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, InterruptedAtMS: &none},
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &empty},
+		}},
+	}, openairt.NewModel("model").Profile())
+	var texts []string
+	for _, item := range items {
+		texts = append(texts, item["content"].([]any)[0].(map[string]any)["text"].(string))
+	}
+	want := []string{cut + "\n[Interrupted after 640 ms]", check, leaves + "\n[Interrupted]"}
+	if !slices.Equal(texts, want) {
+		t.Fatalf("seeded %q", texts)
+	}
+}

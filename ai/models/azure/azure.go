@@ -44,6 +44,11 @@ func NewModel(deployment string, config Config, opts ...openai.Option) (*openai.
 	if err != nil {
 		return nil, err
 	}
+	lower := strings.ToLower(deployment)
+	if strings.HasPrefix(lower, "mistral") || strings.HasPrefix(lower, "ministral") ||
+		strings.HasPrefix(lower, "magistral") {
+		opts = append([]openai.Option{openai.WithToolCallIDLength(9)}, opts...)
+	}
 	opts = append(
 		opts,
 		openai.WithProvider(provider),

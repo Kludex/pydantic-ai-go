@@ -41,6 +41,9 @@ func TestLiveRejectUnsupportedSettings(t *testing.T) {
 	if _, err := openairt.NewLiveModel("gpt-live-1").Connect(t.Context(), realtime.ConnectParams{Request: ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}}}}); err == nil {
 		t.Fatal("unsupported native tool")
 	}
+	if _, err := openairt.NewLiveModel("gpt-live-1").Connect(t.Context(), realtime.ConnectParams{Request: ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.WebSearchTool{MaxUses: 1}}}}); err == nil || !strings.Contains(err.Error(), "max uses") {
+		t.Fatalf("web search max uses was dropped: %v", err)
+	}
 	audio := ai.BinaryContent{Data: []byte{1, 0}, MediaType: "audio/pcm"}
 	for _, message := range []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{audio}}}}, ai.ModelRequest{Parts: []ai.RequestPart{ai.SpeechPart{Audio: &audio}}}, ai.ModelResponse{Parts: []ai.ResponsePart{ai.SpeechPart{Audio: &audio}}}} {
 		if _, err := openairt.NewLiveModel("gpt-live-1").Connect(t.Context(), realtime.ConnectParams{Messages: []ai.ModelMessage{message}}); err == nil {

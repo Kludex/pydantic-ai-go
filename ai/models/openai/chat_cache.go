@@ -35,6 +35,10 @@ type ChatPromptCache struct {
 	ExplicitMarkerStyle ChatPromptCacheMarkerStyle
 	// MaxPoints limits explicit cache boundaries. Zero uses the provider default.
 	MaxPoints int
+	// RequestScopedTail holds the texts of the trailing user messages that render
+	// request-scoped prompts. The next request leaves them out, so the messages
+	// boundary goes on the message before them.
+	RequestScopedTail []string
 }
 
 type chatPromptCacheContextKey struct{}

@@ -8,6 +8,17 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Added
 
+- Meta Muse models through `ai/models/meta` (`NewModel` on the Responses API, `NewChatModel` on Chat Completions) and the `meta:` inference prefix.
+- `SystemPromptPart.Scope` with `SystemPromptScopeRequest` for system prompts that apply to one request only. Anthropic sends them natively as `clear_at` system entries; other models receive each one only with its own request.
+- `ModelProfile.ToolCallIDLength` replaces tool call IDs a model rejects with stable hashes in requests while history keeps the originals. Mistral models, directly or through other providers, use nine characters.
+- `ModelProfile.MimicsAssistantMessageFormatting`: Anthropic and Bedrock Claude send reasoning they cannot replay natively in a user turn. Opt out with `anthropic.WithMimicsAssistantMessageFormatting(false)`.
+- `openai.Settings.TextVerbosity` for Chat Completions and Responses.
+- MCP Apps: tool results of UI-backed tools reach AG-UI and Vercel AI frontends, and `mcp.Session.CallToolForApp` relays an app's tool calls with visibility checks.
+- AG-UI and Vercel AI frontends receive messages enqueued with `RunContext.Enqueue` as hidden history they send back.
+- Gemini 4 Argon long decode: Google requests continue past the per-request output cap, and `MarkInitialInputTokens` keeps context-window usage and per-request input limits on the first request's input.
+- Gemini agentic media processing through `VendorMetadata["media_processing"]` and normalized `media_processing` native tool parts.
+- `WithFallbackWarningHandler` receives the warning `FallbackModel` reports when a streamed request skips response predicates.
+- `TruncateOutput.ItemID` truncates a specific realtime output item.
 - OpenAI Decisions through `ai/models/openaidecisions` and the `openai-decisions:` inference prefix, with image input and request limits checked before transport.
 - `ModelResponse.FailedAttempts`, `ModelRequestAttempt`, and `FallbackExhaustedError.Attempts` record each failed or rejected `FallbackModel` attempt with its model, provider, timing, error, and usage.
 - `BinaryContentFromDataURI` decodes base64 data URIs, including percent-encoded payloads.
@@ -19,6 +30,18 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- An expired deadline on the run's context ends the run like `RunContext.Cancel` and returns a `*RunCancelledError` that keeps completed history, usage, and metadata, and also matches `context.DeadlineExceeded`. `RunCancelledError.Unwrap` now returns `[]error`; use `errors.Is` and `errors.As` instead of `errors.Unwrap`.
+- `FallbackModel` falls back when a stream fails before its first event.
+- `RunStream` returns `UnexpectedModelBehaviorError` when a model request hook asks to retry a response it already streamed as final output. `Run` and `StartRun` still retry it.
+- `ReinjectSystemPrompt{ReplaceExisting: true}` replaces only the system prompts the run started with and keeps ones added during the run.
+- A run resumed from a suspended response counts only the usage billed beyond that response.
+- A tool's prepare function sees its own name and retry count, also under `PrefixToolset` and `RenameToolset`.
+- Tool results are sent in the order of their calls, so UI round trips keep the prompt cache.
+- Native tools whose domain, use, or live-access constraints a model cannot apply are treated as unsupported, so the local fallback runs instead of silently dropping the constraint.
+- Price responses at their reported service tier and price OpenAI Decisions separately from OpenAI. `genai-prices` is now v0.1.13.
+- Realtime: a late transcript joins the part its output item already ended, interrupting a finished reply records it as interrupted, seeded history marks interrupted speech, and xAI sessions reconnect past `max_duration` when a reconnect policy is set.
+- Mistral forces a single tool natively and supports adjustable reasoning on Mistral Large 4. OpenAI Codex sends no explicit prompt-cache fields. `gpt-5.4-nano` gets no native tool search.
+- The legacy Anthropic Bedrock transport retries stale thinking blocks, sends required betas, and withholds structured output from models Bedrock rejects it for.
 - Tokens and cost of responses a `FallbackModel` rejected count toward run usage and token and cost limits, but not `RequestLimit`. Rejected cost is no longer folded into the accepted response's `Usage.CostUSD`.
 - xAI realtime reconnects start a new provider conversation and replay local history, because xAI conversation resumption drops typed user turns and tool calls.
 - Anthropic automatic caching also caches instructions and tool definitions. Anthropic, Bedrock, and OpenRouter raise an earlier cache boundary to a later, longer lifetime.
@@ -28,6 +51,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Fixed
 
+- Replay Gemini tool-call thought signatures (`extra_content`) through OpenAI-compatible Chat Completions, and backfill an empty thinking field on current-turn tool calls.
+- Attach a leading OpenRouter `CachePoint` to the previous user message instead of failing.
+- Accept a `CachePoint` after a replayed Anthropic MCP tool result.
+- Keep tool reveals on assistant messages when a Vercel AI frontend rebuilds history.
+- Replay an empty Bedrock Nova code interpreter result as `null`.
 - Keep OpenAI's implicit prompt cache when stable-prefix-only caching cannot place an explicit boundary.
 - Return fallback-eligible model API errors for non-JSON 200 responses from OpenAI Responses token counting, and wrap transport failures from Google, Mistral, Cohere, Anthropic, and Bedrock in `ModelTransportError`.
 - Repair repeated tool-call IDs within one response first in, first out.

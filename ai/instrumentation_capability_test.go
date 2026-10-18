@@ -85,6 +85,17 @@ func TestInstrumentationCapabilityRecordsRunRequestsAndTools(t *testing.T) {
 				ai.TextContent{Text: "attachment"}, ai.CachePoint{},
 				ai.BinaryContent{Data: []byte("secret"), MediaType: "audio/wav"},
 			},
+			Metadata: map[string]any{ai.MCPAppMetadataKey: map[string]any{
+				"resource_uri": "ui://lookup", "tool_input": map[string]any{"query": "go"},
+				"result": map[string]any{"isError": false, "content": []any{
+					"not a block",
+					map[string]any{"type": "text", "text": "mcp-text"},
+					map[string]any{"type": "image", "data": "c2VjcmV0", "mimeType": "image/png"},
+					map[string]any{"type": "audio", "data": "c2VjcmV0", "mimeType": "audio/wav"},
+					map[string]any{"type": "resource", "resource": map[string]any{"uri": "file:///blob", "blob": "c2VjcmV0"}},
+					map[string]any{"type": "resource", "resource": "not an object"},
+				}},
+			}},
 		}, nil
 	})
 	result, err := agent.Run(t.Context(), "go", struct{}{})
@@ -140,6 +151,7 @@ func TestInstrumentationCapabilityRecordsRunRequestsAndTools(t *testing.T) {
 	}
 	toolResult, _ := toolAttributes["gen_ai.tool.call.result"].(string)
 	if !strings.Contains(toolResult, "image/png") || !strings.Contains(toolResult, "audio/wav") ||
+		!strings.Contains(toolResult, "mcp-text") || !strings.Contains(toolResult, "file:///blob") ||
 		strings.Contains(toolResult, "c2VjcmV0") {
 		t.Fatalf("tool result binary data was not redacted: %s", toolResult)
 	}

@@ -1,6 +1,7 @@
 package mistral
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"slices"
@@ -67,37 +68,43 @@ func (model *Model) buildRequest(
 		}
 		request.Messages = slices.Insert(request.Messages, index, values...)
 	}
-	tools := slices.Clone(params.Tools)
-	if provider.allowedTools != nil {
-		allowed := map[string]bool{}
-		for _, name := range provider.allowedTools {
-			allowed[name] = true
-		}
-		tools = slices.DeleteFunc(tools, func(tool ai.ToolDefinition) bool { return !allowed[tool.Name] })
+	declared := slices.Clone(params.Tools)
+	callable := slices.Clone(params.Tools)
+	if provider.toolChoice == ToolChoiceNone {
+		callable = nil
+	} else if provider.allowedTools != nil {
+		callable = slices.DeleteFunc(callable, func(tool ai.ToolDefinition) bool {
+			return !slices.Contains(provider.allowedTools, tool.Name)
+		})
 	}
 	if params.OutputTool != nil {
-		tools = append(tools, *params.OutputTool)
+		declared = append(declared, *params.OutputTool)
+		callable = append(callable, *params.OutputTool)
 	}
-	request.ToolChoice = provider.toolChoice
+	choice := provider.toolChoice
 	if params.OutputTool != nil && !params.AllowText {
-		request.ToolChoice = ToolChoiceAny
-	} else if request.ToolChoice == ToolChoiceNone {
-		tools = nil
-		request.ToolChoice = ""
+		choice = ToolChoiceAny
+	} else if choice == ToolChoiceNone {
+		callable, choice = nil, ""
+	}
+	tools := callable
+	if choice == ToolChoiceAny && len(callable) == 1 && len(declared) > 1 {
+		tools = declared
+		forced := namedToolChoice{Type: "function"}
+		forced.Function.Name = callable[0].Name
+		request.ToolChoice = forced
 	}
 	for _, tool := range tools {
 		request.Tools = append(request.Tools, mistralTool{Function: mistralFunction{
 			Name: tool.Name, Description: tool.Description, Parameters: tool.Schema,
 		}})
 	}
-	if len(request.Tools) == 0 {
-		request.ToolChoice = ""
-	} else {
+	if len(request.Tools) > 0 {
 		if stream {
 			request.N = &one
 		}
-		if request.ToolChoice == "" {
-			request.ToolChoice = ToolChoiceAuto
+		if request.ToolChoice == nil {
+			request.ToolChoice = cmp.Or(choice, ToolChoiceAuto)
 		}
 		if stream && request.TopP == nil {
 			topP := 1.0

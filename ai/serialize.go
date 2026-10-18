@@ -130,6 +130,7 @@ type wirePart struct {
 	ID              string            `json:"id,omitempty"`
 	Signature       string            `json:"signature,omitempty"`
 	DynamicRef      string            `json:"dynamic_ref,omitempty"`
+	Scope           SystemPromptScope `json:"scope,omitempty"`
 	Timestamp       *time.Time        `json:"timestamp,omitempty"`
 	ProviderName    string            `json:"provider_name,omitempty"`
 	ProviderDetails map[string]any    `json:"provider_details,omitempty"`
@@ -195,7 +196,9 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 		}
 		return marshalSpeechPart(part), nil
 	case SystemPromptPart:
-		wire := wirePart{PartKind: "system-prompt", Content: mustJSON(part.Content), DynamicRef: part.DynamicRef}
+		wire := wirePart{
+			PartKind: "system-prompt", Content: mustJSON(part.Content), DynamicRef: part.DynamicRef, Scope: part.Scope,
+		}
 		return wirePartWithTimestamp(wire, part.Timestamp), nil
 	case UserPromptPart:
 		content, err := marshalUserContent(part)
@@ -401,7 +404,12 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 		}
 		return part, nil
 	case "system-prompt":
-		part := SystemPromptPart{Content: stringContent(wp.Content), DynamicRef: wp.DynamicRef}
+		switch wp.Scope {
+		case "", SystemPromptScopeConversation, SystemPromptScopeRequest:
+		default:
+			return nil, fmt.Errorf("ai: invalid system prompt scope %q", wp.Scope)
+		}
+		part := SystemPromptPart{Content: stringContent(wp.Content), DynamicRef: wp.DynamicRef, Scope: wp.Scope}
 		if wp.Timestamp != nil {
 			part.Timestamp = *wp.Timestamp
 		}

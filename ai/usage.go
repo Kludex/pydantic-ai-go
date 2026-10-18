@@ -137,6 +137,40 @@ func (u *Usage) Add(other Usage) {
 	}
 }
 
+// usageBeyond is usage less baseline, the inverse of Add for token counts and
+// details. Requests and tool calls are kept, so a resuming request still counts,
+// and cost is subtracted only when both are known, so an unknown baseline errs
+// towards counting too much.
+func usageBeyond(usage, baseline Usage) Usage {
+	beyond := usage.Clone()
+	beyond.InputTokens -= baseline.InputTokens
+	beyond.CacheWriteTokens -= baseline.CacheWriteTokens
+	beyond.CacheWrite1HTokens -= baseline.CacheWrite1HTokens
+	beyond.CacheReadTokens -= baseline.CacheReadTokens
+	beyond.InputAudioTokens -= baseline.InputAudioTokens
+	beyond.InputImageTokens -= baseline.InputImageTokens
+	beyond.CacheAudioReadTokens -= baseline.CacheAudioReadTokens
+	beyond.CacheImageReadTokens -= baseline.CacheImageReadTokens
+	beyond.OutputTokens -= baseline.OutputTokens
+	beyond.OutputAudioTokens -= baseline.OutputAudioTokens
+	beyond.ReasoningTokens -= baseline.ReasoningTokens
+	beyond.AcceptedPredictionTokens -= baseline.AcceptedPredictionTokens
+	beyond.RejectedPredictionTokens -= baseline.RejectedPredictionTokens
+	beyond.AudioSeconds -= baseline.AudioSeconds
+	if len(baseline.Details) > 0 {
+		if beyond.Details == nil {
+			beyond.Details = make(map[string]int, len(baseline.Details))
+		}
+		for key, value := range baseline.Details {
+			beyond.Details[key] -= value
+		}
+	}
+	if beyond.CostUSD != nil && baseline.CostUSD != nil {
+		*beyond.CostUSD -= *baseline.CostUSD
+	}
+	return beyond
+}
+
 func modelRequestAttemptsUsage(attempts []ModelRequestAttempt) Usage {
 	var usage Usage
 	for _, attempt := range attempts {
@@ -161,7 +195,8 @@ type UsageLimits struct {
 	OutputTokenLimit int
 	// TotalTokenLimit caps cumulative input and output tokens. Zero disables the limit.
 	TotalTokenLimit int
-	// PerRequestInputTokenLimit caps one request context. Zero disables the limit.
+	// PerRequestInputTokenLimit caps one request context. Zero disables the limit. A response merged
+	// from several provider requests is checked against its MarkInitialInputTokens tokens.
 	PerRequestInputTokenLimit int
 	// CountTokensBeforeRequest checks projected input tokens and cost before generation.
 	CountTokensBeforeRequest bool
@@ -198,11 +233,31 @@ func (l UsageLimits) checkCountedRequest(current Usage, counted Usage) error {
 	return nil
 }
 
-func (l UsageLimits) checkResponse(response Usage) error {
-	if l.PerRequestInputTokenLimit > 0 && response.InputTokens > l.PerRequestInputTokenLimit {
-		return usageLimitError("per-request input token", response.InputTokens, l.PerRequestInputTokenLimit)
+func (l UsageLimits) checkResponse(response ModelResponse) error {
+	inputTokens := contextInputTokens(response)
+	if l.PerRequestInputTokenLimit > 0 && inputTokens > l.PerRequestInputTokenLimit {
+		return usageLimitError("per-request input token", inputTokens, l.PerRequestInputTokenLimit)
 	}
 	return nil
+}
+
+// MarkInitialInputTokens records on response the input tokens of the first of several provider
+// requests merged into it, such as a Google long decode. The response's Usage sums the input of
+// every request, which is what they cost but overstates the context the model was given, so
+// ContextWindowUsed and UsageLimits.PerRequestInputTokenLimit read these tokens instead.
+func MarkInitialInputTokens(response *ModelResponse, inputTokens int) {
+	stampFallbackMetadata(response, "initial_input_tokens", inputTokens)
+}
+
+func contextInputTokens(response ModelResponse) int {
+	namespace, _ := response.Metadata["__pydantic_ai__"].(map[string]any)
+	switch tokens := namespace["initial_input_tokens"].(type) {
+	case int:
+		return tokens
+	case float64:
+		return int(tokens)
+	}
+	return response.Usage.InputTokens
 }
 
 func (l UsageLimits) check(u Usage) error {

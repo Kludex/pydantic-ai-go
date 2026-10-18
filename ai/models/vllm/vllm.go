@@ -98,8 +98,11 @@ func NewModel(name string, options ...Option) (*Model, error) {
 }
 
 // ModelProfile reports native structured output with schema instructions.
-func (*Model) ModelProfile() ai.ModelProfile {
-	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, NativeOutputRequiresPrompt: true}
+func (model *Model) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{
+		DefaultOutputMode: ai.OutputModeTool, NativeOutputRequiresPrompt: true,
+		ToolCallIDLength: vllmFamilyProfile(model.name).toolCallIDLength,
+	}
 }
 
 // Request sends one vLLM Chat Completions request.
@@ -164,6 +167,7 @@ type familyProfile struct {
 	supportsThinking          bool
 	thinkingAlwaysEnabled     bool
 	disableRequiredToolChoice bool
+	toolCallIDLength          int
 }
 
 func vllmFamilyProfile(name string) familyProfile {
@@ -179,6 +183,8 @@ func vllmFamilyProfile(name string) familyProfile {
 		profile.schema = schemaGoogle
 	case strings.HasPrefix(bare, "qwen"), strings.HasPrefix(bare, "qwq"):
 		profile.schema = schemaInline
+	case strings.HasPrefix(name, "mistral"), strings.HasPrefix(bare, "mistral"):
+		profile.toolCallIDLength = 9
 	}
 	qwen3 := strings.HasPrefix(bare, "qwen3") && !strings.HasPrefix(bare, "qwen3-coder") &&
 		!strings.HasPrefix(bare, "qwen3.8") && !strings.Contains(bare, "-instruct")

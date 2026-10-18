@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
@@ -77,14 +78,11 @@ func convertMessages(messages []UIMessage, externalIDs map[string]struct{}) ([]a
 			if messageIndex == len(messages)-1 {
 				messageExternalIDs = externalIDs
 			}
-			response, results, err := assistantMessage(message.Parts, messageExternalIDs)
+			messages, err := assistantMessage(message.Parts, messageExternalIDs, metadata, timestamp)
 			if err != nil {
 				return nil, err
 			}
-			response.Metadata = metadata
-			response.Timestamp = timestamp
-			converted = append(converted, response)
-			converted = append(converted, results...)
+			converted = append(converted, messages...)
 		default:
 			return nil, fmt.Errorf("vercel: unsupported message role %q", message.Role)
 		}
@@ -152,15 +150,25 @@ func allText(parts []UIMessagePart) bool {
 }
 
 func assistantMessage(
-	parts []UIMessagePart, externalIDs map[string]struct{},
-) (ai.ModelResponse, []ai.ModelMessage, error) {
-	response := ai.ModelResponse{}
-	var results []ai.ModelMessage
+	parts []UIMessagePart, externalIDs map[string]struct{}, metadata map[string]any, timestamp time.Time,
+) ([]ai.ModelMessage, error) {
+	response := ai.ModelResponse{Metadata: metadata, Timestamp: timestamp}
+	var results, messages []ai.ModelMessage
 	for _, part := range parts {
 		switch {
+		case part.Type == string(ChunkDataEnqueuedMessages):
+			enqueued, err := convertMessages(enqueuedMessages(part.Data), nil)
+			if err != nil {
+				return nil, err
+			}
+			if len(response.Parts) > 0 || len(results) > 0 {
+				messages = append(append(messages, response), results...)
+				response, results = ai.ModelResponse{}, nil
+			}
+			messages = append(messages, enqueued...)
 		case part.Type == "text":
 			if !validPartState(part.State) {
-				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: unsupported text state %q", part.State)
+				return nil, fmt.Errorf("vercel: unsupported text state %q", part.State)
 			}
 			metadata := loadPartMetadata(part.ProviderMetadata)
 			response.Parts = append(response.Parts, ai.TextPart{
@@ -169,7 +177,7 @@ func assistantMessage(
 			})
 		case part.Type == "reasoning":
 			if !validPartState(part.State) {
-				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: unsupported reasoning state %q", part.State)
+				return nil, fmt.Errorf("vercel: unsupported reasoning state %q", part.State)
 			}
 			metadata := loadPartMetadata(part.ProviderMetadata)
 			signature := metadata.signature
@@ -183,7 +191,7 @@ func assistantMessage(
 		case part.Type == "file":
 			file, err := binaryFile(part.URL)
 			if err != nil {
-				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: decode assistant file: %w", err)
+				return nil, fmt.Errorf("vercel: decode assistant file: %w", err)
 			}
 			metadata := loadPartMetadata(part.ProviderMetadata)
 			file.VendorMetadata = cloneMap(metadata.vendorMetadata)
@@ -199,28 +207,39 @@ func assistantMessage(
 			}
 		case part.Type == string(ChunkSourceURL):
 			if part.SourceID == "" || part.URL == "" {
-				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: source-url requires sourceId and url")
+				return nil, fmt.Errorf("vercel: source-url requires sourceId and url")
 			}
 		case part.Type == string(ChunkSourceDocument):
 			if part.SourceID == "" || part.MediaType == "" || part.Title == "" {
-				return ai.ModelResponse{}, nil, fmt.Errorf(
+				return nil, fmt.Errorf(
 					"vercel: source-document requires sourceId, mediaType, and title",
 				)
 			}
+		case part.Type == string(ChunkDataToolAvailability):
+			data, ok := part.Data.(map[string]any)
+			if !ok {
+				continue
+			}
+			if len(results) == 0 {
+				results = append(results, ai.ModelRequest{})
+			}
+			last := results[len(results)-1].(ai.ModelRequest)
+			last.Parts = append(last.Parts, toolAvailabilityPart(data))
+			results[len(results)-1] = last
 		case strings.HasPrefix(part.Type, "data-"), part.Type == "step-start":
 		case isToolPart(part):
 			if part.ToolCallID == "" {
-				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: tool part requires a toolCallId")
+				return nil, fmt.Errorf("vercel: tool part requires a toolCallId")
 			}
 			name, _ := toolPartName(part)
 			if name == "" {
-				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: dynamic tool part requires a toolName")
+				return nil, fmt.Errorf("vercel: dynamic tool part requires a toolName")
 			}
 			switch part.State {
 			case "input-streaming", "input-available", "output-available", "output-error", "approval-requested",
 				"approval-responded", "output-denied":
 			default:
-				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: unsupported tool state %q", part.State)
+				return nil, fmt.Errorf("vercel: unsupported tool state %q", part.State)
 			}
 			metadata := loadPartMetadata(part.CallProviderMetadata)
 			input := part.Input
@@ -228,7 +247,7 @@ func assistantMessage(
 				input = json.RawMessage(`{}`)
 			}
 			if !json.Valid(input) {
-				return ai.ModelResponse{}, nil, fmt.Errorf("vercel: tool %q input is not valid JSON", name)
+				return nil, fmt.Errorf("vercel: tool %q input is not valid JSON", name)
 			}
 			providerExecuted := part.ProviderExecuted != nil && *part.ProviderExecuted
 			if providerExecuted {
@@ -247,7 +266,7 @@ func assistantMessage(
 			if part.State == "output-available" || part.State == "output-error" || part.State == "output-denied" {
 				content, outcome, err := toolOutput(part, name)
 				if err != nil {
-					return ai.ModelResponse{}, nil, err
+					return nil, err
 				}
 				if providerExecuted {
 					response.Parts = append(response.Parts, ai.NativeToolReturnPart{
@@ -263,10 +282,13 @@ func assistantMessage(
 				}
 			}
 		default:
-			return ai.ModelResponse{}, nil, fmt.Errorf("vercel: unsupported assistant part %q", part.Type)
+			return nil, fmt.Errorf("vercel: unsupported assistant part %q", part.Type)
 		}
 	}
-	return response, results, nil
+	if len(response.Parts) > 0 || len(results) > 0 || len(messages) == 0 {
+		messages = append(append(messages, response), results...)
+	}
+	return messages, nil
 }
 
 func validPartState(state string) bool {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -197,6 +198,50 @@ func TestTransformToolResultChunks(t *testing.T) {
 	stored := metadata["pydantic_ai_go_vercel_chunks"].([]any)[0].(map[string]any)
 	if stored["data"].(map[string]any)["nested"].(map[string]any)["value"] != "original" {
 		t.Fatal("emitted custom data shares tool metadata")
+	}
+}
+
+func TestTransformMCPApps(t *testing.T) {
+	record := map[string]any{
+		"resource_uri": "ui://weather", "tool_input": map[string]any{"city": "Paris"},
+		"result": map[string]any{"isError": false}, "toolset_id": "weather",
+	}
+	extra, err := vercel.ToolResultMetadata(vercel.Chunk{Type: "data-custom", Data: "ignored"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extra[ai.MCPAppMetadataKey] = record
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "app", Content: "Sunny", Metadata: extra}}, nil)
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "anonymous", Content: "Sunny",
+			Metadata: map[string]any{ai.MCPAppMetadataKey: map[string]any{
+				"resource_uri": "ui://weather", "tool_input": map[string]any{}, "result": map[string]any{},
+			}},
+		}}, nil)
+	})
+	var apps []vercel.Chunk
+	for chunk, err := range vercel.TransformStream(stream, "") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunk.Type == "data-custom" {
+			t.Fatal("MCP Apps record did not replace other tool result chunks")
+		}
+		if chunk.Type == "data-mcp-apps" {
+			apps = append(apps, chunk)
+		}
+	}
+	want := []vercel.Chunk{
+		{Type: "data-mcp-apps", ID: "app", Data: map[string]any{
+			"resourceUri": "ui://weather", "toolInput": map[string]any{"city": "Paris"},
+			"result": map[string]any{"isError": false}, "serverId": "weather", "serverHash": "weather",
+		}},
+		{Type: "data-mcp-apps", ID: "anonymous", Data: map[string]any{
+			"resourceUri": "ui://weather", "toolInput": map[string]any{}, "result": map[string]any{},
+		}},
+	}
+	if !reflect.DeepEqual(apps, want) {
+		t.Fatalf("unexpected MCP Apps chunks:\n got %#v\nwant %#v", apps, want)
 	}
 }
 
@@ -697,4 +742,113 @@ func TestTransformConsumerStops(t *testing.T) {
 	vercel.TransformStream(metadata, "message")(func(chunk vercel.Chunk, _ error) bool {
 		return chunk.Type != vercel.ChunkMessageMetadata
 	})
+}
+
+func TestTransformEnqueuedMessages(t *testing.T) {
+	timestamp := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		_ = yield(ai.EnqueuedMessagesEvent{EnqueueID: "hidden", Messages: []ai.ModelMessage{
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.SystemPromptPart{Content: "secret"}}},
+		}}, nil) && yield(ai.EnqueuedMessagesEvent{EnqueueID: "e", Messages: []ai.ModelMessage{
+			ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.TextPart{Content: "reply"}, ai.ThinkingPart{Content: "thought"},
+				ai.FilePart{Content: ai.BinaryContent{Data: []byte("png"), MediaType: "image/png"}},
+				ai.ToolCallPart{ToolName: "skipped", ToolCallID: "call"},
+			}},
+			ai.ModelRequest{Timestamp: timestamp, Metadata: map[string]any{"app": "x"}, Parts: []ai.RequestPart{
+				ai.SystemPromptPart{Content: "secret"},
+				ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.TextContent{Text: "look"},
+					ai.BinaryContent{Data: []byte("pdf"), MediaType: "application/pdf"},
+					ai.ImageURL{URL: "https://example.com/a.png", MediaType: "image/png"},
+					ai.AudioURL{URL: "https://example.com/a.mp3", MediaType: "audio/mpeg"},
+					ai.VideoURL{URL: "https://example.com/a.mp4", MediaType: "video/mp4"},
+					ai.DocumentURL{URL: "https://example.com/a.txt", MediaType: "text/plain",
+						VendorMetadata: map[string]any{"detail": "high"}},
+				}},
+			}},
+		}}, nil)
+	})
+	var enqueued []vercel.Chunk
+	for chunk, err := range vercel.TransformStream(stream, "") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunk.Type == vercel.ChunkDataEnqueuedMessages {
+			enqueued = append(enqueued, chunk)
+		}
+	}
+	if len(enqueued) != 1 || enqueued[0].ID != "e" {
+		t.Fatalf("a server-owned system prompt was streamed or the delivery is missing: %#v", enqueued)
+	}
+	encoded, _ := json.Marshal(enqueued[0])
+	want := `{"type":"data-enqueued-messages","id":"e","data":{"messages":[` +
+		`{"id":"e-assistant-0","role":"assistant","parts":[{"type":"text","text":"reply","state":"done"},` +
+		`{"type":"reasoning","text":"thought","state":"done"},` +
+		`{"type":"file","url":"data:image/png;base64,cG5n","mediaType":"image/png"}]},` +
+		`{"id":"e-user-1","role":"user","parts":[{"type":"text","text":"look","state":"done"},` +
+		`{"type":"file","url":"data:application/pdf;base64,cGRm","mediaType":"application/pdf"},` +
+		`{"type":"file","url":"https://example.com/a.png","mediaType":"image/png"},` +
+		`{"type":"file","url":"https://example.com/a.mp3","mediaType":"audio/mpeg"},` +
+		`{"type":"file","url":"https://example.com/a.mp4","mediaType":"video/mp4"},` +
+		`{"type":"file","url":"https://example.com/a.txt","mediaType":"text/plain",` +
+		`"providerMetadata":{"pydantic_ai":{"vendor_metadata":{"detail":"high"}}}}],` +
+		`"metadata":{"app":"x","pydantic_ai":{"timestamp":"2026-01-02T03:04:05Z"}}}]}}`
+	if string(encoded) != want {
+		t.Fatalf("unexpected enqueued chunk:\n got %s\nwant %s", encoded, want)
+	}
+
+	var data any
+	_ = json.Unmarshal(encoded, &struct {
+		Data *any `json:"data"`
+	}{&data})
+	_, history, _, err := vercel.PrepareInput(vercel.RequestData{Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+		{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
+			{Type: string(vercel.ChunkDataEnqueuedMessages), Data: "malformed"},
+			{Type: string(vercel.ChunkDataEnqueuedMessages), Data: data},
+			{Type: "text", Text: "own"},
+		}},
+		{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil || len(history) != 3 {
+		t.Fatalf("unexpected history: %#v err=%v", history, err)
+	}
+	reply, request, own := history[0].(ai.ModelResponse), history[1].(ai.ModelRequest), history[2].(ai.ModelResponse)
+	if len(reply.Parts) != 3 || len(request.Parts[0].(ai.UserPromptPart).Contents) != 6 ||
+		!request.Timestamp.Equal(timestamp) || request.Metadata["app"] != "x" ||
+		own.Parts[0].(ai.TextPart).Content != "own" {
+		t.Fatalf("enqueued messages did not load in place: %#v", history)
+	}
+
+	_, history, _, err = vercel.PrepareInput(vercel.RequestData{Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+		{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
+			{Type: "text", Text: "own"},
+			{Type: string(vercel.ChunkDataEnqueuedMessages), Data: map[string]any{"messages": []any{
+				map[string]any{"id": "inner", "role": "user", "parts": []any{
+					map[string]any{"type": "text", "text": "kept"},
+					map[string]any{"type": string(vercel.ChunkDataEnqueuedMessages), "data": map[string]any{
+						"messages": []any{map[string]any{"id": "x", "role": "user", "parts": []any{
+							map[string]any{"type": "text", "text": "dropped"},
+						}}},
+					}},
+				}},
+			}}},
+		}},
+		{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil || len(history) != 2 || history[1].(ai.ModelRequest).Parts[0].(ai.UserPromptPart).Content != "kept" {
+		t.Fatalf("nested enqueued messages were not dropped: %#v err=%v", history, err)
+	}
+
+	_, _, _, err = vercel.PrepareInput(vercel.RequestData{Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+		{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
+			{Type: string(vercel.ChunkDataEnqueuedMessages), Data: map[string]any{"messages": []any{
+				map[string]any{"id": "", "role": "user", "parts": []any{}},
+			}}},
+		}},
+		{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
+	}}, ai.MessageSanitizationOptions{})
+	if err == nil {
+		t.Fatal("expected invalid enqueued message error")
+	}
 }

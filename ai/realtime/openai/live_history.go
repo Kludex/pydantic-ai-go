@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/realtime/internal/seed"
 	"github.com/tiktoken-go/tokenizer"
 )
 
@@ -58,17 +59,18 @@ func seedLiveItems(messages []ai.ModelMessage, replay bool) ([]map[string]any, e
 				}
 			}
 		case ai.ModelResponse:
-			for _, part := range message.Parts {
+			for index, part := range message.Parts {
 				switch part := part.(type) {
 				case ai.TextPart:
 					add("assistant", part.Content)
 				case ai.ThinkingPart:
 					add("assistant", part.Content)
 				case ai.SpeechPart:
-					if part.Transcript != nil {
-						add("assistant", *part.Transcript)
-					} else if part.Audio != nil && !replay {
+					if part.Transcript == nil && part.Audio != nil && !replay {
 						return nil, fmt.Errorf("openai GPT-Live: seeded audio needs a transcript")
+					}
+					if part.Content() != "" {
+						add("assistant", seed.AssistantSpeech(message, index))
 					}
 				case ai.ToolCallPart:
 					add("assistant", fmt.Sprintf("Called `%s` with %s.", part.ToolName, part.Args))

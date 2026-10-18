@@ -223,6 +223,19 @@ The adapter uses `data-compaction` parts for provider compaction boundaries. It 
 
 Unrecognized `data-*` parts remain UI-only and are not sent to the model.
 
+## Keep enqueued messages
+
+Messages you deliver with `RunContext.Enqueue` reach the client as a `data-enqueued-messages` chunk with `id` set to the enqueue ID. Its `data.messages` holds the delivered messages as `UIMessage` values. The AI SDK keeps the data part on the assistant message without rendering it, so a client that rebuilds history from the stream sends the messages back. On the next request the adapter restores them at their position, as their own messages.
+
+Enqueued system prompts are sent only when `Sanitization.AllowSystemPrompts` is `true` (`StreamConfig.AllowSystemPrompts` for `TransformStreamWithConfig`). When the server owns the system prompt, the client's copy would be stripped on the way back in, so sending it would only disclose it.
+
+!!! note "Enqueued responses keep text, reasoning, and files"
+    Tool calls inside an enqueued `ModelResponse` are not streamed.
+
+## Render MCP Apps
+
+After the result of an [MCP Apps](mcp.md#render-mcp-apps) tool call, the stream carries a `data-mcp-apps` chunk with `id` set to the tool call ID. Its `data` holds `resourceUri`, `toolInput`, `result` (the full MCP `CallToolResult`), and `serverId` and `serverHash` (both the toolset ID, when set). It replaces any chunks you attached with `ToolResultMetadata` to the same result. The adapter ignores the data part when the client sends the history back.
+
 ## Preserve metadata
 
 The adapter stores part metadata under `providerMetadata.pydantic_ai`. It round-trips provider part IDs, names, details, reasoning signatures, tool kinds, and file metadata.

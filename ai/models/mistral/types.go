@@ -12,7 +12,7 @@ type chatRequest struct {
 	Stream            bool             `json:"stream"`
 	N                 *int             `json:"n,omitempty"`
 	Tools             []mistralTool    `json:"tools,omitempty"`
-	ToolChoice        ToolChoice       `json:"tool_choice,omitempty"`
+	ToolChoice        any              `json:"tool_choice,omitempty"`
 	MaxTokens         int              `json:"max_tokens,omitempty"`
 	Temperature       *float64         `json:"temperature,omitempty"`
 	TopP              *float64         `json:"top_p,omitempty"`
@@ -60,6 +60,13 @@ type mistralFunction struct {
 	Description string          `json:"description"`
 	Parameters  map[string]any  `json:"parameters,omitempty"`
 	Arguments   json.RawMessage `json:"arguments,omitempty"`
+}
+
+type namedToolChoice struct {
+	Type     string `json:"type"`
+	Function struct {
+		Name string `json:"name"`
+	} `json:"function"`
 }
 
 type mistralToolCall struct {

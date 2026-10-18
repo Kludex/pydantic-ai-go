@@ -659,3 +659,141 @@ func TestOpenRouterProviderError(t *testing.T) {
 		t.Fatalf("unexpected provider error: %v", err)
 	}
 }
+
+func TestOpenRouterLeadingCachePointMarksPreviousUserMessage(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body = nil
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`))
+	}))
+	defer server.Close()
+	model := openrouter.NewModel(
+		"anthropic/claude-sonnet-4.6", openrouter.WithBaseURL(server.URL), openrouter.WithHTTPClient(server.Client()),
+	)
+	leading := ai.UserPromptPart{Contents: []ai.UserContent{ai.CachePoint{}, ai.TextContent{Text: "next"}}}
+	toolTurn := []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: "lookup", Args: json.RawMessage(`{}`), ToolCallID: "call"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "lookup", Content: "found", ToolCallID: "call"}, leading}},
+	}
+	for _, test := range []struct {
+		name     string
+		messages []ai.ModelMessage
+		want     string
+	}{
+		{
+			name:     "string",
+			messages: append([]ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "first"}}}}, toolTurn...),
+			want: `[{"content":[{"cache_control":{"ttl":"5m","type":"ephemeral"},"text":"first","type":"text"}],"role":"user"},` +
+				`{"role":"assistant","tool_calls":[{"function":{"arguments":"{}","name":"lookup"},"id":"call","type":"function"}]},` +
+				`{"content":"found","role":"tool","tool_call_id":"call"},` +
+				`{"content":[{"text":"next","type":"text"}],"role":"user"}]`,
+		},
+		{
+			name: "longer ttl",
+			messages: []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.TextContent{Text: "first"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+				}}}},
+				ai.ModelRequest{Parts: []ai.RequestPart{leading}},
+			},
+			want: `[{"content":[{"cache_control":{"ttl":"1h","type":"ephemeral"},"text":"first","type":"text"}],"role":"user"},` +
+				`{"content":[{"text":"next","type":"text"}],"role":"user"}]`,
+		},
+		{
+			name: "replaced ttl",
+			messages: []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.TextContent{Text: "first"}, ai.CachePoint{},
+				}}}},
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.CachePoint{TTL: ai.CachePointTTL1Hour}, ai.TextContent{Text: "next"},
+				}}}},
+			},
+			want: `[{"content":[{"cache_control":{"ttl":"1h","type":"ephemeral"},"text":"first","type":"text"}],"role":"user"},` +
+				`{"content":[{"text":"next","type":"text"}],"role":"user"}]`,
+		},
+		{
+			name:     "dropped",
+			messages: toolTurn,
+			want: `[{"role":"assistant","tool_calls":[{"function":{"arguments":"{}","name":"lookup"},"id":"call","type":"function"}]},` +
+				`{"content":"found","role":"tool","tool_call_id":"call"},` +
+				`{"content":[{"text":"next","type":"text"}],"role":"user"}]`,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := model.Request(t.Context(), test.messages, ai.ModelRequestParams{}); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := json.Marshal(body["messages"]); string(got) != test.want {
+				t.Fatalf("unexpected messages:\n got %s\nwant %s", got, test.want)
+			}
+		})
+	}
+	for name, messages := range map[string][]ai.ModelMessage{
+		"instructions only": {ai.ModelRequest{Parts: []ai.RequestPart{ai.SystemPromptPart{Content: "system"}, leading}}},
+		"cache point only": {
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "first"}}},
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{ai.CachePoint{}}}}},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := model.Request(t.Context(), messages, ai.ModelRequestParams{})
+			if err == nil || !strings.Contains(err.Error(), "cache point must follow user content") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestOpenRouterCachesMessagesBeforeRequestScopedPrompts(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body = nil
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`))
+	}))
+	defer server.Close()
+	settings, err := (openrouter.Settings{CacheMessages: openrouter.CacheTTL5Minutes}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := openrouter.NewModel(
+		"anthropic/claude-sonnet-4.6", openrouter.WithBaseURL(server.URL), openrouter.WithHTTPClient(server.Client()),
+	)
+	reminder := ai.SystemPromptPart{Content: "remind", Scope: ai.SystemPromptScopeRequest}
+	for name, test := range map[string]struct {
+		messages []ai.ModelMessage
+		cached   int
+	}{
+		"current": {messages: []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "remind"}, ai.UserPromptPart{Content: "go"}, reminder,
+		}}}, cached: 1},
+		"only": {messages: []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{reminder}}}, cached: -1},
+		"resumed": {messages: []ai.ModelMessage{
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}, reminder}},
+			ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "partial"}}},
+		}, cached: 2},
+		"lasting": {messages: []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.UserPromptPart{Content: "go"}, reminder, ai.SystemPromptPart{Content: "lasting"},
+		}}}, cached: 2},
+	} {
+		if _, err := model.Request(t.Context(), test.messages, ai.ModelRequestParams{Settings: settings}); err != nil {
+			t.Fatal(err)
+		}
+		wire := body["messages"].([]any)
+		for index, message := range wire {
+			content, cached := message.(map[string]any)["content"].([]any)
+			if cached != (index == test.cached) {
+				t.Fatalf("%s: breakpoint not on message %d: %#v", name, test.cached, wire)
+			}
+			if cached && content[0].(map[string]any)["text"] == "<system>remind</system>" {
+				t.Fatalf("%s: breakpoint on the request-scoped prompt: %#v", name, wire)
+			}
+		}
+	}
+}

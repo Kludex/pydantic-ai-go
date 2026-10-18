@@ -93,6 +93,8 @@ func (CancelResponse) RealtimeInputKind() string { return "cancel-response" }
 type TruncateOutput struct {
 	// AudioEndMilliseconds is the amount of output the user heard.
 	AudioEndMilliseconds int
+	// ItemID names the output item to truncate. Empty truncates the latest one.
+	ItemID string
 }
 
 // RealtimeInputKind identifies an output truncation command.

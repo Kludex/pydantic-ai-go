@@ -33,16 +33,19 @@ func (model *Model) streamLegacyBedrock(
 		}, nil
 	}
 	payload.Stream = true
-	body, err := legacyBedrockBody(payload)
+	var stream LegacyBedrockEventStream
+	err := model.invokeLegacyBedrock(payload, headers, func(body []byte) (err error) {
+		stream, err = streamer.InvokeModelWithResponseStream(ctx, &bedrockruntime.InvokeModelWithResponseStreamInput{
+			ModelId: aws.String(model.name), Body: body,
+			ContentType: aws.String("application/json"), Accept: aws.String("application/json"),
+		}, legacyBedrockOptions(headers))
+		if err != nil {
+			return model.legacyBedrockError(ctx, "stream request", err)
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
-	}
-	stream, err := streamer.InvokeModelWithResponseStream(ctx, &bedrockruntime.InvokeModelWithResponseStreamInput{
-		ModelId: aws.String(model.name), Body: body,
-		ContentType: aws.String("application/json"), Accept: aws.String("application/json"),
-	}, legacyBedrockOptions(headers))
-	if err != nil {
-		return nil, model.legacyBedrockError(ctx, "stream request", err)
 	}
 	if legacyBedrockStreamIsNil(stream) {
 		return nil, fmt.Errorf("anthropic: legacy Bedrock streaming client returned nil stream")

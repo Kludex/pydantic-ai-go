@@ -407,6 +407,14 @@ func TestThinkingSettings(t *testing.T) {
 			model: "gemini-3.8-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
 			level: "LOW", include: true, hasInclude: true,
 		},
+		"argon disabled snaps up": {
+			model: "gemini-4-argon", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			level: "LOW",
+		},
+		"argon medium": {
+			model: "gemini-4-argon", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
+			level: "MEDIUM", include: true, hasInclude: true,
+		},
 		"pro medium tie snaps down": {
 			model: "gemini-3-pro-preview", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
 			level: "LOW", include: true, hasInclude: true,
@@ -1095,6 +1103,106 @@ func TestGoogleNativeToolPartErrors(t *testing.T) {
 	}
 }
 
+func TestGoogleMediaProcessingParts(t *testing.T) {
+	type pair struct{ call, response string }
+	tests := map[string]struct {
+		parts string
+		want  []pair
+	}{
+		"typed": {
+			parts: `{"toolCall":{"id":"typed","toolType":"MEDIA_PROCESSING"},"thoughtSignature":"a"},
+				{"toolResponse":{"id":"typed","toolType":"MEDIA_PROCESSING"},"thoughtSignature":"b"}`,
+			want: []pair{{"typed", "typed"}},
+		},
+		"untyped without IDs": {
+			parts: `{"toolCall":{}},{"toolResponse":{"response":{}}},{"toolCall":{"args":{}}},{"toolResponse":{}}`,
+			want: []pair{
+				{"response:media_processing:0", "response:media_processing:0"},
+				{"response:media_processing:2", "response:media_processing:2"},
+			},
+		},
+		"missing response ID": {
+			parts: `{"toolCall":{"id":"call"}},{"toolResponse":{"toolType":"MEDIA_PROCESSING"}}`,
+			want:  []pair{{"call", "call"}},
+		},
+		"missing call ID": {
+			parts: `{"toolCall":{"toolType":"MEDIA_PROCESSING"}},{"toolResponse":{"id":"response"}}`,
+			want:  []pair{{"response", "response"}},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = response.Write([]byte(`{"responseId":"response","candidates":[{"content":{"parts":[` +
+					test.parts + `]}}]}`))
+			})
+			response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []pair
+			for index := 0; index < len(response.Parts); index += 2 {
+				call := response.Parts[index].(ai.NativeToolCallPart)
+				returned := response.Parts[index+1].(ai.NativeToolReturnPart)
+				if call.ToolName != "media_processing" || returned.ToolName != "media_processing" {
+					t.Fatalf("unexpected media processing names: %+v %+v", call, returned)
+				}
+				got = append(got, pair{call.ToolCallID, returned.ToolCallID})
+			}
+			if fmt.Sprint(got) != fmt.Sprint(test.want) {
+				t.Fatalf("media processing IDs = %v, want %v", got, test.want)
+			}
+		})
+	}
+
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[
+			{"toolCall":{"id":"media"},"thoughtSignature":"a"},
+			{"toolResponse":{"id":"media"},"thoughtSignature":"b"},
+			{"thoughtSignature":"vertex-step"},
+			{"text":"","thoughtSignature":"empty"},
+			{"text":"answer","thoughtSignature":"c"}
+		]},"groundingMetadata":{"webSearchQueries":["Pydantic AI"],"groundingChunks":[{"web":{"uri":"https://ai.pydantic.dev","title":"Pydantic AI"}}]}}]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Parts) != 6 {
+		t.Fatalf("unexpected media processing response: %#v", response.Parts)
+	}
+	search := response.Parts[0].(ai.NativeToolCallPart)
+	call := response.Parts[2].(ai.NativeToolCallPart)
+	empty := response.Parts[4].(ai.TextPart)
+	if search.ToolName != "web_search" || call.ToolName != "media_processing" ||
+		call.ProviderDetails["thought_signature"] != "a" || empty.ProviderDetails["thought_signature"] != "empty" ||
+		response.Text() != "answer" {
+		t.Fatalf("unexpected media processing response: %#v", response.Parts)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, replayed := range body["contents"].([]any)[0].(map[string]any)["parts"].([]any) {
+		if signature := replayed.(map[string]any)["thoughtSignature"]; signature == "a" || signature == "b" {
+			t.Fatalf("media processing step was replayed: %#v", replayed)
+		}
+	}
+
+	for _, nativePart := range []string{`{"toolCall":{"args":{"query":"x"}}}`, `{"toolResponse":{"response":[]}}`} {
+		model = newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+			_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[` + nativePart + `]}}]}`))
+		})
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil ||
+			!strings.Contains(err.Error(), "unknown native tool type") {
+			t.Fatalf("untyped tool part with a payload became media processing: %v", err)
+		}
+	}
+}
+
 func TestGoogleFiltersThinkingPartsByProvider(t *testing.T) {
 	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
 		var body map[string]any
@@ -1741,6 +1849,38 @@ func TestVideoURLPrompt(t *testing.T) {
 	}
 }
 
+func TestMediaProcessingPrompt(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	})
+	metadata := map[string]any{"media_processing": "AGENTIC", "media_resolution": map[string]any{"level": "LOW"}}
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+		ai.VideoURL{URL: "https://www.youtube.com/watch?v=lCdaVNyHtjU", VendorMetadata: metadata},
+		ai.BinaryContent{Data: []byte("video"), MediaType: "video/mp4", VendorMetadata: metadata},
+		ai.UploadedFile{
+			FileID:       "https://generativelanguage.googleapis.com/v1beta/files/video",
+			ProviderName: "google", MediaType: "video/mp4", VendorMetadata: metadata,
+		},
+	}}}}}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, sent := range body["contents"].([]any)[0].(map[string]any)["parts"].([]any) {
+		sent := sent.(map[string]any)
+		if sent["mediaProcessing"] != "AGENTIC" || sent["mediaResolution"].(map[string]any)["level"] != "LOW" ||
+			sent["videoMetadata"] != nil {
+			t.Fatalf("unexpected media processing part: %#v", sent)
+		}
+	}
+	if len(metadata) != 2 || metadata["media_processing"] != "AGENTIC" {
+		t.Fatalf("Google mutated media processing metadata: %#v", metadata)
+	}
+}
+
 func TestVertexVideoURLPrompt(t *testing.T) {
 	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
@@ -1988,5 +2128,131 @@ func TestAnyLooseToolDisablesGoogleStrictMode(t *testing.T) {
 	mode := gotBody["toolConfig"].(map[string]any)["functionCallingConfig"].(map[string]any)["mode"]
 	if mode != "AUTO" {
 		t.Fatalf("expected AUTO, got %v", mode)
+	}
+}
+
+func TestGoogleContinuationWithoutTokenIsLength(t *testing.T) {
+	model := newNamedServer(t, "gemini-4-argon", func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = response.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"cut"}]},"finishReason":"CONTINUATION"}]}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.FinishReason != ai.FinishReasonLength || response.Text() != "cut" {
+		t.Fatalf("unexpected continuation response: %+v", response)
+	}
+}
+
+func TestGoogleLongDecodeMergesContinuationRequests(t *testing.T) {
+	hops := []string{
+		`{"responseId":"r1","modelVersion":"gemini-4-argon",
+			"candidates":[{"content":{"role":"model","parts":[{"text":"plan","thought":true},{"text":"Hello "}]},
+				"finishReason":"CONTINUATION","continuationToken":"tok1","avgLogprobs":-0.5,
+				"safetyRatings":[{"category":"HARM_CATEGORY_HATE_SPEECH","probability":"LOW"}]}],
+			"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5,"thoughtsTokenCount":2,
+				"promptTokensDetails":[{"modality":"TEXT","tokenCount":10}]}}`,
+		`{"responseId":"r2","modelVersion":"gemini-4-argon",
+			"candidates":[{"content":{"role":"model","parts":[{"text":"world"}]},"continuationToken":"tok2",
+				"citationMetadata":{"citations":[]},"logprobsResult":{"logProbabilitySum":0.5},
+				"safetyRatings":[{"category":"HARM_CATEGORY_HATE_SPEECH","probability":"MEDIUM"},
+					{"category":"HARM_CATEGORY_HARASSMENT","probability":"LOW"}],
+				"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://a.example"}}],
+					"groundingSupports":[{"groundingChunkIndices":[0],"segment":{}}]}},
+				{"content":{"parts":[{"text":"alternative"}]}}],
+			"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":4,
+				"promptTokensDetails":[{"modality":"TEXT","tokenCount":15},{"modality":"IMAGE","tokenCount":1}]}}`,
+		`{"responseId":"r3","modelVersion":"gemini-4-argon",
+			"candidates":[{"content":{"role":"model","parts":[{"text":"!"}]},"finishReason":"STOP",
+				"continuationToken":"ignored","avgLogprobs":-0.25,"safetyRatings":null,"citationMetadata":null,
+				"logprobsResult":{"logProbabilitySum":0.25},
+				"groundingMetadata":{"groundingChunks":[{"web":{"uri":"https://b.example"}}],
+					"groundingSupports":[{"groundingChunkIndices":[0],"segment":{"partIndex":0}}]}}],
+			"usageMetadata":{"promptTokenCount":19,"candidatesTokenCount":1,
+				"promptTokensDetails":[{"modality":"TEXT","tokenCount":19}]}}`,
+	}
+	var tokens []any
+	model := newNamedServer(t, "gemini-4-argon", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		tokens = append(tokens, body["continuationToken"])
+		_, _ = w.Write([]byte(hops[len(tokens)-1]))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(tokens) != "[<nil> tok1 tok2]" {
+		t.Fatalf("unexpected continuation tokens: %v", tokens)
+	}
+	if len(response.Parts) != 4 || response.Parts[0].(ai.ThinkingPart).Content != "plan" ||
+		response.Parts[2].(ai.TextPart).Content != "world" || response.Text() != "Hello world!" {
+		t.Fatalf("unexpected merged parts: %#v", response.Parts)
+	}
+	if response.Usage.InputTokens != 44 || response.Usage.OutputTokens != 12 ||
+		response.Usage.Details["text_prompt_tokens"] != 44 || response.Usage.Details["image_prompt_tokens"] != 1 {
+		t.Fatalf("unexpected merged usage: %+v", response.Usage)
+	}
+	if response.FinishReason != ai.FinishReasonStop || response.ProviderResponseID != "r3" {
+		t.Fatalf("unexpected merged response: %+v", response)
+	}
+	if fmt.Sprint(response.Metadata) != "map[__pydantic_ai__:map[initial_input_tokens:10]]" {
+		t.Fatalf("unexpected initial input tokens: %v", response.Metadata)
+	}
+	details, _ := json.Marshal(response.ProviderDetails)
+	for _, want := range []string{
+		`"avg_logprobs":-0.25`, `"logprobs":{"logProbabilitySum":0.75}`,
+		`"safety_ratings":[{"category":"HARM_CATEGORY_HATE_SPEECH","probability":"MEDIUM"},` +
+			`{"category":"HARM_CATEGORY_HARASSMENT","probability":"LOW"}]`,
+		`"groundingSupports":[{"groundingChunkIndices":[0],"segment":{"partIndex":2}},` +
+			`{"groundingChunkIndices":[1],"segment":{"partIndex":3}}]`,
+	} {
+		if !strings.Contains(string(details), want) {
+			t.Fatalf("provider details %s lack %s", details, want)
+		}
+	}
+}
+
+func TestGoogleLongDecodeContinuationFailures(t *testing.T) {
+	first := `{"candidates":[{"content":{"parts":[{"text":"partial"}]},"finishReason":"CONTINUATION",` +
+		`"continuationToken":"tok"}],"usageMetadata":{"promptTokenCount":3}}`
+	for name, test := range map[string]struct {
+		status int
+		body   string
+		check  func(*ai.ModelResponse, error) bool
+	}{
+		"API error": {status: http.StatusInternalServerError, body: `{"error":{}}`, check: func(_ *ai.ModelResponse, err error) bool {
+			var apiErr *google.APIError
+			return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusInternalServerError
+		}},
+		"malformed": {status: http.StatusOK, body: `{`, check: func(_ *ai.ModelResponse, err error) bool {
+			var transportErr *ai.ModelTransportError
+			return errors.As(err, &transportErr) && transportErr.Operation == "parse response"
+		}},
+		"no candidates": {status: http.StatusOK, body: `{"usageMetadata":{"promptTokenCount":4}}`, check: func(
+			response *ai.ModelResponse, err error,
+		) bool {
+			return err == nil && response.Text() == "partial" && response.FinishReason == "" &&
+				response.Usage.InputTokens == 7
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			requests := 0
+			model := newNamedServer(t, "gemini-4-argon", func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				if requests == 1 {
+					_, _ = w.Write([]byte(first))
+					return
+				}
+				w.WriteHeader(test.status)
+				_, _ = w.Write([]byte(test.body))
+			})
+			response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+			if !test.check(response, err) {
+				t.Fatalf("unexpected result: %+v %v", response, err)
+			}
+		})
 	}
 }

@@ -23,6 +23,10 @@ const testPrices = `[
 	{
 		"id":"openai","name":"OpenAI","api_pattern":"https://api\\.openai\\.com",
 		"models":[{"id":"gpt-5","match":{"starts_with":"gpt-5"},"prices":{"input_mtok":1,"output_mtok":1,"cache_read_mtok":0.1}}]
+	},
+	{
+		"id":"openai-decisions","name":"OpenAI Decisions","api_pattern":"https://api\\.openai\\.com",
+		"models":[{"id":"gpt-5","match":{"starts_with":"gpt-5"},"prices":{"input_mtok":0.1}}]
 	}
 ]`
 
@@ -295,6 +299,19 @@ func TestPriceUpdateConfigValidation(t *testing.T) {
 			}()
 			ai.UpdatePricesInBackground(t.Context(), config)
 		})
+	}
+}
+
+func TestOpenAIDecisionsPricesByProviderName(t *testing.T) {
+	installTestPrices(t)
+	for provider, want := range map[string]string{"openai-decisions": "openai-decisions", "alternate": "openai"} {
+		calculation, err := (ai.ModelResponse{
+			ModelName: "gpt-5", ProviderName: provider, ProviderURL: "https://api.openai.com/v1/",
+			Usage: ai.Usage{InputTokens: 1_000_000},
+		}).Price()
+		if err != nil || calculation.ProviderID != want {
+			t.Fatalf("%s priced as %+v: %v", provider, calculation, err)
+		}
 	}
 }
 

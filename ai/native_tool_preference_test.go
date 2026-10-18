@@ -193,6 +193,74 @@ func TestResolveNativeToolPreferencesUnknownSupport(t *testing.T) {
 	}
 }
 
+type unrestrictedWebModel struct{ selectiveNativeModel }
+
+func (model *unrestrictedWebModel) SupportsNativeTool(tool ai.NativeTool) bool {
+	switch tool := tool.(type) {
+	case ai.WebSearchTool:
+		return tool.AllowedDomains == nil && tool.BlockedDomains == nil && tool.MaxUses == 0 && tool.ExternalWebAccess == nil
+	case ai.WebFetchTool:
+		return tool.AllowedDomains == nil && tool.BlockedDomains == nil && tool.MaxUses == 0
+	}
+	return false
+}
+
+func TestResolveNativeToolPreferencesRejectsUnappliedRestrictions(t *testing.T) {
+	model := &unrestrictedWebModel{}
+	cached := false
+	for want, tool := range map[string]ai.NativeTool{
+		`"web_search" (maximum uses)`:                                  ai.WebSearchTool{MaxUses: 2},
+		`"web_search" (blocked domains, allowed domains)`:              &ai.WebSearchTool{AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{}},
+		`"web_search" (disabled external web access)`:                  ai.WebSearchTool{ExternalWebAccess: &cached},
+		`"web_fetch" (blocked domains, allowed domains, maximum uses)`: ai.WebFetchTool{AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"spam.example"}, MaxUses: 1},
+	} {
+		_, err := ai.RequestModel(t.Context(), model, nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{tool}})
+		if err == nil || !strings.Contains(err.Error(), `model "selective" cannot apply native tool setting(s) `+want) {
+			t.Fatalf("unapplied restriction was not rejected: %v", err)
+		}
+	}
+	if len(model.requests) != 0 {
+		t.Fatalf("restricted tool reached the model: %#v", model.requests)
+	}
+
+	resolved, err := ai.ResolveNativeToolPreferences(model, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.WebSearchTool{MaxUses: 1, Optional: true}, ai.WebFetchTool{}, ai.CodeExecutionTool{Optional: true},
+	}})
+	if err != nil || len(resolved.NativeTools) != 1 || resolved.NativeTools[0].Kind() != "web_fetch" {
+		t.Fatalf("optional restricted tool was not omitted: %#v, %v", resolved.NativeTools, err)
+	}
+	resolved, err = ai.ResolveNativeToolPreferences(model, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{UserLocation: &ai.WebSearchUserLocation{Country: "PT"}}},
+	})
+	if err != nil || len(resolved.NativeTools) != 1 {
+		t.Fatalf("portable settings were treated as restrictions: %#v, %v", resolved.NativeTools, err)
+	}
+
+	localCalls := 0
+	fetch := &unrestrictedWebModel{selectiveNativeModel{callLocal: true}}
+	agent := ai.NewAgent[struct{}, string](fetch, ai.WithCapabilities(
+		ai.NewWebFetchCapability(ai.WebFetchCapabilityConfig[struct{}]{
+			Native: ai.WebFetchTool{AllowedDomains: []string{"go.dev"}},
+			Local:  ai.NewFunctionToolset(webCapabilityTool(t, &localCalls)),
+		}),
+	))
+	if _, err := agent.Run(t.Context(), "fetch", struct{}{}); err != nil || localCalls != 1 ||
+		len(fetch.requests[0].NativeTools) != 0 {
+		t.Fatalf("restricted fetch did not use its local fallback: calls=%d err=%v", localCalls, err)
+	}
+
+	agent = ai.NewAgent[struct{}, string](model, ai.WithCapabilities(
+		ai.NewWebSearchCapability(ai.WebSearchCapabilityConfig[struct{}]{
+			Native: ai.WebSearchTool{MaxUses: 1},
+			Local:  ai.NewFunctionToolset(webCapabilityTool(t, &localCalls)),
+		}),
+	))
+	if _, err := agent.Run(t.Context(), "search", struct{}{}); err == nil ||
+		!strings.Contains(err.Error(), `cannot apply native tool setting(s) "web_search" (maximum uses)`) {
+		t.Fatalf("restricted search capability used its local fallback: %v", err)
+	}
+}
+
 func toolNames(definitions []ai.ToolDefinition) []string {
 	names := make([]string, len(definitions))
 	for index, definition := range definitions {

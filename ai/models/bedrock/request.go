@@ -114,9 +114,12 @@ func buildConverseInput(
 				input.Messages = append(input.Messages, types.Message{Role: types.ConversationRoleUser, Content: blocks})
 			}
 		case ai.ModelResponse:
-			blocks, err := responseBlocks(value)
+			blocks, carried, err := responseBlocks(value, mimicsAssistantMessageFormatting(modelName))
 			if err != nil {
 				return nil, err
+			}
+			if len(carried) > 0 {
+				input.Messages = appendUserContent(input.Messages, carried)
 			}
 			if len(blocks) > 0 {
 				input.Messages = append(input.Messages, types.Message{Role: types.ConversationRoleAssistant, Content: blocks})
@@ -387,4 +390,19 @@ func requestBlocks(
 		}
 	}
 	return blocks, system, nil
+}
+
+// Converse requires alternating roles, so carried content joins a preceding user turn,
+// ahead of a cache point that ends it so the point keeps its authored position.
+func appendUserContent(messages []types.Message, content []types.ContentBlock) []types.Message {
+	if len(messages) == 0 || messages[len(messages)-1].Role != types.ConversationRoleUser {
+		return append(messages, types.Message{Role: types.ConversationRoleUser, Content: content})
+	}
+	last := &messages[len(messages)-1]
+	end := len(last.Content)
+	if _, point := last.Content[end-1].(*types.ContentBlockMemberCachePoint); point {
+		end--
+	}
+	last.Content = slices.Concat(last.Content[:end:end], content, last.Content[end:])
+	return messages
 }

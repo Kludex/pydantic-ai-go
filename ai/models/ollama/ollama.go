@@ -105,6 +105,9 @@ func NewModel(name string, options ...Option) *Model {
 			DisableDocumentInput: true,
 		}),
 	}
+	if strings.HasPrefix(strings.ToLower(name), "mistral") {
+		openAIOptions = append(openAIOptions, openai.WithToolCallIDLength(9))
+	}
 	openAIOptions = append(openAIOptions, configuration.options...)
 	model := openai.NewModel(name, openAIOptions...)
 	return &Model{

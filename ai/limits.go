@@ -19,13 +19,14 @@ func (c usageLimitsCapability) WrapModelRequest(
 		return nil, err
 	}
 	fillResponseCost(ctx, resp)
+	billed := billedBeyond(resp, pricedResumedResponse(ctx, msgs))
 	projected := current
-	projected.Add(modelRequestAttemptsUsage(resp.FailedAttempts))
-	projected.Add(resp.Usage)
+	projected.Add(modelRequestAttemptsUsage(billed.FailedAttempts))
+	projected.Add(billed.Usage)
 	if err := c.limits.check(projected); err != nil {
 		return nil, err
 	}
-	if err := c.limits.checkResponse(resp.Usage); err != nil {
+	if err := c.limits.checkResponse(*billed); err != nil {
 		return nil, err
 	}
 	return resp, nil

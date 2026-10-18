@@ -166,6 +166,12 @@ func (model *LiveModel) liveConfig(params realtime.ConnectParams, settings LiveS
 			}
 			return nil, fmt.Errorf("openai GPT-Live: native tool %q is unsupported", native.Kind())
 		}
+		if search.MaxUses != 0 {
+			if search.Optional {
+				continue
+			}
+			return nil, fmt.Errorf("openai GPT-Live: web search cannot apply max uses")
+		}
 		size := search.SearchContextSize
 		if size == "" {
 			size = ai.WebSearchContextMedium

@@ -22,7 +22,8 @@ const (
 	ToolChoiceAuto ToolChoice = "auto"
 	// ToolChoiceAny requires Mistral to call one available tool.
 	ToolChoiceAny ToolChoice = "any"
-	// ToolChoiceNone prevents tool declarations from being sent.
+	// ToolChoiceNone prevents function-tool calls. Declarations are omitted
+	// unless a required output tool is forced by name beside them.
 	ToolChoiceNone ToolChoice = "none"
 )
 
@@ -34,7 +35,10 @@ type Settings struct {
 	PromptCacheKey string
 	// ToolChoice controls function-tool selection.
 	ToolChoice ToolChoice
-	// AllowedTools restricts declarations to these names while preserving their original order.
+	// AllowedTools restricts callable function tools to these names. With
+	// ToolChoiceAny and one callable tool, every declaration is sent and the tool
+	// is forced by name, so Mistral's prompt cache keeps the tools prefix.
+	// Otherwise, declarations are filtered in their original order.
 	AllowedTools []string
 }
 

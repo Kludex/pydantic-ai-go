@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync/atomic"
 
@@ -122,7 +123,8 @@ func (session *Session) InterruptAtAudio(ctx context.Context, playedBytes int) (
 	}
 	playhead := tap.subscribedAtBytes + playedBytes + tap.droppedBytes
 	emitted := session.emittedAudioBytes
-	turnStart := session.turnAudioStartBytes
+	audioItems := slices.Clone(session.audioItems)
+	connectionStart := session.connectionAudioStartBytes
 	hasAudio := session.hasAudioPart
 	audioPartIndex := session.audioPartIndex
 	session.tapMu.Unlock()
@@ -161,10 +163,28 @@ func (session *Session) InterruptAtAudio(ctx context.Context, playedBytes int) (
 
 	inputs := make([]Input, 0, 2)
 	var playedMilliseconds *int
+	var cuts []TruncateOutput
 	if session.profile.SupportsOutputTruncation {
-		milliseconds := max(0, playhead-turnStart) * 1000 / (session.profile.AudioOutputSampleRate * 2)
+		heard := func(start int) int {
+			return max(0, playhead-start) * 1000 / (session.profile.AudioOutputSampleRate * 2)
+		}
+		milliseconds := heard(audioItems[len(audioItems)-1].start)
 		playedMilliseconds = &milliseconds
-		inputs = append(inputs, TruncateOutput{AudioEndMilliseconds: milliseconds})
+		for index, item := range audioItems {
+			end := emitted
+			if index+1 < len(audioItems) {
+				end = audioItems[index+1].start
+			}
+			last := index == len(audioItems)-1
+			if end <= playhead || item.itemID == "" && !last {
+				continue
+			}
+			truncate := TruncateOutput{AudioEndMilliseconds: heard(item.start), ItemID: item.itemID}
+			inputs = append(inputs, truncate)
+			if item.itemID != "" && item.start >= connectionStart {
+				cuts = append(cuts, truncate)
+			}
+		}
 	}
 	if !serverCancelling {
 		inputs = append(inputs, CancelResponse{})
@@ -174,8 +194,50 @@ func (session *Session) InterruptAtAudio(ctx context.Context, playedBytes int) (
 			return false, err
 		}
 	}
+	session.mu.Lock()
+	for _, cut := range cuts {
+		session.cutItemLocked(cut.ItemID, cut.AudioEndMilliseconds)
+	}
+	session.mu.Unlock()
 	session.publish(ResponseInterruptedEvent{PlayedMilliseconds: playedMilliseconds})
 	return true, nil
+}
+
+// Far more output items than can be queued for playback.
+const maxCuttableOutputItems = 32
+
+// cutItemLocked records that the listener heard only the first heard milliseconds of an output
+// item. A recorded response is replaced by an interrupted copy; one still under way is cut when it
+// is recorded.
+func (session *Session) cutItemLocked(itemID string, heard int) {
+	index := len(session.recordedItems) - 1
+	for index >= 0 && session.recordedItems[index].itemID != itemID {
+		index--
+	}
+	if index < 0 {
+		_, ended := session.endedAssistant[itemID]
+		if ended || session.activeAssistant != nil && session.activeAssistant.itemID == itemID {
+			if session.pendingCuts == nil {
+				session.pendingCuts = map[string]int{}
+			}
+			session.pendingCuts[itemID] = heard
+		}
+		return
+	}
+	recorded := session.recordedItems[index]
+	for position, message := range session.history {
+		response, ok := message.(ai.ModelResponse)
+		if !ok || !response.Timestamp.Equal(recorded.timestamp) {
+			continue
+		}
+		speech := response.Parts[recorded.position].(ai.SpeechPart)
+		speech.InterruptedAtMS = &heard
+		response.Parts = slices.Clone(response.Parts)
+		response.Parts[recorded.position] = speech
+		response.State = ai.ModelResponseStateInterrupted
+		session.history[position] = response
+		return
+	}
 }
 
 func (session *Session) flushAudioTaps() {

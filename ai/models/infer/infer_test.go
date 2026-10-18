@@ -53,6 +53,7 @@ func TestModels(t *testing.T) {
 		{"deepseek-responses:deepseek-v4-flash", "deepseek"},
 		{"groq:openai/gpt-oss-20b", "groq"},
 		{"huggingface:Qwen/Qwen3-32B", "huggingface"},
+		{"meta:muse-spark-1.3", "meta"},
 		{"mistral:mistral-large-latest", "mistral"},
 		{"ollama:qwen3", "ollama"},
 		{"openrouter:anthropic/claude-sonnet-4.6", "openrouter"},

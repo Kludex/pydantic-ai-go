@@ -35,6 +35,18 @@ const (
 	PromptCacheRetention24Hours PromptCacheRetention = "24h"
 )
 
+// TextVerbosity constrains how verbose the model's text response is.
+type TextVerbosity string
+
+const (
+	// TextVerbosityLow asks for concise responses.
+	TextVerbosityLow TextVerbosity = "low"
+	// TextVerbosityMedium asks for the model's default level of detail.
+	TextVerbosityMedium TextVerbosity = "medium"
+	// TextVerbosityHigh asks for detailed responses.
+	TextVerbosityHigh TextVerbosity = "high"
+)
+
 // PromptCacheOptions configures request-wide caching for GPT-5.6 and later models.
 type PromptCacheOptions struct {
 	// Mode selects implicit or explicit breakpoint placement.
@@ -49,6 +61,9 @@ type Settings struct {
 	Common ai.ModelSettings
 	// Prediction supplies expected Chat Completions output.
 	Prediction *Prediction
+	// TextVerbosity constrains response verbosity. Chat Completions sends it as `verbosity`
+	// and Responses as `text.verbosity`. Model support varies.
+	TextVerbosity TextVerbosity
 	// IncludeRawAnnotations retains Responses text annotations such as citations.
 	IncludeRawAnnotations *bool
 	// ResponsesInclude requests optional Responses output fields.
@@ -74,6 +89,7 @@ const (
 	promptCacheOptionsSetting     = "openai_prompt_cache_options"
 	cacheInstructionsSetting      = "openai_cache_instructions"
 	promptCacheDiagnosticsSetting = "openai_prompt_cache_diagnostics"
+	textVerbositySetting          = "openai_text_verbosity"
 )
 
 type promptCacheSettings struct {
@@ -111,7 +127,7 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	for _, name := range []string{
 		predictionSetting, includeRawAnnotationsSetting, responsesIncludeSetting,
 		promptCacheKeySetting, promptCacheRetentionSetting, promptCacheOptionsSetting,
-		cacheInstructionsSetting, promptCacheDiagnosticsSetting,
+		cacheInstructionsSetting, promptCacheDiagnosticsSetting, textVerbositySetting,
 	} {
 		if _, exists := extra[name]; exists {
 			return ai.ModelSettings{}, fmt.Errorf("openai: setting field %q is reserved", name)
@@ -119,6 +135,12 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	}
 	if settings.CacheInstructions {
 		extra[cacheInstructionsSetting] = true
+	}
+	if settings.TextVerbosity != "" {
+		if err := validateTextVerbosity(settings.TextVerbosity); err != nil {
+			return ai.ModelSettings{}, err
+		}
+		extra[textVerbositySetting] = settings.TextVerbosity
 	}
 	if settings.PromptCacheDiagnostics != nil {
 		extra[promptCacheDiagnosticsSetting] = *settings.PromptCacheDiagnostics
@@ -265,5 +287,31 @@ func validatePromptCacheRetention(retention PromptCacheRetention) error {
 		return nil
 	default:
 		return fmt.Errorf("openai: invalid prompt cache retention %q", retention)
+	}
+}
+
+func extractTextVerbosity(settings ai.ModelSettings) (ai.ModelSettings, TextVerbosity, error) {
+	value, exists := settings.ExtraBody[textVerbositySetting]
+	if !exists {
+		return settings, "", nil
+	}
+	settings = settings.Clone()
+	delete(settings.ExtraBody, textVerbositySetting)
+	if len(settings.ExtraBody) == 0 {
+		settings.ExtraBody = nil
+	}
+	verbosity, ok := value.(TextVerbosity)
+	if !ok {
+		return ai.ModelSettings{}, "", fmt.Errorf("openai: text verbosity must use TextVerbosity")
+	}
+	return settings, verbosity, validateTextVerbosity(verbosity)
+}
+
+func validateTextVerbosity(verbosity TextVerbosity) error {
+	switch verbosity {
+	case TextVerbosityLow, TextVerbosityMedium, TextVerbosityHigh:
+		return nil
+	default:
+		return fmt.Errorf("openai: invalid text verbosity %q", verbosity)
 	}
 }

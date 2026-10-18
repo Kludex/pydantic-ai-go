@@ -239,10 +239,8 @@ func (t *runToolset[Deps]) Tools(ctx context.Context, _ *ai.RunContext[Deps]) ([
 		if err != nil {
 			return nil, fmt.Errorf("ai/mcp: list tools: %w", err)
 		}
-		if ui, ok := tool.Meta["ui"].(map[string]any); ok {
-			if visibility, ok := ui["visibility"].([]any); ok && !slices.Contains(visibility, any("model")) {
-				continue
-			}
+		if !visibleTo(tool, "model") {
+			continue
 		}
 		tools, err = t.appendTool(tools, tool)
 		if err != nil {
@@ -296,13 +294,15 @@ func (t *runToolset[Deps]) convertTool(tool *mcpsdk.Tool) (ai.Tool[Deps], error)
 		Name: tool.Name, Description: tool.Description, Schema: schema, ReturnSchema: returnSchema,
 		Metadata: metadata,
 	}
-	name := tool.Name
+	name, resourceURI := tool.Name, appResourceURI(tool)
 	return ai.NewRawTool[Deps](definition, func(ctx context.Context, rawArgs json.RawMessage) (any, error) {
-		return t.callTool(ctx, name, rawArgs)
+		return t.callTool(ctx, name, resourceURI, rawArgs)
 	}), nil
 }
 
-func (t *runToolset[Deps]) callTool(ctx context.Context, name string, rawArgs json.RawMessage) (any, error) {
+func (t *runToolset[Deps]) callTool(
+	ctx context.Context, name string, resourceURI string, rawArgs json.RawMessage,
+) (any, error) {
 	var arguments any
 	if len(rawArgs) > 0 {
 		if err := json.Unmarshal(rawArgs, &arguments); err != nil {
@@ -315,7 +315,15 @@ func (t *runToolset[Deps]) callTool(ctx context.Context, name string, rawArgs js
 	if err != nil {
 		return nil, t.toolError(name, err)
 	}
-	return t.mapToolCallResult(name, result)
+	value, err := t.mapToolCallResult(name, result)
+	if err != nil || resourceURI == "" {
+		return value, err
+	}
+	value.(ai.ToolReturn).Metadata[ai.MCPAppMetadataKey] = map[string]any{
+		"resource_uri": resourceURI, "tool_input": arguments, "result": wireResult(result),
+		"toolset_id": t.owner.config.id,
+	}
+	return value, nil
 }
 
 func (t *runToolset[Deps]) mapToolCallResult(name string, result *mcpsdk.CallToolResult) (any, error) {
@@ -327,6 +335,37 @@ func (t *runToolset[Deps]) mapToolCallResult(name string, result *mcpsdk.CallToo
 		return nil, t.toolError(name, errors.New(formatToolResult(value)))
 	}
 	return ai.ToolReturn{ReturnValue: value, Metadata: map[string]any{ToolMetadataKey: cloneJSON(result.Meta)}}, nil
+}
+
+// visibleTo reports whether audience ("model" or "app") may see tool. MCP Apps
+// servers list the audiences in _meta.ui.visibility; without it, both can.
+func visibleTo(tool *mcpsdk.Tool, audience string) bool {
+	ui, _ := tool.Meta["ui"].(map[string]any)
+	visibility, ok := ui["visibility"].([]any)
+	return !ok || slices.Contains(visibility, any(audience))
+}
+
+func appResourceURI(tool *mcpsdk.Tool) string {
+	ui, _ := tool.Meta["ui"].(map[string]any)
+	if uri, ok := ui["resourceUri"].(string); ok {
+		return uri
+	}
+	uri, _ := tool.Meta["ui/resourceUri"].(string)
+	return uri
+}
+
+func wireResult(result *mcpsdk.CallToolResult) map[string]any {
+	wire := map[string]any{"content": []any{}, "isError": result.IsError}
+	if content, ok := cloneJSON(result.Content).([]any); ok {
+		wire["content"] = content
+	}
+	if result.StructuredContent != nil {
+		wire["structuredContent"] = cloneJSON(result.StructuredContent)
+	}
+	if result.Meta != nil {
+		wire["_meta"] = cloneJSON(result.Meta)
+	}
+	return wire
 }
 
 func (t *runToolset[Deps]) toolError(name string, err error) error {

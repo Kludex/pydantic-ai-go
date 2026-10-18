@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -976,4 +977,99 @@ func assertPanic(t *testing.T, function func()) {
 		}
 	}()
 	function()
+}
+
+func TestAdapterRoundTripsEnqueuedMessages(t *testing.T) {
+	for _, allowSystemPrompts := range []bool{false, true} {
+		agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+		ai.AddTool(agent, "work", func(_ context.Context, rc *ai.RunContext[struct{}], _ struct{}) (string, error) {
+			for _, items := range [][]ai.EnqueueItem{
+				{ai.UserPromptPart{Content: "Background result: 42"}},
+				{ai.SystemPromptPart{Content: "Announcement"}},
+				{ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "Synthetic reply"}}},
+					ai.UserPromptPart{Content: "Synthetic follow-up"}},
+			} {
+				if _, err := rc.Enqueue(items...); err != nil {
+					return "", err
+				}
+			}
+			return "started", nil
+		})
+		config := agui.Config{Sanitization: ai.MessageSanitizationOptions{AllowSystemPrompts: allowSystemPrompts}}
+		user := agui.Message{ID: "user-1", Role: "user", Content: "Go"}
+		messages := []agui.Message{user}
+		var callID string
+		for event, err := range agui.NewAdapter(agent, config).RunStream(t.Context(), agui.RunAgentInput{
+			ThreadID: "thread", RunID: "run", Messages: messages,
+		}, struct{}{}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, _ := json.Marshal(event)
+			var decoded agui.Event
+			_ = json.Unmarshal(encoded, &decoded)
+			switch decoded.Type {
+			case agui.EventToolCallStart:
+				callID = decoded.ToolCallID
+				messages = append(messages, agui.Message{ID: "assistant-1", Role: "assistant", ToolCalls: []agui.ToolCall{{
+					ID: callID, Type: "function", Function: agui.ToolCallFunction{Name: decoded.ToolCallName, Arguments: "{}"},
+				}}})
+			case agui.EventToolCallResult:
+				messages = append(messages, agui.Message{ID: "tool-1", Role: "tool", ToolCallID: callID, Content: decoded.Content})
+			case agui.EventActivitySnapshot:
+				if decoded.ActivityType == "pydantic_ai_enqueued_messages" {
+					messages = append(messages, agui.Message{
+						ID: decoded.MessageID, Role: "activity", ActivityType: decoded.ActivityType, Content: decoded.Content,
+					})
+				}
+			case agui.EventTextMessageContent:
+				messages = append(messages, agui.Message{ID: "assistant-2", Role: "assistant", Content: decoded.Delta})
+			}
+		}
+		messages = append(messages, agui.Message{ID: "user-2", Role: "user", Content: "Again"})
+
+		_, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: messages}, config.Sanitization)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := []string{"request: user-prompt Go", "response: tool-call work",
+			"request: tool-return started", "request: user-prompt Background result: 42"}
+		if allowSystemPrompts {
+			want = append(want, "request: system-prompt Announcement")
+		}
+		want = append(want, "response: text Synthetic reply", "request: user-prompt Synthetic follow-up",
+			"response: text success")
+		if got := modelVisible(history); !slices.Equal(got, want) {
+			t.Fatalf("allow=%v reloaded\n got %q\nwant %q", allowSystemPrompts, got, want)
+		}
+	}
+}
+
+func modelVisible(messages []ai.ModelMessage) []string {
+	var visible []string
+	for _, message := range messages {
+		switch message := message.(type) {
+		case ai.ModelRequest:
+			for _, part := range message.Parts {
+				switch part := part.(type) {
+				case ai.UserPromptPart:
+					visible = append(visible, "request: user-prompt "+part.Content)
+				case ai.SystemPromptPart:
+					visible = append(visible, "request: system-prompt "+part.Content)
+				case ai.ToolReturnPart:
+					visible = append(visible, fmt.Sprint("request: tool-return ", part.Content))
+				}
+			}
+		case ai.ModelResponse:
+			for _, part := range message.Parts {
+				switch part := part.(type) {
+				case ai.TextPart:
+					visible = append(visible, "response: text "+part.Content)
+				case ai.ToolCallPart:
+					visible = append(visible, "response: tool-call "+part.ToolName)
+				}
+			}
+		}
+	}
+	return visible
 }

@@ -173,6 +173,9 @@ type Session struct {
 	history                  []ai.ModelMessage
 	responseParts            []ai.ResponsePart
 	activeAssistant          *activeSpeech
+	endedAssistant           map[string]endedPart
+	recordedItems            []recordedItem
+	pendingCuts              map[string]int
 	userTurns                map[string]*activeSpeech
 	anonymousUser            *activeSpeech
 	userOrder                []*activeSpeech
@@ -211,7 +214,8 @@ type Session struct {
 	audioTaps                 map[*audioTap]struct{}
 	transcriptTaps            map[chan TranscriptUpdate]struct{}
 	emittedAudioBytes         int
-	turnAudioStartBytes       int
+	audioItems                []audioItem
+	connectionAudioStartBytes int
 	audioPartIndex            int
 	hasAudioPart              bool
 	interruptedAudioPartIndex int
@@ -256,6 +260,23 @@ type activeSpeech struct {
 	finished      bool
 	commitHeld    bool
 	timestamp     time.Time
+}
+
+type endedPart struct {
+	index    int
+	partID   string
+	position int
+}
+
+type recordedItem struct {
+	itemID    string
+	timestamp time.Time
+	position  int
+}
+
+type audioItem struct {
+	start  int
+	itemID string
 }
 
 type toolBatch struct {
@@ -422,7 +443,8 @@ func (session *Session) Conversation() ai.Conversation {
 	}
 }
 
-// ContextWindowUsed returns the latest response's occupied context fraction.
+// ContextWindowUsed returns the occupied context fraction. A provider-reported fraction takes effect
+// together with the usage it arrives with; otherwise the fraction is computed from the latest response.
 func (session *Session) ContextWindowUsed() (float64, bool) {
 	session.mu.RLock()
 	defer session.mu.RUnlock()
@@ -1193,6 +1215,9 @@ func (session *Session) handle(event CodecEvent) bool {
 				}
 				session.toolMu.Unlock()
 				session.cancelTools(ids)
+				session.tapMu.Lock()
+				session.connectionAudioStartBytes = session.emittedAudioBytes
+				session.tapMu.Unlock()
 			}
 			session.mu.RLock()
 			partial := session.activeAssistant != nil || len(session.responseParts) > 0
@@ -1276,12 +1301,12 @@ func (session *Session) handleAudio(event AudioDelta) {
 		active.audio = append(active.audio, event.Data...)
 		session.boundAudioLocked()
 	}
-	index, partID := active.index, active.partID
+	index, partID, itemID := active.index, active.partID, active.itemID
 	session.mu.Unlock()
 	session.publish(ai.PartDeltaEvent{Index: index, PartID: partID, Delta: ai.SpeechPartDelta{
 		Speaker: ai.SpeechSpeakerAssistant, AudioChunk: slices.Clone(event.Data),
 	}})
-	session.publishAudio(index, event.Data)
+	session.publishAudio(index, itemID, event.Data)
 }
 
 func (session *Session) handleOutputTranscript(event OutputTranscript) {
@@ -1289,6 +1314,9 @@ func (session *Session) handleOutputTranscript(event OutputTranscript) {
 	session.beginResponseLocked()
 	if event.ResponseID != "" {
 		session.pendingResponseID = event.ResponseID
+	}
+	if ended, ok := session.endedAssistant[event.ItemID]; ok && event.ItemID != "" && session.lateTranscriptLocked(ended, event) {
+		return
 	}
 	active := session.ensureAssistantLocked(event.OutputText, event.ItemID)
 	previous := active.transcript
@@ -1310,6 +1338,45 @@ func (session *Session) handleOutputTranscript(event OutputTranscript) {
 	if event.Final {
 		session.finishAssistantPart()
 	}
+}
+
+// lateTranscriptLocked folds a transcript into the part its item already ended, so a provider that finishes an item
+// after a later one started still records and streams one part per item. It unlocks the session when it folds.
+func (session *Session) lateTranscriptLocked(ended endedPart, event OutputTranscript) bool {
+	if session.activeAssistant != nil && session.activeAssistant.itemID == event.ItemID {
+		return false
+	}
+	part := session.responseParts[ended.position]
+	text, isText := part.(ai.TextPart)
+	if isText != event.OutputText {
+		return false
+	}
+	previous := text.Content
+	speech, _ := part.(ai.SpeechPart)
+	if speech.Transcript != nil {
+		previous = *speech.Transcript
+	}
+	transcript, appended := accumulateTranscript(previous, event.Text, event.Final)
+	restarted, updated := part, ai.ResponsePart(ai.TextPart{Content: transcript})
+	var delta ai.ResponsePartDelta = ai.TextPartDelta{ContentDelta: appended}
+	if !isText {
+		restart, recorded, full := speech, transcript, transcript
+		restart.Audio = nil
+		speech.Transcript = &recorded
+		restarted, updated = restart, speech
+		delta = ai.SpeechPartDelta{Speaker: ai.SpeechSpeakerAssistant, TranscriptDelta: appended, Transcript: &full}
+	}
+	session.responseParts[ended.position] = updated
+	session.mu.Unlock()
+	if transcript != previous {
+		session.publish(ai.PartStartEvent{Index: ended.index, PartID: ended.partID, Part: restarted})
+		session.publish(ai.PartDeltaEvent{Index: ended.index, PartID: ended.partID, Delta: delta})
+		session.publish(ai.PartEndEvent{Index: ended.index, PartID: ended.partID, Part: updated})
+		session.publishTranscript(TranscriptUpdate{
+			Index: ended.index, Speaker: ai.SpeechSpeakerAssistant, Delta: appended, Transcript: transcript,
+		})
+	}
+	return true
 }
 
 func (session *Session) handleInputTranscript(event InputTranscript) {
@@ -1423,6 +1490,12 @@ func (session *Session) finishAssistantPartLocked() {
 		}
 		part = speech
 	}
+	if active.itemID != "" {
+		if session.endedAssistant == nil {
+			session.endedAssistant = map[string]endedPart{}
+		}
+		session.endedAssistant[active.itemID] = endedPart{index: active.index, partID: active.partID, position: len(session.responseParts)}
+	}
 	session.responseParts = append(session.responseParts, part)
 	session.publishLocked(ai.PartEndEvent{Index: active.index, PartID: active.partID, Part: part})
 	session.activeAssistant = nil
@@ -1443,19 +1516,16 @@ func (session *Session) handleUsage(event SessionUsage) {
 			session.pendingProviderDetails = cloneAnyMap(event.ProviderDetails)
 		}
 	}
-	if event.ContextWindowUsed != nil && session.profile.SynthesizesTurnBoundary {
+	if event.ContextWindowUsed != nil {
 		value := *event.ContextWindowUsed
 		session.contextWindowUsed = &value
+		session.pendingContextWindowUsed = &value
 	}
 	if event.ProviderResponseID != "" {
 		session.pendingResponseID = event.ProviderResponseID
 	}
 	if event.FinishReason != "" {
 		session.pendingFinish = event.FinishReason
-	}
-	if event.ContextWindowUsed != nil {
-		value := *event.ContextWindowUsed
-		session.pendingContextWindowUsed = &value
 	}
 	session.mu.Unlock()
 }
@@ -1533,6 +1603,19 @@ func (session *Session) finishResponse(event ResponseDone) {
 	}
 	if len(response.Parts) > 0 {
 		session.history = append(session.history, response)
+		for itemID, ended := range session.endedAssistant {
+			if _, speech := response.Parts[ended.position].(ai.SpeechPart); speech {
+				session.recordedItems = append(session.recordedItems, recordedItem{
+					itemID: itemID, timestamp: response.Timestamp, position: ended.position,
+				})
+			}
+		}
+		if extra := len(session.recordedItems) - maxCuttableOutputItems; extra > 0 {
+			session.recordedItems = slices.Delete(session.recordedItems, 0, extra)
+		}
+		for itemID, heard := range session.pendingCuts {
+			session.cutItemLocked(itemID, heard)
+		}
 		for _, active := range session.userOrder {
 			if active.afterResponse {
 				active.afterResponse = false
@@ -1562,6 +1645,8 @@ func (session *Session) finishResponse(event ResponseDone) {
 	session.history = append(session.history, requestsAsMessages(session.pendingHistory)...)
 	session.pendingHistory = nil
 	session.responseParts = nil
+	clear(session.endedAssistant)
+	clear(session.pendingCuts)
 	session.boundAudioLocked()
 	session.pendingUsage = ai.Usage{}
 	session.pendingProviderDetails = nil
@@ -1824,7 +1909,7 @@ func (session *Session) fail(err error) {
 	session.cancel(err)
 }
 
-func (session *Session) publishAudio(partIndex int, data []byte) {
+func (session *Session) publishAudio(partIndex int, itemID string, data []byte) {
 	session.tapMu.Lock()
 	defer session.tapMu.Unlock()
 	if session.hasInterruptedAudioPart && partIndex == session.interruptedAudioPartIndex {
@@ -1833,7 +1918,10 @@ func (session *Session) publishAudio(partIndex int, data []byte) {
 	if !session.hasAudioPart || partIndex != session.audioPartIndex {
 		session.audioPartIndex = partIndex
 		session.hasAudioPart = true
-		session.turnAudioStartBytes = session.emittedAudioBytes
+		session.audioItems = append(session.audioItems, audioItem{start: session.emittedAudioBytes, itemID: itemID})
+		if len(session.audioItems) > maxCuttableOutputItems {
+			session.audioItems = slices.Delete(session.audioItems, 0, 1)
+		}
 	}
 	session.emittedAudioBytes += len(data)
 	for tap := range session.audioTaps {
@@ -1868,7 +1956,7 @@ func (session *Session) publishTranscript(update TranscriptUpdate) {
 
 func accumulateTranscript(previous, text string, cumulative bool) (string, string) {
 	if cumulative {
-		if text == previous {
+		if text == previous || text == "" {
 			return previous, ""
 		}
 		if len(text) >= len(previous) && text[:len(previous)] == previous {

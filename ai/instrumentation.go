@@ -334,6 +334,7 @@ func (request *instrumentedRequest) finish(
 			request.span.End()
 			return
 		}
+		response = billedBeyond(response, request.observed.resumed)
 		if request.operation == "chat" {
 			if served != nil {
 				recordCacheHealth(request.span, request.observed.marks, request.observed.model,

@@ -162,6 +162,7 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 	converted := make([]ai.ModelMessage, 0, len(messages))
 	toolNames := map[string]string{}
 	toolKinds := map[string]ai.ToolPartKind{}
+	sealed := 0
 	for _, message := range messages {
 		if message.ID == "" {
 			return nil, fmt.Errorf("agui: message ID must not be empty")
@@ -187,10 +188,17 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 				return nil, fmt.Errorf("agui: activity content must be an object")
 			}
 			switch message.ActivityType {
+			case enqueuedMessagesActivity:
+				enqueued, err := convertMessages(enqueuedMessages(content), preserveFileData)
+				if err != nil {
+					return nil, err
+				}
+				converted = append(converted, enqueued...)
+				sealed = len(converted)
 			case "pydantic_ai_compaction":
 				part, ok := compactionActivityPart(content)
 				if ok {
-					converted = appendResponse(converted, []ai.ResponsePart{part})
+					converted = appendResponse(converted, sealed, []ai.ResponsePart{part})
 				}
 			case "pydantic_ai_tool_availability_delta":
 				converted = append(converted, ai.ModelRequest{Parts: []ai.RequestPart{
@@ -202,7 +210,7 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 					if err != nil {
 						return nil, err
 					}
-					converted = appendResponse(converted, []ai.ResponsePart{part})
+					converted = appendResponse(converted, sealed, []ai.ResponsePart{part})
 				}
 			case "pydantic_ai_uploaded_file":
 				if preserveFileData {
@@ -225,7 +233,7 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 				ProviderDetails map[string]any `json:"provider_details"`
 			}{}
 			_ = json.Unmarshal([]byte(message.EncryptedValue), &metadata)
-			converted = appendResponse(converted, []ai.ResponsePart{ai.ThinkingPart{
+			converted = appendResponse(converted, sealed, []ai.ResponsePart{ai.ThinkingPart{
 				Content: content, ID: metadata.ID, Signature: metadata.Signature, ProviderName: metadata.ProviderName,
 				ProviderDetails: cloneMap(metadata.ProviderDetails),
 			}})
@@ -263,7 +271,7 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 					})
 				}
 			}
-			converted = appendResponse(converted, parts)
+			converted = appendResponse(converted, sealed, parts)
 		case "tool":
 			if message.ToolCallID == "" {
 				return nil, fmt.Errorf("agui: tool result requires a toolCallId")
@@ -291,7 +299,7 @@ func convertMessages(messages []Message, preserveFileData bool) ([]ai.ModelMessa
 				kind = ""
 			}
 			if providerName, originalID, ok := nativeToolCallID(message.ToolCallID); ok {
-				converted = appendResponse(converted, []ai.ResponsePart{ai.NativeToolReturnPart{
+				converted = appendResponse(converted, sealed, []ai.ResponsePart{ai.NativeToolReturnPart{
 					ToolName: toolName, ToolCallID: originalID, Content: content, ProviderName: providerName,
 					ToolKind: kind, Outcome: outcome,
 				}})
@@ -422,8 +430,8 @@ func toolAvailabilityActivityPart(content map[string]any) ai.ToolAvailabilityDel
 	return part
 }
 
-func appendResponse(messages []ai.ModelMessage, parts []ai.ResponsePart) []ai.ModelMessage {
-	if len(messages) > 0 {
+func appendResponse(messages []ai.ModelMessage, sealed int, parts []ai.ResponsePart) []ai.ModelMessage {
+	if len(messages) > sealed {
 		if response, ok := messages[len(messages)-1].(ai.ModelResponse); ok {
 			response.Parts = append(response.Parts, parts...)
 			messages[len(messages)-1] = response

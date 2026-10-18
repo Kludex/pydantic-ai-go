@@ -2,7 +2,9 @@ package openaiprotocol_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -125,6 +127,43 @@ func TestToolBatchSendFailureReachesEvents(t *testing.T) {
 	}
 }
 
+func TestTruncateOutputTargetsItemByID(t *testing.T) {
+	connection, socket, frames, events := protocolWire(t)
+	delta := func(index int) {
+		t.Helper()
+		_ = writeFrame(t.Context(), socket, map[string]any{
+			"type": "response.output_audio.delta", "item_id": fmt.Sprintf("item-%d", index), "content_index": index % 2,
+			"delta": base64.StdEncoding.EncodeToString(make([]byte, 48*(index+1))),
+		})
+		if audio, ok := (<-events).(realtime.AudioDelta); !ok || audio.ItemID != fmt.Sprintf("item-%d", index) {
+			t.Fatalf("audio: %+v", audio)
+		}
+	}
+	truncate := func(itemID string, wantMilliseconds, wantContentIndex float64) {
+		t.Helper()
+		if err := connection.Send(t.Context(), realtime.TruncateOutput{ItemID: itemID, AudioEndMilliseconds: 100}); err != nil {
+			t.Fatal(err)
+		}
+		frame := protocolFrame(t, frames)
+		if frame["type"] != "conversation.item.truncate" || frame["item_id"] != itemID ||
+			frame["audio_end_ms"] != wantMilliseconds || frame["content_index"] != wantContentIndex {
+			t.Fatalf("truncate %s: %+v", itemID, frame)
+		}
+	}
+	for index := range 32 {
+		delta(index)
+	}
+	truncate("item-0", 1, 0)
+	delta(32)
+	for _, itemID := range []string{"item-0", "missing"} {
+		if err := connection.Send(t.Context(), realtime.TruncateOutput{ItemID: itemID, AudioEndMilliseconds: 100}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	truncate("item-1", 2, 1)
+	truncate("item-32", 33, 0)
+}
+
 func TestSeedlessSpeechRemainsInReplay(t *testing.T) {
 	items := openairt.SeedItems([]ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.SpeechPart{Speaker: ai.SpeechSpeakerUser}}}}, realtime.DefaultProfile())
 	if len(items) != 0 {
@@ -205,5 +244,28 @@ func protocolFrame(t *testing.T, frames <-chan map[string]any) map[string]any {
 	case <-time.After(time.Second):
 		t.Fatal("frame did not arrive")
 		return nil
+	}
+}
+
+func TestMalformedResponseDoneEndsResponseCreatedWithoutID(t *testing.T) {
+	connection, socket, frames, events := protocolWire(t)
+	if err := connection.Send(t.Context(), realtime.TextInput{Text: "one"}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = protocolFrame(t, frames), protocolFrame(t, frames)
+	_ = writeFrame(t.Context(), socket, map[string]any{"type": "response.created", "response": map[string]any{}})
+	_ = writeFrame(t.Context(), socket, map[string]any{"type": "response.done", "response": "garbled"})
+	if started, ok := (<-events).(realtime.ResponseStarted); !ok || started.ResponseID != "" {
+		t.Fatalf("started: %+v", started)
+	}
+	if _, ok := (<-events).(realtime.ResponseDone); !ok {
+		t.Fatal("malformed response.done did not end the response")
+	}
+	if err := connection.Send(t.Context(), realtime.TextInput{Text: "two"}); err != nil {
+		t.Fatal(err)
+	}
+	_ = protocolFrame(t, frames)
+	if frame := protocolFrame(t, frames); frame["type"] != "response.create" {
+		t.Fatalf("next reply was deferred: %+v", frame)
 	}
 }

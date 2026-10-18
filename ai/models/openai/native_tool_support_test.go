@@ -51,4 +51,22 @@ func TestNativeToolSupport(t *testing.T) {
 	}) || responses.SupportsNativeTool(ai.MemoryTool{}) || responses.SupportsNativeTool((*ai.WebSearchTool)(nil)) {
 		t.Fatal("unexpected Responses native-tool support")
 	}
+
+	cached := false
+	for _, restricted := range []ai.WebSearchTool{
+		{AllowedDomains: []string{"go.dev"}}, {BlockedDomains: []string{}}, {MaxUses: 1}, {ExternalWebAccess: &cached},
+	} {
+		if search.SupportsNativeTool(restricted) {
+			t.Fatalf("Chat supported restricted web search %#v", restricted)
+		}
+	}
+	if !responses.SupportsNativeTool(ai.WebSearchTool{
+		AllowedDomains: []string{"go.dev"}, BlockedDomains: []string{"spam.example"}, ExternalWebAccess: &cached,
+	}) || responses.SupportsNativeTool(ai.WebSearchTool{MaxUses: 1}) {
+		t.Fatal("unexpected Responses restricted web search support")
+	}
+	xai := openai.NewResponsesModel("grok-4.3", openai.WithProvider(openai.ProviderConfig{Name: "xai", BaseURL: "https://example.invalid/v1"}))
+	if xai.SupportsNativeTool(ai.WebSearchTool{ExternalWebAccess: &cached}) {
+		t.Fatal("xAI Responses supported cached-only web search")
+	}
 }

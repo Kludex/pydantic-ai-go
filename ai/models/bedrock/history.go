@@ -10,6 +10,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/thinking"
 )
 
 func toolResultBlock(
@@ -53,8 +54,11 @@ func nativeToolResultBlock(part ai.NativeToolReturnPart) (types.ContentBlock, er
 	}}, nil
 }
 
-func responseBlocks(response ai.ModelResponse) ([]types.ContentBlock, error) {
+func responseBlocks(
+	response ai.ModelResponse, carryThinking bool,
+) ([]types.ContentBlock, []types.ContentBlock, error) {
 	blocks := make([]types.ContentBlock, 0, len(response.Parts))
+	var carried []types.ContentBlock
 	for _, part := range response.Parts {
 		switch value := part.(type) {
 		case ai.TextPart:
@@ -62,7 +66,7 @@ func responseBlocks(response ai.ModelResponse) ([]types.ContentBlock, error) {
 		case ai.ToolCallPart:
 			var args any
 			if err := json.Unmarshal(value.Args, &args); err != nil {
-				return nil, fmt.Errorf("bedrock: decode tool call %q arguments: %w", value.ToolName, err)
+				return nil, nil, fmt.Errorf("bedrock: decode tool call %q arguments: %w", value.ToolName, err)
 			}
 			blocks = append(blocks, &types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{
 				Name: aws.String(value.ToolName), ToolUseId: aws.String(value.ToolCallID), Input: document.NewLazyDocument(args),
@@ -73,7 +77,7 @@ func responseBlocks(response ai.ModelResponse) ([]types.ContentBlock, error) {
 			}
 			var args any
 			if err := json.Unmarshal(value.Args, &args); err != nil {
-				return nil, fmt.Errorf("bedrock: decode native tool call arguments: %w", err)
+				return nil, nil, fmt.Errorf("bedrock: decode native tool call arguments: %w", err)
 			}
 			blocks = append(blocks, &types.ContentBlockMemberToolUse{Value: types.ToolUseBlock{
 				Name: aws.String("nova_code_interpreter"), ToolUseId: aws.String(value.ToolCallID),
@@ -85,11 +89,21 @@ func responseBlocks(response ai.ModelResponse) ([]types.ContentBlock, error) {
 			}
 			block, err := nativeToolResultBlock(value)
 			if err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 			blocks = append(blocks, block)
 		case ai.ThinkingPart:
-			if value.ProviderName != "" && value.ProviderName != "bedrock" {
+			native := value.ProviderName == "" || value.ProviderName == "bedrock"
+			if carryThinking && (!native || value.Signature == "") {
+				if value.Content != "" {
+					// Claude copies thinking tags it sees in assistant turns into the answers users read.
+					carried = append(carried, &types.ContentBlockMemberText{
+						Value: thinking.Carried(value.Content, response.ModelName, response.ProviderName),
+					})
+				}
+				continue
+			}
+			if !native {
 				continue
 			}
 			reasoning := types.ReasoningTextBlock{Text: aws.String(value.Content)}
@@ -98,10 +112,10 @@ func responseBlocks(response ai.ModelResponse) ([]types.ContentBlock, error) {
 			}
 			blocks = append(blocks, &types.ContentBlockMemberReasoningContent{Value: &types.ReasoningContentBlockMemberReasoningText{Value: reasoning}})
 		default:
-			return nil, fmt.Errorf("bedrock: unsupported response part type %T", part)
+			return nil, nil, fmt.Errorf("bedrock: unsupported response part type %T", part)
 		}
 	}
-	return blocks, nil
+	return blocks, carried, nil
 }
 
 func toolConfiguration(params ai.ModelRequestParams) *types.ToolConfiguration {

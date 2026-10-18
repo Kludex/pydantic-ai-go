@@ -2,6 +2,8 @@ package ai_test
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
@@ -351,4 +353,52 @@ func TestModelProfileRejectsNegativeContextWindow(t *testing.T) {
 		DefaultOutputMode: ai.OutputModeTool,
 		ContextWindow:     -1,
 	})
+}
+
+func TestMergedResponseContextUsesInitialInputTokens(t *testing.T) {
+	merged := ai.ModelResponse{
+		Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}},
+		Usage: ai.Usage{InputTokens: 900, OutputTokens: 100},
+	}
+	ai.MarkInitialInputTokens(&merged, 100)
+	encoded, err := ai.MarshalMessages([]ai.ModelMessage{merged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := ai.UnmarshalMessages(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, response := range map[string]ai.ModelResponse{"marked": merged, "decoded": decoded[0].(ai.ModelResponse)} {
+		t.Run(name, func(t *testing.T) {
+			run := func(limit int, history []ai.ModelMessage) (*contextWindowCapability, error) {
+				capability := &contextWindowCapability{}
+				model := fakes.NewFunctionModel(func(
+					_ context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+				) (*ai.ModelResponse, error) {
+					return &response, nil
+				})
+				agent := ai.NewAgent[struct{}, string](
+					ai.NewProfiledModel(model, ai.ModelProfile{ContextWindow: 1000}),
+					ai.WithCapabilities(capability),
+					ai.WithUsageLimits(ai.UsageLimits{PerRequestInputTokenLimit: limit}),
+				)
+				_, err := agent.Run(t.Context(), "go", struct{}{}, ai.WithMessageHistory(history))
+				return capability, err
+			}
+			capability, err := run(100, []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}, response,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !capability.known[0] || capability.values[0] != 0.2 {
+				t.Fatalf("unexpected context-window usage: %v %v", capability.values, capability.known)
+			}
+			if _, err := run(99, nil); !errors.Is(err, ai.ErrUsageLimitExceeded) ||
+				!strings.Contains(err.Error(), "100") {
+				t.Fatalf("unexpected per-request limit error: %v", err)
+			}
+		})
+	}
 }

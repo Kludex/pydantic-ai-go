@@ -28,6 +28,20 @@ type ModelProfile struct {
 	// SupportsToolAvailabilityDelta lets the provider render tool reveals directly.
 	// Other models receive a provider-neutral tool-search call and result.
 	SupportsToolAvailabilityDelta bool
+	// MimicsAssistantMessageFormatting reports that the model copies markup from earlier
+	// assistant turns into its visible answers. Adapters that honor it send reasoning they
+	// cannot replay natively in a user turn instead of the assistant turn.
+	MimicsAssistantMessageFormatting bool
+	// ToolCallIDLength is the exact number of ASCII letters and digits the model accepts in
+	// a tool call ID. Zero accepts any ID. Requests replace IDs that do not fit with stable
+	// hashes that do, and the stored history keeps the original IDs.
+	ToolCallIDLength int
+	// SupportsRequestScopedSystemPrompts reports that the provider keeps a
+	// request-scoped SystemPromptPart in the conversation and stops rendering it
+	// itself once a later request exists, like Anthropic's clear_at system entries.
+	// The adapter is then sent every such part, unchanged. Otherwise a part is
+	// sent only with its own request, at the end of its last ModelRequest.
+	SupportsRequestScopedSystemPrompts bool
 	// ContextWindow is the maximum combined input and output token count.
 	// Zero means the limit is unknown.
 	ContextWindow int
@@ -232,6 +246,9 @@ func validateModelProfile(profile ModelProfile) {
 	}
 	if profile.ContextWindow < 0 {
 		panic("ai: model profile context window must not be negative")
+	}
+	if profile.ToolCallIDLength < 0 {
+		panic("ai: model profile tool call ID length must not be negative")
 	}
 	if profile.DefaultCacheRetention < 0 {
 		panic("ai: model profile cache retention must not be negative")

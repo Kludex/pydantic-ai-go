@@ -376,11 +376,11 @@ func TestMCPInternalErrorBranches(t *testing.T) {
 			t.Fatal(err)
 		}
 	}()
-	value, err := opened.callTool(t.Context(), "plain", nil)
+	value, err := opened.callTool(t.Context(), "plain", "", nil)
 	if err != nil || value.(ai.ToolReturn).ReturnValue != "ok" {
 		t.Fatalf("empty arguments call failed: value=%#v err=%v", value, err)
 	}
-	if _, err := opened.callTool(t.Context(), "plain", json.RawMessage(`{`)); err == nil {
+	if _, err := opened.callTool(t.Context(), "plain", "", json.RawMessage(`{`)); err == nil {
 		t.Fatal("expected invalid argument error")
 	}
 	canceled, cancel := context.WithCancel(t.Context())

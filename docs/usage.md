@@ -108,6 +108,10 @@ Use `errors.Is(err, ai.ErrTokenCountingUnsupported)` when a model may not suppor
 
 Provider-specific integer counters remain in `Details`. The first-class fields are accumulated across requests and nested tool usage.
 
+`ModelResponse.Price` passes the response's string `ProviderDetails` to `genai-prices` as price context. OpenAI can serve a request on a different tier than the one you asked for, for example when it downgrades a `priority` request. The tier that served it is stored in `ProviderDetails["service_tier"]`, so the cost uses that tier's rates. A tier without published rates, such as Gemini's `standard`, is priced at standard rates.
+
+`ModelResponse.Price` matches the response's `ProviderURL` first because a URL is more specific than a provider name, then falls back to `ProviderName`. OpenAI Decisions shares OpenAI's URL with different prices, so `openai-decisions` responses match by provider name only. When the snapshot has no OpenAI Decisions prices, they report no cost instead of OpenAI's.
+
 ## Inspect context-window usage
 
 ```go
@@ -125,7 +129,7 @@ func main() {
 }
 ```
 
-Bundled provider models resolve `ModelProfile.ContextWindow` from the `genai-prices` v0.1.8 snapshot. The lookup uses the model's provider identity, so a model name from another provider does not supply a limit. A zero value means the provider or model is unknown, or its metadata does not specify a limit. An explicit `ai.NewProfiledModel` profile always wins, including an explicit zero.
+Bundled provider models resolve `ModelProfile.ContextWindow` from the `genai-prices` v0.1.13 snapshot. The lookup uses the model's provider identity, so a model name from another provider does not supply a limit. A zero value means the provider or model is unknown, or its metadata does not specify a limit. An explicit `ai.NewProfiledModel` profile always wins, including an explicit zero.
 
 `RunContext.ContextWindowUsed` and `RunInfo.ContextWindowUsed` divide the latest response token count by this window. A fallback model uses the smallest known candidate window. Both methods return `known=false` when either value is unavailable.
 
@@ -136,6 +140,53 @@ Bundled provider models resolve `ModelProfile.ContextWindow` from the `genai-pri
 Without pre-request counting, `PerRequestInputTokenLimit` uses the input count reported by each response. A suspended continuation is checked conservatively against its combined input usage.
 
 All zero numeric limits are disabled. `ToolCallLimit` and `CostLimitUSD` use pointers so you can enforce a zero limit explicitly.
+
+## Resume a suspended turn
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
+)
+
+func main() {
+	ctx := context.Background()
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-5"),
+		ai.WithUsageLimits(ai.UsageLimits{TotalTokenLimit: 50_000}),
+	)
+
+	stream := agent.RunStream(ctx, "Research and summarize Go's scheduler.", struct{}{})
+	for range stream.Events() {
+		break
+	}
+	suspended := stream.Suspended()
+	if suspended == nil {
+		return
+	}
+
+	result, err := agent.Resume(ctx, nil, struct{}{}, ai.WithConversation(ai.Conversation{
+		Messages: suspended.Messages(),
+		Usage:    suspended.Usage(),
+	}))
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Usage().TotalTokens())
+}
+```
+
+A run that resumes a suspended response counts only the usage it billed itself. The run that left the response suspended already counted what that response was billed, including its failed fallback attempts. Run usage, live stream usage, usage limits, and the `chat` span all exclude it.
+
+The completed response in history still reports the whole turn's usage. Adding up each run's usage gives what the provider billed for the conversation.
+
+To have limits cap the conversation total rather than the resuming run alone, carry the earlier usage with `WithConversation`, as above. Pass `nil` history to `Resume` or `ResumeStream` so the conversation's messages are used.
 
 ## Keep pricing data current
 

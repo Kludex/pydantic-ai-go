@@ -88,3 +88,11 @@ func TestTogetherProviderAndStreaming(t *testing.T) {
 		t.Fatalf("unexpected streamed model: thinking=%v provider=%q", sawThinking, model.ProviderName())
 	}
 }
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	for name, want := range map[string]int{"mistralai/Mistral-7B-Instruct-v0.3": 9, "Qwen/Qwen3-235B": 0} {
+		if got := together.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
+			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
+		}
+	}
+}

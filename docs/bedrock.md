@@ -159,6 +159,10 @@ func main() {
 
 The legacy transport defaults provider-native deferred tool search to regex. Bedrock rejects BM25 on this API, so an explicit BM25 strategy fails before transport. `RunStream` uses `InvokeModelWithResponseStream` with the AWS SDK or a custom `LegacyBedrockStreamingClient`. A custom client without streaming support falls back to one complete `InvokeModel` response.
 
+InvokeModel takes beta features in the request body, not in a header. The adapter sends the betas it needs, plus any you set in the `anthropic-beta` extra header, as the `anthropic_beta` body field. When a Claude model that binds thinking blocks rejects a stale block, the adapter retries once with `prefix_mismatch_behavior: drop_block`, as it does on the direct API.
+
+Bedrock withholds structured output from some Claude models that have it on the direct API: Claude Opus 4.1, 4.7, 4.8, and 5, Sonnet 5, Haiku 5.5, and Fable 5. For these models the adapter sends tool definitions without `strict`, and `OutputModeNative` fails before transport. Other models keep strict tools and native output; the adapter matches them by the name after the `anthropic.` segment, so a geo prefix like `global.` works. `WithStrictToolSupport` overrides the strict default.
+
 You own the AWS client and its lifecycle. `ProviderURL` records telemetry identity and does not reconfigure the client.
 
 ## Messages and files
@@ -173,7 +177,11 @@ The Converse adapter maps these provider-neutral values:
 
 Bedrock requires text beside a document. The adapter inserts a neutral text block when a user prompt contains documents without text. It preserves the newest four explicit cache points because Bedrock rejects requests above that limit.
 
+Claude copies formatting it sees in assistant turns. So for Claude models, reasoning without a Bedrock signature, or from another provider, is sent as text in a `user` turn ahead of the assistant turn, wrapped in `<assistant_thinking model="..." provider="...">`. Bedrock requires alternating roles, so that text joins a preceding `user` turn, ahead of a trailing cache point so the point keeps its position. See [Carried-over thinking](providers.md#carried-over-thinking). Other models drop reasoning from another provider.
+
 Bedrock receives detached byte slices. A request does not retain caller-owned file buffers.
+
+A Nova code interpreter result with no content, such as a sandbox timeout, has `nil` content. The adapter replays it as one JSON `null` block, because Bedrock rejects a tool result with an empty content list.
 
 ## Prompt caching and native output
 

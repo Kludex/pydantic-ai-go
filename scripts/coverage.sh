@@ -15,6 +15,7 @@ packages=(
     ./ai/internal/download
     ./ai/internal/schema
     ./ai/internal/promptcache
+    ./ai/internal/thinking
     ./ai/images
     ./ai/images/fakes
     ./ai/images/google
@@ -50,6 +51,7 @@ packages=(
     ./ai/models/groq
     ./ai/models/huggingface
     ./ai/models/infer
+    ./ai/models/meta
     ./ai/models/mistral
     ./ai/models/ollama
     ./ai/models/snowflake
@@ -66,6 +68,7 @@ packages=(
     ./ai/realtime/google
     ./ai/realtime/infer
     ./ai/realtime/internal/openaiprotocol
+    ./ai/realtime/internal/seed
     ./ai/realtime/openai
     ./ai/realtime/xai
     ./ai/ui/agui
@@ -80,6 +83,8 @@ for pkg in "${packages[@]}"; do
     elif [ "$pkg" = "./ai/internal/promptcache" ]; then
         go test ./ai/models/anthropic ./ai/models/bedrock ./ai/models/openai ./ai/models/openrouter \
             -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+    elif [ "$pkg" = "./ai/internal/thinking" ]; then
+        go test ./ai/models/anthropic ./ai/models/bedrock -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     else
         go test "$pkg" -coverprofile="$profile" > /dev/null
     fi

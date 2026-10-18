@@ -110,6 +110,9 @@ func NewModel(name string, options ...Option) *Model {
 			FinishReasons:  map[string]ai.FinishReason{"error": ai.FinishReasonError},
 		}),
 	}
+	if strings.HasPrefix(strings.TrimPrefix(name, "~"), "mistralai/") {
+		openAIOptions = append(openAIOptions, openai.WithToolCallIDLength(9))
+	}
 	openAIOptions = append(openAIOptions, configuration.options...)
 	model := openai.NewModel(name, openAIOptions...)
 	return &Model{ModelWrapper: ai.WrapModel(model), model: model}
@@ -144,8 +147,10 @@ func (*Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
 		return false
 	}
-	switch tool.CloneNativeTool().(type) {
-	case ai.WebSearchTool, ai.AdvisorTool:
+	switch tool := tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool:
+		return tool.ExternalWebAccess == nil || *tool.ExternalWebAccess
+	case ai.AdvisorTool:
 		return true
 	default:
 		return false
@@ -194,26 +199,28 @@ func (model *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Durati
 func (model *Model) Request(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*ai.ModelResponse, error) {
-	ctx, prepared, err := model.prepareParams(ctx, params)
+	messages, scopedTail := prepareMessages(messages)
+	ctx, prepared, err := model.prepareParams(ctx, params, scopedTail)
 	if err != nil {
 		return nil, err
 	}
-	return model.model.Request(ctx, prepareMessages(messages), prepared)
+	return model.model.Request(ctx, messages, prepared)
 }
 
 // StreamRequest implements ai.StreamingModel.
 func (model *Model) StreamRequest(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
-	ctx, prepared, err := model.prepareParams(ctx, params)
+	messages, scopedTail := prepareMessages(messages)
+	ctx, prepared, err := model.prepareParams(ctx, params, scopedTail)
 	if err != nil {
 		return nil, err
 	}
-	return model.model.StreamRequest(ctx, prepareMessages(messages), prepared)
+	return model.model.StreamRequest(ctx, messages, prepared)
 }
 
 func (model *Model) prepareParams(
-	ctx context.Context, params ai.ModelRequestParams,
+	ctx context.Context, params ai.ModelRequestParams, scopedTail []string,
 ) (context.Context, ai.ModelRequestParams, error) {
 	params, err := ai.ResolveNativeToolPreferences(model, params)
 	if err != nil {
@@ -302,6 +309,7 @@ func (model *Model) prepareParams(
 			cache.ExplicitMarkerStyle = openai.ChatPromptCacheMarkerBreakpoint
 		}
 	}
+	cache.RequestScopedTail = scopedTail
 	params.Settings = settings
 	return openai.WithChatPromptCache(ctx, cache), params, nil
 }

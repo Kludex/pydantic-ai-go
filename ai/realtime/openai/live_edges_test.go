@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -272,4 +273,46 @@ func TestLivePublicSessionToolsAndFinalUsage(t *testing.T) {
 	if err := session.Close(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestLiveBackendResponseEndingAsSessionClosesCountsItsRequest(t *testing.T) {
+	connection, peer := livePair(t, realtime.ConnectParams{})
+	session, err := realtime.Open(t.Context(), boundLiveModel{peer.model, connection}, realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer.frame(t, delegation("d"))
+	peer.closing <- delegated("d", backendTerminal("response.completed", map[string]any{"input_tokens": 10, "output_tokens": 2}))
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if usage := session.Usage(); usage.Requests != 1 || usage.InputTokens != 10 || usage.AudioSeconds != 9 {
+		t.Fatalf("usage: %+v", usage)
+	}
+}
+
+func TestLiveSeedMarksInterruptedSpeech(t *testing.T) {
+	cut, check, leaves := "Sure, the morning flight", "Let me check.", "It leaves at"
+	heard, none := 640, 0
+	connection, peer := livePair(t, realtime.ConnectParams{Messages: []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &cut, InterruptedAtMS: &heard},
+		}},
+		ai.ModelResponse{State: ai.ModelResponseStateInterrupted, Parts: []ai.ResponsePart{
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &check},
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &leaves},
+		}},
+		ai.ModelResponse{State: ai.ModelResponseStateInterrupted, Parts: []ai.ResponsePart{
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, InterruptedAtMS: &none},
+		}},
+	}})
+	var texts []string
+	for _, item := range peer.start["input"].([]any) {
+		texts = append(texts, item.(map[string]any)["content"].([]any)[0].(map[string]any)["text"].(string))
+	}
+	if want := []string{cut + "\n[Interrupted after 640 ms]", check, leaves + "\n[Interrupted]"}; !slices.Equal(texts, want) {
+		t.Fatalf("seeded %q", texts)
+	}
+	peer.end(t, "remote_hangup", 0)
+	_ = collectLive(t, connection)
 }

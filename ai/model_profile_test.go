@@ -281,6 +281,11 @@ func TestProfileValidation(t *testing.T) {
 		"auto default": func() {
 			ai.NewProfiledModel(fakes.NewTestModel(), ai.ModelProfile{DefaultOutputMode: ai.OutputModeAuto})
 		},
+		"negative tool call ID length": func() {
+			ai.NewProfiledModel(fakes.NewTestModel(), ai.ModelProfile{
+				DefaultOutputMode: ai.OutputModeTool, ToolCallIDLength: -1,
+			})
+		},
 		"negative cache retention": func() {
 			ai.NewProfiledModel(fakes.NewTestModel(), ai.ModelProfile{
 				DefaultOutputMode: ai.OutputModeTool, DefaultCacheRetention: -time.Second,
@@ -381,5 +386,139 @@ func TestModelRequestHookCanSwitchAutomaticOutputProfile(t *testing.T) {
 	)
 	if _, err := agent.Run(t.Context(), "go", struct{}{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRequestScopedSystemPromptsReachOnlyTheirRequest(t *testing.T) {
+	reminder := func(content string) ai.SystemPromptPart {
+		return ai.SystemPromptPart{Content: content, Scope: ai.SystemPromptScopeRequest}
+	}
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "first"}, reminder("old")}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{reminder("dropped request")}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "again"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{reminder("current"), ai.UserPromptPart{Content: "earlier"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{}},
+	}
+	var seen []ai.ModelMessage
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		seen = messages
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "ok"}}}, nil
+	})
+	agent := ai.NewAgent[struct{}, string](model)
+	if _, err := agent.Run(t.Context(), "now", struct{}{}, ai.WithMessageHistory(history)); err != nil {
+		t.Fatal(err)
+	}
+	var scoped []string
+	for _, message := range seen {
+		if request, ok := message.(ai.ModelRequest); ok {
+			for _, part := range request.Parts {
+				if system, ok := part.(ai.SystemPromptPart); ok {
+					scoped = append(scoped, system.Content)
+				}
+			}
+		}
+	}
+	if strings.Join(scoped, ",") != "current" || len(seen) != 5 {
+		t.Fatalf("superseded prompts reached the model: %#v", seen)
+	}
+	last := seen[len(seen)-1].(ai.ModelRequest).Parts
+	if system, ok := last[len(last)-1].(ai.SystemPromptPart); !ok || system.Content != "current" {
+		t.Fatalf("current prompt not moved to the end: %#v", last)
+	}
+
+	native := ai.NewProfiledModel(model, ai.ModelProfile{
+		DefaultOutputMode: ai.OutputModeTool, SupportsRequestScopedSystemPrompts: true,
+	})
+	if _, err := ai.NewAgent[struct{}, string](native).Run(
+		t.Context(), "now", struct{}{}, ai.WithMessageHistory(history),
+	); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 6 {
+		t.Fatalf("native model did not receive every prompt unchanged: %#v", seen)
+	}
+}
+
+func TestRetryWithoutResponseDropsRequestScopedSystemPrompts(t *testing.T) {
+	for also, want := range map[string]int{"": 5, "also": 6} {
+		var requests int
+		model := fakes.NewFunctionModel(func(
+			context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			requests++
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "ok"}}}, nil
+		})
+		native := ai.NewProfiledModel(model, ai.ModelProfile{
+			DefaultOutputMode: ai.OutputModeTool, SupportsRequestScopedSystemPrompts: true,
+		})
+		retried := false
+		retry := ai.BeforeModelRequestFunc(func(
+			_ context.Context, _ *ai.RunInfo, request ai.ModelRequestContext,
+		) (ai.ModelRequestContext, error) {
+			if !retried {
+				retried = true
+				return request, ai.Retryf("again")
+			}
+			return request, nil
+		})
+		history := []ai.ModelMessage{
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}},
+			ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "hello"}}},
+			ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.SystemPromptPart{Content: "reminder", Scope: ai.SystemPromptScopeRequest},
+			}},
+		}
+		if also != "" {
+			last := history[2].(ai.ModelRequest)
+			last.Parts = append(last.Parts, ai.UserPromptPart{Content: also})
+			history[2] = last
+		}
+		result, err := ai.NewAgent[struct{}, string](native, ai.WithCapabilities(retry)).Run(
+			t.Context(), "kept", struct{}{}, ai.WithMessageHistory(history),
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, message := range result.Messages() {
+			if request, ok := message.(ai.ModelRequest); ok {
+				for _, part := range request.Parts {
+					if system, ok := part.(ai.SystemPromptPart); ok {
+						t.Fatalf("unanswered request-scoped prompt survived the retry: %#v", system)
+					}
+				}
+			}
+		}
+		if requests != 1 || len(result.Messages()) != want {
+			t.Fatalf("%q: requests = %d, messages = %#v", also, requests, result.Messages())
+		}
+	}
+}
+
+func TestPrepareModelMessagesKeepsRequestScopedPromptsOfASuspendedResponse(t *testing.T) {
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{}, nil
+	})
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.SystemPromptPart{Content: "current", Scope: ai.SystemPromptScopeRequest},
+			ai.UserPromptPart{Content: "go"},
+		}},
+		ai.ModelResponse{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "partial"}}, State: ai.ModelResponseStateSuspended,
+		},
+	}
+	prepared, err := ai.PrepareModelMessages(model, history)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := prepared[0].(ai.ModelRequest).Parts
+	if len(prepared) != 2 || len(parts) != 2 || parts[1].(ai.SystemPromptPart).Content != "current" {
+		t.Fatalf("the continued request lost its request-scoped prompt: %#v", prepared)
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"log/slog"
 	"strings"
 	"time"
 )
@@ -49,6 +50,11 @@ func WithFallbackOnError(predicate FallbackErrorPredicate) FallbackModelOption {
 
 // WithFallbackOnResponse replaces the default API-error policy with a response predicate.
 // Multiple predicates are combined with OR semantics in option order.
+//
+// Response predicates only apply to Request. A streamed response has already
+// reached the consumer by the time it could be judged, so StreamRequest accepts
+// it as is and reports a warning. A run streams whenever something consumes its
+// events: RunStream, StartRun, or Run with an event listener or event-stream capability.
 func WithFallbackOnResponse(predicate FallbackResponsePredicate) FallbackModelOption {
 	if predicate == nil {
 		panic("ai: fallback response predicate must not be nil")
@@ -59,12 +65,19 @@ func WithFallbackOnResponse(predicate FallbackResponsePredicate) FallbackModelOp
 	}
 }
 
+// WithFallbackWarningHandler receives warnings, such as response predicates
+// skipped on a streamed request. Without a handler, warnings go to slog.Warn.
+func WithFallbackWarningHandler(handler func(string)) FallbackModelOption {
+	return func(fallback *FallbackModel) { fallback.warningHandler = handler }
+}
+
 // FallbackModel tries models in order when configured errors or responses are rejected.
 type FallbackModel struct {
 	models             []Model
 	errorPredicates    []FallbackErrorPredicate
 	responsePredicates []FallbackResponsePredicate
 	customPolicy       bool
+	warningHandler     func(string)
 }
 
 // NewFallbackModel creates a fallback chain. By default, only ModelAPIError values
@@ -187,8 +200,15 @@ func (fallback *FallbackModel) Request(
 	return nil, newFallbackExhaustedError(failures, rejected, attempts)
 }
 
-// StreamRequest tries the next model only when opening a stream fails. Errors
-// after the first event remain visible to the consumer and do not switch models.
+// StreamRequest hands a stream over only once it has produced its first event,
+// so an error the stream reports before any output, such as an overload after
+// the provider accepted the request, falls back like an error while opening it.
+// ResponseMetadataEvent values do not count as output. Errors after the first
+// event reach the consumer and do not switch models. Range over the returned
+// sequence, or break from it, to release the underlying stream.
+//
+// Response predicates are not applied: the response has already been streamed
+// by the time it could be judged, so it is accepted as is and a warning is reported.
 func (fallback *FallbackModel) StreamRequest(
 	ctx context.Context, messages []ModelMessage, params ModelRequestParams,
 ) (iter.Seq2[ModelStreamEvent, error], error) {
@@ -206,6 +226,9 @@ func (fallback *FallbackModel) StreamRequest(
 			return nil, predicateErr
 		}
 		if !shouldFallback {
+			if events != nil {
+				return fallback.stampStream(events, model, false, attempts), nil
+			}
 			return nil, err
 		}
 		fallback.cancelModel(ctx, model, messages[len(messages)-1].(ModelResponse))
@@ -213,6 +236,16 @@ func (fallback *FallbackModel) StreamRequest(
 		rewound = true
 		failures = append(failures, err)
 		fallback.recordAttempt(ctx, &attempts, model, err, nil, started)
+	}
+	if len(fallback.responsePredicates) > 0 {
+		message := "ai: FallbackModel response predicates are not applied to streamed requests, " +
+			"so the streamed response is accepted as is. A request is streamed whenever something consumes " +
+			"the run's events, such as RunStream, StartRun, or an event listener or event-stream capability."
+		if fallback.warningHandler != nil {
+			fallback.warningHandler(message)
+		} else {
+			slog.Warn(message)
+		}
 	}
 	for _, model := range fallback.models {
 		started := time.Now()
@@ -225,6 +258,9 @@ func (fallback *FallbackModel) StreamRequest(
 			return nil, predicateErr
 		}
 		if !shouldFallback {
+			if events != nil {
+				return fallback.stampStream(events, model, rewound, attempts), nil
+			}
 			return nil, err
 		}
 		failures = append(failures, err)
@@ -346,7 +382,11 @@ func (fallback *FallbackModel) streamModel(
 		return nil, err
 	}
 	if streaming, ok := model.(StreamingModel); ok {
-		return streaming.StreamRequest(ctx, messages, params)
+		events, err := streaming.StreamRequest(ctx, messages, params)
+		if err != nil {
+			return nil, err
+		}
+		return peekModelStream(events)
 	}
 	response, err := model.Request(ctx, messages, params)
 	if err != nil {
@@ -357,6 +397,44 @@ func (fallback *FallbackModel) streamModel(
 	}
 	fallback.stampResponse(response, model, false)
 	return replayAsEvents(response), nil
+}
+
+// peekModelStream reads events up to the first one a consumer sees. When that
+// read fails, it returns the error together with a replay of what was read.
+func peekModelStream(events iter.Seq2[ModelStreamEvent, error]) (iter.Seq2[ModelStreamEvent, error], error) {
+	next, stop := iter.Pull2(events)
+	var buffered []ModelStreamEvent
+	var firstErr error
+	for {
+		event, err, ok := next()
+		if !ok || err != nil {
+			stop()
+			firstErr = err
+			break
+		}
+		buffered = append(buffered, event)
+		if _, metadata := event.(ResponseMetadataEvent); !metadata {
+			break
+		}
+	}
+	return func(yield func(ModelStreamEvent, error) bool) {
+		defer stop()
+		for _, event := range buffered {
+			if !yield(event, nil) {
+				return
+			}
+		}
+		if firstErr != nil {
+			yield(nil, firstErr)
+			return
+		}
+		for {
+			event, err, ok := next()
+			if !ok || !yield(event, err) {
+				return
+			}
+		}
+	}, firstErr
 }
 
 func (fallback *FallbackModel) shouldFallbackError(ctx context.Context, requestErr error) (bool, error) {

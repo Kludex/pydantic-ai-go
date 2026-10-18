@@ -181,3 +181,11 @@ func TestEmptyInferenceProviderPanics(t *testing.T) {
 	}()
 	_ = huggingface.WithInferenceProvider("")
 }
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	for name, want := range map[string]int{"mistralai/Mistral-Small-3.1-24B-Instruct-2503": 9, "Qwen/Qwen3-32B": 0} {
+		if got := huggingface.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
+			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
+		}
+	}
+}

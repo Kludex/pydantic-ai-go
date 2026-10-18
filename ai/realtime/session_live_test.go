@@ -95,3 +95,17 @@ func TestRealtimeContextWindowValidation(t *testing.T) {
 		t.Fatal("negative window accepted")
 	}
 }
+
+func TestContextWindowUsedMovesWithTheUsageReportedAtClose(t *testing.T) {
+	connection := &endingConnection{fakeConnection: newFakeConnection()}
+	session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: fullProfile()}, realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if used, ok := session.ContextWindowUsed(); !ok || used != 0.7 || session.Usage().AudioSeconds != 3 {
+		t.Fatal(used, ok, session.Usage())
+	}
+}

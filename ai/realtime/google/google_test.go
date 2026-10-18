@@ -259,7 +259,7 @@ func TestGoogleRealtimeSession(t *testing.T) {
 				Name: "lookup", Schema: map[string]any{"type": "object"},
 				ReturnSchema: map[string]any{"type": "object"},
 			}},
-			NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+			NativeTools: []ai.NativeTool{ai.WebSearchTool{}, ai.WebSearchTool{MaxUses: 1, Optional: true}},
 		},
 	}
 	session, err := realtime.Open(t.Context(), model, params, realtime.WithToolExecutor(
@@ -388,6 +388,23 @@ func TestGoogleConnectionAndValidation(t *testing.T) {
 	}
 	if _, err := googlert.NewModel("", googlert.WithConnector(connector)).Connect(t.Context(), realtime.ConnectParams{}); err == nil {
 		t.Fatal("expected model name error")
+	}
+	cached := false
+	for _, search := range []ai.WebSearchTool{
+		{AllowedDomains: []string{"go.dev"}}, {BlockedDomains: []string{}}, {MaxUses: 1}, {ExternalWebAccess: &cached},
+	} {
+		if _, err := model.Connect(t.Context(), realtime.ConnectParams{
+			Request: ai.ModelRequestParams{NativeTools: []ai.NativeTool{search}},
+		}); err == nil || !strings.Contains(err.Error(), "web search cannot apply") {
+			t.Fatalf("restricted web search %#v was sent: %v", search, err)
+		}
+	}
+	if connection, err := model.Connect(t.Context(), realtime.ConnectParams{
+		Request: ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}}},
+	}); err != nil || len(connector.config.Tools) != 0 {
+		t.Fatalf("code execution reached Gemini Live: %v %+v", err, connector.config.Tools)
+	} else {
+		_ = connection.Close(t.Context())
 	}
 	connector.err = errors.New("dial")
 	if _, err := model.Connect(t.Context(), realtime.ConnectParams{}); err == nil {

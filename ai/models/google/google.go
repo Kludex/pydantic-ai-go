@@ -84,8 +84,13 @@ func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
 		return false
 	}
-	switch tool.CloneNativeTool().(type) {
-	case ai.WebSearchTool, ai.WebFetchTool, ai.CodeExecutionTool, ai.FileSearchTool:
+	switch tool := tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool:
+		return tool.AllowedDomains == nil && tool.BlockedDomains == nil && tool.MaxUses == 0 &&
+			(tool.ExternalWebAccess == nil || *tool.ExternalWebAccess)
+	case ai.WebFetchTool:
+		return tool.AllowedDomains == nil && tool.BlockedDomains == nil && tool.MaxUses == 0
+	case ai.CodeExecutionTool, ai.FileSearchTool:
 		return true
 	case ai.ImageGenerationTool:
 		return supportsImageOutput(m.name)
@@ -124,43 +129,63 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if err != nil {
 		return nil, err
 	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, fmt.Errorf("google: marshal request: %w", err)
-	}
-	endpoint := fmt.Sprintf("%s/models/%s:generateContent", m.baseURL, m.name)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	data, serviceTier, err := m.generateContent(ctx, payload, params.Settings)
 	if err != nil {
 		return nil, err
 	}
-	if err := m.prepareHTTPRequest(req, params.Settings); err != nil {
-		return nil, err
-	}
-
-	resp, err := m.httpClient.Do(req)
-	if err != nil {
-		return nil, ai.NewModelTransportError(ctx, m, "request", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	data, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, ai.NewModelTransportError(ctx, m, "read response", err)
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	var first generateResponse
+	continued := json.Unmarshal(data, &first) == nil && first.continuationToken() != ""
+	if continued {
+		data, serviceTier, err = m.continueGeneration(ctx, payload, params.Settings, data, first.continuationToken())
+		if err != nil {
+			return nil, err
+		}
 	}
 	response, err := parseResponse(data, m.providerName, m.name, hasGoogleFileSearch(params.NativeTools))
 	if response != nil {
 		response.ProviderName = m.providerName
 		response.ProviderURL = m.baseURL
-		if serviceTier := resp.Header.Get("x-gemini-service-tier"); serviceTier != "" {
+		if serviceTier != "" {
 			if response.ProviderDetails == nil {
 				response.ProviderDetails = map[string]any{}
 			}
 			response.ProviderDetails["service_tier"] = strings.ToLower(serviceTier)
 		}
+		if continued {
+			ai.MarkInitialInputTokens(response, first.UsageMetadata.usage().InputTokens)
+		}
 	}
 	return response, err
+}
+
+func (m *Model) generateContent(
+	ctx context.Context, payload *generateRequest, settings ai.ModelSettings,
+) ([]byte, string, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, "", fmt.Errorf("google: marshal request: %w", err)
+	}
+	endpoint := fmt.Sprintf("%s/models/%s:generateContent", m.baseURL, m.name)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, "", err
+	}
+	if err := m.prepareHTTPRequest(req, settings); err != nil {
+		return nil, "", err
+	}
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, "", ai.NewModelTransportError(ctx, m, "request", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, "", ai.NewModelTransportError(ctx, m, "read response", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+	}
+	return data, resp.Header.Get("x-gemini-service-tier"), nil
 }
 
 // CountTokens counts prospective input tokens through the configured Google transport.
@@ -249,6 +274,7 @@ type generateRequest struct {
 	CachedContent     string            `json:"cachedContent,omitempty"`
 	ModelArmorConfig  *ModelArmorConfig `json:"modelArmorConfig,omitempty"`
 	GenerationConfig  *generationConfig `json:"generationConfig,omitempty"`
+	ContinuationToken string            `json:"continuationToken,omitempty"`
 }
 
 type content struct {
@@ -270,6 +296,19 @@ type part struct {
 	ThoughtSignature    string               `json:"thoughtSignature,omitempty"`
 	VideoMetadata       map[string]any       `json:"videoMetadata,omitempty"`
 	MediaResolution     any                  `json:"mediaResolution,omitempty"`
+	MediaProcessing     any                  `json:"mediaProcessing,omitempty"`
+	signatureOnly       bool
+}
+
+func (p *part) UnmarshalJSON(data []byte) error {
+	type fields part
+	if err := json.Unmarshal(data, (*fields)(p)); err != nil {
+		return err
+	}
+	var keys map[string]json.RawMessage
+	_ = json.Unmarshal(data, &keys) // cannot fail once the struct decode succeeded
+	p.signatureOnly = p.ThoughtSignature != "" && len(keys) == 1
+	return nil
 }
 
 type executableCode struct {
@@ -429,6 +468,10 @@ func applyGoogleFileMetadata(filePart *part, metadata map[string]any, video bool
 	if resolution, exists := metadata["media_resolution"]; exists {
 		filePart.MediaResolution = resolution
 		delete(metadata, "media_resolution")
+	}
+	if processing, exists := metadata["media_processing"]; exists {
+		filePart.MediaProcessing = processing
+		delete(metadata, "media_processing")
 	}
 	if !video {
 		return
@@ -836,7 +879,7 @@ func googleThinkingLevel(modelName string, transport Transport, requested string
 		strings.HasPrefix(name, "gemini-3.1-flash-lite-image")):
 		supported = []string{"MINIMAL", "HIGH"}
 	case strings.HasPrefix(name, "gemini-3.7-flash"), strings.HasPrefix(name, "gemini-3.8-flash"),
-		strings.HasPrefix(name, "gemini-3.1-pro-preview"):
+		strings.HasPrefix(name, "gemini-3.1-pro-preview"), strings.HasPrefix(name, "gemini-4-argon"):
 		supported = []string{"LOW", "MEDIUM", "HIGH"}
 	case strings.HasPrefix(name, "gemini-3-pro-preview"):
 		supported = []string{"LOW", "HIGH"}
@@ -984,7 +1027,10 @@ func googleNativeToolType(kind ai.ToolPartKind) string {
 	}[kind]
 }
 
-func googleNativeToolIdentity(toolType string) (string, ai.ToolPartKind, bool) {
+func googleNativeToolIdentity(toolType string, payload any) (string, ai.ToolPartKind, bool) {
+	if googleMediaProcessingStep(toolType, payload) {
+		return googleMediaProcessingToolName, "", true
+	}
 	identity, ok := map[string]struct {
 		name string
 		kind ai.ToolPartKind
@@ -994,6 +1040,39 @@ func googleNativeToolIdentity(toolType string) (string, ai.ToolPartKind, bool) {
 		"FILE_SEARCH":       {name: "file_search", kind: ai.ToolPartKindFileSearch},
 	}[toolType]
 	return identity.name, identity.kind, ok
+}
+
+const googleMediaProcessingToolName = "media_processing"
+
+// Gemini omits toolType on agentic media-processing steps, which are the only server-side steps without a payload.
+func googleMediaProcessingStep(toolType string, payload any) bool {
+	if toolType != "" {
+		return toolType == "MEDIA_PROCESSING"
+	}
+	switch value := payload.(type) {
+	case nil:
+		return true
+	case map[string]any:
+		return len(value) == 0
+	}
+	return false
+}
+
+func googleToolType(name, toolType string) string {
+	if name == googleMediaProcessingToolName {
+		return "MEDIA_PROCESSING"
+	}
+	return toolType
+}
+
+func googleNativeInvocation(p part) bool {
+	switch {
+	case p.ToolCall != nil:
+		return !googleMediaProcessingStep(p.ToolCall.ToolType, p.ToolCall.Args)
+	case p.ToolResponse != nil:
+		return !googleMediaProcessingStep(p.ToolResponse.ToolType, p.ToolResponse.Response)
+	}
+	return false
 }
 
 func googlePartMetadata(signature, providerName string) (string, map[string]any) {
@@ -1086,6 +1165,7 @@ type generateResponse struct {
 		AvgLogprobs        *float64         `json:"avgLogprobs"`
 		GroundingMetadata  map[string]any   `json:"groundingMetadata"`
 		URLContextMetadata map[string]any   `json:"urlContextMetadata"`
+		ContinuationToken  string           `json:"continuationToken"`
 	} `json:"candidates"`
 	PromptFeedback struct {
 		BlockReason        string           `json:"blockReason"`
@@ -1169,7 +1249,7 @@ func (u googleUsage) usage() ai.Usage {
 
 func googleFinishReason(reason string) ai.FinishReason {
 	return map[string]ai.FinishReason{
-		"STOP": ai.FinishReasonStop, "MAX_TOKENS": ai.FinishReasonLength,
+		"STOP": ai.FinishReasonStop, "MAX_TOKENS": ai.FinishReasonLength, "CONTINUATION": ai.FinishReasonLength,
 		"SAFETY": ai.FinishReasonContentFilter, "RECITATION": ai.FinishReasonContentFilter,
 		"BLOCKLIST": ai.FinishReasonContentFilter, "PROHIBITED_CONTENT": ai.FinishReasonContentFilter,
 		"SPII": ai.FinishReasonContentFilter, "IMAGE_SAFETY": ai.FinishReasonContentFilter,
@@ -1416,7 +1496,7 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 	}
 	hasExplicitNativeTools := false
 	for _, candidatePart := range gr.Candidates[0].Content.Parts {
-		if candidatePart.ToolCall != nil || candidatePart.ToolResponse != nil {
+		if googleNativeInvocation(candidatePart) {
 			hasExplicitNativeTools = true
 			break
 		}
@@ -1444,6 +1524,7 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 	}
 	lastCodeCallID := ""
 	lastServerCallIDs := map[ai.ToolPartKind]string{}
+	mediaCallWithoutID := -1
 	for index, p := range gr.Candidates[0].Content.Parts {
 		partProviderName, providerDetails := googlePartMetadata(p.ThoughtSignature, providerName)
 		switch {
@@ -1488,27 +1569,41 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 			})
 			lastCodeCallID = ""
 		case p.ToolCall != nil:
-			name, kind, ok := googleNativeToolIdentity(p.ToolCall.ToolType)
+			name, kind, ok := googleNativeToolIdentity(p.ToolCall.ToolType, p.ToolCall.Args)
 			if !ok {
 				return nil, fmt.Errorf("google: unknown native tool type %q", p.ToolCall.ToolType)
 			}
-			callID := googleNativeCallID(p.ToolCall.ID, gr.ResponseID, p.ToolCall.ToolType, index)
+			callID := googleNativeCallID(p.ToolCall.ID, gr.ResponseID, googleToolType(name, p.ToolCall.ToolType), index)
 			args, _ := json.Marshal(p.ToolCall.Args)
+			if name == googleMediaProcessingToolName {
+				mediaCallWithoutID = -1
+				if p.ToolCall.ID == "" {
+					mediaCallWithoutID = len(resp.Parts)
+				}
+			}
 			resp.Parts = append(resp.Parts, ai.NativeToolCallPart{
 				ToolName: name, Args: args, ToolCallID: callID, ToolKind: kind,
 				ProviderName: providerName, ProviderDetails: providerDetails,
 			})
 			lastServerCallIDs[kind] = callID
 		case p.ToolResponse != nil:
-			name, kind, ok := googleNativeToolIdentity(p.ToolResponse.ToolType)
+			name, kind, ok := googleNativeToolIdentity(p.ToolResponse.ToolType, p.ToolResponse.Response)
 			if !ok {
 				return nil, fmt.Errorf("google: unknown native tool type %q", p.ToolResponse.ToolType)
 			}
 			callID := p.ToolResponse.ID
 			if callID == "" {
 				callID = lastServerCallIDs[kind]
+			} else if name == googleMediaProcessingToolName && mediaCallWithoutID >= 0 {
+				call := resp.Parts[mediaCallWithoutID].(ai.NativeToolCallPart)
+				call.ToolCallID = callID
+				resp.Parts[mediaCallWithoutID] = call
 			}
-			callID = googleNativeCallID(callID, gr.ResponseID, p.ToolResponse.ToolType, index)
+			if name == googleMediaProcessingToolName {
+				delete(lastServerCallIDs, kind)
+				mediaCallWithoutID = -1
+			}
+			callID = googleNativeCallID(callID, gr.ResponseID, googleToolType(name, p.ToolResponse.ToolType), index)
 			response := p.ToolResponse.Response
 			if kind == ai.ToolPartKindFileSearch && response == nil {
 				if contexts := googleFileSearchContexts(gr.Candidates[0].GroundingMetadata); len(contexts) > 0 {
@@ -1535,6 +1630,8 @@ func parseResponse(data []byte, providerName, modelName string, fileSearchEnable
 				ToolName: p.FunctionCall.Name, Args: args, ToolCallID: p.FunctionCall.ID,
 				ProviderName: partProviderName, ProviderDetails: providerDetails,
 			})
+		case p.signatureOnly:
+			// Vertex AI reports agentic media-processing steps as signature-only parts that it rejects on replay.
 		case p.Thought:
 			resp.Parts = append(resp.Parts, ai.ThinkingPart{
 				Content: p.Text, ProviderName: partProviderName, ProviderDetails: providerDetails,

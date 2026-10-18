@@ -89,3 +89,9 @@ func (model *Model) ProviderURL() string { return model.baseURL }
 
 // DefaultModelSettings returns a detached settings snapshot.
 func (model *Model) DefaultModelSettings() ai.ModelSettings { return model.defaultSettings.Clone() }
+
+// ModelProfile reports that Mistral models accept tool call IDs of exactly nine letters and digits.
+// Requests rewrite IDs from other providers to fit, so a history started elsewhere keeps working.
+func (*Model) ModelProfile() ai.ModelProfile {
+	return ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, ToolCallIDLength: 9}
+}

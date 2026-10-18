@@ -8,8 +8,10 @@ import (
 // ReinjectSystemPrompt restores the agent's configured legacy system prompts
 // when request history omitted them. Instructions do not need reinjection.
 type ReinjectSystemPrompt struct {
-	// ReplaceExisting removes history-provided system prompts before injecting
-	// the agent's configuration. Use it when history is untrusted.
+	// ReplaceExisting removes the system prompts the run started with before
+	// injecting the agent's configuration. Use it when history is untrusted.
+	// System prompts added during the run, for example with
+	// [RunContext.Enqueue], are kept.
 	ReplaceExisting bool
 }
 
@@ -37,7 +39,7 @@ func (capability ReinjectSystemPrompt) BeforeModelRequest(
 	}
 	messages := request.Messages
 	if capability.ReplaceExisting {
-		messages = stripSystemPrompts(messages)
+		messages = stripSystemPrompts(messages, *runInfo.startingSystemPrompts)
 	}
 	parts, err := runInfo.systemPrompts(ctx)
 	if err != nil {
@@ -78,7 +80,7 @@ func hasSystemPrompt(messages []ModelMessage) bool {
 	return false
 }
 
-func stripSystemPrompts(messages []ModelMessage) []ModelMessage {
+func stripSystemPrompts(messages []ModelMessage, stripped []SystemPromptPart) []ModelMessage {
 	filteredMessages := make([]ModelMessage, 0, len(messages))
 	for _, message := range messages {
 		request, ok := message.(ModelRequest)
@@ -88,9 +90,11 @@ func stripSystemPrompts(messages []ModelMessage) []ModelMessage {
 		}
 		parts := make([]RequestPart, 0, len(request.Parts))
 		for _, part := range request.Parts {
-			if _, ok := part.(SystemPromptPart); !ok {
-				parts = append(parts, part)
+			system, ok := part.(SystemPromptPart)
+			if ok && slices.ContainsFunc(stripped, system.equal) {
+				continue
 			}
+			parts = append(parts, part)
 		}
 		if len(parts) == 0 {
 			continue
@@ -99,4 +103,9 @@ func stripSystemPrompts(messages []ModelMessage) []ModelMessage {
 		filteredMessages = append(filteredMessages, request)
 	}
 	return filteredMessages
+}
+
+func (part SystemPromptPart) equal(other SystemPromptPart) bool {
+	return part.Content == other.Content && part.DynamicRef == other.DynamicRef &&
+		part.Timestamp.Equal(other.Timestamp)
 }

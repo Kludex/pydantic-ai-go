@@ -230,3 +230,40 @@ func TestSessionIteratorCancellationWhileOpen(t *testing.T) {
 }
 
 var _ iter.Seq2[[]byte, error]
+
+func TestSessionFailedAudioChunkIsNotRetained(t *testing.T) {
+	connection := newFakeConnection()
+	profile := fullProfile()
+	session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: profile},
+		realtime.ConnectParams{}, realtime.WithAudioRetention(realtime.AudioRetentionInput))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := session.SendAudio(t.Context(), []byte{1, 0}, "audio/pcm"); err != nil {
+		t.Fatal(err)
+	}
+	connection.err = errors.New("audio write")
+	if err := session.SendAudio(t.Context(), []byte{2, 0}, "audio/pcm"); err == nil {
+		t.Fatal("expected audio send error")
+	}
+	connection.err = nil
+	connection.events <- realtime.InputTranscript{Text: "hello", Final: true}
+	connection.end()
+	for range session.Events(t.Context()) {
+	}
+	var audio []byte
+	for _, message := range session.NewMessages() {
+		if request, ok := message.(ai.ModelRequest); ok {
+			for _, part := range request.Parts {
+				if speech, ok := part.(ai.SpeechPart); ok && speech.Audio != nil {
+					if audio, err = realtime.AudioPCM(*speech.Audio, profile.AudioInputSampleRate); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+		}
+	}
+	if string(audio) != string([]byte{1, 0}) {
+		t.Fatalf("retained audio = %v, want only the sent chunk", audio)
+	}
+}

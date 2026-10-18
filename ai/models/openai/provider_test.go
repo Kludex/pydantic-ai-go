@@ -1356,6 +1356,18 @@ func TestOpenAIChatCompatibilityValidation(t *testing.T) {
 	}
 }
 
+func TestToolCallIDLength(t *testing.T) {
+	if got := openai.NewModel("compatible", openai.WithToolCallIDLength(9)).ModelProfile().ToolCallIDLength; got != 9 {
+		t.Fatalf("tool call ID length = %d", got)
+	}
+	defer func() {
+		if recovered := recover(); recovered != "openai: tool call ID length must not be negative" {
+			t.Fatalf("unexpected panic: %v", recovered)
+		}
+	}()
+	_ = openai.WithToolCallIDLength(-1)
+}
+
 func TestOpenAICompatibleResponsesProviderIdentity(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{
@@ -1556,5 +1568,69 @@ func TestOpenAIBaseURLFromEnvironment(t *testing.T) {
 	}
 	if response.ProviderName != "proxy" {
 		t.Fatalf("unexpected provider name: %q", response.ProviderName)
+	}
+}
+
+func TestOpenAIChatLeadingCachePointMarksPreviousUserMessage(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		body = nil
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}],"usage":{}}`))
+	})
+	ctx := openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
+		ExplicitMarkerStyle: openai.ChatPromptCacheMarkerControl, IncludeTTL: true,
+	})
+	leading := ai.UserPromptPart{Contents: []ai.UserContent{ai.CachePoint{}, ai.TextContent{Text: "next"}}}
+	for name, test := range map[string]struct {
+		messages []ai.ModelMessage
+		want     string
+	}{
+		"string behind tool turn": {
+			messages: []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "first"}}},
+				ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: "lookup", Args: json.RawMessage(`{}`), ToolCallID: "call"}}},
+				ai.ModelRequest{Parts: []ai.RequestPart{
+					ai.ToolReturnPart{ToolName: "lookup", Content: "found", ToolCallID: "call"}, ai.SystemPromptPart{Content: "system"}, leading,
+				}},
+			},
+			want: `[{"content":[{"cache_control":{"ttl":"5m","type":"ephemeral"},"text":"first","type":"text"}],"role":"user"},` +
+				`{"role":"assistant","tool_calls":[{"function":{"arguments":"{}","name":"lookup"},"id":"call","type":"function"}]},` +
+				`{"content":"found","role":"tool","tool_call_id":"call"},{"content":"system","role":"system"},` +
+				`{"content":[{"text":"next","type":"text"}],"role":"user"}]`,
+		},
+		"longer ttl kept": {
+			messages: []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.TextContent{Text: "first"}, ai.CachePoint{TTL: ai.CachePointTTL1Hour},
+				}}}},
+				ai.ModelRequest{Parts: []ai.RequestPart{leading}},
+			},
+			want: `[{"content":[{"cache_control":{"ttl":"1h","type":"ephemeral"},"text":"first","type":"text"}],"role":"user"},` +
+				`{"content":[{"text":"next","type":"text"}],"role":"user"}]`,
+		},
+		"shorter ttl replaced": {
+			messages: []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.TextContent{Text: "first"}, ai.CachePoint{},
+				}}}},
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.CachePoint{TTL: ai.CachePointTTL1Hour}, ai.TextContent{Text: "next"},
+				}}}},
+			},
+			want: `[{"content":[{"cache_control":{"ttl":"1h","type":"ephemeral"},"text":"first","type":"text"}],"role":"user"},` +
+				`{"content":[{"text":"next","type":"text"}],"role":"user"}]`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := model.Request(ctx, test.messages, ai.ModelRequestParams{}); err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := json.Marshal(body["messages"]); string(got) != test.want {
+				t.Fatalf("unexpected messages:\n got %s\nwant %s", got, test.want)
+			}
+		})
 	}
 }

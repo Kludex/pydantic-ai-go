@@ -311,7 +311,11 @@ func (settings typedSettings) routeThreshold() float64 {
 }
 
 func (model *Model) call(
-	ctx context.Context, state any, questions map[string]question, settings ai.ModelSettings,
+	ctx context.Context,
+	state any,
+	questions map[string]question,
+	images []ai.BinaryContent,
+	settings ai.ModelSettings,
 ) (responseBody, error) {
 	body, err := json.Marshal(map[string]any{"state": state, "questions": questions, "model": model.name})
 	if err != nil {

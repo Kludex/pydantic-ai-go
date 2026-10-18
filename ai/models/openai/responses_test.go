@@ -168,6 +168,8 @@ func TestResponsesCountTokensErrors(t *testing.T) {
 				t.Context(), messages, ai.ModelRequestParams{},
 			); err == nil || !strings.Contains(err.Error(), test.contains) {
 				t.Fatalf("unexpected token count error: %v", err)
+			} else if test.name == "decode" && !errors.As(err, new(ai.ModelAPIError)) {
+				t.Fatalf("decode error is not a model API error: %T", err)
 			}
 		})
 	}
@@ -1574,6 +1576,19 @@ func TestResponsesDeferredToolSupportCanBeDisabled(t *testing.T) {
 		tools[0].(map[string]any)["name"] != ai.ToolSearchName {
 		t.Fatalf("deferred support override was ignored: %+v", tools)
 	}
+	for _, name := range []string{"gpt-5.4-nano", "openai.gpt-5.4-nano-2026-03-17"} {
+		if nano := openai.NewResponsesModel(name); nano.NativeToolSearchProvider() != "" {
+			t.Fatalf("%s was granted native tool search", name)
+		}
+	}
+	for _, model := range []*openai.ResponsesModel{
+		openai.NewResponsesModel("gpt-5.4"),
+		openai.NewResponsesModel("gpt-5.4-nano", openai.WithDeferredToolSupport(true)),
+	} {
+		if model.NativeToolSearchProvider() != "openai" {
+			t.Fatalf("%s lost native tool search", model.Name())
+		}
+	}
 }
 
 func TestResponsesNativeDeferredErrors(t *testing.T) {
@@ -1779,8 +1794,8 @@ func TestResponsesErrors(t *testing.T) {
 	})
 	t.Run("invalid json", func(t *testing.T) {
 		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) { _, _ = w.Write([]byte("not json")) })
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err == nil {
-			t.Fatal("expected parse error")
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); !errors.As(err, new(ai.ModelAPIError)) {
+			t.Fatalf("expected model API error, got %v", err)
 		}
 	})
 	t.Run("unknown message type", func(t *testing.T) {
@@ -1920,6 +1935,31 @@ func TestResponsesCompatibleReasoningContentHistory(t *testing.T) {
 	item := body["input"].([]any)[0].(map[string]any)
 	if item["content"].([]any)[0].(map[string]any)["text"] != "private" {
 		t.Fatalf("reasoning content was not replayed: %#v", body)
+	}
+}
+
+func TestResponsesCompatibleEncryptedReasoningKeepsSampling(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = response.Write([]byte(`{"id":"response","model":"compatible","status":"completed","output":[],"usage":{}}`))
+	}, openai.WithChatCompatibility(openai.ChatCompatibility{
+		ResponsesEncryptedReasoning: true, SamplingWithReasoning: true,
+	}))
+	temperature := 0.2
+	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}}}, ai.ModelRequestParams{
+		Settings: ai.ModelSettings{
+			Temperature: &temperature, Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["temperature"] != 0.2 || body["reasoning"].(map[string]any)["effort"] != "minimal" ||
+		fmt.Sprint(body["include"]) != "[reasoning.encrypted_content]" {
+		t.Fatalf("unexpected request: %#v", body)
 	}
 }
 

@@ -204,6 +204,7 @@ func accumulate(
 			response.ProviderResponseID = event.ProviderResponseID
 			response.FinishReason = event.FinishReason
 			response.State = event.State
+			response.FailedAttempts = cloneModelRequestAttempts(event.FailedAttempts)
 			notify()
 		case TextDeltaEvent:
 			part, started, err := partForDelta(event.PartID, ResponsePartKindText)
@@ -413,6 +414,7 @@ func accumulate(
 			response.ProviderResponseID = event.ProviderResponseID
 			response.FinishReason = event.FinishReason
 			response.State = event.State
+			response.FailedAttempts = cloneModelRequestAttempts(event.FailedAttempts)
 			if err := emitEvent(event); err != nil {
 				return response, err
 			}

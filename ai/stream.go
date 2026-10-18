@@ -61,6 +61,8 @@ type ResponseMetadataEvent struct {
 	FinishReason FinishReason
 	// State replaces the response lifecycle state.
 	State ModelResponseState
+	// FailedAttempts records earlier attempts before this stream opened.
+	FailedAttempts []ModelRequestAttempt
 }
 
 func (ResponseMetadataEvent) modelStreamEventKind() string { return "response-metadata" }
@@ -219,6 +221,8 @@ type FinishEvent struct {
 	FinishReason FinishReason
 	// State is the final or suspended response lifecycle state.
 	State ModelResponseState
+	// FailedAttempts records earlier attempts before this stream opened.
+	FailedAttempts []ModelRequestAttempt
 }
 
 func (FinishEvent) modelStreamEventKind() string { return "finish" }

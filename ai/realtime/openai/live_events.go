@@ -223,12 +223,16 @@ func (connection *LiveConnection) audioUsage(seconds float64, ratio *float64) []
 		connection.seconds = seconds
 	}
 	usage := ai.Usage{AudioSeconds: increment}
-	connection.priceUsage(&usage, connection.model)
+	connection.priceUsage(&usage, connection.model, "")
 	return []realtime.CodecEvent{realtime.SessionUsage{Usage: usage, ContextWindowUsed: ratio}}
 }
 
-func (connection *LiveConnection) priceUsage(usage *ai.Usage, model string) {
-	if price, err := (ai.ModelResponse{Usage: *usage, ModelName: model, ProviderName: "openai", ProviderURL: connection.baseURL}).Price(); err == nil {
+func (connection *LiveConnection) priceUsage(usage *ai.Usage, model, serviceTier string) {
+	priced := ai.ModelResponse{
+		Usage: *usage, ModelName: model, ProviderName: "openai", ProviderURL: connection.baseURL,
+		ProviderDetails: map[string]any{"service_tier": serviceTier},
+	}
+	if price, err := priced.Price(); err == nil {
 		usage.CostUSD = &price.TotalPrice
 	}
 }
@@ -259,7 +263,7 @@ func (connection *LiveConnection) mapBackend(frame map[string]any, id string) ([
 			usage.ReasoningTokens = integer(output["reasoning_tokens"])
 			usage.Details = map[string]int{"reasoning_tokens": usage.ReasoningTokens}
 		}
-		connection.priceUsage(&usage, stringValue(response["model"]))
+		connection.priceUsage(&usage, stringValue(response["model"]), stringValue(response["service_tier"]))
 		events := []realtime.CodecEvent{realtime.SessionUsage{Usage: usage, ResponseScoped: true,
 			ProviderDetails: map[string]any{"delegated_model": response["model"], "delegated_response_id": response["id"]}}}
 		connection.settleDelegation(id, kind != "response.completed")

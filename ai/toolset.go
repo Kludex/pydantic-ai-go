@@ -215,7 +215,7 @@ func (t functionToolset[Deps]) Tools(
 		if tool.entry.prepare == nil {
 			continue
 		}
-		definition, err := tool.entry.prepare(ctx, rc, cloneToolDefinition(tool.entry.def))
+		definition, err := tool.entry.prepare(ctx, rc.forTool(tool.entry.def.Name), cloneToolDefinition(tool.entry.def))
 		if err != nil {
 			return nil, fmt.Errorf("prepare tool %q: %w", tool.entry.def.Name, err)
 		}
@@ -304,7 +304,7 @@ func (t filteredToolset[Deps]) Tools(
 	}
 	filtered := make([]Tool[Deps], 0, len(tools))
 	for _, tool := range tools {
-		keep, err := t.filter(ctx, rc, cloneToolDefinition(tool.entry.def))
+		keep, err := t.filter(ctx, rc.withToolNamePath(nil), cloneToolDefinition(tool.entry.def))
 		if err != nil {
 			return nil, err
 		}
@@ -331,12 +331,13 @@ func (prefixedToolset[Deps]) relaysToolsetInstructions() bool { return true }
 func (t prefixedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
-	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
+	prefixed := func(name string) string { return t.prefix + "_" + name }
+	tools, err := resolveToolsetTools(ctx, rc.withToolNameLayer(prefixed), t.toolset)
 	if err != nil {
 		return nil, err
 	}
 	for index := range tools {
-		tools[index] = routeToolName(tools[index], t.prefix+"_"+tools[index].entry.def.Name)
+		tools[index] = routeToolName(tools[index], prefixed(tools[index].entry.def.Name))
 	}
 	return tools, nil
 }
@@ -357,7 +358,13 @@ func (renamedToolset[Deps]) relaysToolsetInstructions() bool { return true }
 func (t renamedToolset[Deps]) Tools(
 	ctx context.Context, rc *RunContext[Deps],
 ) ([]Tool[Deps], error) {
-	tools, err := resolveToolsetTools(ctx, rc, t.toolset)
+	renamed := func(name string) string {
+		if renamed, ok := t.names[name]; ok {
+			return renamed
+		}
+		return name
+	}
+	tools, err := resolveToolsetTools(ctx, rc.withToolNameLayer(renamed), t.toolset)
 	if err != nil {
 		return nil, err
 	}
@@ -405,7 +412,7 @@ func (t preparedToolset[Deps]) Tools(
 		definitions[index] = cloneToolDefinition(tool.entry.def)
 		byName[tool.entry.def.Name] = tool
 	}
-	prepared, err := t.prepare(ctx, rc, definitions)
+	prepared, err := t.prepare(ctx, rc.withToolNamePath(nil), definitions)
 	if err != nil {
 		return nil, err
 	}

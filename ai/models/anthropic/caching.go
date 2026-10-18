@@ -30,12 +30,12 @@ func (m *Model) translateCache(settings ai.ModelSettings) (ai.ModelSettings, err
 		ttl = CacheTTL5Minutes
 	}
 	messages := cache.Messages == nil || *cache.Messages
-	if messages && m.ModelProfile().SupportsAutoCache {
-		settings.ExtraBody[cacheSetting] = ttl
-	} else {
-		settings.ExtraBody[cacheInstructionsSetting] = ttl
-		settings.ExtraBody[cacheToolDefinitionsSetting] = ttl
-		if messages {
+	settings.ExtraBody[cacheInstructionsSetting] = ttl
+	settings.ExtraBody[cacheToolDefinitionsSetting] = ttl
+	if messages {
+		if m.ModelProfile().SupportsAutoCache {
+			settings.ExtraBody[cacheSetting] = ttl
+		} else {
 			settings.ExtraBody[cacheMessagesSetting] = ttl
 		}
 	}

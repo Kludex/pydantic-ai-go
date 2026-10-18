@@ -186,6 +186,9 @@ func (s *StreamedRun[Output]) Suspended() *SuspendedRun {
 // RunStream executes the agent loop like Run, but yields events as the
 // model produces them. Models that do not implement StreamingModel are
 // driven with plain requests; each response is replayed as events.
+// RunStream can't retry a response it already streamed as final output, so a
+// model request hook rejecting one with a retry fails the run with an
+// [UnexpectedModelBehaviorError]. Run retries it.
 //
 //	stream := agent.RunStream(ctx, "hello", deps)
 //	for event, err := range stream.Events() {
@@ -328,8 +331,10 @@ func (r *run[Deps, Output]) suspendedSnapshot() *SuspendedRun {
 	}
 	messages := cloneModelMessages(r.messages)
 	messages = append(messages, *cloneModelResponse(response))
+	billed := billedBeyond(response, r.resumed)
 	usage := r.usage.Clone()
-	usage.Add(response.Usage)
+	usage.Add(modelRequestAttemptsUsage(billed.FailedAttempts))
+	usage.Add(billed.Usage)
 	return &SuspendedRun{response: *response, messages: messages, usage: usage}
 }
 
@@ -463,6 +468,7 @@ func replayAsEvents(response *ModelResponse) iter.Seq2[ModelStreamEvent, error] 
 			ProviderName: response.ProviderName, ProviderURL: response.ProviderURL,
 			ProviderDetails: cloneSchemaMap(response.ProviderDetails), Metadata: cloneSchemaMap(response.Metadata),
 			ProviderResponseID: response.ProviderResponseID, FinishReason: response.FinishReason, State: state,
+			FailedAttempts: cloneModelRequestAttempts(response.FailedAttempts),
 		}, nil)
 	}
 }

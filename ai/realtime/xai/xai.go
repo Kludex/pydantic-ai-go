@@ -144,7 +144,7 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 			return mapEvent(data, tracker, state.get())
 		}, Reconnect: params.Settings.Reconnect,
 		InputTranscriptionEnabled:  transcriptionEnabled(params.Settings),
-		RestoresInFlightState:      true,
+		RestoresInFlightState:      false,
 		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
 		SupportsImages:             false,
 		OutputSampleRate:           model.profile.AudioOutputSampleRate,
@@ -177,7 +177,7 @@ func (model *Model) dial(
 	common realtime.Settings,
 	settings Settings,
 ) (*websocket.Conn, string, error) {
-	endpoint, err := websocketURL(model.baseURL, model.name, state.get())
+	endpoint, err := websocketURL(model.baseURL, model.name)
 	if err != nil {
 		return nil, "", err
 	}
@@ -196,9 +196,6 @@ func (model *Model) dial(
 			return nil, "", fmt.Errorf("xai realtime: websocket handshake returned %s: %w", response.Status, err)
 		}
 		return nil, "", fmt.Errorf("xai realtime: websocket handshake: %w", err)
-	}
-	if state.get() != "" {
-		history = nil
 	}
 	serverModel, conversationID, err := configureSocket(
 		handshakeCtx, socket, history, request, common, settings, model.profile,
@@ -314,9 +311,6 @@ func sessionConfig(
 		}
 		config["reasoning"] = map[string]any{"effort": effort}
 	}
-	if common.Reconnect != nil {
-		config["resumption"] = map[string]any{"enabled": true}
-	}
 	return config
 }
 
@@ -403,7 +397,7 @@ func (model *Model) resolveSettings(common realtime.Settings) Settings {
 	return settings
 }
 
-func websocketURL(baseURL, model, conversationID string) (string, error) {
+func websocketURL(baseURL, model string) (string, error) {
 	parsed, err := url.Parse(baseURL)
 	if err != nil || parsed.Host == "" {
 		return "", fmt.Errorf("xai realtime: invalid base URL %q", baseURL)
@@ -420,9 +414,6 @@ func websocketURL(baseURL, model, conversationID string) (string, error) {
 	parsed.Path = strings.TrimRight(parsed.Path, "/") + "/realtime"
 	query := parsed.Query()
 	query.Set("model", model)
-	if conversationID != "" {
-		query.Set("conversation_id", conversationID)
-	}
 	parsed.RawQuery = query.Encode()
 	return parsed.String(), nil
 }

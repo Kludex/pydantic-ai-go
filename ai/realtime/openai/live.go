@@ -24,6 +24,7 @@ type LiveSettings struct {
 	Delegation   map[string]any
 	TurnSilence  time.Duration
 	Store        bool
+	IdleAudio    bool
 	DataChannel  map[string]any
 }
 

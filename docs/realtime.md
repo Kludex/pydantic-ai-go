@@ -92,6 +92,8 @@ Set `azure_voice_live` in `realtime.Settings.Provider` or use `azure.WithSetting
 
 Azure OpenAI supports ephemeral client secrets and WebRTC through `CreateClientSecret`, `AnswerWebRTCOffer`, and `ConnectWebRTC`. Voice Live uses a different signaling protocol and rejects those methods.
 
+`azure_voice_live_turn_detection` accepts server VAD and Azure semantic VAD maps. End-of-utterance detection is accepted only by cascade models and fails before the WebSocket connection otherwise. `azure_voice_live_noise_reduction` configures Azure deep suppression or near/far-field processing. `azure_voice_live_echo_cancellation` enables server echo cancellation. On cascade models, the portable `openai_input_noise_reduction` setting maps to Azure deep suppression.
+
 ## Stream audio
 
 ```go
@@ -146,6 +148,8 @@ Call `StreamAudio` or `StreamTranscripts` before starting the goroutine that con
 
 Call `WaitForReply` after a responding send when you only need the model turn boundary. It does not consume `Events`, so another goroutine can continue handling events. `WaitForReply` returns immediately when no response is outstanding or when the session closes. Use `WaitForPlayback` separately when you also need buffered audio to finish playing.
 
+A part's `Index` identifies it for the whole session. A provider can finish an output item after a later item started, so text of the item's transcript can arrive after its part ended. The session then streams that part again under the same `Index`, and the new `ai.PartStartEvent` replaces the part as it ended. `StreamTranscripts` yields the grown transcript under the same `Index` too. Keep parts by `Index` rather than adding one for every `ai.PartEndEvent`, and history still records one part per item.
+
 Set `WithAudioRetention` when you need raw audio in portable history. Retained audio is stored as WAV. Live audio events remain raw PCM.
 
 ## Handle barge-in
@@ -153,6 +157,10 @@ Set `WithAudioRetention` when you need raw audio in portable history. Retained a
 Pass `realtime.WithBargeIn(true)` to `Open` when one device-paced `StreamAudio` consumer plays the output. The session tracks completed chunks, flushes unheard audio when user speech starts, and truncates provider history when supported. Automatic barge-in does nothing when the model profile does not support interruption.
 
 For an application-owned trigger, read `PlayedAudioBytes` and pass the result to `InterruptAtAudio`. Keep your own playback counter when your audio layer buffers ahead of the device. You can pass an exact millisecond position to `Interrupt` instead.
+
+A reply cut off this way is recorded as interrupted, with `ai.SpeechPart.InterruptedAtMS` on the speech part that was cut, even when it had already finished generating. A message you already read from `Messages` is never edited: a later snapshot holds an interrupted copy at the same position. The transcript stays what the model generated, because generation outruns playback.
+
+When you hand that history to a text model or seed it into a new realtime session with `ConnectParams.Messages`, the transcript gets a marker: `[Interrupted after 640 ms]`, or `[Interrupted]` on the last speech part of an interrupted response with no recorded offset. Without it, the model reads the transcript as heard in full and may repeat itself. The marker is never stored in history.
 
 ## Execute tools
 
@@ -293,7 +301,9 @@ func main() {
 }
 ```
 
-xAI reads `XAI_API_KEY`. Grok Voice always produces speech. It supports interruption but not output truncation. Reconnects use xAI conversation IDs so the provider restores the session without replaying local history.
+xAI reads `XAI_API_KEY`. Grok Voice always produces speech. It supports interruption but not output truncation. A reconnect starts a new provider conversation and replays finalized local history. xAI's native conversation resumption is not used because it drops typed user turns and tool calls.
+
+xAI ends a conversation that runs past its maximum duration with a `max_duration` error. With `Settings.Reconnect`, the session reports it as a recoverable `SessionErrorEvent` and reconnects right away, so the call carries on past the limit in a new conversation that gets the replayed history. Without a policy, or once its reconnects are used up, the error ends the session.
 
 ## Resolve application providers
 
@@ -301,7 +311,7 @@ Pass `infer.WithProvider` to `infer.Model` when credentials or endpoints come fr
 
 ## Reconnect
 
-Set `Settings.Reconnect` to recover from dropped WebSocket sessions. OpenAI starts a configured replacement connection and replays finalized portable history. xAI resumes its provider conversation ID. Gemini uses the latest official SDK session-resumption handle.
+Set `Settings.Reconnect` to recover from dropped WebSocket sessions. OpenAI, Azure OpenAI, and xAI start configured replacement connections and replay finalized portable history. Gemini uses the latest official SDK session-resumption handle.
 
 A reconnect emits `SessionReconnectEvent`. `StateRestored` reports whether the provider restored in-flight state. Bounded attempts and total reconnect limits prevent a failing provider from reconnecting forever.
 

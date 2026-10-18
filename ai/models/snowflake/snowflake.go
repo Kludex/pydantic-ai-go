@@ -126,7 +126,11 @@ func (model *Model) ModelProfile() ai.ModelProfile {
 	if model.family == familyOther {
 		mode = ai.OutputModePrompted
 	}
-	return ai.ModelProfile{DefaultOutputMode: mode}
+	profile := ai.ModelProfile{DefaultOutputMode: mode}
+	if name := strings.ToLower(model.Name()); strings.HasPrefix(name, "mistral") || strings.HasPrefix(name, "mixtral") {
+		profile.ToolCallIDLength = 9
+	}
+	return profile
 }
 
 // Request implements ai.Model.

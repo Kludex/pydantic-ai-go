@@ -37,7 +37,7 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 			return
 		}
 		state := transformState{
-			sdkVersion: config.SDKVersion, partIDs: map[string]string{}, toolIDs: map[string]string{},
+			sdkVersion: config.SDKVersion, allowSystemPrompts: config.AllowSystemPrompts, partIDs: map[string]string{}, toolIDs: map[string]string{},
 			streamedCalls: map[string]ai.ToolCallPart{}, streamedNative: map[string]bool{},
 			invalidatedCalls: map[string]ai.ToolCallPart{},
 		}
@@ -79,17 +79,18 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 }
 
 type transformState struct {
-	sdkVersion        int
-	step              bool
-	finishReason      string
-	messageMetadata   map[string]any
-	externalCallIDs   []string
-	partIDs           map[string]string
-	toolIDs           map[string]string
-	streamedCalls     map[string]ai.ToolCallPart
-	streamedCallOrder []string
-	streamedNative    map[string]bool
-	invalidatedCalls  map[string]ai.ToolCallPart
+	sdkVersion         int
+	allowSystemPrompts bool
+	step               bool
+	finishReason       string
+	messageMetadata    map[string]any
+	externalCallIDs    []string
+	partIDs            map[string]string
+	toolIDs            map[string]string
+	streamedCalls      map[string]ai.ToolCallPart
+	streamedCallOrder  []string
+	streamedNative     map[string]bool
+	invalidatedCalls   map[string]ai.ToolCallPart
 }
 
 func (state *transformState) transform(yield func(Chunk, error) bool, event ai.StreamEvent) bool {
@@ -223,6 +224,10 @@ func (state *transformState) transform(yield func(Chunk, error) bool, event ai.S
 		return state.resultChunks(yield, value.Part)
 	case ai.ToolAvailabilityDeltaEvent:
 		return yield(Chunk{Type: ChunkDataToolAvailability, Data: toolAvailabilityData(value.Part)}, nil)
+	case ai.EnqueuedMessagesEvent:
+		if chunk, ok := enqueuedChunk(value, state.allowSystemPrompts); ok {
+			return yield(chunk, nil)
+		}
 	case ai.DeferredToolRequestsEvent:
 		for _, call := range value.Requests.Calls {
 			if !slices.Contains(state.externalCallIDs, call.ToolCallID) {
@@ -256,6 +261,9 @@ func (state *transformState) resultChunks(yield func(Chunk, error) bool, part ai
 	result, ok := part.(ai.ToolReturnPart)
 	if !ok {
 		return true
+	}
+	if payload, ok := mcpAppPayload(result.Metadata); ok {
+		return yield(Chunk{Type: "data-mcp-apps", ID: result.ToolCallID, Data: payload}, nil)
 	}
 	chunks, err := toolResultChunks(result.Metadata)
 	if err != nil {

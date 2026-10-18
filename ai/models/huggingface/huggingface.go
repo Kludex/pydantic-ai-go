@@ -90,6 +90,9 @@ func NewModel(name string, options ...Option) *Model {
 			},
 		}),
 	}
+	if strings.HasPrefix(strings.ToLower(name), "mistralai/") {
+		openAIOptions = append(openAIOptions, openai.WithToolCallIDLength(9))
+	}
 	openAIOptions = append(openAIOptions, configuration.options...)
 	model := openai.NewModel(name, openAIOptions...)
 	return &Model{ModelWrapper: ai.WrapModel(model), model: model}

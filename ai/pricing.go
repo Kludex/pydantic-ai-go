@@ -58,13 +58,22 @@ func WithPricingDiagnosticSink(ctx context.Context, sink PricingDiagnosticSink) 
 }
 
 // Price calculates this response's price using the current genai-prices snapshot.
+// String provider details, such as the reported service_tier, select request-specific rates.
+// It matches the provider URL first and falls back to the provider name. OpenAI Decisions
+// shares OpenAI's URL, so an "openai-decisions" response matches by provider name only.
 // It returns lookup and usage errors to callers that need explicit pricing diagnostics.
 func (response ModelResponse) Price() (PriceCalculation, error) {
 	calculator := currentPriceCalculator.Load()
 	request := genaiprices.PriceRequest{
 		Usage: usageForPricing(response.Usage), Model: response.ModelName, Timestamp: response.Timestamp,
+		PriceContext: map[string]string{},
 	}
-	if response.ProviderURL != "" {
+	for key, value := range response.ProviderDetails {
+		if text, ok := value.(string); ok {
+			request.PriceContext[key] = text
+		}
+	}
+	if response.ProviderURL != "" && response.ProviderName != "openai-decisions" {
 		request.ProviderAPIURL = response.ProviderURL
 		calculation, err := calculatePrice(calculator, request)
 		if err == nil {

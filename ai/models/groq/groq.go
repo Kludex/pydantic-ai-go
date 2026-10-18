@@ -171,6 +171,9 @@ func NewModel(name string, options ...Option) *Model {
 		openai.WithProvider(NewProviderConfig()),
 		openai.WithChatCompatibility(openai.ChatCompatibility{Reasoning: true, ExecutedTools: true}),
 	}
+	if strings.HasPrefix(strings.ToLower(name), "mistral") {
+		openAIOptions = append(openAIOptions, openai.WithToolCallIDLength(9))
+	}
 	openAIOptions = append(openAIOptions, configuration.options...)
 	return &Model{
 		ModelWrapper: ai.WrapModel(openai.NewModel(name, openAIOptions...)),
@@ -183,14 +186,19 @@ func (model *Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	if !isCompoundModel(model.name) {
 		return false
 	}
+	var webSearch ai.WebSearchTool
 	switch value := tool.(type) {
 	case ai.WebSearchTool:
-		return true
+		webSearch = value
 	case *ai.WebSearchTool:
-		return value != nil
+		if value == nil {
+			return false
+		}
+		webSearch = *value
 	default:
 		return false
 	}
+	return webSearch.MaxUses == 0 && (webSearch.ExternalWebAccess == nil || *webSearch.ExternalWebAccess)
 }
 
 // Request maps Groq compound search settings before generation.

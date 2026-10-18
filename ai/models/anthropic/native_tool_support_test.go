@@ -34,4 +34,10 @@ func TestNativeToolSupport(t *testing.T) {
 	if !advisor.SupportsNativeTool(ai.AdvisorTool{Model: "claude-opus-4-8"}) {
 		t.Fatal("advisor model did not report advisor support")
 	}
+	cached := false
+	if !model.SupportsNativeTool(ai.WebSearchTool{AllowedDomains: []string{"go.dev"}, MaxUses: 1}) ||
+		!model.SupportsNativeTool(ai.WebFetchTool{BlockedDomains: []string{"spam.example"}, MaxUses: 1}) ||
+		model.SupportsNativeTool(ai.WebSearchTool{ExternalWebAccess: &cached}) {
+		t.Fatal("unexpected Anthropic restricted web tool support")
+	}
 }

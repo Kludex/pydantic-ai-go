@@ -54,11 +54,18 @@ func TestDynamicSystemPromptReevaluatesResumedHistory(t *testing.T) {
 		t.Fatalf("unexpected initial system prompts: %+v", firstRequest.Parts)
 	}
 
+	history := first.Messages()
 	second, err := agent.Run(
-		t.Context(), "second", promptDeps{Value: "two"}, ai.WithMessageHistory(first.Messages()),
+		t.Context(), "second", promptDeps{Value: "two"}, ai.WithMessageHistory(history),
 	)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if kept := history[0].(ai.ModelRequest).Parts[2].(ai.SystemPromptPart); kept.Content != "Policy one" {
+		t.Fatalf("reevaluation mutated caller history: %+v", kept)
+	}
+	if fresh := second.Messages()[0].(ai.ModelRequest).Parts[2].(ai.SystemPromptPart); fresh.Content != "Policy two" {
+		t.Fatalf("second run kept the stale prompt: %+v", fresh)
 	}
 	resumed := requests[1][0].(ai.ModelRequest)
 	updated := resumed.Parts[2].(ai.SystemPromptPart)

@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
 )
 
 // ChatPromptCacheMarkerStyle selects the provider wire format for explicit markers.
@@ -33,6 +35,10 @@ type ChatPromptCache struct {
 	ExplicitMarkerStyle ChatPromptCacheMarkerStyle
 	// MaxPoints limits explicit cache boundaries. Zero uses the provider default.
 	MaxPoints int
+	// RequestScopedTail holds the texts of the trailing user messages that render
+	// request-scoped prompts. The next request leaves them out, so the messages
+	// boundary goes on the message before them.
+	RequestScopedTail []string
 }
 
 type chatPromptCacheContextKey struct{}
@@ -83,6 +89,36 @@ func addChatMessageCache(message *chatMessage, ttl string, includeTTL bool) {
 			content[len(content)-1].CacheControl = control
 		}
 		message.Content = content
+	}
+}
+
+func raiseChatCacheTTLs(messages []chatMessage, tools []any, cache ChatPromptCache) {
+	if !cache.IncludeTTL || cache.ExplicitMarkerStyle != ChatPromptCacheMarkerControl {
+		return
+	}
+	controls := make([]*chatCacheControl, 0, 4)
+	for _, tool := range tools {
+		if functionTool, ok := tool.(chatTool); ok && functionTool.CacheControl != nil {
+			controls = append(controls, functionTool.CacheControl)
+		}
+	}
+	for _, message := range messages {
+		content, ok := message.Content.([]contentPart)
+		if !ok {
+			continue
+		}
+		for index := range content {
+			if content[index].CacheControl != nil {
+				controls = append(controls, content[index].CacheControl)
+			}
+		}
+	}
+	ttls := make([]string, len(controls))
+	for index, control := range controls {
+		ttls[index] = control.TTL
+	}
+	for index, ttl := range promptcache.RaiseEarlierTTLs(ttls) {
+		controls[index].TTL = ttl
 	}
 }
 

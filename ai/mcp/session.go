@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"slices"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -240,6 +242,32 @@ func (session *Session) CallTool(ctx context.Context, name string, arguments any
 		return nil, fmt.Errorf("ai/mcp: call tool %q: %w", name, err)
 	}
 	return cloneProtocol(result), nil
+}
+
+// CallToolForApp relays a tools/call request from an MCP Apps page. A page runs
+// in the browser and cannot reach the server, so your backend calls the tool
+// for it and sends the result back as is, including IsError results.
+//
+// Only tools visible to apps can be called: those whose _meta.ui.visibility
+// includes "app" or is omitted. Other names return a *jsonrpc.Error with code
+// jsonrpc.CodeInvalidParams, which you send back to the page.
+func (session *Session) CallToolForApp(
+	ctx context.Context, name string, arguments map[string]any,
+) (*CallToolResult, error) {
+	tools, err := session.ListTools(ctx)
+	if err != nil {
+		return nil, err
+	}
+	index := slices.IndexFunc(tools, func(tool *Tool) bool { return tool.Name == name })
+	if index < 0 || !visibleTo(tools[index], "app") {
+		return nil, fmt.Errorf("ai/mcp: call tool %q for app: %w", name, &jsonrpc.Error{
+			Code: jsonrpc.CodeInvalidParams, Message: fmt.Sprintf("Tool %q is not available to apps", name),
+		})
+	}
+	if arguments == nil {
+		arguments = map[string]any{}
+	}
+	return session.CallTool(ctx, name, arguments)
 }
 
 func (session *Session) initialized() (*mcpsdk.InitializeResult, error) {

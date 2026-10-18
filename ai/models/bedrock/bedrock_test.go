@@ -344,6 +344,10 @@ func TestModelErrorsAndResponseShapes(t *testing.T) {
 			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusTooManyRequests}},
 			Err:      errors.New("throttled"),
 		}, match: "throttled"},
+		{name: "data retention", err: &smithyhttp.ResponseError{
+			Response: &smithyhttp.Response{Response: &http.Response{StatusCode: http.StatusBadRequest}},
+			Err:      errors.New("data retention mode default is not available"),
+		}, match: "PutAccountDataRetention"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -359,10 +363,15 @@ func TestModelErrorsAndResponseShapes(t *testing.T) {
 			if err == nil || !strings.Contains(err.Error(), test.match) {
 				t.Fatalf("unexpected error: %v", err)
 			}
-			if test.name == "api" {
+			if test.name == "api" || test.name == "data retention" {
 				var apiError *bedrock.APIError
-				if !errors.As(err, &apiError) || apiError.StatusCode != http.StatusTooManyRequests ||
-					!apiError.IsModelAPIError() || !errors.Is(err, test.err) {
+				wantStatus := http.StatusTooManyRequests
+				if test.name == "data retention" {
+					wantStatus = http.StatusBadRequest
+				}
+				if !errors.As(err, &apiError) || apiError.StatusCode != wantStatus ||
+					!apiError.IsModelAPIError() || !errors.Is(err, test.err) ||
+					(test.name == "data retention") != (apiError.Hint != "") {
 					t.Fatalf("unexpected API error: %#v", err)
 				}
 			}
@@ -545,6 +554,77 @@ func TestNativeCodeExecution(t *testing.T) {
 	}}, ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}}})
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestNativeCodeExecutionSandboxTimeout(t *testing.T) {
+	index := int32(0)
+	var replayed []types.ToolResultContentBlock
+	client := &streamingClient{fakeClient: &fakeClient{converse: func(
+		input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		if len(input.Messages) > 0 {
+			replayed = input.Messages[0].Content[1].(*types.ContentBlockMemberToolResult).Value.Content
+		}
+		return &bedrockruntime.ConverseOutput{
+			Output: &types.ConverseOutputMemberMessage{Value: types.Message{Content: []types.ContentBlock{
+				&types.ContentBlockMemberToolResult{Value: types.ToolResultBlock{
+					ToolUseId: aws.String("code"), Type: aws.String("nova_code_interpreter_result"),
+					Status: types.ToolResultStatusError, Content: []types.ToolResultContentBlock{},
+				}},
+			}}}, StopReason: types.StopReasonEndTurn,
+		}, nil
+	}}, stream: func(*bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (bedrock.EventStream, error) {
+		return newFakeStream(
+			&types.ConverseStreamOutputMemberContentBlockStart{Value: types.ContentBlockStartEvent{
+				ContentBlockIndex: &index, Start: &types.ContentBlockStartMemberToolResult{Value: types.ToolResultBlockStart{
+					ToolUseId: aws.String("code"), Type: aws.String("nova_code_interpreter_result"),
+					Status: types.ToolResultStatusError,
+				}},
+			}},
+			&types.ConverseStreamOutputMemberContentBlockStop{Value: types.ContentBlockStopEvent{ContentBlockIndex: &index}},
+			&types.ConverseStreamOutputMemberMessageStop{Value: types.MessageStopEvent{StopReason: types.StopReasonEndTurn}},
+		), nil
+	}}
+	model := bedrock.NewModel("model", bedrock.WithClient(client))
+	params := ai.ModelRequestParams{NativeTools: []ai.NativeTool{ai.CodeExecutionTool{}}}
+	response, err := model.Request(context.Background(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := model.StreamRequest(context.Background(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var streamed ai.NativeToolReturnPart
+	for event, eventErr := range sequence {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		if value, ok := event.(ai.NativeToolReturnEvent); ok {
+			streamed = value.Part
+		}
+	}
+	for _, result := range []ai.NativeToolReturnPart{response.Parts[0].(ai.NativeToolReturnPart), streamed} {
+		if result.ToolCallID != "code" || result.Content != nil || result.Outcome != ai.ToolReturnOutcomeFailed {
+			t.Fatalf("unexpected sandbox-timeout result: %#v", result)
+		}
+		_, err = model.Request(context.Background(), []ai.ModelMessage{ai.ModelResponse{
+			ProviderName: "bedrock", Parts: []ai.ResponsePart{
+				ai.NativeToolCallPart{
+					ToolName: "code_execution", ToolCallID: "code", ToolKind: ai.ToolPartKindCodeExecution,
+					Args: json.RawMessage(`{"snippet":"while True: pass"}`), ProviderName: "bedrock",
+				},
+				result,
+			},
+		}}, params)
+		if err != nil {
+			t.Fatal(err)
+		}
+		encoded, err := replayed[0].(*types.ToolResultContentBlockMemberJson).Value.MarshalSmithyDocument()
+		if len(replayed) != 1 || err != nil || string(encoded) != "null" {
+			t.Fatalf("sandbox-timeout result did not replay as JSON null: %s %v", encoded, err)
+		}
 	}
 }
 
@@ -950,5 +1030,85 @@ func TestDownloadValidation(t *testing.T) {
 	}}}, ai.ModelRequestParams{})
 	if err == nil || !strings.Contains(err.Error(), "URL scheme") {
 		t.Fatalf("unexpected download error: %v", err)
+	}
+}
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	for name, want := range map[string]int{
+		"mistral.mistral-large-2407-v1:0": 9, "us.mistral.pixtral-large-2502-v1:0": 9, "us.anthropic.claude-sonnet-5": 0,
+	} {
+		if got := bedrock.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
+			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
+		}
+	}
+}
+
+func TestNonNativeThinkingIsCarriedInUserTurnForClaude(t *testing.T) {
+	var got []types.Message
+	client := &fakeClient{converse: func(
+		input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		got = input.Messages
+		return completeOutput(types.StopReasonEndTurn), nil
+	}}
+	foreign := ai.ModelResponse{ModelName: "gpt-5", ProviderName: "openai", Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "plan", ProviderName: "openai"},
+		ai.ThinkingPart{Content: "", Signature: "redacted", ProviderName: "openai"},
+		ai.TextPart{Content: "answer"},
+	}}
+	messages := []ai.ModelMessage{
+		foreign,
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: []ai.UserContent{
+			ai.TextContent{Text: "hi"}, ai.CachePoint{},
+		}}}},
+		foreign,
+	}
+	model := bedrock.NewModel("us.anthropic.claude-sonnet-4-5-v1:0", bedrock.WithClient(client))
+	if !model.ModelProfile().MimicsAssistantMessageFormatting {
+		t.Fatal("Claude profile should mimic assistant formatting")
+	}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	carried := "<assistant_thinking model=\"gpt-5\" provider=\"openai\">\nplan\n</assistant_thinking>"
+	text := func(block types.ContentBlock) string {
+		value, _ := block.(*types.ContentBlockMemberText)
+		if value == nil {
+			return ""
+		}
+		return value.Value
+	}
+	if len(got) != 4 || got[0].Role != types.ConversationRoleUser || len(got[0].Content) != 1 ||
+		text(got[0].Content[0]) != carried || got[1].Role != types.ConversationRoleAssistant {
+		t.Fatalf("expected a new user turn ahead of the first response, got %#v", got)
+	}
+	user := got[2].Content
+	if _, point := user[2].(*types.ContentBlockMemberCachePoint); len(user) != 3 || text(user[0]) != "hi" ||
+		text(user[1]) != carried || !point {
+		t.Fatalf("expected carried text ahead of the cache point, got %#v", user)
+	}
+
+	own := ai.ModelResponse{ModelName: "claude", ProviderName: "bedrock", Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "unsigned", ProviderName: "bedrock"},
+		ai.ThinkingPart{Content: "signed", Signature: "sig", ProviderName: "bedrock"},
+	}}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{own}, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || text(got[0].Content[0]) !=
+		"<assistant_thinking model=\"claude\" provider=\"bedrock\">\nunsigned\n</assistant_thinking>" ||
+		len(got[1].Content) != 1 {
+		t.Fatalf("expected unsigned reasoning carried and signed reasoning kept native, got %#v", got)
+	}
+	if _, native := got[1].Content[0].(*types.ContentBlockMemberReasoningContent); !native {
+		t.Fatalf("expected signed reasoning replayed natively, got %#v", got[1].Content)
+	}
+
+	model = bedrock.NewModel("mistral.mistral-large-2407-v1:0", bedrock.WithClient(client))
+	if _, err := model.Request(t.Context(), messages[:1], ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].Role != types.ConversationRoleAssistant || len(got[0].Content) != 1 {
+		t.Fatalf("expected foreign thinking dropped for other models, got %#v", got)
 	}
 }

@@ -114,9 +114,12 @@ func buildConverseInput(
 				input.Messages = append(input.Messages, types.Message{Role: types.ConversationRoleUser, Content: blocks})
 			}
 		case ai.ModelResponse:
-			blocks, err := responseBlocks(value)
+			blocks, carried, err := responseBlocks(value, mimicsAssistantMessageFormatting(modelName))
 			if err != nil {
 				return nil, err
+			}
+			if len(carried) > 0 {
+				input.Messages = appendUserContent(input.Messages, carried)
 			}
 			if len(blocks) > 0 {
 				input.Messages = append(input.Messages, types.Message{Role: types.ConversationRoleAssistant, Content: blocks})
@@ -159,6 +162,7 @@ func buildConverseInput(
 		reservedCachePoints++
 	}
 	limitCachePoints(input.Messages, 4-reservedCachePoints)
+	raiseBedrockCacheTTLs(input)
 	if bedrockAnthropicDisallowsSampling(modelName) || bedrockOpenAIDisallowsSampling(modelName) {
 		params.Settings = params.Settings.Clone()
 		params.Settings.Temperature = nil
@@ -177,6 +181,41 @@ func buildConverseInput(
 	}
 	input.ServiceTier = serviceTier(params.Settings.ServiceTier)
 	return input, nil
+}
+
+func raiseBedrockCacheTTLs(input *bedrockruntime.ConverseInput) {
+	points := make([]*types.CachePointBlock, 0, 4)
+	if input.ToolConfig != nil {
+		for _, tool := range input.ToolConfig.Tools {
+			if point, ok := tool.(*types.ToolMemberCachePoint); ok {
+				points = append(points, &point.Value)
+			}
+		}
+	}
+	for _, block := range input.System {
+		if point, ok := block.(*types.SystemContentBlockMemberCachePoint); ok {
+			points = append(points, &point.Value)
+		}
+	}
+	for _, message := range input.Messages {
+		for _, block := range message.Content {
+			if point, ok := block.(*types.ContentBlockMemberCachePoint); ok {
+				points = append(points, &point.Value)
+			}
+		}
+	}
+	ttls := make([]string, len(points))
+	for index, point := range points {
+		ttls[index] = string(point.Ttl)
+		if ttls[index] == "" {
+			ttls[index] = "5m"
+		}
+	}
+	for index, ttl := range promptcache.RaiseEarlierTTLs(ttls) {
+		if ttl != ttls[index] {
+			points[index].Ttl = types.CacheTTL(ttl)
+		}
+	}
 }
 
 func applyThinkingSettings(modelName string, params *ai.ModelRequestParams) error {
@@ -238,7 +277,7 @@ func applyThinkingSettings(modelName string, params *ai.ModelRequestParams) erro
 }
 
 func bedrockSupportsAdaptiveThinking(name string) bool {
-	return strings.Contains(name, "claude-sonnet-4-6") || strings.Contains(name, "claude-sonnet-5") ||
+	return strings.Contains(name, "claude-haiku-5-5") || strings.Contains(name, "claude-sonnet-4-6") || strings.Contains(name, "claude-sonnet-5") ||
 		strings.Contains(name, "claude-opus-4-6") || strings.Contains(name, "claude-opus-4-7") ||
 		strings.Contains(name, "claude-opus-4-8") || strings.Contains(name, "claude-opus-5") ||
 		strings.Contains(name, "claude-fable-5") || strings.Contains(name, "claude-mythos-5")
@@ -251,13 +290,14 @@ func bedrockSupportsEffort(name string) bool {
 func bedrockSupportsXHigh(name string) bool {
 	return strings.Contains(name, "claude-opus-4-7") || strings.Contains(name, "claude-opus-4-8") ||
 		strings.Contains(name, "claude-opus-5") || strings.Contains(name, "claude-sonnet-5") ||
+		strings.Contains(name, "claude-haiku-5-5") ||
 		strings.Contains(name, "claude-fable-5") || strings.Contains(name, "claude-mythos-5")
 }
 
 func bedrockOpenAIDisallowsSampling(modelName string) bool {
 	name := strings.ToLower(modelName)
 	for _, model := range []string{
-		"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra",
+		"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "gpt-6.1-sol",
 	} {
 		if strings.HasSuffix(name, "openai."+model) || name == model {
 			return true
@@ -270,7 +310,7 @@ func bedrockAnthropicDisallowsSampling(modelName string) bool {
 	name := strings.ToLower(modelName)
 	for _, prefix := range []string{
 		"claude-fable-5", "claude-mythos-5", "claude-opus-4-7", "claude-opus-4-8",
-		"claude-opus-5", "claude-sonnet-5",
+		"claude-opus-5", "claude-sonnet-5", "claude-haiku-5-5",
 	} {
 		if strings.Contains(name, prefix) {
 			return true
@@ -350,4 +390,19 @@ func requestBlocks(
 		}
 	}
 	return blocks, system, nil
+}
+
+// Converse requires alternating roles, so carried content joins a preceding user turn,
+// ahead of a cache point that ends it so the point keeps its authored position.
+func appendUserContent(messages []types.Message, content []types.ContentBlock) []types.Message {
+	if len(messages) == 0 || messages[len(messages)-1].Role != types.ConversationRoleUser {
+		return append(messages, types.Message{Role: types.ConversationRoleUser, Content: content})
+	}
+	last := &messages[len(messages)-1]
+	end := len(last.Content)
+	if _, point := last.Content[end-1].(*types.ContentBlockMemberCachePoint); point {
+		end--
+	}
+	last.Content = slices.Concat(last.Content[:end:end], content, last.Content[end:])
+	return messages
 }

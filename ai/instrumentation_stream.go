@@ -36,7 +36,8 @@ func (accumulator *telemetryStreamAccumulator) observe(event ModelStreamEvent) {
 	switch event := event.(type) {
 	case ResponseMetadataEvent:
 		accumulator.applyMetadata(event.Usage, event.ModelName, event.Timestamp, event.ProviderName,
-			event.ProviderURL, event.ProviderDetails, event.Metadata, event.ProviderResponseID, event.FinishReason, event.State)
+			event.ProviderURL, event.ProviderDetails, event.Metadata, event.ProviderResponseID, event.FinishReason, event.State,
+			event.FailedAttempts)
 	case TextDeltaEvent:
 		part := accumulator.part(event.PartID, ResponsePartKindText)
 		part.text += event.Delta
@@ -85,13 +86,15 @@ func (accumulator *telemetryStreamAccumulator) observe(event ModelStreamEvent) {
 			accumulator.response.Parts = cloneModelResponse(&ModelResponse{Parts: event.Parts}).Parts
 		}
 		accumulator.applyMetadata(event.Usage, event.ModelName, event.Timestamp, event.ProviderName,
-			event.ProviderURL, event.ProviderDetails, event.Metadata, event.ProviderResponseID, event.FinishReason, event.State)
+			event.ProviderURL, event.ProviderDetails, event.Metadata, event.ProviderResponseID, event.FinishReason, event.State,
+			event.FailedAttempts)
 	}
 }
 
 func (accumulator *telemetryStreamAccumulator) applyMetadata(
 	usage Usage, modelName string, timestamp time.Time, providerName, providerURL string,
 	providerDetails, metadata map[string]any, responseID string, finishReason FinishReason, state ModelResponseState,
+	failedAttempts []ModelRequestAttempt,
 ) {
 	accumulator.response.Usage = usage.Clone()
 	accumulator.response.ModelName = modelName
@@ -103,6 +106,7 @@ func (accumulator *telemetryStreamAccumulator) applyMetadata(
 	accumulator.response.ProviderResponseID = responseID
 	accumulator.response.FinishReason = finishReason
 	accumulator.response.State = state
+	accumulator.response.FailedAttempts = cloneModelRequestAttempts(failedAttempts)
 }
 
 func (accumulator *telemetryStreamAccumulator) snapshot() *ModelResponse {

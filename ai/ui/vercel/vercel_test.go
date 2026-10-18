@@ -6,8 +6,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -300,6 +302,44 @@ func TestPrepareInputDataParts(t *testing.T) {
 	if err != nil || prompt.Content != "old" || len(history) != 1 ||
 		history[0].(ai.ModelRequest).Parts[0].(ai.ToolAvailabilityDeltaPart).ToolsAdded[0] != "next" {
 		t.Fatalf("unexpected data-only message: prompt=%#v history=%#v err=%v", prompt, history, err)
+	}
+}
+
+func TestPrepareInputAssistantToolAvailability(t *testing.T) {
+	_, history, _, err := vercel.PrepareInput(vercel.RequestData{
+		Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+			{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "Find tools."}}},
+			{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
+				{Type: "step-start"},
+				{Type: "data-tool-availability-delta", Data: "not an object"},
+				{Type: "tool-discover", ToolCallID: "discover", State: "output-available", Input: json.RawMessage(`{}`),
+					Output: json.RawMessage(`"found"`)},
+				{Type: string(vercel.ChunkDataToolAvailability), Data: map[string]any{
+					"added": []any{"search"}, "tool_call_id": "discover",
+				}},
+			}},
+			{ID: "next", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "Continue."}}},
+		},
+	}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := history[2].(ai.ModelRequest)
+	if len(history) != 3 || len(request.Parts) != 2 || request.Parts[0].(ai.ToolReturnPart).ToolCallID != "discover" ||
+		request.Parts[1].(ai.ToolAvailabilityDeltaPart).ToolsAdded[0] != "search" {
+		t.Fatalf("tool reveal did not follow its tool return: %#v", history)
+	}
+
+	_, history, _, err = vercel.PrepareInput(vercel.RequestData{
+		Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+			{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
+				{Type: string(vercel.ChunkDataToolAvailability), Data: map[string]any{"added": []any{"search"}}},
+			}},
+			{ID: "next", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "Continue."}}},
+		},
+	}, ai.MessageSanitizationOptions{})
+	if err != nil || len(history) != 1 || history[0].(ai.ModelRequest).Parts[0].(ai.ToolAvailabilityDeltaPart).ToolsAdded[0] != "search" {
+		t.Fatalf("unexpected standalone tool reveal: %#v err=%v", history, err)
 	}
 }
 
@@ -816,4 +856,124 @@ func assertPanic(t *testing.T, function func()) {
 		}
 	}()
 	function()
+}
+
+func TestAdapterRoundTripsEnqueuedMessages(t *testing.T) {
+	for _, allowSystemPrompts := range []bool{false, true} {
+		agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+		ai.AddTool(agent, "work", func(_ context.Context, rc *ai.RunContext[struct{}], _ struct{}) (string, error) {
+			for _, items := range [][]ai.EnqueueItem{
+				{ai.UserPromptPart{Content: "Background result: 42"}},
+				{ai.SystemPromptPart{Content: "Announcement"}},
+				{ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "Synthetic reply"}}},
+					ai.UserPromptPart{Content: "Synthetic follow-up"}},
+			} {
+				if _, err := rc.Enqueue(items...); err != nil {
+					return "", err
+				}
+			}
+			return "started", nil
+		})
+		config := vercel.Config{Sanitization: ai.MessageSanitizationOptions{AllowSystemPrompts: allowSystemPrompts}}
+		user := vercel.UIMessage{ID: "user-1", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "Go"}}}
+		var chunks []vercel.Chunk
+		for chunk, err := range vercel.NewAdapter(agent, config).RunStream(t.Context(), vercel.RequestData{
+			Trigger: "submit-message", ID: "chat-1", Messages: []vercel.UIMessage{user},
+		}, struct{}{}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			encoded, _ := json.Marshal(chunk)
+			var decoded vercel.Chunk
+			_ = json.Unmarshal(encoded, &decoded)
+			chunks = append(chunks, decoded)
+		}
+
+		var streamed [][]string
+		assistant := vercel.UIMessage{ID: "assistant-1", Role: "assistant"}
+		for _, chunk := range chunks {
+			switch chunk.Type {
+			case vercel.ChunkDataEnqueuedMessages:
+				var delivery []string
+				for _, message := range chunk.Data.(map[string]any)["messages"].([]any) {
+					message := message.(map[string]any)
+					part := message["parts"].([]any)[0].(map[string]any)
+					delivery = append(delivery, message["role"].(string)+": "+part["text"].(string))
+				}
+				streamed = append(streamed, delivery)
+				assistant.Parts = append(assistant.Parts, vercel.UIMessagePart{Type: string(chunk.Type), Data: chunk.Data})
+			case vercel.ChunkToolInputAvailable:
+				input, _ := json.Marshal(chunk.Input)
+				assistant.Parts = append(assistant.Parts, vercel.UIMessagePart{
+					Type: "tool-" + chunk.ToolName, ToolCallID: chunk.ToolCallID, State: "input-available", Input: input,
+				})
+			case vercel.ChunkToolOutputAvailable:
+				output, _ := json.Marshal(chunk.Output)
+				last := &assistant.Parts[len(assistant.Parts)-1]
+				last.State, last.Output = "output-available", output
+			case vercel.ChunkTextDelta:
+				assistant.Parts = append(assistant.Parts, vercel.UIMessagePart{Type: "text", Text: chunk.Delta})
+			}
+		}
+		want := [][]string{{"user: Background result: 42"}}
+		if allowSystemPrompts {
+			want = append(want, []string{"system: Announcement"})
+		}
+		want = append(want, []string{"assistant: Synthetic reply", "user: Synthetic follow-up"})
+		if !reflect.DeepEqual(streamed, want) {
+			t.Fatalf("allow=%v streamed %v, want %v", allowSystemPrompts, streamed, want)
+		}
+		enqueuedAt := chunkIndex(chunks, vercel.ChunkDataEnqueuedMessages)
+		if enqueuedAt < chunkIndex(chunks, vercel.ChunkToolOutputAvailable) || enqueuedAt > chunkIndex(chunks, vercel.ChunkTextStart) {
+			t.Fatalf("enqueued messages were not streamed between the tool result and the reply: %#v", chunks)
+		}
+
+		next := vercel.UIMessage{ID: "user-2", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "Again"}}}
+		_, history, _, err := vercel.PrepareInput(vercel.RequestData{
+			Trigger: "submit-message", ID: "chat-1", Messages: []vercel.UIMessage{user, assistant, next},
+		}, config.Sanitization)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := modelVisible(history)
+		wantHistory := []string{"request: user-prompt Go", "response: tool-call work",
+			"request: tool-return started", "request: user-prompt Background result: 42"}
+		if allowSystemPrompts {
+			wantHistory = append(wantHistory, "request: system-prompt Announcement")
+		}
+		wantHistory = append(wantHistory, "response: text Synthetic reply", "request: user-prompt Synthetic follow-up",
+			"response: text success")
+		if !reflect.DeepEqual(got, wantHistory) {
+			t.Fatalf("allow=%v reloaded\n got %q\nwant %q", allowSystemPrompts, got, wantHistory)
+		}
+	}
+}
+
+func modelVisible(messages []ai.ModelMessage) []string {
+	var visible []string
+	for _, message := range messages {
+		switch message := message.(type) {
+		case ai.ModelRequest:
+			for _, part := range message.Parts {
+				switch part := part.(type) {
+				case ai.UserPromptPart:
+					visible = append(visible, "request: user-prompt "+part.Content)
+				case ai.SystemPromptPart:
+					visible = append(visible, "request: system-prompt "+part.Content)
+				case ai.ToolReturnPart:
+					visible = append(visible, fmt.Sprint("request: tool-return ", part.Content))
+				}
+			}
+		case ai.ModelResponse:
+			for _, part := range message.Parts {
+				switch part := part.(type) {
+				case ai.TextPart:
+					visible = append(visible, "response: text "+part.Content)
+				case ai.ToolCallPart:
+					visible = append(visible, "response: tool-call "+part.ToolName)
+				}
+			}
+		}
+	}
+	return visible
 }

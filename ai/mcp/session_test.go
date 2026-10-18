@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	aimcp "github.com/Kludex/pydantic-ai-go/ai/mcp"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+	"github.com/modelcontextprotocol/go-sdk/jsonrpc"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -319,6 +322,9 @@ func TestSessionValidation(t *testing.T) {
 	if _, err := session.CallTool(t.Context(), "tool", nil); err == nil {
 		t.Fatal("nil session called a tool")
 	}
+	if _, err := session.CallToolForApp(t.Context(), "tool", nil); err == nil {
+		t.Fatal("nil session called a tool for an app")
+	}
 	func() {
 		defer func() {
 			if recovered := recover(); recovered != "ai/mcp: session must not be nil" {
@@ -341,4 +347,114 @@ type blockingTransport struct{}
 func (blockingTransport) Connect(ctx context.Context) (mcpsdk.Connection, error) {
 	<-ctx.Done()
 	return nil, ctx.Err()
+}
+
+func TestSessionMCPApps(t *testing.T) {
+	server := mcpsdk.NewServer(&mcpsdk.Implementation{Name: "weather", Version: "1"}, nil)
+	server.AddResource(&mcpsdk.Resource{URI: "ui://weather", Name: "weather"}, func(
+		context.Context, *mcpsdk.ReadResourceRequest,
+	) (*mcpsdk.ReadResourceResult, error) {
+		return &mcpsdk.ReadResourceResult{Contents: []*mcpsdk.ResourceContents{{
+			URI: "ui://weather", MIMEType: "text/html;profile=mcp-app", Text: "<html></html>",
+			Meta: mcpsdk.Meta{"ui": map[string]any{"csp": map[string]any{"connectDomains": []any{"https://api.example.com"}}}},
+		}}}, nil
+	})
+	var called []string
+	for _, tool := range []*mcpsdk.Tool{
+		{Name: "forecast", Meta: mcpsdk.Meta{"ui": map[string]any{"resourceUri": "ui://weather"}}},
+		{Name: "legacy", Meta: mcpsdk.Meta{"ui/resourceUri": "ui://legacy"}},
+		{Name: "select_day", Meta: mcpsdk.Meta{"ui": map[string]any{"visibility": []any{"app"}}}},
+		{Name: "model_only", Meta: mcpsdk.Meta{"ui": map[string]any{"visibility": []any{"model"}}}},
+	} {
+		tool.InputSchema = map[string]any{"type": "object"}
+		server.AddTool(tool, func(_ context.Context, request *mcpsdk.CallToolRequest) (*mcpsdk.CallToolResult, error) {
+			called = append(called, request.Params.Name+string(request.Params.Arguments))
+			if request.Params.Name == "select_day" {
+				return &mcpsdk.CallToolResult{IsError: true, Content: []mcpsdk.Content{&mcpsdk.TextContent{Text: "no day"}}}, nil
+			}
+			return &mcpsdk.CallToolResult{
+				Content: []mcpsdk.Content{
+					&mcpsdk.TextContent{Text: "Sunny"},
+					&mcpsdk.ImageContent{Data: []byte("png"), MIMEType: "image/png"},
+				},
+				StructuredContent: map[string]any{"temperature": 21},
+				Meta:              mcpsdk.Meta{"source": "station"},
+			}, nil
+		})
+	}
+	session := connectSession(t, server, aimcp.WithID("weather"))
+
+	var returns []ai.ToolReturnPart
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if len(messages) == 1 {
+			if len(params.Tools) != 3 {
+				t.Fatalf("app-only tools reached the model: %+v", params.Tools)
+			}
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.ToolCallPart{ToolName: "forecast", ToolCallID: "forecast", Args: json.RawMessage(`{"city":"Paris"}`)},
+				ai.ToolCallPart{ToolName: "legacy", ToolCallID: "legacy", Args: json.RawMessage(`{}`)},
+			}}, nil
+		}
+		for _, part := range messages[len(messages)-1].(ai.ModelRequest).Parts {
+			returnPart, ok := part.(ai.ToolReturnPart)
+			if !ok {
+				t.Fatalf("unexpected request part: %+v", part)
+			}
+			returns = append(returns, returnPart)
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	agent := ai.NewAgent[struct{}, string](model, ai.WithSequentialToolExecution())
+	agent.AddToolset(aimcp.NewSessionToolset[struct{}](session))
+	if _, err := agent.Run(t.Context(), "weather", struct{}{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(returns) != 2 {
+		t.Fatalf("unexpected tool returns: %+v", returns)
+	}
+	wantResult := map[string]any{
+		"content": []any{
+			map[string]any{"type": "text", "text": "Sunny"},
+			map[string]any{"type": "image", "data": "cG5n", "mimeType": "image/png"},
+		},
+		"structuredContent": map[string]any{"temperature": float64(21)},
+		"_meta": map[string]any{
+			"source": "station", "io.modelcontextprotocol/serverInfo": map[string]any{"name": "weather", "version": "1"},
+		},
+		"isError": false,
+	}
+	for index, want := range []map[string]any{
+		{"resource_uri": "ui://weather", "tool_input": map[string]any{"city": "Paris"}, "result": wantResult, "toolset_id": "weather"},
+		{"resource_uri": "ui://legacy", "tool_input": map[string]any{}, "result": wantResult, "toolset_id": "weather"},
+	} {
+		if got := returns[index].Metadata[ai.MCPAppMetadataKey]; !reflect.DeepEqual(got, want) {
+			t.Fatalf("unexpected MCP app record %d:\n got %#v\nwant %#v", index, got, want)
+		}
+	}
+
+	result, err := session.CallToolForApp(t.Context(), "select_day", map[string]any{"day": "monday"})
+	if err != nil || !result.IsError || result.Content[0].(*mcpsdk.TextContent).Text != "no day" {
+		t.Fatalf("unexpected app tool result: %+v err=%v", result, err)
+	}
+	if result, err := session.CallToolForApp(t.Context(), "forecast", nil); err != nil || result.IsError {
+		t.Fatalf("unexpected shared tool result: %+v err=%v", result, err)
+	}
+	for _, name := range []string{"model_only", "missing"} {
+		_, err := session.CallToolForApp(t.Context(), name, nil)
+		var rpcErr *jsonrpc.Error
+		if !errors.As(err, &rpcErr) || rpcErr.Code != jsonrpc.CodeInvalidParams ||
+			rpcErr.Message != fmt.Sprintf("Tool %q is not available to apps", name) {
+			t.Fatalf("unexpected hidden tool error for %q: %v", name, err)
+		}
+	}
+	if want := []string{`forecast{"city":"Paris"}`, "legacy{}", `select_day{"day":"monday"}`, "forecast{}"}; !reflect.DeepEqual(called, want) {
+		t.Fatalf("unexpected server calls: %q", called)
+	}
+
+	page, err := session.ReadResource(t.Context(), "ui://weather")
+	if err != nil || page.Contents[0].MIMEType != "text/html;profile=mcp-app" || page.Contents[0].Meta["ui"] == nil {
+		t.Fatalf("app page lost its MIME type or _meta: %+v err=%v", page, err)
+	}
 }

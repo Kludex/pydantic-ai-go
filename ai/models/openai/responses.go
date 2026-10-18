@@ -73,8 +73,11 @@ func (m *ResponsesModel) SupportsNativeTool(tool ai.NativeTool) bool {
 	if err := ai.ValidateNativeTools([]ai.NativeTool{tool}); err != nil {
 		return false
 	}
-	switch tool.CloneNativeTool().(type) {
-	case ai.WebSearchTool, ai.CodeExecutionTool, ai.FileSearchTool, ai.MCPServerTool:
+	switch tool := tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool:
+		return tool.MaxUses == 0 &&
+			(m.providerName != "xai" || tool.ExternalWebAccess == nil || *tool.ExternalWebAccess)
+	case ai.CodeExecutionTool, ai.FileSearchTool, ai.MCPServerTool:
 		return true
 	case ai.ImageGenerationTool:
 		return m.providerName != "xai"
@@ -239,7 +242,7 @@ func (m *ResponsesModel) CountTokens(
 		InputTokens int `json:"input_tokens"`
 	}
 	if err := json.Unmarshal(data, &counted); err != nil {
-		return ai.Usage{}, fmt.Errorf("openai: decode token count response: %w", err)
+		return ai.Usage{}, &APIError{Body: "decode token count response: " + err.Error(), ProviderName: m.providerName}
 	}
 	return ai.Usage{InputTokens: counted.InputTokens}, nil
 }
@@ -449,7 +452,8 @@ type responsesReasoning struct {
 }
 
 type responsesText struct {
-	Format responsesTextFormat `json:"format"`
+	Format    *responsesTextFormat `json:"format,omitempty"`
+	Verbosity TextVerbosity        `json:"verbosity,omitempty"`
 }
 
 type responsesTextFormat struct {
@@ -782,6 +786,10 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if err != nil {
 		return nil, err
 	}
+	settings, verbosity, err := extractTextVerbosity(settings)
+	if err != nil {
+		return nil, err
+	}
 	params.Settings = settings
 	reasoningEffort, err := openAIThinkingEffortForModel(m.name, params.Settings.Thinking)
 	if err != nil {
@@ -829,13 +837,19 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if params.Settings.Logprobs != nil && *params.Settings.Logprobs {
 		req.Include = append(req.Include, "message.output_text.logprobs")
 	}
+	if m.chatCompatibility.ResponsesEncryptedReasoning {
+		req.Include = appendResponsesInclude(req.Include, "reasoning.encrypted_content")
+	}
+	if verbosity != "" {
+		req.Text = &responsesText{Verbosity: verbosity}
+	}
 	if reasoningEffort != "" {
 		req.Reasoning = &responsesReasoning{Effort: reasoningEffort}
 	}
 	reasoningActive := reasoningEffort != "none" &&
 		(reasoningEffort != "" || m.chatCompatibility.ReasoningEnabledByDefault ||
 			openAIModelReasoningActive(m.name, reasoningEffort))
-	if reasoningActive {
+	if reasoningActive && !m.chatCompatibility.SamplingWithReasoning {
 		req.Temperature = nil
 		req.TopP = nil
 	}
@@ -884,6 +898,8 @@ func (m *ResponsesModel) buildResponsesPayload(
 			deferred[tool.Name] = tool
 		}
 	}
+	// The Codex backend rejects explicit prompt cache breakpoints and caches implicitly.
+	promptCacheBreakpoints := supportsOpenAIPromptCache(m.name) && m.providerName != "openai-codex"
 	converter := responsesMessageConverter{
 		ctx:                       ctx,
 		providerName:              m.providerName,
@@ -893,7 +909,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		rendered:                  make(map[string]struct{}),
 		strictSupport:             m.strictToolSupport,
 		phaseSupport:              responsesPhaseSupported(m.name, m.phaseSupport),
-		promptCacheBreakpoints:    supportsOpenAIPromptCache(m.name),
+		promptCacheBreakpoints:    promptCacheBreakpoints,
 		responsesReasoningContent: m.chatCompatibility.ResponsesReasoningContent,
 		storeDisabled:             params.Settings.ExtraBody["store"] == false,
 	}
@@ -904,7 +920,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		}
 		req.Input = append(req.Input, items...)
 	}
-	if promptCache.Instructions && supportsOpenAIPromptCache(m.name) &&
+	if promptCache.Instructions && promptCacheBreakpoints &&
 		params.Settings.ExtraBody["previous_response_id"] == nil && params.Settings.ExtraBody["conversation"] == nil {
 		parts, static, eligible := cacheableInstructions(msgs, params)
 		for _, message := range msgs {
@@ -975,6 +991,25 @@ func (m *ResponsesModel) buildResponsesPayload(
 			req.Input[index].Content = content[1:]
 		}
 	}
+	hasPromptCacheBreakpoint := false
+	for _, item := range req.Input {
+		body := item.Content
+		if item.Type == "function_call_output" {
+			body = item.Output
+		}
+		if content, ok := body.([]responsesInputContent); ok {
+			for _, part := range content {
+				hasPromptCacheBreakpoint = hasPromptCacheBreakpoint || part.PromptCacheBreakpoint != nil
+			}
+		}
+	}
+	keepImplicitCacheWithoutBreakpoints(&promptCache, hasPromptCacheBreakpoint)
+	if promptCache.Options != nil {
+		if req.PromptCacheOptions == nil { // pragma: no cover - options initialize this request field above.
+			req.PromptCacheOptions = &responsesPromptCacheOptions{}
+		}
+		req.PromptCacheOptions.PromptCacheOptions = *promptCache.Options
+	}
 	for _, tool := range params.Tools {
 		if activeToolSearch && (tool.ToolKind == ai.ToolPartKindToolSearch || tool.DeferLoading) {
 			continue
@@ -1034,9 +1069,9 @@ func (m *ResponsesModel) buildResponsesPayload(
 		if m.strictToolSupport {
 			strictFlag = &strict
 		}
-		req.Text = &responsesText{Format: responsesTextFormat{
+		req.Text = &responsesText{Format: &responsesTextFormat{
 			Type: "json_schema", Name: "final_result", Schema: schema, Strict: strictFlag,
-		}}
+		}, Verbosity: verbosity}
 	}
 	return req, nil
 }

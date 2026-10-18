@@ -20,16 +20,18 @@ import (
 )
 
 type livePeer struct {
-	socket *websocket.Conn
-	sent   chan map[string]any
-	start  map[string]any
-	model  *openairt.LiveModel
+	socket  *websocket.Conn
+	sent    chan map[string]any
+	closing chan any
+	start   map[string]any
+	model   *openairt.LiveModel
 }
 
 func livePair(t *testing.T, params realtime.ConnectParams, options ...openairt.Option) (*openairt.LiveConnection, *livePeer) {
 	t.Helper()
 	ready := make(chan *livePeer, 1)
 	sent := make(chan map[string]any, 256)
+	closing := make(chan any, 8)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/live/sessions" || r.Header.Get("Authorization") != "Bearer secret" {
 			t.Errorf("handshake: %s %s", r.URL, r.Header)
@@ -49,7 +51,7 @@ func livePair(t *testing.T, params realtime.ConnectParams, options ...openairt.O
 		session := frame["session"].(map[string]any)
 		started := map[string]any{"id": "live-1", "model": "gpt-live-1", "delegation": session["delegation"]}
 		_ = writeFrame(r.Context(), socket, map[string]any{"type": "session.started", "session": started})
-		ready <- &livePeer{socket: socket, sent: sent, start: session}
+		ready <- &livePeer{socket: socket, sent: sent, closing: closing, start: session}
 		for {
 			_, data, err := socket.Read(r.Context())
 			if err != nil {
@@ -59,6 +61,9 @@ func livePair(t *testing.T, params realtime.ConnectParams, options ...openairt.O
 			_ = json.Unmarshal(data, &input)
 			sent <- input
 			if input["type"] == "session.close" {
+				for len(closing) > 0 {
+					_ = writeFrame(r.Context(), socket, <-closing)
+				}
 				_ = writeFrame(r.Context(), socket, map[string]any{"type": "session.closed", "reason": "close_requested", "usage": map[string]any{"seconds": 9.0}})
 			}
 		}
@@ -151,7 +156,7 @@ func TestLiveConfigAndHistory(t *testing.T) {
 		ai.ModelRequest{Parts: []ai.RequestPart{ai.SystemPromptPart{Content: "system"}, ai.UserPromptPart{Contents: []ai.UserContent{ai.TextContent{Text: "one"}, ai.TextContent{Text: "two"}}}, ai.SpeechPart{Transcript: &text}, ai.ToolReturnPart{ToolName: "lookup", Content: map[string]any{"ok": true}}, ai.RetryPromptPart{ToolName: "lookup", Content: "try again"}, ai.RetryPromptPart{Content: "retry"}, ai.UserPromptPart{Content: "  "}}},
 		ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "answer"}, ai.ThinkingPart{Content: "thought", Signature: "not replayed"}, ai.SpeechPart{Transcript: &text}, ai.ToolCallPart{ToolName: "lookup", Args: json.RawMessage(`{}`)}}},
 	}
-	connection, peer := livePair(t, realtime.ConnectParams{Messages: messages, Request: ai.ModelRequestParams{Instructions: "work", Tools: []ai.ToolDefinition{{Name: "lookup", Description: "find", Schema: map[string]any{"type": "object"}, Strict: &yes}}, NativeTools: []ai.NativeTool{ai.WebSearchTool{UserLocation: &ai.WebSearchUserLocation{City: "Berlin", Country: "DE", Region: "BE", Timezone: "Europe/Berlin"}, AllowedDomains: []string{"example.org"}, BlockedDomains: []string{"example.com"}, ExternalWebAccess: &no}, ai.CodeExecutionTool{Optional: true}}}, Settings: realtime.Settings{Thinking: ai.ThinkingLevelHigh, ParallelToolCalls: &no, ToolChoice: realtime.ToolChoiceAuto, Provider: map[string]any{"openai_voice": "marin", "openai_live_instructions": "talk", "openai_live_store": true, "openai_live_turn_silence_ms": 15, "openai_live_delegation": map[string]any{"model": "gpt-6-sol", "instructions": "extra", "max_output_tokens": 100, "verbosity": "low", "service_tier": "priority"}}}})
+	connection, peer := livePair(t, realtime.ConnectParams{Messages: messages, Request: ai.ModelRequestParams{Instructions: "work", Tools: []ai.ToolDefinition{{Name: "lookup", Description: "find", Schema: map[string]any{"type": "object"}, Strict: &yes}}, NativeTools: []ai.NativeTool{ai.WebSearchTool{UserLocation: &ai.WebSearchUserLocation{City: "Berlin", Country: "DE", Region: "BE", Timezone: "Europe/Berlin"}, AllowedDomains: []string{"example.org"}, BlockedDomains: []string{"example.com"}, ExternalWebAccess: &no}, ai.CodeExecutionTool{Optional: true}, ai.WebSearchTool{MaxUses: 1, Optional: true}}}, Settings: realtime.Settings{Thinking: ai.ThinkingLevelHigh, ParallelToolCalls: &no, ToolChoice: realtime.ToolChoiceAuto, Provider: map[string]any{"openai_voice": "marin", "openai_live_instructions": "talk", "openai_live_store": true, "openai_live_turn_silence_ms": 15, "openai_live_delegation": map[string]any{"model": "gpt-6-sol", "instructions": "extra", "max_output_tokens": 100, "verbosity": "low", "service_tier": "priority"}}}})
 	if connection.ModelName() != "gpt-live-1" || !connection.InputTranscriptionEnabled() || connection.ReconnectRestoresInFlightState() {
 		t.Fatal("connection info")
 	}
@@ -381,5 +386,25 @@ func TestLiveMalformedEventsAreRecoverable(t *testing.T) {
 		if failure, ok := event.(realtime.SessionError); !ok || !failure.Recoverable {
 			t.Fatalf("not recoverable: %+v", event)
 		}
+	}
+}
+
+func TestLiveBackendUsageIsPricedAtItsReportedServiceTier(t *testing.T) {
+	connection, peer := livePair(t, realtime.ConnectParams{})
+	peer.frame(t, delegation("d"))
+	for _, tier := range []string{"default", "priority"} {
+		terminal := backendTerminal("response.completed", map[string]any{"input_tokens": 1000, "output_tokens": 100})
+		terminal["response"].(map[string]any)["service_tier"] = tier
+		peer.frame(t, delegated("d", terminal))
+	}
+	peer.end(t, "remote_hangup", 0)
+	var costs []float64
+	for _, event := range collectLive(t, connection) {
+		if usage, ok := event.(realtime.SessionUsage); ok && usage.Usage.CostUSD != nil {
+			costs = append(costs, *usage.Usage.CostUSD)
+		}
+	}
+	if len(costs) != 2 || costs[1] <= costs[0] {
+		t.Fatalf("costs: %v", costs)
 	}
 }

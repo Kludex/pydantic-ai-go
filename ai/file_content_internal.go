@@ -3,11 +3,14 @@ package ai
 import (
 	"crypto/sha1"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net/url"
 	"path"
 	"strings"
 )
+
+var errCannotInferMediaType = errors.New("cannot infer media type")
 
 var mediaTypesByExtension = map[string]string{
 	".3gp":  "video/3gpp",
@@ -64,7 +67,7 @@ func resolveURLMediaType(rawURL, explicit, kind string) (string, error) {
 	}
 	mediaType := mediaTypesByExtension[strings.ToLower(path.Ext(parsed.Path))]
 	if mediaType == "" {
-		return "", fmt.Errorf("ai: cannot infer media type from %s URL %q", kind, rawURL)
+		return "", fmt.Errorf("ai: %w from %s URL %q", errCannotInferMediaType, kind, rawURL)
 	}
 	return mediaType, nil
 }

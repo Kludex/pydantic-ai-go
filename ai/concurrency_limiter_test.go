@@ -192,12 +192,14 @@ func TestConcurrencyLimitedModelReleasesOnStreamFailureAndBreak(t *testing.T) {
 	}
 	limiter := ai.NewConcurrencyLimiter(1)
 	model := ai.NewConcurrencyLimitedModel(&underlying, limiter)
+	var runningDuringCleanup int
 	if _, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{}); !errors.Is(err, streamErr) || limiter.Running() != 0 {
 		t.Fatalf("opening failure leaked slot: running=%d err=%v", limiter.Running(), err)
 	}
 
 	underlying.stream = func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (iter.Seq2[ai.ModelStreamEvent, error], error) {
 		return func(yield func(ai.ModelStreamEvent, error) bool) {
+			defer func() { runningDuringCleanup = limiter.Running() }()
 			if !yield(ai.TextDeltaEvent{Delta: "one"}, nil) {
 				return
 			}
@@ -211,12 +213,17 @@ func TestConcurrencyLimitedModelReleasesOnStreamFailureAndBreak(t *testing.T) {
 	for range events {
 		break
 	}
-	if limiter.Running() != 0 {
-		t.Fatalf("consumer break leaked slot: %d", limiter.Running())
+	if runningDuringCleanup != 1 || limiter.Running() != 0 {
+		t.Fatalf("consumer break released slot before cleanup or leaked it: cleanup=%d running=%d",
+			runningDuringCleanup, limiter.Running())
 	}
 
+	runningDuringCleanup = 0
 	underlying.stream = func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (iter.Seq2[ai.ModelStreamEvent, error], error) {
-		return func(yield func(ai.ModelStreamEvent, error) bool) { yield(nil, streamErr) }, nil
+		return func(yield func(ai.ModelStreamEvent, error) bool) {
+			defer func() { runningDuringCleanup = limiter.Running() }()
+			yield(nil, streamErr)
+		}, nil
 	}
 	events, err = model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
 	if err != nil {
@@ -227,8 +234,9 @@ func TestConcurrencyLimitedModelReleasesOnStreamFailureAndBreak(t *testing.T) {
 			t.Fatalf("unexpected stream event error: %v", err)
 		}
 	}
-	if limiter.Running() != 0 {
-		t.Fatalf("failed stream leaked slot: %d", limiter.Running())
+	if runningDuringCleanup != 1 || limiter.Running() != 0 {
+		t.Fatalf("failed stream released slot before cleanup or leaked it: cleanup=%d running=%d",
+			runningDuringCleanup, limiter.Running())
 	}
 }
 

@@ -13,7 +13,8 @@ var ErrUsageLimitExceeded = errors.New("ai: usage limit exceeded")
 // validator keeps asking the model to retry past the configured cap.
 var ErrMaxRetriesExceeded = errors.New("ai: max retries exceeded")
 
-// ErrRunCancelled identifies cancellation requested through RunContext.Cancel.
+// ErrRunCancelled identifies cancellation requested through RunContext.Cancel,
+// AgentRun.Cancel, or an expired run context deadline.
 var ErrRunCancelled = errors.New("ai: run cancelled")
 
 // ErrUnknownModelID identifies an application model ID no resolver accepted.
@@ -145,19 +146,37 @@ func (e *UnknownModelIDError) Error() string {
 // Unwrap supports errors.Is(err, ErrUnknownModelID).
 func (e *UnknownModelIDError) Unwrap() error { return ErrUnknownModelID }
 
-// RunCancelledError reports a run cancelled through RunContext.Cancel. It
-// retains the history and usage completed before cancellation took effect.
+// RunCancelledError reports a run cancelled through RunContext.Cancel or
+// AgentRun.Cancel, or stopped by the deadline of the context passed to the
+// run. It retains the history and usage completed before cancellation took
+// effect, so you can resume from Messages.
+//
+// When the deadline stopped the run, the error also matches the context's
+// cause, context.DeadlineExceeded unless the deadline was set with a custom
+// cause.
 type RunCancelledError struct {
 	messages []ModelMessage
 	usage    Usage
 	metadata map[string]any
+	deadline error
 }
 
 // Error identifies run cancellation.
-func (e *RunCancelledError) Error() string { return ErrRunCancelled.Error() }
+func (e *RunCancelledError) Error() string {
+	if e.deadline != nil {
+		return ErrRunCancelled.Error() + ": " + e.deadline.Error()
+	}
+	return ErrRunCancelled.Error()
+}
 
-// Unwrap supports errors.Is(err, ErrRunCancelled).
-func (e *RunCancelledError) Unwrap() error { return ErrRunCancelled }
+// Unwrap supports errors.Is(err, ErrRunCancelled) and, after a deadline,
+// errors.Is(err, context.DeadlineExceeded).
+func (e *RunCancelledError) Unwrap() []error {
+	if e.deadline != nil {
+		return []error{ErrRunCancelled, e.deadline}
+	}
+	return []error{ErrRunCancelled}
+}
 
 // Messages returns a copy of the history retained at cancellation.
 func (e *RunCancelledError) Messages() []ModelMessage {
@@ -189,6 +208,13 @@ type ContentFilterError struct {
 	Message  string
 	response ModelResponse
 	body     []byte
+}
+
+// NewContentFilterError returns an inspectable content-filter error with a detached response.
+func NewContentFilterError(message string, response ModelResponse) *ContentFilterError {
+	cloned := cloneModelResponse(&response)
+	body, _ := MarshalMessages([]ModelMessage{*cloned})
+	return &ContentFilterError{Message: message, response: *cloned, body: body}
 }
 
 // Error describes the content-filter decision.

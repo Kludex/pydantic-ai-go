@@ -49,6 +49,31 @@ func modelResponseMergeMode(existing, next *ModelResponse) continuationMergeMode
 	return continuationAccumulate
 }
 
+// billedBeyond is response with only the usage and failed attempts billed
+// beyond the suspended response it resumed. The run that produced resumed
+// already counted it, so the resuming run counts only the segments it requested.
+func billedBeyond(response, resumed *ModelResponse) *ModelResponse {
+	if resumed == nil {
+		return response
+	}
+	billed := cloneModelResponse(response)
+	billed.Usage = usageBeyond(response.Usage, resumed.Usage)
+	billed.FailedAttempts = billed.FailedAttempts[min(len(resumed.FailedAttempts), len(billed.FailedAttempts)):]
+	return billed
+}
+
+// pricedResumedResponse is the suspended response msgs end in, priced like the
+// response it is merged into, or nil when the request does not resume one.
+func pricedResumedResponse(ctx context.Context, msgs []ModelMessage) *ModelResponse {
+	if !historyEndsSuspended(msgs) {
+		return nil
+	}
+	seed := msgs[len(msgs)-1].(ModelResponse)
+	resumed := cloneModelResponse(&seed)
+	fillResponseCost(ctx, resumed)
+	return resumed
+}
+
 func mergeModelResponses(existing, next *ModelResponse) (*ModelResponse, continuationMergeMode) {
 	mode := modelResponseMergeMode(existing, next)
 	merged := cloneModelResponse(next)
@@ -65,6 +90,7 @@ func mergeModelResponses(existing, next *ModelResponse) (*ModelResponse, continu
 			merged.ProviderResponseID = existing.ProviderResponseID
 		}
 	}
+	merged.FailedAttempts = append(cloneModelRequestAttempts(existing.FailedAttempts), merged.FailedAttempts...)
 	merged.ProviderDetails = mergeProviderDetails(existing.ProviderDetails, merged.ProviderDetails)
 	merged.Metadata = mergeProviderDetails(existing.Metadata, merged.Metadata)
 	stripReplacePreviousResponseMarker(merged.Metadata)
@@ -109,9 +135,24 @@ func cloneModelResponse(response *ModelResponse) *ModelResponse {
 		}
 	}
 	cloned.Usage = response.Usage.Clone()
+	cloned.FailedAttempts = cloneModelRequestAttempts(response.FailedAttempts)
 	cloned.ProviderDetails = cloneSchemaMap(response.ProviderDetails)
 	cloned.Metadata = cloneSchemaMap(response.Metadata)
 	return &cloned
+}
+
+func cloneModelRequestAttempts(attempts []ModelRequestAttempt) []ModelRequestAttempt {
+	if len(attempts) == 0 {
+		return nil
+	}
+	cloned := slices.Clone(attempts)
+	for index := range cloned {
+		if attempts[index].Usage != nil {
+			usage := attempts[index].Usage.Clone()
+			cloned[index].Usage = &usage
+		}
+	}
+	return cloned
 }
 
 func hasReplacePreviousResponseMarker(metadata map[string]any) bool {

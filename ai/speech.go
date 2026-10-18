@@ -5,14 +5,17 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 )
 
 // PrepareModelMessages converts realtime speech history into content a standard model can consume.
-// It returns a detached history and leaves durable SpeechPart values unchanged. Composite
-// dispatchers may defer conversion so each selected child applies its own profile.
+// It also sends the tool results answering a response in the order of its calls, and replaces tool
+// call IDs that do not fit the profile's ToolCallIDLength. It returns a detached history and leaves
+// the durable history unchanged. Composite dispatchers may defer conversion so each selected child
+// applies its own profile.
 func PrepareModelMessages(model Model, messages []ModelMessage) ([]ModelMessage, error) {
 	return prepareModelMessages(model, messages, nil)
 }
@@ -29,21 +32,80 @@ func prepareModelMessages(
 	if err != nil {
 		return nil, err
 	}
+	if !profile.SupportsRequestScopedSystemPrompts {
+		messages = scopeRequestSystemPrompts(messages)
+	}
 	supportsToolAvailability := profile.SupportsToolAvailabilityDelta
 	if params != nil {
 		if provider, ok := model.(ToolAvailabilityDeltaModel); ok {
 			supportsToolAvailability = provider.SupportsToolAvailabilityDelta(*params)
 		}
 	}
-	if supportsToolAvailability {
-		return messages, nil
+	if !supportsToolAvailability {
+		messages = synthesizeToolAvailabilityMessages(messages, params)
 	}
-	return synthesizeToolAvailabilityMessages(messages, params)
+	orderToolResultsByCall(messages)
+	if profile.ToolCallIDLength > 0 {
+		if err := fitToolCallIDs(messages, profile.ToolCallIDLength); err != nil {
+			return nil, err
+		}
+	}
+	return messages, nil
 }
 
-func synthesizeToolAvailabilityMessages(
-	messages []ModelMessage, params *ModelRequestParams,
-) ([]ModelMessage, error) {
+// scopeRequestSystemPrompts leaves out request-scoped prompts whose request has
+// been answered and moves the current ones to the end of the last request, so
+// a cache boundary placed before them stays valid for the next request.
+func scopeRequestSystemPrompts(messages []ModelMessage) []ModelMessage {
+	if !slices.ContainsFunc(messages, func(message ModelMessage) bool {
+		request, ok := message.(ModelRequest)
+		return ok && slices.ContainsFunc(request.Parts, isRequestScoped)
+	}) {
+		return messages
+	}
+	current := len(messages)
+	for current > 0 {
+		if _, ok := messages[current-1].(ModelResponse); !ok {
+			break
+		}
+		current--
+	}
+	last := -1
+	for current > 0 {
+		if _, ok := messages[current-1].(ModelRequest); !ok {
+			break
+		}
+		current--
+		last = max(last, current)
+	}
+	var scoped []RequestPart
+	prepared := make([]ModelMessage, 0, len(messages))
+	for index, message := range messages {
+		request, ok := message.(ModelRequest)
+		if !ok {
+			prepared = append(prepared, message)
+			continue
+		}
+		parts := make([]RequestPart, 0, len(request.Parts))
+		for _, part := range request.Parts {
+			if !isRequestScoped(part) {
+				parts = append(parts, part)
+			} else if index >= current {
+				scoped = append(scoped, part)
+			}
+		}
+		if index == last {
+			parts = append(parts, scoped...)
+		}
+		if len(parts) > 0 || len(request.Parts) == 0 || index == last {
+			request.Parts = parts
+			prepared = append(prepared, request)
+		}
+	}
+	return prepared
+}
+
+func synthesizeToolAvailabilityMessages(messages []ModelMessage, params *ModelRequestParams) []ModelMessage {
 	var allowed map[string]struct{}
 	if params != nil {
 		allowed = make(map[string]struct{}, len(params.DeferredTools))
@@ -167,9 +229,9 @@ func synthesizeToolAvailabilityMessages(
 		flush()
 	}
 	if !changed {
-		return messages, nil
+		return messages
 	}
-	return prepared, nil
+	return prepared
 }
 
 func requestHasToolAvailabilityDelta(request ModelRequest) bool {

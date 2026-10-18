@@ -23,7 +23,8 @@ import (
 // Dial opens and fully configures one websocket session.
 type Dial func(ctx context.Context, history []ai.ModelMessage) (*websocket.Conn, string, error)
 
-// Mapper translates one provider frame.
+// Mapper translates one provider frame. A non-recoverable SessionError ends the provider conversation:
+// a connection with reconnects left reports it as recoverable and redials into a new one.
 type Mapper func(data []byte) ([]realtime.CodecEvent, error)
 
 // Config defines one OpenAI-protocol connection.
@@ -53,32 +54,36 @@ type Connection struct {
 	history func() []ai.ModelMessage
 	closed  bool
 
-	stateMu             sync.Mutex
-	responseActive      bool
-	activeResponseID    string
-	currentItemID       string
-	currentContentIndex int
-	generatedAudioBytes int
-	reconnects          int
-	inputsReceived      int
-	responseInputs      []int
-	deferredInputs      []int
-	seenToolCalls       map[string]struct{}
-	idleTimeoutItems    map[string]bool
-	toolBatches         map[string]*toolBatch
-	toolResponses       map[string]string
-	reconnecting        bool
-	gaveUp              bool
-	manualMu            sync.Mutex
-	commitHeld          bool
-	commitAnnounced     bool
-	commitListener      func()
-	heldAudio           []map[string]any
-	heldCommitted       int
-	sentAudio           []map[string]any
-	audioUncommitted    bool
-	audioLatest         bool
-	speechDetected      bool
+	stateMu          sync.Mutex
+	responseActive   bool
+	activeResponseID string
+	outputItems      []outputItem
+	reconnects       int
+	inputsReceived   int
+	responseInputs   []int
+	deferredInputs   []int
+	seenToolCalls    map[string]struct{}
+	idleTimeoutItems map[string]bool
+	toolBatches      map[string]*toolBatch
+	toolResponses    map[string]string
+	reconnecting     bool
+	gaveUp           bool
+	manualMu         sync.Mutex
+	commitHeld       bool
+	commitAnnounced  bool
+	commitListener   func()
+	heldAudio        []map[string]any
+	heldCommitted    int
+	sentAudio        []map[string]any
+	audioUncommitted bool
+	audioLatest      bool
+	speechDetected   bool
+}
+
+type outputItem struct {
+	id             string
+	contentIndex   int
+	generatedBytes int
 }
 
 type toolBatch struct {
@@ -241,17 +246,20 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 		return connection.writeJSON(ctx, map[string]any{"type": "response.cancel"})
 	case realtime.TruncateOutput:
 		connection.stateMu.Lock()
-		itemID := connection.currentItemID
-		contentIndex := connection.currentContentIndex
-		maximum := connection.generatedAudioBytes * 1000 / (connection.config.OutputSampleRate * 2)
-		connection.stateMu.Unlock()
-		if itemID == "" {
+		index := len(connection.outputItems) - 1
+		if input.ItemID != "" {
+			index = slices.IndexFunc(connection.outputItems, func(item outputItem) bool { return item.id == input.ItemID })
+		}
+		if index < 0 {
+			connection.stateMu.Unlock()
 			return nil
 		}
-		end := min(input.AudioEndMilliseconds, maximum)
+		item := connection.outputItems[index]
+		connection.stateMu.Unlock()
+		maximum := item.generatedBytes * 1000 / (connection.config.OutputSampleRate * 2)
 		return connection.writeJSON(ctx, map[string]any{
-			"type": "conversation.item.truncate", "item_id": itemID,
-			"content_index": contentIndex, "audio_end_ms": end,
+			"type": "conversation.item.truncate", "item_id": item.id,
+			"content_index": item.contentIndex, "audio_end_ms": min(input.AudioEndMilliseconds, maximum),
 		})
 	default:
 		return fmt.Errorf("realtime: %s does not support %T input", connection.config.Provider, input)
@@ -333,6 +341,7 @@ func (connection *Connection) writeRaw(ctx context.Context, value any) error {
 // Events reads, maps, and reconnects the websocket stream.
 func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.CodecEvent, error] {
 	return func(yield func(realtime.CodecEvent, error) bool) {
+	read:
 		for {
 			connection.mu.RLock()
 			socket := connection.socket
@@ -342,27 +351,10 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 				if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
 					return
 				}
-				if !connection.config.RestoresInFlightState {
-					connection.stateMu.Lock()
-					active, responseID := connection.responseActive, connection.activeResponseID
-					connection.stateMu.Unlock()
-					if active && !yield(realtime.ResponseDone{Interrupted: true, ProviderResponseID: responseID}, nil) {
-						return
-					}
-				}
-				reconnected, reconnectErr := connection.reconnect(ctx)
-				if reconnectErr != nil {
-					yield(nil, reconnectErr)
+				if !connection.redial(ctx, yield, fmt.Errorf("websocket closed: %w", err)) {
 					return
 				}
-				if reconnected {
-					if !yield(realtime.SessionReconnected{StateRestored: connection.config.RestoresInFlightState}, nil) {
-						return
-					}
-					continue
-				}
-				yield(realtime.SessionError{Err: fmt.Errorf("websocket closed: %w", err)}, nil)
-				return
+				continue
 			}
 			if messageType != websocket.MessageText {
 				continue
@@ -444,11 +436,20 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 						return
 					}
 				}
+				sessionError, failed := event.(realtime.SessionError)
+				ended := failed && !sessionError.Recoverable
+				if ended && connection.CanReconnect() {
+					sessionError.Recoverable = true
+					event = sessionError
+				}
 				if !yield(event, nil) {
 					return
 				}
-				if sessionError, ok := event.(realtime.SessionError); ok && !sessionError.Recoverable {
-					return
+				if ended {
+					if !sessionError.Recoverable || !connection.redial(ctx, yield, sessionError.Err) {
+						return
+					}
+					continue read
 				}
 				if _, done := event.(realtime.ResponseDone); done && connection.config.ManualAudioTurns {
 					connection.manualMu.Lock()
@@ -464,17 +465,45 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 	}
 }
 
+func (connection *Connection) redial(ctx context.Context, yield func(realtime.CodecEvent, error) bool, cause error) bool {
+	if !connection.config.RestoresInFlightState {
+		connection.stateMu.Lock()
+		active, responseID := connection.responseActive, connection.activeResponseID
+		connection.stateMu.Unlock()
+		if active && !yield(realtime.ResponseDone{Interrupted: true, ProviderResponseID: responseID}, nil) {
+			return false
+		}
+	}
+	reconnected, err := connection.reconnect(ctx)
+	if err != nil {
+		yield(nil, err)
+		return false
+	}
+	if !reconnected {
+		yield(realtime.SessionError{Err: cause}, nil)
+		return false
+	}
+	return yield(realtime.SessionReconnected{StateRestored: connection.config.RestoresInFlightState}, nil)
+}
+
 func (connection *Connection) observe(event realtime.CodecEvent) {
 	connection.stateMu.Lock()
 	defer connection.stateMu.Unlock()
 	switch event := event.(type) {
 	case realtime.AudioDelta:
-		if event.ItemID != "" && event.ItemID != connection.currentItemID {
-			connection.currentItemID = event.ItemID
-			connection.generatedAudioBytes = 0
+		last := len(connection.outputItems) - 1
+		if event.ItemID != "" && (last < 0 || connection.outputItems[last].id != event.ItemID) {
+			connection.outputItems = append(connection.outputItems, outputItem{id: event.ItemID})
+			// Far more items than can be queued for playback.
+			if len(connection.outputItems) > 32 {
+				connection.outputItems = slices.Delete(connection.outputItems, 0, 1)
+			}
+			last = len(connection.outputItems) - 1
 		}
-		connection.generatedAudioBytes += len(event.Data)
-		connection.currentContentIndex = event.ContentIndex
+		if last >= 0 {
+			connection.outputItems[last].generatedBytes += len(event.Data)
+			connection.outputItems[last].contentIndex = event.ContentIndex
+		}
 	case realtime.InputSpeechStarted:
 		if connection.config.ManualAudioTurns {
 			connection.speechDetected = true
@@ -647,8 +676,7 @@ func (connection *Connection) reconnect(ctx context.Context) (bool, error) {
 			connection.deferredInputs = nil
 			clear(connection.toolBatches)
 			clear(connection.toolResponses)
-			connection.currentItemID = ""
-			connection.generatedAudioBytes = 0
+			connection.outputItems = nil
 		}
 		connection.stateMu.Unlock()
 		return true, nil

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"iter"
 	"testing"
+	"testing/synctest"
+	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
@@ -322,4 +324,251 @@ func (m *cancelStreamingModel) StreamRequest(
 			yield(ai.FinishEvent{}, nil)
 		}
 	}, nil
+}
+
+func TestContextDeadlineEndsRunLikeCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		model := fakes.NewFunctionModel(func(
+			_ context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{
+				Parts: []ai.ResponsePart{
+					ai.ToolCallPart{ToolName: "fast", Args: json.RawMessage(`{}`), ToolCallID: "fast"},
+					ai.ToolCallPart{ToolName: "slow", Args: json.RawMessage(`{}`), ToolCallID: "slow"},
+				},
+				Usage: ai.Usage{Requests: 1, InputTokens: 2},
+			}, nil
+		})
+		agent := ai.NewAgent[deps, string](model, ai.WithMetadata(map[string]any{"run": "timed out"}))
+		ai.AddSimpleTool(agent, "fast", func(context.Context, struct{}) (string, error) {
+			return "completed", nil
+		}, ai.WithSequential())
+		ai.AddSimpleTool(agent, "slow", func(ctx context.Context, _ struct{}) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+
+		result, err := agent.Run(ctx, "go", deps{})
+		var cancelled *ai.RunCancelledError
+		if result != nil || !errors.As(err, &cancelled) || !errors.Is(err, ai.ErrRunCancelled) ||
+			!errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			t.Fatalf("expected deadline cancellation, got result=%+v err=%v", result, err)
+		}
+		if err.Error() != "ai: run cancelled: context deadline exceeded" {
+			t.Fatalf("unexpected message: %v", err)
+		}
+		messages := cancelled.Messages()
+		if len(messages) != 3 || cancelled.Usage().InputTokens != 2 || cancelled.Metadata()["run"] != "timed out" {
+			t.Fatalf("deadline lost run state: messages=%+v usage=%+v metadata=%+v",
+				messages, cancelled.Usage(), cancelled.Metadata())
+		}
+		interrupted := messages[2].(ai.ModelRequest)
+		if interrupted.State != ai.RequestStateInterrupted || len(interrupted.Parts) != 1 ||
+			interrupted.Parts[0].(ai.ToolReturnPart).ToolName != "fast" {
+			t.Fatalf("completed result was not retained: %+v", interrupted)
+		}
+		resumed := ai.NewAgent[deps, string](fakes.NewTestModel())
+		if _, err := resumed.Run(t.Context(), "continue", deps{}, ai.WithMessageHistory(messages)); err != nil {
+			t.Fatalf("deadline history did not resume: %v", err)
+		}
+	})
+}
+
+func TestExpiredContextDeadlineStopsBeforeTheFirstRequest(t *testing.T) {
+	requests := 0
+	model := fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		requests++
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "unused"}}}, nil
+	})
+	ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+	defer cancel()
+	_, err := ai.NewAgent[deps, string](model).Run(ctx, "go", deps{})
+	var cancelled *ai.RunCancelledError
+	if !errors.As(err, &cancelled) || !errors.Is(err, context.DeadlineExceeded) ||
+		requests != 0 || cancelled.Usage().Requests != 0 {
+		t.Fatalf("expired deadline reached the model: requests=%d err=%v", requests, err)
+	}
+}
+
+func TestCancelBeforeContextDeadlineStaysCancellation(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		model := fakes.NewFunctionModel(func(
+			context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "cancel", ToolCallID: "cancel", Args: json.RawMessage(`{}`),
+			}}}, nil
+		})
+		agent := ai.NewAgent[deps, string](model)
+		ai.AddTool(agent, "cancel", func(
+			ctx context.Context, rc *ai.RunContext[deps], _ struct{},
+		) (string, error) {
+			rc.Cancel()
+			time.Sleep(time.Hour)
+			return "", ctx.Err()
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		_, err := agent.Run(ctx, "go", deps{})
+		if !errors.Is(err, ai.ErrRunCancelled) || errors.Is(err, context.DeadlineExceeded) ||
+			err.Error() != "ai: run cancelled" {
+			t.Fatalf("deadline replaced an earlier cancellation: %v", err)
+		}
+	})
+}
+
+func TestContextDeadlineEndsStreamedRunLikeCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		model := newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+			return []ai.ModelStreamEvent{
+				ai.ToolCallStartEvent{PartID: "fast", ToolName: "fast", ToolCallID: "fast"},
+				ai.ToolCallDeltaEvent{PartID: "fast", ArgsDelta: `{}`},
+				ai.ToolCallStartEvent{PartID: "slow", ToolName: "slow", ToolCallID: "slow"},
+				ai.ToolCallDeltaEvent{PartID: "slow", ArgsDelta: `{}`},
+				ai.FinishEvent{},
+			}
+		})
+		agent := ai.NewAgent[deps, string](model)
+		ai.AddSimpleTool(agent, "fast", func(context.Context, struct{}) (string, error) {
+			return "completed", nil
+		}, ai.WithSequential())
+		ai.AddSimpleTool(agent, "slow", func(ctx context.Context, _ struct{}) (string, error) {
+			<-ctx.Done()
+			return "", ctx.Err()
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		stream := agent.RunStream(ctx, "go", deps{})
+		var got error
+		for _, err := range stream.Events() {
+			if err != nil {
+				got = err
+			}
+		}
+		var cancelled *ai.RunCancelledError
+		if stream.Result() != nil || !errors.As(got, &cancelled) || !errors.Is(got, context.DeadlineExceeded) {
+			t.Fatalf("expected streamed deadline cancellation, got %v", got)
+		}
+		request := cancelled.Messages()[2].(ai.ModelRequest)
+		if request.State != ai.RequestStateInterrupted || request.Parts[0].(ai.ToolReturnPart).ToolName != "fast" {
+			t.Fatalf("completed streamed tool was not retained: %+v", request)
+		}
+	})
+}
+
+func TestContextDeadlineEndsAgentRunLikeCancel(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		model := fakes.NewFunctionModel(func(
+			ctx context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+		run, err := ai.NewAgent[deps, string](model).StartRun(ctx, "go", deps{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = run.Close() }()
+		for {
+			_, ok, nextErr := run.Next()
+			if nextErr != nil {
+				err = nextErr
+			}
+			if !ok {
+				break
+			}
+		}
+		var cancelled *ai.RunCancelledError
+		if !errors.As(err, &cancelled) || !errors.Is(run.Err(), context.DeadlineExceeded) ||
+			len(cancelled.Messages()) != 1 {
+			t.Fatalf("expected manual-run deadline cancellation, got %v", err)
+		}
+	})
+}
+
+func TestContextDeadlineDuringNestedRunEndsParentWithItsHistory(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		child := ai.NewAgent[deps, string](fakes.NewFunctionModel(func(
+			ctx context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}))
+		var childErr error
+		parent := ai.NewAgent[deps, string](fakes.NewFunctionModel(func(
+			context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: "delegate", ToolCallID: "delegate", Args: json.RawMessage(`{}`),
+			}}}, nil
+		}))
+		ai.AddTool(parent, "delegate", func(
+			ctx context.Context, rc *ai.RunContext[deps], _ struct{},
+		) (string, error) {
+			result, err := child.Run(ctx, "sub", rc.Deps)
+			if err != nil {
+				childErr = err
+				return "", err
+			}
+			return result.Output, nil
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+
+		_, err := parent.Run(ctx, "go", deps{})
+		var parentCancelled, childCancelled *ai.RunCancelledError
+		if !errors.As(err, &parentCancelled) || !errors.Is(err, context.DeadlineExceeded) ||
+			!errors.As(childErr, &childCancelled) || !errors.Is(childErr, context.DeadlineExceeded) {
+			t.Fatalf("expected both runs to stop at the deadline: parent=%v child=%v", err, childErr)
+		}
+		messages := parentCancelled.Messages()
+		prompt := messages[0].(ai.ModelRequest).Parts[0].(ai.UserPromptPart)
+		if len(messages) != 3 || prompt.Content != "go" ||
+			messages[2].(ai.ModelRequest).State != ai.RequestStateInterrupted {
+			t.Fatalf("parent did not report its own history: %+v", messages)
+		}
+	})
+}
+
+func TestNestedRunOwnDeadlineLeavesParentRunning(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		child := ai.NewAgent[deps, string](fakes.NewFunctionModel(func(
+			ctx context.Context, _ []ai.ModelMessage, _ ai.ModelRequestParams,
+		) (*ai.ModelResponse, error) {
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}))
+		parent := ai.NewAgent[deps, string](fakes.NewTestModel())
+		ai.AddTool(parent, "delegate", func(
+			ctx context.Context, rc *ai.RunContext[deps], _ struct{},
+		) (string, error) {
+			ctx, cancel := context.WithTimeout(ctx, time.Second)
+			defer cancel()
+			result, err := child.Run(ctx, "sub", rc.Deps)
+			if errors.Is(err, context.DeadlineExceeded) {
+				return "", ai.ToolFailedf("specialist: %v", err)
+			}
+			if err != nil {
+				return "", err
+			}
+			return result.Output, nil
+		})
+		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+		defer cancel()
+
+		result, err := parent.Run(ctx, "go", deps{})
+		if err != nil {
+			t.Fatalf("specialist deadline ended the parent: %v", err)
+		}
+		failed := result.Messages()[2].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
+		if failed.Outcome != ai.ToolReturnOutcomeFailed {
+			t.Fatalf("expected a failed tool call, got %+v", failed)
+		}
+	})
 }

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"slices"
 	"sync"
@@ -490,6 +491,9 @@ func telemetryOutputValue(value any, includeBinary bool) any {
 			content = append(content, telemetryOutputUserContent(item, includeBinary))
 		}
 		value.Content = content
+		if !includeBinary {
+			value.Metadata = withoutMCPAppBinary(value.Metadata)
+		}
 		return value
 	case DeferredToolRequests:
 		return map[string]any{
@@ -524,6 +528,48 @@ func telemetryOutputValue(value any, includeBinary bool) any {
 	default:
 		return value
 	}
+}
+
+// withoutMCPAppBinary drops the base64 payloads an MCP Apps record keeps in wire form,
+// which are strings rather than BinaryContent.
+func withoutMCPAppBinary(metadata map[string]any) map[string]any {
+	app, _ := metadata[MCPAppMetadataKey].(map[string]any)
+	result, _ := app["result"].(map[string]any)
+	content, ok := result["content"].([]any)
+	if !ok {
+		return metadata
+	}
+	blocks := make([]any, len(content))
+	for index, block := range content {
+		blocks[index] = block
+		object, ok := block.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch object["type"] {
+		case "image", "audio":
+			blocks[index] = withoutKey(object, "data")
+		case "resource":
+			if resource, ok := object["resource"].(map[string]any); ok {
+				redacted := maps.Clone(object)
+				redacted["resource"] = withoutKey(resource, "blob")
+				blocks[index] = redacted
+			}
+		}
+	}
+	result = maps.Clone(result)
+	result["content"] = blocks
+	app = maps.Clone(app)
+	app["result"] = result
+	metadata = maps.Clone(metadata)
+	metadata[MCPAppMetadataKey] = app
+	return metadata
+}
+
+func withoutKey(object map[string]any, key string) map[string]any {
+	cloned := maps.Clone(object)
+	delete(cloned, key)
+	return cloned
 }
 
 func telemetryOutputUserContent(content UserContent, includeBinary bool) UserContent {

@@ -14,6 +14,7 @@ func TestMessagesRoundTrip(t *testing.T) {
 		ai.ModelRequest{Parts: []ai.RequestPart{
 			ai.SystemPromptPart{Content: "be nice"},
 			ai.UserPromptPart{Content: "weather in SF?"},
+			ai.SystemPromptPart{Content: "answer briefly", Scope: ai.SystemPromptScopeRequest},
 		}},
 		ai.ModelResponse{
 			Parts: []ai.ResponsePart{
@@ -152,6 +153,11 @@ func TestMarshalUnmarshalEdgeCases(t *testing.T) {
 	}
 	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"request","parts":[{"part_kind":"mystery"}]}]`)); err == nil {
 		t.Fatal("expected error for unknown request part kind")
+	}
+	if _, err := ai.UnmarshalMessages(
+		[]byte(`[{"kind":"request","parts":[{"part_kind":"system-prompt","content":"x","scope":"turn"}]}]`),
+	); err == nil {
+		t.Fatal("expected error for unknown system prompt scope")
 	}
 	if _, err := ai.UnmarshalMessages([]byte(`[{"kind":"response","parts":[{"part_kind":"mystery"}]}]`)); err == nil {
 		t.Fatal("expected error for unknown response part kind")

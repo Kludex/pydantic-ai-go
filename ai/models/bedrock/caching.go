@@ -8,8 +8,20 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
 )
 
-// ModelProfile reports request-side cache support for Claude and Nova models.
-func (model *Model) ModelProfile() ai.ModelProfile { return cacheProfile(model.name) }
+// ModelProfile reports request-side cache support for Claude and Nova models, the tool call
+// ID length Mistral models accept, and that Claude copies markup from earlier assistant turns.
+func (model *Model) ModelProfile() ai.ModelProfile {
+	profile := cacheProfile(model.name)
+	if strings.Contains(strings.ToLower(model.name), "mistral.") {
+		profile.ToolCallIDLength = 9
+	}
+	profile.MimicsAssistantMessageFormatting = mimicsAssistantMessageFormatting(model.name)
+	return profile
+}
+
+func mimicsAssistantMessageFormatting(name string) bool {
+	return strings.Contains(strings.ToLower(name), "claude")
+}
 
 func cacheProfile(name string) ai.ModelProfile {
 	profile := ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool}

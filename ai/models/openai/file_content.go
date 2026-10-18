@@ -127,7 +127,8 @@ func imageDetail(metadata map[string]any) string {
 }
 
 func isTextLikeMediaType(mediaType string) bool {
-	mediaType = strings.ToLower(mediaType)
+	mediaType, _, _ = strings.Cut(mediaType, ";")
+	mediaType = strings.ToLower(strings.TrimSpace(mediaType))
 	return strings.HasPrefix(mediaType, "text/") || mediaType == "application/json" ||
 		strings.HasSuffix(mediaType, "+json") || mediaType == "application/xml" ||
 		strings.HasSuffix(mediaType, "+xml") || mediaType == "application/x-yaml" ||

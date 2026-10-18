@@ -76,7 +76,9 @@ func main() {
 }
 ```
 
-`DocumentURL` and `AudioURL` infer their media types from common file extensions. Set `MediaType` when a URL has no extension. Each type provides `ResolvedIdentifier()` for a stable six-character file identifier.
+`DocumentURL` and `AudioURL` infer their media types from common file extensions. Set `MediaType` when a provider needs one and the URL has no extension. Persisted history writes `media_type: null` for an extensionless URL, so you can save and reload a request even when its provider consumes the URL directly. Each type provides `ResolvedIdentifier()` for a stable six-character file identifier.
+
+Use `BinaryContentFromDataURI` to decode a base64 data URI. It preserves media type parameters such as `charset=utf-8` and accepts percent-encoded base64 payloads.
 
 OpenAI Responses sends document and audio URLs as `input_file`. Forced downloads become base64 file data. OpenAI Chat Completions downloads audio and accepts MP3 or WAV data. It downloads documents, sends supported binary documents as files, and wraps text-like documents in stable file delimiters.
 
@@ -122,6 +124,49 @@ OpenRouter sends `VideoURL` as its `video_url` extension. It also sends `BinaryC
 `VideoURL` infers common video media types from the URL extension. Set `MediaType` when the URL has no recognizable extension. `ResolvedIdentifier()` returns a stable six-character identifier unless you provide `Identifier`.
 
 Google sends YouTube URLs, Gemini Files API URLs, and Vertex `gs://` URLs directly. It downloads other Gemini API video URLs and sends the bytes inline.
+
+### Agentic video processing
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/google"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](google.NewModel("gemini-3.7-flash"))
+	result, err := agent.RunParts(
+		context.Background(),
+		[]ai.UserContent{
+			ai.TextContent{Text: "Summarize the important moments with timestamps."},
+			ai.VideoURL{
+				URL:            "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
+				VendorMetadata: map[string]any{"media_processing": "AGENTIC"},
+			},
+		},
+		struct{}{},
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Agentic video processing lets Gemini inspect relevant video segments on demand. Without `media_processing`, Gemini uses its default static processing. [Google recommends](https://ai.google.dev/gemini-api/docs/generate-content/video-understanding#choose_a_processing_mode) static processing for short clips, whole-video summaries, latency-sensitive queries, or frame-level precision. Agentic processing suits long videos and retrieving specific moments or topics.
+
+Google forwards `VendorMetadata["media_processing"]` as the per-part `mediaProcessing` field on `VideoURL`, `BinaryContent`, and `UploadedFile`. It composes with `media_resolution`. The video source and the processing mode are independent: a YouTube URL is still sent directly, without a download.
+
+On the Gemini API, each processing step appears in the response as a `NativeToolCallPart` and `NativeToolReturnPart` named `media_processing`. Vertex AI returns signature-only parts for these steps, so they do not appear in the message history.
+
+!!! note "Follow-up requests process the video again"
+    Google omits media-processing steps from later requests because Gemini rejects them. The final text and its thought signature stay in history. When that history still includes the original video, a follow-up request processes it again and can incur more video-processing tokens.
 
 ## Control URL downloads
 
@@ -215,6 +260,8 @@ func main() {
 `CachePoint` marks the preceding content item. It cannot be the first item. The zero value uses five minutes. Anthropic accepts five-minute and one-hour boundaries and keeps the newest four. OpenAI GPT-5.6 Chat Completions and Responses use explicit cache breakpoints and ignore the per-marker TTL.
 
 OpenRouter maps cache points for Anthropic and Gemini routes. It includes TTL only for Anthropic, enforces Anthropic's four-point limit, and maps OpenAI GPT-5.6 routes to OpenAI breakpoints. Unsupported providers validate and omit the marker.
+
+On OpenRouter Anthropic and Gemini routes, a `CachePoint` that opens a user message marks the end of the previous user message instead, keeping a one-hour TTL already there. A tool result in between does not carry it, because OpenRouter does not document `cache_control` on tool results. With no earlier user message the marker is dropped. A marker with only instructions or nothing before it, or with nothing after it in its message, returns an error.
 
 ## Reference an uploaded file
 

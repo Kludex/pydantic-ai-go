@@ -48,6 +48,7 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		stream := adapter.agent.RunStream(ctx, prompt.Content, deps, runOptions...)
 		for chunk, eventErr := range TransformStreamWithConfig(stream.Events(), StreamConfig{
 			SDKVersion: adapter.config.SDKVersion, ServerMessageID: adapter.config.ServerMessageID,
+			AllowSystemPrompts: adapter.config.Sanitization.AllowSystemPrompts,
 		}) {
 			if !yield(chunk, eventErr) || eventErr != nil {
 				return

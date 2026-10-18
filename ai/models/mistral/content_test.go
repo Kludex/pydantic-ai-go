@@ -61,6 +61,8 @@ func TestDownloadedAndDirectContent(t *testing.T) {
 				URL: server.URL + "/octet-pdf", MediaType: "application/pdf", ForceDownload: ai.FileDownloadAllowLocal,
 			},
 			ai.BinaryContent{Data: []byte("name = \"demo\""), MediaType: "application/toml", Identifier: "project"},
+			ai.BinaryContent{Data: []byte("plain"), MediaType: "text/plain;charset=utf-8", Identifier: "t"},
+			ai.BinaryContent{Data: []byte("{}"), MediaType: "application/json; charset=utf-8", Identifier: "j"},
 		}},
 	}}}, ai.ModelRequestParams{AllowText: true})
 	if err != nil {
@@ -71,7 +73,7 @@ func TestDownloadedAndDirectContent(t *testing.T) {
 		t.Fatalf("plain content was not preserved: %#v", messages)
 	}
 	content := messages[1].(map[string]any)["content"].([]any)
-	if len(content) != 9 ||
+	if len(content) != 11 ||
 		!strings.HasPrefix(content[0].(map[string]any)["image_url"].(map[string]any)["url"].(string), "data:image/png;base64,") ||
 		content[1].(map[string]any)["image_url"].(map[string]any)["detail"] != "auto" ||
 		!strings.Contains(content[2].(map[string]any)["text"].(string), "downloaded text") ||
@@ -80,7 +82,11 @@ func TestDownloadedAndDirectContent(t *testing.T) {
 		!strings.HasPrefix(content[5].(map[string]any)["image_url"].(map[string]any)["url"].(string), "data:image/png;base64,") ||
 		!strings.Contains(content[6].(map[string]any)["text"].(string), "octets") ||
 		!strings.HasPrefix(content[7].(map[string]any)["document_url"].(string), "data:application/pdf;base64,") ||
-		!strings.Contains(content[8].(map[string]any)["text"].(string), `name = "demo"`) {
+		!strings.Contains(content[8].(map[string]any)["text"].(string), `name = "demo"`) ||
+		content[9].(map[string]any)["text"] !=
+			"-----BEGIN FILE id=\"t\" type=\"text/plain;charset=utf-8\"-----\nplain\n-----END FILE id=\"t\"-----" ||
+		content[10].(map[string]any)["type"] != "text" ||
+		!strings.Contains(content[10].(map[string]any)["text"].(string), "{}") {
 		t.Fatalf("unexpected downloaded content: %#v", content)
 	}
 	for _, item := range []ai.UserContent{

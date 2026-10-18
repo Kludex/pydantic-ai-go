@@ -18,6 +18,7 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
+	"github.com/Kludex/pydantic-ai-go/ai/realtime/internal/seed"
 	"google.golang.org/genai"
 )
 
@@ -373,9 +374,18 @@ func (model *Model) liveConfig(
 		config.Tools = append(config.Tools, &genai.Tool{FunctionDeclarations: declarations})
 	}
 	for _, tool := range request.NativeTools {
-		if tool.Kind() == "web_search" {
-			config.Tools = append(config.Tools, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
+		search, ok := tool.CloneNativeTool().(ai.WebSearchTool)
+		if !ok {
+			continue
 		}
+		if search.AllowedDomains != nil || search.BlockedDomains != nil || search.MaxUses != 0 ||
+			search.ExternalWebAccess != nil && !*search.ExternalWebAccess {
+			if search.Optional {
+				continue
+			}
+			return nil, fmt.Errorf("google realtime: web search cannot apply domain filters, max uses, or cached-only access")
+		}
+		config.Tools = append(config.Tools, &genai.Tool{GoogleSearch: &genai.GoogleSearch{}})
 	}
 	if settings.ConfigOverrides != nil {
 		settings.ConfigOverrides(config)
@@ -1031,7 +1041,7 @@ func seedTurns(messages []ai.ModelMessage, profile realtime.Profile) ([]*genai.C
 			}
 		case ai.ModelResponse:
 			content.Role = "model"
-			for _, part := range message.Parts {
+			for index, part := range message.Parts {
 				switch part := part.(type) {
 				case ai.TextPart:
 					content.Parts = append(content.Parts, genai.NewPartFromText(part.Content))
@@ -1039,7 +1049,9 @@ func seedTurns(messages []ai.ModelMessage, profile realtime.Profile) ([]*genai.C
 					if part.Transcript == nil {
 						return nil, fmt.Errorf("google realtime: seeded speech requires a transcript")
 					}
-					content.Parts = append(content.Parts, genai.NewPartFromText(*part.Transcript))
+					if part.Content() != "" {
+						content.Parts = append(content.Parts, genai.NewPartFromText(seed.AssistantSpeech(message, index)))
+					}
 				case ai.ThinkingPart:
 					content.Parts = append(content.Parts, genai.NewPartFromText("<think>\n"+part.Content+"\n</think>"))
 				case ai.ToolCallPart:

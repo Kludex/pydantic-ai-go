@@ -264,3 +264,27 @@ func jsonResponse(body string) *http.Response {
 		Body:       io.NopCloser(strings.NewReader(body)),
 	}
 }
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	t.Setenv("OPENAI_API_VERSION", "")
+	config := azure.Config{Endpoint: "https://example.openai.azure.com/openai/v1", APIKey: "key"}
+	for _, test := range []struct {
+		deployment string
+		options    []openai.Option
+		want       int
+	}{
+		{deployment: "mistral-large-2411", want: 9},
+		{deployment: "Ministral-3B", want: 9},
+		{deployment: "magistral-medium", want: 9},
+		{deployment: "mistral-large-2411", options: []openai.Option{openai.WithToolCallIDLength(0)}},
+		{deployment: "gpt-5"},
+	} {
+		model, err := azure.NewModel(test.deployment, config, test.options...)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := model.ModelProfile().ToolCallIDLength; got != test.want {
+			t.Fatalf("%s tool call ID length = %d, want %d", test.deployment, got, test.want)
+		}
+	}
+}

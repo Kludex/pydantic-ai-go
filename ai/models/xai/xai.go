@@ -139,8 +139,10 @@ func (model *Model) SupportsNativeTool(tool ai.NativeTool) bool {
 	if !supportsNativeTools(model.Name()) || ai.ValidateNativeTools([]ai.NativeTool{tool}) != nil {
 		return false
 	}
-	switch tool.CloneNativeTool().(type) {
-	case ai.WebSearchTool, ai.CodeExecutionTool, ai.MCPServerTool, ai.XSearchTool, ai.FileSearchTool:
+	switch tool := tool.CloneNativeTool().(type) {
+	case ai.WebSearchTool:
+		return tool.MaxUses == 0 && (tool.ExternalWebAccess == nil || *tool.ExternalWebAccess)
+	case ai.CodeExecutionTool, ai.MCPServerTool, ai.XSearchTool, ai.FileSearchTool:
 		return true
 	default:
 		return false

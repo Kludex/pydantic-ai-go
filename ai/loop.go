@@ -49,6 +49,8 @@ func (a *Agent[Deps, Output]) RunParts(ctx context.Context, contents []UserConte
 
 // Resume continues a provider response left suspended in history without
 // adding a new user prompt. History must end with ModelResponseStateSuspended.
+// Pass nil history with WithConversation to resume a stored conversation and
+// carry its usage, so usage limits cap the conversation total.
 func (a *Agent[Deps, Output]) Resume(
 	ctx context.Context, history []ModelMessage, deps Deps, opts ...RunOption,
 ) (*RunResult[Output], error) {
@@ -58,8 +60,10 @@ func (a *Agent[Deps, Output]) Resume(
 func suspendedRunOptions(history []ModelMessage, opts []RunOption) []RunOption {
 	options := slices.Clone(opts)
 	options = append(options, func(cfg *runConfig) {
-		cfg.history = cloneModelMessages(history)
-		cfg.historySet = true
+		if history != nil {
+			cfg.history = cloneModelMessages(history)
+			cfg.historySet = true
+		}
 		cfg.resumeSuspended = true
 	})
 	return options
@@ -424,12 +428,13 @@ func (a *Agent[Deps, Output]) newRun(
 		RunID: runID, ConversationID: conversationID, Model: model, ModelSettings: settings, UsageLimits: limits,
 		usage: &r.usage, usageMu: &r.usageMu, toolCalls: &r.toolCalls, messages: &r.messages,
 		revealedTools: &r.revealedTools, pendingMessages: r.pendingMessages, cancellation: cancellation,
+		toolRetries: r.toolRetryCount,
 	}
 	r.info = &RunInfo{
 		RunID: runID, ConversationID: conversationID, prompt: cloneUserPromptPart(prompt),
 		agentName: a.name, agentDescription: description,
 		usage: &r.usage, usageMu: &r.usageMu, toolCalls: &r.toolCalls, messages: &r.messages, newMessages: r.newMessages,
-		metadata: &r.metadata, model: func() Model { return r.model },
+		metadata: &r.metadata, model: func() Model { return r.model }, startingSystemPrompts: &r.startingSystemPrompts,
 		systemPrompts: func(ctx context.Context) ([]SystemPromptPart, error) {
 			return r.configuredSystemPromptParts(ctx, r.rc)
 		},
@@ -636,19 +641,23 @@ type trackedToolCall struct {
 
 func repairDanglingToolCalls(messages []ModelMessage, preserveDangling bool) ([]ModelMessage, []RequestPart) {
 	tracked := make([]*trackedToolCall, 0)
-	open := map[string]*trackedToolCall{}
+	open := map[string][]*trackedToolCall{}
 	for index, message := range messages {
 		switch message := message.(type) {
 		case ModelResponse:
 			for _, call := range message.ToolCalls() {
 				key := toolCallMatchKey(call.ToolName, call.ToolCallID)
-				if shadowed := open[key]; shadowed != nil {
-					shadowed.active = false
-					shadowed.dangling = true
+				pending := open[key]
+				if len(pending) > 0 && pending[len(pending)-1].responseIndex != index {
+					for _, shadowed := range pending {
+						shadowed.active = false
+						shadowed.dangling = true
+					}
+					pending = nil
 				}
 				item := &trackedToolCall{responseIndex: index, call: call, active: true}
 				tracked = append(tracked, item)
-				open[key] = item
+				open[key] = append(pending, item)
 			}
 		case ModelRequest:
 			for _, part := range message.Parts {
@@ -657,9 +666,10 @@ func repairDanglingToolCalls(messages []ModelMessage, preserveDangling bool) ([]
 					continue
 				}
 				key := toolCallMatchKey(toolName, toolCallID)
-				if item := open[key]; item != nil {
-					item.active = false
-					delete(open, key)
+				pending := open[key]
+				if len(pending) > 0 {
+					pending[0].active = false
+					open[key] = pending[1:]
 				}
 			}
 		}
@@ -771,6 +781,7 @@ type run[Deps, Output any] struct {
 	currentToolEntries         map[string]toolEntry[Deps]
 	staticInstructions         []InstructionPart
 	systemPromptsPrepared      bool
+	startingSystemPrompts      []SystemPromptPart
 	capSettings                []capabilitySettingsLayer
 	runSettings                *ModelSettings
 	usageLimits                UsageLimits
@@ -782,6 +793,7 @@ type run[Deps, Output any] struct {
 	resolvedModels             map[string]Model
 	carriedWorkspaceRef        *WorkspaceRef
 	resumeSeed                 *ModelResponse
+	resumed                    *ModelResponse
 	detachedResponse           *ModelResponse
 	enteredModels              []Model
 	modelClosers               []ModelCloseFunc
@@ -1125,6 +1137,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 	if r.cacheMarks == nil {
 		r.cacheMarks = bindCacheMarks(r.rc.ConversationID)
 	}
+	r.resumed = nil
 	observation := &modelRequestObservation{marks: r.cacheMarks, started: time.Now()}
 	ctx = context.WithValue(ctx, modelRequestObservationKey{}, observation)
 	r.revealedTools = revealedToolNames(r.messages)
@@ -1177,7 +1190,7 @@ func (r *run[Deps, Output]) modelRequest(ctx context.Context) (*ModelResponse, e
 			endSpan(reqSpan, err)
 			return resp, err
 		}
-		recordUsage(reqSpan, resp.Usage)
+		recordUsage(reqSpan, billedBeyond(resp, r.resumed).Usage)
 		endSpan(reqSpan, nil)
 		return resp, nil
 	}
@@ -1958,7 +1971,7 @@ func (r *run[Deps, Output]) prepareModelParams(ctx context.Context) (ModelReques
 		prepared := cloneToolDefinition(def)
 		entry, _ := r.findTool(def.Name)
 		if entry.prepare != nil {
-			result, err := entry.prepare(ctx, rc, prepared)
+			result, err := entry.prepare(ctx, rc.forTool(def.Name), prepared)
 			if err != nil {
 				return ModelRequestParams{}, fmt.Errorf("ai: prepare tool %q: %w", def.Name, err)
 			}
@@ -2300,11 +2313,14 @@ func (r *run[Deps, Output]) doModelRequest(
 ) (*ModelResponse, error) {
 	observation, _ := ctx.Value(modelRequestObservationKey{}).(*modelRequestObservation)
 	baseMessages := slices.Clone(msgs)
+	resumed := pricedResumedResponse(ctx, baseMessages)
+	r.resumed = resumed
+	if observation != nil {
+		observation.resumed = resumed
+	}
 	var response *ModelResponse
-	if historyEndsSuspended(baseMessages) {
-		seed := baseMessages[len(baseMessages)-1].(ModelResponse)
-		response = cloneModelResponse(&seed)
-		fillResponseCost(ctx, response)
+	if resumed != nil {
+		response = cloneModelResponse(resumed)
 		baseMessages = baseMessages[:len(baseMessages)-1]
 	}
 	lastMode := continuationAccumulate
@@ -2352,6 +2368,13 @@ func (r *run[Deps, Output]) doModelRequest(
 			observation.record(r.model, msgs, params, response, segment)
 		}
 		if err != nil {
+			var exhausted *FallbackExhaustedError
+			if errors.As(err, &exhausted) {
+				r.addUsage(modelRequestAttemptsUsage(exhausted.Attempts()))
+				if limitErr := r.rc.UsageLimits.check(r.usageSnapshot()); limitErr != nil {
+					return nil, errors.Join(limitErr, err)
+				}
+			}
 			prior := response
 			partial := response
 			if segment != nil {
@@ -2405,8 +2428,10 @@ func (r *run[Deps, Output]) doModelRequest(
 			}
 		}
 		if response.State == ModelResponseStateSuspended {
+			billed := billedBeyond(response, resumed)
 			projected := r.usageSnapshot()
-			projected.Add(response.Usage)
+			projected.Add(modelRequestAttemptsUsage(billed.FailedAttempts))
+			projected.Add(billed.Usage)
 			if err := r.rc.UsageLimits.check(projected); err != nil {
 				r.cancelSuspendedResponse(response)
 				return nil, err
@@ -2478,6 +2503,8 @@ func (r *run[Deps, Output]) publishUsage(response *ModelResponse) {
 	if response != nil {
 		priced := cloneModelResponse(response)
 		fillResponseCost(r.ctx, priced)
+		priced = billedBeyond(priced, r.resumed)
+		usage.Add(modelRequestAttemptsUsage(priced.FailedAttempts))
 		usage.Add(priced.Usage)
 	}
 	r.observeUsage(usage)
@@ -2514,6 +2541,9 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 	defer r.refreshWorkspaceRef()
 	for {
 		r.refreshWorkspaceRef()
+		if r.cancelled() {
+			return nil, ErrRunCancelled
+		}
 		resp, err := r.modelRequest(ctx)
 		if err != nil {
 			var retry *RetryError
@@ -2526,12 +2556,19 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			if resp != nil {
 				resp = cloneModelResponse(resp)
 				fillResponseCost(ctx, resp)
-				r.addUsage(resp.Usage)
+				billed := billedBeyond(resp, r.resumed)
+				r.addUsage(modelRequestAttemptsUsage(billed.FailedAttempts))
+				r.addUsage(billed.Usage)
 				r.publishUsage(nil)
 				if applyErr := r.applyResponseToolKinds(resp); applyErr != nil {
 					return nil, applyErr
 				}
 				r.messages = append(r.messages, *resp)
+				if r.emit != nil && r.commitStreamedOutput && r.streamedFinalResult(resp) {
+					return nil, &UnexpectedModelBehaviorError{Message: streamHookRetried}
+				}
+			} else {
+				r.dropUnansweredRequestScopedPrompts()
 			}
 			r.recordRetry(RetryPromptPart{Content: retry.Message})
 			continue
@@ -2544,7 +2581,9 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		}
 		resp = cloneModelResponse(resp)
 		fillResponseCost(ctx, resp)
-		r.addUsage(resp.Usage)
+		billed := billedBeyond(resp, r.resumed)
+		r.addUsage(modelRequestAttemptsUsage(billed.FailedAttempts))
+		r.addUsage(billed.Usage)
 		r.publishUsage(nil)
 		if err := r.applyResponseToolKinds(resp); err != nil {
 			return nil, err
@@ -2573,7 +2612,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 			}
 			if committed {
 				parts, err := r.executeCallsWithCommittedOutput(ctx, calls, winningCall)
-				if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
+				if r.cancelled() {
 					if len(calls) > 0 {
 						r.appendRequest(parts, RequestStateInterrupted)
 					}
@@ -2637,7 +2676,7 @@ func (r *run[Deps, Output]) loop(ctx context.Context) (*RunResult[Output], error
 		}
 
 		parts, final, err := r.executeCalls(ctx, calls)
-		if errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
+		if r.cancelled() {
 			r.appendRequest(parts, RequestStateInterrupted)
 			return nil, ErrRunCancelled
 		}
@@ -3249,7 +3288,7 @@ func (r *run[Deps, Output]) executeOne(ctx context.Context, call ToolCallPart) c
 		outcome.part = nil
 		outcome.deferred = &deferred
 	}
-	if err == nil && errors.Is(context.Cause(r.ctx), ErrRunCancelled) {
+	if err == nil && r.cancelled() {
 		outcome.part = nil
 		outcome.extraParts = nil
 		outcome.output = nil
@@ -3978,6 +4017,34 @@ func validationRetryPrompt(err error, raw json.RawMessage, toolName, toolCallID,
 	}
 }
 
+// dropUnansweredRequestScopedPrompts removes the request-scoped prompts of a
+// step given up without a response, so the retry does not send them beside its own.
+// An emptied request is removed unless it is the only trailing one.
+func (r *run[Deps, Output]) dropUnansweredRequestScopedPrompts() {
+	start := len(r.messages)
+	for start > 0 {
+		if _, ok := r.messages[start-1].(ModelRequest); !ok {
+			break
+		}
+		start--
+	}
+	for index := len(r.messages) - 1; index >= start; index-- {
+		request := r.messages[index].(ModelRequest)
+		if !slices.ContainsFunc(request.Parts, isRequestScoped) {
+			continue
+		}
+		request.Parts = slices.DeleteFunc(slices.Clone(request.Parts), isRequestScoped)
+		if len(request.Parts) > 0 || len(r.messages)-start == 1 {
+			r.messages[index] = request
+			continue
+		}
+		r.messages = slices.Delete(r.messages, index, index+1)
+		if index < r.newMessages {
+			r.newMessages--
+		}
+	}
+}
+
 func (r *run[Deps, Output]) recordRetry(part RetryPromptPart) {
 	r.appendRequest([]RequestPart{part}, RequestStateComplete)
 }
@@ -4036,6 +4103,12 @@ func (r *run[Deps, Output]) countToolRetry(name string) error {
 		return fmt.Errorf("%w: tool %q exceeded %d retries", ErrMaxRetriesExceeded, name, maxRetries)
 	}
 	return nil
+}
+
+func (r *run[Deps, Output]) toolRetryCount(name string) int {
+	r.retriesMu.Lock()
+	defer r.retriesMu.Unlock()
+	return r.toolRetries[name]
 }
 
 func (r *run[Deps, Output]) toolRetryInfo(name string) (int, int) {
@@ -4203,6 +4276,11 @@ func (r *run[Deps, Output]) prepareSystemPrompts(ctx context.Context, rc *RunCon
 				Content: content, Timestamp: time.Now().UTC(), DynamicRef: part.DynamicRef,
 			}
 		}
+		for _, part := range parts {
+			if part, ok := part.(SystemPromptPart); ok {
+				r.startingSystemPrompts = append(r.startingSystemPrompts, part)
+			}
+		}
 		request.Parts = parts
 		r.messages[messageIndex] = request
 	}
@@ -4213,6 +4291,7 @@ func (r *run[Deps, Output]) prepareSystemPrompts(ctx context.Context, rc *RunCon
 	if err != nil {
 		return err
 	}
+	r.startingSystemPrompts = parts
 	if len(parts) == 0 {
 		return nil
 	}
@@ -4431,11 +4510,14 @@ func (r *run[Deps, Output]) wrappedLoop(ctx context.Context) (*RunResult[Output]
 	}
 	outcome, err := next(ctx)
 	cause := context.Cause(r.ctx)
-	if errors.Is(cause, ErrRunCancelled) {
+	if r.cancelled() {
 		usage := r.usageSnapshot()
 		usage.ToolCalls += int(r.toolCalls.Load())
 		cancelled := &RunCancelledError{
 			messages: slices.Clone(r.messages), usage: usage, metadata: r.metadata.snapshot(),
+		}
+		if !errors.Is(cause, ErrRunCancelled) {
+			cancelled.deadline = cause
 		}
 		if persistErr := persistPendingMessages(r.messages, r.pendingMessages); persistErr != nil {
 			return nil, errors.Join(cancelled, persistErr)

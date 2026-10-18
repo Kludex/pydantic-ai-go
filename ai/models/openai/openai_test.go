@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -604,8 +605,9 @@ func TestParseErrors(t *testing.T) {
 		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(body))
 		})
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
-			t.Fatalf("%s: expected error", name)
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+		if err == nil || name == "invalid json" && !errors.As(err, new(ai.ModelAPIError)) {
+			t.Fatalf("%s: unexpected error %v", name, err)
 		}
 	}
 }
@@ -810,11 +812,16 @@ func TestChatFileContent(t *testing.T) {
 		ai.BinaryContent{Data: []byte("config"), MediaType: "text/plain", Identifier: "config"},
 		ai.BinaryContent{Data: []byte("name = \"demo\""), MediaType: "application/toml", Identifier: "project"},
 		ai.UploadedFile{FileID: "file-report", ProviderName: "openai", MediaType: "application/pdf"},
+		ai.BinaryContent{Data: []byte("x"), MediaType: "application/json; charset=utf-8", Identifier: "j"},
 	}}}}}
 	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
 		t.Fatal(err)
 	}
 	parts := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if parts[9].(map[string]any)["type"] != "text" || parts[9].(map[string]any)["text"] !=
+		"-----BEGIN FILE id=\"j\" type=\"application/json; charset=utf-8\"-----\nx\n-----END FILE id=\"j\"-----" {
+		t.Fatalf("parameterized JSON media type was not inlined as text: %#v", parts[9])
+	}
 	if parts[0].(map[string]any)["input_audio"].(map[string]any)["data"] != "ZmlsZQ==" ||
 		parts[0].(map[string]any)["input_audio"].(map[string]any)["format"] != "mp3" ||
 		parts[1].(map[string]any)["file"].(map[string]any)["file_data"] !=
@@ -1043,5 +1050,210 @@ func TestParallelToolCallsSetting(t *testing.T) {
 	}
 	if _, exists := bodies[1]["parallel_tool_calls"]; exists {
 		t.Fatalf("parallel setting sent without tools: %v", bodies[1])
+	}
+}
+
+func TestTextVerbosity(t *testing.T) {
+	var bodies []map[string]any
+	record := func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if strings.HasSuffix(request.URL.Path, "/responses") {
+			_, _ = response.Write([]byte(`{"status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"{}"}]}]}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"model":"gpt-5","choices":[{"message":{"content":"4"}}]}`))
+	}
+	chat := newServer(t, record)
+	responses := newResponsesServer(t, record)
+	low, err := (openai.Settings{TextVerbosity: openai.TextVerbosityLow}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := ai.ModelRequestParams{
+		Settings: low, OutputSchema: map[string]any{"type": "object"}, OutputMode: ai.OutputModeNative,
+	}
+	for _, request := range []func() error{
+		func() error {
+			_, err := chat.Request(t.Context(), nil, ai.ModelRequestParams{Settings: low})
+			return err
+		},
+		func() error { _, err := chat.Request(t.Context(), nil, ai.ModelRequestParams{}); return err },
+		func() error {
+			_, err := responses.Request(t.Context(), nil, ai.ModelRequestParams{Settings: low})
+			return err
+		},
+		func() error { _, err := responses.Request(t.Context(), nil, native); return err },
+	} {
+		if err := request(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if bodies[0]["verbosity"] != "low" || bodies[1]["verbosity"] != nil || bodies[0]["openai_text_verbosity"] != nil {
+		t.Fatalf("unexpected Chat verbosity: %#v %#v", bodies[0], bodies[1])
+	}
+	if text := bodies[2]["text"].(map[string]any); text["verbosity"] != "low" || text["format"] != nil {
+		t.Fatalf("unexpected Responses text: %#v", text)
+	}
+	if text := bodies[3]["text"].(map[string]any); text["verbosity"] != "low" || text["format"] == nil {
+		t.Fatalf("unexpected Responses output text: %#v", text)
+	}
+
+	if _, err := (openai.Settings{TextVerbosity: "loud"}).Build(); err == nil ||
+		!strings.Contains(err.Error(), `invalid text verbosity "loud"`) {
+		t.Fatalf("unexpected invalid verbosity error: %v", err)
+	}
+	reserved := openai.Settings{Common: ai.ModelSettings{ExtraBody: map[string]any{"openai_text_verbosity": "low"}}}
+	if _, err := reserved.Build(); err == nil || !strings.Contains(err.Error(), "reserved") {
+		t.Fatalf("unexpected reserved verbosity error: %v", err)
+	}
+	for _, value := range []any{"low", openai.TextVerbosity("loud")} {
+		params := ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"openai_text_verbosity": value},
+		}}
+		if _, err := chat.Request(t.Context(), nil, params); err == nil || !strings.Contains(err.Error(), "verbosity") {
+			t.Fatalf("unexpected Chat verbosity error for %v: %v", value, err)
+		}
+		if _, err := responses.Request(t.Context(), nil, params); err == nil ||
+			!strings.Contains(err.Error(), "verbosity") {
+			t.Fatalf("unexpected Responses verbosity error for %v: %v", value, err)
+		}
+	}
+}
+
+func TestChatToolCallExtraContent(t *testing.T) {
+	signature := map[string]any{"google": map[string]any{"thought_signature": "c2lnbmF0dXJl"}}
+	calls := `[{"extra_content":{"google":{"thought_signature":"c2lnbmF0dXJl"}},` +
+		`"function":{"arguments":"{\"city\":\"Taipei\"}","name":"get_weather"},"id":"call_1","type":"function"},` +
+		`{"extra_content":{},"function":{"arguments":"{\"city\":\"Kaohsiung\"}","name":"get_weather"},` +
+		`"id":"call_2","type":"function"}]`
+	var bodies []map[string]any
+	model := newServer(t, func(w http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if body["stream"] != true {
+			_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","tool_calls":` + calls + `},"finish_reason":"tool_calls"}]}`))
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		var parsed []map[string]any
+		if err := json.Unmarshal([]byte(calls), &parsed); err != nil {
+			t.Error(err)
+		}
+		parsed[1]["function"].(map[string]any)["arguments"] = `{"city":`
+		for _, call := range parsed {
+			chunk, _ := json.Marshal(map[string]any{"choices": []any{map[string]any{
+				"delta": map[string]any{"role": "assistant", "tool_calls": []any{call}},
+			}}})
+			_, _ = w.Write([]byte("data: " + string(chunk) + "\n\n"))
+		}
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"tool_calls":[{"function":{"arguments":"\"Kaohsiung\"}"}}]},` +
+			`"finish_reason":"tool_calls"}]}` + "\n\n" + "data: [DONE]\n\n"))
+	})
+	prompt := ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Weather in Taipei and Kaohsiung?"}}}
+	static, err := model.Request(t.Context(), []ai.ModelMessage{prompt}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, err := model.StreamRequest(t.Context(), []ai.ModelMessage{prompt}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamed, err := ai.CollectModelStream(events, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, response := range []*ai.ModelResponse{static, streamed} {
+		calls := response.ToolCalls()
+		if len(calls) != 2 || calls[1].ToolCallID != "call_2" || string(calls[1].Args) != `{"city":"Kaohsiung"}` ||
+			calls[1].ProviderDetails != nil {
+			t.Fatalf("unexpected tool calls: %#v", calls)
+		}
+		if got, _ := json.Marshal(calls[0].ProviderDetails); string(got) != `{"extra_content":{"google":{"thought_signature":"c2lnbmF0dXJl"}}}` {
+			t.Fatalf("unexpected tool call provider details: %s", got)
+		}
+		if _, err := model.Request(t.Context(), []ai.ModelMessage{prompt, *response}, ai.ModelRequestParams{}); err != nil {
+			t.Fatal(err)
+		}
+		replayed := bodies[len(bodies)-1]["messages"].([]any)[1].(map[string]any)["tool_calls"].([]any)
+		if got, _ := json.Marshal(replayed[0].(map[string]any)["extra_content"]); string(got) != `{"google":{"thought_signature":"c2lnbmF0dXJl"}}` {
+			t.Fatalf("thought signature was not replayed: %#v", replayed)
+		}
+		if _, exists := replayed[1].(map[string]any)["extra_content"]; exists {
+			t.Fatalf("unsigned call gained extra content: %#v", replayed)
+		}
+	}
+
+	other := ai.ModelResponse{ProviderName: "litellm", Parts: []ai.ResponsePart{ai.ToolCallPart{
+		ToolName: "get_weather", Args: json.RawMessage(`{"city":"Taipei"}`), ToolCallID: "call_1",
+		ProviderName: "litellm", ProviderDetails: map[string]any{"extra_content": signature},
+	}}}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{prompt, other}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	replayed := bodies[len(bodies)-1]["messages"].([]any)[1].(map[string]any)["tool_calls"].([]any)
+	if _, exists := replayed[0].(map[string]any)["extra_content"]; exists {
+		t.Fatalf("another provider's extra content was sent: %#v", replayed)
+	}
+}
+
+func TestChatBackfillsThinkingFieldOnCurrentTurnToolCalls(t *testing.T) {
+	var body map[string]any
+	model := openai.NewModel("deepseek-v4-flash",
+		openai.WithBaseURL(newHTTPServer(t, openAIRequestRecorder(t, &body)).URL),
+		openai.WithChatCompatibility(openai.ChatCompatibility{ReasoningFallback: true}),
+	)
+	call := func(id, city string) ai.ToolCallPart {
+		return ai.ToolCallPart{ToolName: "get_weather", Args: json.RawMessage(`{"city":"` + city + `"}`), ToolCallID: id}
+	}
+	weather := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Weather in Paris and then London?"}}},
+		ai.ModelResponse{ProviderName: "openai", Parts: []ai.ResponsePart{
+			ai.ThinkingPart{Content: "Check Paris first.", ID: "reasoning_content", ProviderName: "openai"},
+			call("call_1", "Paris"),
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "get_weather", Content: "sunny", ToolCallID: "call_1"}}},
+		ai.ModelResponse{ProviderName: "other", Parts: []ai.ResponsePart{call("call_2", "London")}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "get_weather", Content: "rainy", ToolCallID: "call_2"}}},
+	}
+	for _, test := range []struct {
+		name    string
+		history []ai.ModelMessage
+		want    string
+	}{
+		{name: "current turn", history: weather, want: `["Check Paris first.",""]`},
+		{name: "earlier turn", history: append(slices.Clone(weather),
+			ai.ModelResponse{ProviderName: "openai", Parts: []ai.ResponsePart{
+				ai.ThinkingPart{Content: "Both done.", ID: "reasoning_content", ProviderName: "openai"},
+				ai.TextPart{Content: "Paris is sunny and London is rainy."},
+			}},
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Which city should I visit?"}}},
+		), want: `["Check Paris first.",null,"Both done."]`},
+		{name: "two fields", history: append(slices.Clone(weather[:4]), ai.ModelResponse{
+			ProviderName: "openai", Parts: []ai.ResponsePart{
+				ai.ThinkingPart{Content: "Check Rome.", ID: "reasoning", ProviderName: "openai"}, call("call_3", "Rome"),
+			},
+		}), want: `["Check Paris first.",null,null]`},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := model.Request(t.Context(), test.history, ai.ModelRequestParams{}); err != nil {
+				t.Fatal(err)
+			}
+			var sent []any
+			for _, message := range body["messages"].([]any) {
+				if message := message.(map[string]any); message["role"] == "assistant" {
+					sent = append(sent, message["reasoning_content"])
+				}
+			}
+			if got, _ := json.Marshal(sent); string(got) != test.want {
+				t.Fatalf("unexpected reasoning_content: got %s want %s", got, test.want)
+			}
+		})
 	}
 }

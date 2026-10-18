@@ -96,7 +96,8 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		}
 		for event, eventErr := range TransformStreamWithConfig(stream.Events(), StreamConfig{
 			Version: adapter.config.Version, ThreadID: threadID, RunID: runID,
-			PreserveFileData: adapter.config.PreserveFileData,
+			PreserveFileData:   adapter.config.PreserveFileData,
+			AllowSystemPrompts: adapter.config.Sanitization.AllowSystemPrompts,
 		}) {
 			terminal := event.Type == EventRunFinished || event.Type == EventRunError
 			if terminal && !yieldQueuedEvents(yield, applicationEvents) {
@@ -145,7 +146,8 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 		}
 		transformer := eventTransformer{
 			runID: runID, version: version, preserveFileData: config.PreserveFileData,
-			calls: map[string]bool{}, partCalls: map[string]string{}, nativeCalls: map[string]string{},
+			allowSystemPrompts: config.AllowSystemPrompts,
+			calls:              map[string]bool{}, partCalls: map[string]string{}, nativeCalls: map[string]string{},
 			partActivities: map[string]string{},
 			outcome:        RunOutcome{Type: "success"},
 		}

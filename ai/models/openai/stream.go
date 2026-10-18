@@ -75,12 +75,13 @@ type chatChunk struct {
 			Annotations      []map[string]any   `json:"annotations"`
 			ExecutedTools    []chatExecutedTool `json:"executed_tools"`
 			ToolCalls        []struct {
-				Index    int    `json:"index"`
+				Index    *int   `json:"index"`
 				ID       string `json:"id"`
 				Function struct {
 					Name      string `json:"name"`
 					Arguments string `json:"arguments"`
 				} `json:"function"`
+				ExtraContent any `json:"extra_content"`
 			} `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason       string `json:"finish_reason"`
@@ -324,12 +325,17 @@ func (m *Model) eventStream(
 				}
 			}
 			for _, call := range delta.ToolCalls {
-				partID := fmt.Sprintf("tool:%d", call.Index)
-				if !startedTools[call.Index] {
-					startedTools[call.Index] = true
+				// Gemini omits the index, so a named call without one starts a new sequential part.
+				partID, start := "", call.Function.Name != ""
+				if call.Index != nil {
+					partID = fmt.Sprintf("tool:%d", *call.Index)
+					start = !startedTools[*call.Index]
+					startedTools[*call.Index] = true
+				}
+				if start {
 					if !yield(ai.ToolCallStartEvent{
 						PartID: partID, ToolName: call.Function.Name, ToolCallID: call.ID,
-						ProviderName: m.providerName,
+						ProviderName: m.providerName, ProviderDetails: toolCallProviderDetails(call.ExtraContent),
 					}, nil) {
 						return
 					}

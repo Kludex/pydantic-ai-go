@@ -68,6 +68,9 @@ func NewModel(name string, options ...Option) *openai.Model {
 		openai.WithChatCompatibility(compatibility),
 		openai.WithDeferredToolSupport(false),
 	}
+	if strings.HasPrefix(lowerName, "mistralai/") {
+		openAIOptions = append(openAIOptions, openai.WithToolCallIDLength(9))
+	}
 	openAIOptions = append(openAIOptions, configuration.options...)
 	return openai.NewModel(name, openAIOptions...)
 }

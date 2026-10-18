@@ -1,7 +1,6 @@
 package google
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -24,43 +23,56 @@ func (m *Model) StreamRequest(
 		return nil, err
 	}
 	payload.ModelArmorConfig = nil
+	body, serviceTier, err := m.openStream(ctx, payload, params.Settings)
+	if err != nil {
+		return nil, err
+	}
+	return m.eventStream(
+		m.continuedStream(ctx, body, payload, params.Settings), serviceTier, hasGoogleFileSearch(params.NativeTools),
+	), nil
+}
+
+func (m *Model) openStream(
+	ctx context.Context, payload *generateRequest, settings ai.ModelSettings,
+) (io.ReadCloser, string, error) {
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, fmt.Errorf("google: marshal request: %w", err)
+		return nil, "", fmt.Errorf("google: marshal request: %w", err)
 	}
 	endpoint := fmt.Sprintf("%s/models/%s:streamGenerateContent?alt=sse", m.baseURL, m.name)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	if err := m.prepareHTTPRequest(req, params.Settings); err != nil {
-		return nil, err
+	if err := m.prepareHTTPRequest(req, settings); err != nil {
+		return nil, "", err
 	}
 	req.Header.Set("Accept", "text/event-stream")
 
 	resp, err := m.httpClient.Do(req)
 	if err != nil {
-		return nil, ai.NewModelTransportError(ctx, m, "request", err)
+		return nil, "", ai.NewModelTransportError(ctx, m, "request", err)
 	}
 	if resp.StatusCode != http.StatusOK {
 		data, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
 		if err != nil {
-			return nil, ai.NewModelTransportError(ctx, m, "read error response", err)
+			return nil, "", ai.NewModelTransportError(ctx, m, "read error response", err)
 		}
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
+		return nil, "", &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return m.eventStream(
-		ctx, resp.Body, resp.Header.Get("x-gemini-service-tier"), hasGoogleFileSearch(params.NativeTools),
-	), nil
+	return resp.Body, resp.Header.Get("x-gemini-service-tier"), nil
 }
 
 func (m *Model) eventStream(
-	ctx context.Context, body io.ReadCloser, serviceTier string, fileSearchEnabled bool,
+	chunks iter.Seq2[googleStreamChunk, error], serviceTier string, fileSearchEnabled bool,
 ) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
-		defer func() { _ = body.Close() }()
 		usage := ai.Usage{Requests: 1}
+		var hopUsage ai.Usage
+		hop := 0
+		initialInputTokens := 0
+		partPrefix := ""
 		modelName := m.name
 		responseID := ""
 		finishReason := ""
@@ -84,17 +96,25 @@ func (m *Model) eventStream(
 		fileSearchIndex := 0
 		fileIndex := 0
 		received := false
-		scanner := bufio.NewScanner(body)
-		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			data, ok := strings.CutPrefix(scanner.Text(), "data:")
-			if !ok {
-				continue
-			}
-			var chunk generateResponse
-			if err := json.Unmarshal([]byte(strings.TrimSpace(data)), &chunk); err != nil {
-				yield(nil, ai.NewModelTransportError(ctx, m, "parse stream chunk", err))
+		mediaCallID := ""
+		mediaPendingPartID := ""
+		fillMediaCall := func(id string) bool {
+			partID := mediaPendingPartID
+			mediaPendingPartID = ""
+			return partID == "" || yield(ai.ToolCallDeltaEvent{PartID: partID, ToolCallID: id}, nil)
+		}
+		for streamed, err := range chunks {
+			if err != nil {
+				yield(nil, err)
 				return
+			}
+			chunk := streamed.response
+			if streamed.hop != hop {
+				if hop == 0 {
+					initialInputTokens = usage.InputTokens
+				}
+				hop, hopUsage = streamed.hop, usage.Clone()
+				partPrefix = fmt.Sprintf("%d:", hop)
 			}
 			received = true
 			if chunk.ResponseID != "" {
@@ -105,7 +125,9 @@ func (m *Model) eventStream(
 			}
 			chunkUsage := chunk.usage(modelName)
 			if chunk.UsageMetadata.hasTokens() {
-				usage = chunkUsage
+				usage = hopUsage.Clone()
+				usage.Add(chunkUsage)
+				usage.Requests = 1
 			} else if count, ok := chunkUsage.Details["web_search_requests"]; ok {
 				if usage.Details == nil {
 					usage.Details = map[string]int{}
@@ -143,7 +165,7 @@ func (m *Model) eventStream(
 				urlContextMetadata = chunk.Candidates[0].URLContextMetadata
 			}
 			for _, candidatePart := range chunk.Candidates[0].Content.Parts {
-				if candidatePart.ToolCall != nil || candidatePart.ToolResponse != nil {
+				if googleNativeInvocation(candidatePart) {
 					explicitNativeTools = true
 					break
 				}
@@ -173,13 +195,13 @@ func (m *Model) eventStream(
 			for index, part := range chunk.Candidates[0].Content.Parts {
 				switch {
 				case part.ToolCall != nil:
-					name, kind, ok := googleNativeToolIdentity(part.ToolCall.ToolType)
+					name, kind, ok := googleNativeToolIdentity(part.ToolCall.ToolType, part.ToolCall.Args)
 					if !ok {
 						yield(nil, fmt.Errorf("google: unknown native tool type %q", part.ToolCall.ToolType))
 						return
 					}
 					callID := googleNativeCallID(
-						part.ToolCall.ID, responseID, part.ToolCall.ToolType, fileSearchIndex,
+						part.ToolCall.ID, responseID, googleToolType(name, part.ToolCall.ToolType), fileSearchIndex,
 					)
 					fileSearchIndex++
 					args := part.ToolCall.Args
@@ -188,6 +210,23 @@ func (m *Model) eventStream(
 					}
 					encoded, _ := json.Marshal(args)
 					_, providerDetails := googlePartMetadata(part.ThoughtSignature, m.providerName)
+					if name == googleMediaProcessingToolName {
+						if !fillMediaCall(mediaCallID) {
+							return
+						}
+						mediaCallID = callID
+						partID := fmt.Sprintf("media_processing:%d", fileSearchIndex)
+						if part.ToolCall.ID == "" {
+							mediaPendingPartID = partID
+						}
+						if !yield(ai.ToolCallStartEvent{
+							PartID: partID, ToolName: name, ToolCallID: part.ToolCall.ID,
+							ProviderName: m.providerName, ProviderDetails: providerDetails, Native: true,
+						}, nil) || !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(encoded)}, nil) {
+							return
+						}
+						continue
+					}
 					call := ai.NativeToolCallPart{
 						ToolName: name, Args: encoded, ToolCallID: callID, ToolKind: kind,
 						ProviderName: m.providerName, ProviderDetails: providerDetails,
@@ -199,15 +238,25 @@ func (m *Model) eventStream(
 						lastFileSearchCallID = callID
 					}
 				case part.ToolResponse != nil:
-					name, kind, ok := googleNativeToolIdentity(part.ToolResponse.ToolType)
+					name, kind, ok := googleNativeToolIdentity(part.ToolResponse.ToolType, part.ToolResponse.Response)
 					if !ok {
 						yield(nil, fmt.Errorf("google: unknown native tool type %q", part.ToolResponse.ToolType))
 						return
 					}
 					callID := part.ToolResponse.ID
-					if callID == "" && kind == ai.ToolPartKindFileSearch && lastFileSearchCallID != "" {
+					switch {
+					case callID == "" && kind == ai.ToolPartKindFileSearch && lastFileSearchCallID != "":
 						callID = lastFileSearchCallID
-					} else {
+					case name == googleMediaProcessingToolName:
+						if callID == "" {
+							callID = mediaCallID
+						}
+						callID = googleNativeCallID(callID, responseID, "MEDIA_PROCESSING", fileSearchIndex)
+						mediaCallID = ""
+						if !fillMediaCall(callID) {
+							return
+						}
+					default:
 						callID = googleNativeCallID(callID, responseID, part.ToolResponse.ToolType, fileSearchIndex)
 					}
 					_, providerDetails := googlePartMetadata(part.ThoughtSignature, m.providerName)
@@ -294,8 +343,10 @@ func (m *Model) eventStream(
 						return
 					}
 					lastCodeCallID = ""
+				case part.signatureOnly:
+					// Vertex AI reports agentic media-processing steps as signature-only parts that it rejects on replay.
 				default:
-					if !emitPart(yield, part, index, m.providerName) {
+					if !emitPart(yield, part, partPrefix, index, m.providerName) {
 						return
 					}
 				}
@@ -336,8 +387,7 @@ func (m *Model) eventStream(
 				fileSearchEmitted = call != nil
 			}
 		}
-		if err := scanner.Err(); err != nil {
-			yield(nil, ai.NewModelTransportError(ctx, m, "read stream", err))
+		if !fillMediaCall(mediaCallID) {
 			return
 		}
 		for _, pending := range pendingFileSearchReturns {
@@ -386,10 +436,14 @@ func (m *Model) eventStream(
 		if len(providerDetails) == 0 {
 			providerDetails = nil
 		}
+		var merged ai.ModelResponse
+		if hop > 0 {
+			ai.MarkInitialInputTokens(&merged, initialInputTokens)
+		}
 		yield(ai.FinishEvent{
 			Usage: usage, ModelName: modelName, ProviderName: m.providerName, ProviderURL: m.baseURL,
 			ProviderDetails: providerDetails, ProviderResponseID: responseID,
-			FinishReason: normalizedFinishReason, State: ai.ModelResponseStateComplete,
+			FinishReason: normalizedFinishReason, State: ai.ModelResponseStateComplete, Metadata: merged.Metadata,
 		}, nil)
 	}
 }
@@ -414,11 +468,13 @@ func emitGoogleNativeCall(
 	}, nil) && yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(call.Args)}, nil)
 }
 
-func emitPart(yield func(ai.ModelStreamEvent, error) bool, part part, index int, modelProviderName string) bool {
+func emitPart(
+	yield func(ai.ModelStreamEvent, error) bool, part part, partPrefix string, index int, modelProviderName string,
+) bool {
 	providerName, providerDetails := googlePartMetadata(part.ThoughtSignature, modelProviderName)
 	switch {
 	case part.FunctionCall != nil:
-		partID := fmt.Sprintf("tool:%d", index)
+		partID := fmt.Sprintf("%stool:%d", partPrefix, index)
 		if !yield(ai.ToolCallStartEvent{
 			PartID: partID, ToolName: part.FunctionCall.Name, ToolCallID: part.FunctionCall.ID,
 			ProviderName: providerName, ProviderDetails: providerDetails,
@@ -429,12 +485,12 @@ func emitPart(yield func(ai.ModelStreamEvent, error) bool, part part, index int,
 		return yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: string(args)}, nil)
 	case part.Thought:
 		return part.Text == "" && providerDetails == nil || yield(ai.ThinkingDeltaEvent{
-			PartID: fmt.Sprintf("thinking:%d", index), Delta: part.Text,
+			PartID: fmt.Sprintf("%sthinking:%d", partPrefix, index), Delta: part.Text,
 			ProviderName: providerName, ProviderDetails: providerDetails,
 		}, nil)
 	case part.Text != "" || providerDetails != nil:
 		return yield(ai.TextDeltaEvent{
-			PartID: fmt.Sprintf("text:%d", index), Delta: part.Text,
+			PartID: fmt.Sprintf("%stext:%d", partPrefix, index), Delta: part.Text,
 			ProviderName: providerName, ProviderDetails: providerDetails,
 		}, nil)
 	case part.FileData != nil:

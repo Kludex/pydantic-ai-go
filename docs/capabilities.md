@@ -153,7 +153,7 @@ func main() {
 }
 ```
 
-Use `ReplaceExisting: true` when history came from an untrusted client. The capability strips history-provided system parts before it injects the server configuration.
+Use `ReplaceExisting: true` when history came from an untrusted client. The capability strips the system parts the run started with before it injects the server configuration. It can't tell a client's system prompt from one an earlier server-side run persisted, so it replaces both. System parts added during the run, for example with `RunContext.Enqueue`, are kept.
 
 Reinjection changes only the request snapshot sent to the model. It does not rewrite durable history. Every later request applies the same filter again.
 
@@ -252,6 +252,11 @@ func main() {
 Use the narrowest hook that matches the behavior. Hooks receive detached values. Set `ModelRequestContext.ReplaceHistory` only when a request transformation must also replace durable history.
 
 Capability order is middleware order. Before hooks run from first to last. After and error hooks run in reverse order.
+
+An after model request hook can return `ai.Retryf(...)` with the response to ask the model again. The response stays in history so the model sees what it said, and the retry consumes the output retry budget.
+
+!!! warning "`RunStream` can't retry streamed output"
+    `RunStream` has already handed a final text or output tool call to your consumer when the hook runs. A retry rejecting that response fails the run with `UnexpectedModelBehaviorError`. `Run` and `StartRun` retry it.
 
 ## Emit typed events
 

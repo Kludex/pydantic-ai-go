@@ -69,6 +69,9 @@ type RunContext[Deps any] struct {
 	capabilityID       string
 	info               *RunInfo
 	resolvedNativeTool map[string]NativeTool
+	toolRetries        func(name string) int
+	// toolNamePath holds the renames of the prefixed and renamed toolsets being listed, outermost first.
+	toolNamePath []func(name string) string
 }
 
 // Usage returns the usage accumulated so far in this run.
@@ -91,8 +94,10 @@ func (rc *RunContext[Deps]) Messages() []ModelMessage {
 }
 
 // ContextWindowUsed returns the fraction of the active model's context window
-// occupied by the latest model response. The boolean is false before a
-// response or when its usage or the model's context window is unknown.
+// occupied by the latest model response: its input plus output tokens, with the
+// input read from MarkInitialInputTokens when the provider merged several requests.
+// The boolean is false before a response or when its usage or the model's context
+// window is unknown.
 func (rc *RunContext[Deps]) ContextWindowUsed() (float64, bool) {
 	var messages []ModelMessage
 	if rc.messages != nil {
@@ -111,7 +116,7 @@ func contextWindowUsed(model Model, messages []ModelMessage) (float64, bool) {
 		if !ok {
 			continue
 		}
-		tokens := response.Usage.TotalTokens()
+		tokens := contextInputTokens(response) + response.Usage.OutputTokens
 		if tokens <= 0 {
 			return 0, false
 		}
@@ -135,6 +140,31 @@ func (rc *RunContext[Deps]) clone() *RunContext[Deps] {
 		}
 	}
 	return &cloned
+}
+
+// forTool is the context a tool's prepare function runs with: the tool's
+// original name and the retry count kept under the name the model calls it by.
+func (rc *RunContext[Deps]) forTool(name string) *RunContext[Deps] {
+	exposed := name
+	for _, rename := range slices.Backward(rc.toolNamePath) {
+		exposed = rename(exposed)
+	}
+	prepared := rc.withToolNamePath(nil)
+	prepared.ToolName = name
+	if rc.toolRetries != nil {
+		prepared.Retry = rc.toolRetries(exposed)
+	}
+	return prepared
+}
+
+func (rc *RunContext[Deps]) withToolNamePath(path []func(string) string) *RunContext[Deps] {
+	cloned := *rc
+	cloned.toolNamePath = path
+	return &cloned
+}
+
+func (rc *RunContext[Deps]) withToolNameLayer(rename func(string) string) *RunContext[Deps] {
+	return rc.withToolNamePath(append(slices.Clip(rc.toolNamePath), rename))
 }
 
 // RevealedTools returns model-facing deferred tool names revealed in this run
@@ -180,6 +210,10 @@ func (rc *RunContext[Deps]) Cancel() {
 
 var errStreamDetached = errors.New("ai: stream consumer detached")
 
+func (r *run[Deps, Output]) cancelled() bool {
+	return errors.Is(context.Cause(r.ctx), ErrRunCancelled) || errors.Is(r.ctx.Err(), context.DeadlineExceeded)
+}
+
 type runCancellation struct {
 	mutex  sync.Mutex
 	cancel context.CancelCauseFunc
@@ -216,7 +250,10 @@ func (c *runCancellation) isActive() bool {
 }
 
 // ToolPrepareFunc customizes one tool definition before each model request.
-// Return nil to omit the tool for that step.
+// Return nil to omit the tool for that step. RunContext.ToolName is the tool's
+// own name and RunContext.Retry its own retry count, also when PrefixToolset
+// or RenameToolset exposes it under another name. A name the prepare function
+// or another wrapper gives the tool is not followed.
 type ToolPrepareFunc[Deps any] func(
 	ctx context.Context, rc *RunContext[Deps], tool ToolDefinition,
 ) (*ToolDefinition, error)

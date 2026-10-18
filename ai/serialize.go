@@ -2,6 +2,7 @@ package ai
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"time"
@@ -48,24 +49,71 @@ type wireRequest struct {
 	State          RequestState   `json:"state,omitempty"`
 }
 
+type wireModelRequestAttempt struct {
+	ModelName    string                     `json:"model_name"`
+	ProviderName string                     `json:"provider_name,omitempty"`
+	Outcome      ModelRequestAttemptOutcome `json:"outcome"`
+	Error        string                     `json:"error,omitempty"`
+	Timestamp    time.Time                  `json:"timestamp"`
+	Duration     float64                    `json:"duration"`
+	Usage        *Usage                     `json:"usage,omitempty"`
+}
+
 type wireResponse struct {
-	Kind               string             `json:"kind"`
-	Parts              []wirePart         `json:"parts"`
-	Usage              *Usage             `json:"usage,omitempty"`
-	ModelName          string             `json:"model_name,omitempty"`
-	Timestamp          *time.Time         `json:"timestamp,omitempty"`
-	ProviderName       string             `json:"provider_name,omitempty"`
-	ProviderURL        string             `json:"provider_url,omitempty"`
-	ProviderDetails    map[string]any     `json:"provider_details,omitempty"`
-	VendorDetails      map[string]any     `json:"vendor_details,omitempty"`
-	ProviderResponseID string             `json:"provider_response_id,omitempty"`
-	VendorID           string             `json:"vendor_id,omitempty"`
-	FinishReason       FinishReason       `json:"finish_reason,omitempty"`
-	RunID              string             `json:"run_id,omitempty"`
-	ConversationID     string             `json:"conversation_id,omitempty"`
-	Metadata           map[string]any     `json:"metadata,omitempty"`
-	State              ModelResponseState `json:"state,omitempty"`
-	WorkspaceRef       *WorkspaceRef      `json:"workspace_ref,omitempty"`
+	Kind               string                    `json:"kind"`
+	Parts              []wirePart                `json:"parts"`
+	Usage              *Usage                    `json:"usage,omitempty"`
+	ModelName          string                    `json:"model_name,omitempty"`
+	Timestamp          *time.Time                `json:"timestamp,omitempty"`
+	ProviderName       string                    `json:"provider_name,omitempty"`
+	ProviderURL        string                    `json:"provider_url,omitempty"`
+	ProviderDetails    map[string]any            `json:"provider_details,omitempty"`
+	VendorDetails      map[string]any            `json:"vendor_details,omitempty"`
+	ProviderResponseID string                    `json:"provider_response_id,omitempty"`
+	VendorID           string                    `json:"vendor_id,omitempty"`
+	FinishReason       FinishReason              `json:"finish_reason,omitempty"`
+	RunID              string                    `json:"run_id,omitempty"`
+	ConversationID     string                    `json:"conversation_id,omitempty"`
+	Metadata           map[string]any            `json:"metadata,omitempty"`
+	State              ModelResponseState        `json:"state,omitempty"`
+	WorkspaceRef       *WorkspaceRef             `json:"workspace_ref,omitempty"`
+	FailedAttempts     []wireModelRequestAttempt `json:"failed_attempts,omitempty"`
+}
+
+func marshalModelRequestAttempts(attempts []ModelRequestAttempt) []wireModelRequestAttempt {
+	if len(attempts) == 0 {
+		return nil
+	}
+	wire := make([]wireModelRequestAttempt, len(attempts))
+	for index, attempt := range attempts {
+		wire[index] = wireModelRequestAttempt{
+			ModelName: attempt.ModelName, ProviderName: attempt.ProviderName, Outcome: attempt.Outcome,
+			Error: attempt.Error, Timestamp: attempt.Timestamp, Duration: attempt.Duration.Seconds(),
+		}
+		if attempt.Usage != nil {
+			usage := attempt.Usage.Clone()
+			wire[index].Usage = &usage
+		}
+	}
+	return wire
+}
+
+func unmarshalModelRequestAttempts(wire []wireModelRequestAttempt) []ModelRequestAttempt {
+	if len(wire) == 0 {
+		return nil
+	}
+	attempts := make([]ModelRequestAttempt, len(wire))
+	for index, attempt := range wire {
+		attempts[index] = ModelRequestAttempt{
+			ModelName: attempt.ModelName, ProviderName: attempt.ProviderName, Outcome: attempt.Outcome,
+			Error: attempt.Error, Timestamp: attempt.Timestamp, Duration: time.Duration(attempt.Duration * float64(time.Second)),
+		}
+		if attempt.Usage != nil {
+			usage := attempt.Usage.Clone()
+			attempts[index].Usage = &usage
+		}
+	}
+	return attempts
 }
 
 type wirePart struct {
@@ -82,6 +130,7 @@ type wirePart struct {
 	ID              string            `json:"id,omitempty"`
 	Signature       string            `json:"signature,omitempty"`
 	DynamicRef      string            `json:"dynamic_ref,omitempty"`
+	Scope           SystemPromptScope `json:"scope,omitempty"`
 	Timestamp       *time.Time        `json:"timestamp,omitempty"`
 	ProviderName    string            `json:"provider_name,omitempty"`
 	ProviderDetails map[string]any    `json:"provider_details,omitempty"`
@@ -116,7 +165,7 @@ func marshalMessage(m ModelMessage) ([]byte, error) {
 			ProviderURL: msg.ProviderURL, ProviderDetails: msg.ProviderDetails,
 			ProviderResponseID: msg.ProviderResponseID, FinishReason: msg.FinishReason,
 			RunID: msg.RunID, ConversationID: msg.ConversationID, Metadata: msg.Metadata, State: msg.State,
-			WorkspaceRef: msg.WorkspaceRef,
+			WorkspaceRef: msg.WorkspaceRef, FailedAttempts: marshalModelRequestAttempts(msg.FailedAttempts),
 		}
 		if !msg.Usage.IsZero() {
 			u := msg.Usage
@@ -147,7 +196,9 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 		}
 		return marshalSpeechPart(part), nil
 	case SystemPromptPart:
-		wire := wirePart{PartKind: "system-prompt", Content: mustJSON(part.Content), DynamicRef: part.DynamicRef}
+		wire := wirePart{
+			PartKind: "system-prompt", Content: mustJSON(part.Content), DynamicRef: part.DynamicRef, Scope: part.Scope,
+		}
 		return wirePartWithTimestamp(wire, part.Timestamp), nil
 	case UserPromptPart:
 		content, err := marshalUserContent(part)
@@ -318,6 +369,12 @@ func unmarshalMessage(data []byte) (ModelMessage, error) {
 			ProviderDetails: providerDetails, ProviderResponseID: providerResponseID,
 			FinishReason: w.FinishReason, RunID: w.RunID, ConversationID: w.ConversationID,
 			Metadata: w.Metadata, State: w.State, WorkspaceRef: w.WorkspaceRef,
+			FailedAttempts: unmarshalModelRequestAttempts(w.FailedAttempts),
+		}
+		for _, attempt := range msg.FailedAttempts {
+			if attempt.Outcome != ModelRequestAttemptError && attempt.Outcome != ModelRequestAttemptRejected {
+				return nil, fmt.Errorf("ai: invalid model request attempt outcome %q", attempt.Outcome)
+			}
 		}
 		if w.Usage != nil {
 			msg.Usage = *w.Usage
@@ -347,7 +404,12 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 		}
 		return part, nil
 	case "system-prompt":
-		part := SystemPromptPart{Content: stringContent(wp.Content), DynamicRef: wp.DynamicRef}
+		switch wp.Scope {
+		case "", SystemPromptScopeConversation, SystemPromptScopeRequest:
+		default:
+			return nil, fmt.Errorf("ai: invalid system prompt scope %q", wp.Scope)
+		}
+		part := SystemPromptPart{Content: stringContent(wp.Content), DynamicRef: wp.DynamicRef, Scope: wp.Scope}
 		if wp.Timestamp != nil {
 			part.Timestamp = *wp.Timestamp
 		}
@@ -505,6 +567,24 @@ type wireUserContent struct {
 	Metadata       any            `json:"metadata,omitempty"`
 	ForceDownload  any            `json:"force_download,omitempty"`
 	TTL            CachePointTTL  `json:"ttl,omitempty"`
+}
+
+func (content wireUserContent) MarshalJSON() ([]byte, error) {
+	type wireAlias wireUserContent
+	if content.MediaType != "" || content.Kind != "image-url" && content.Kind != "video-url" &&
+		content.Kind != "audio-url" && content.Kind != "document-url" {
+		return json.Marshal(wireAlias(content))
+	}
+	encoded, err := json.Marshal(wireAlias(content))
+	if err != nil {
+		return nil, err
+	}
+	var object map[string]any
+	if err := json.Unmarshal(encoded, &object); err != nil { // pragma: no cover - json.Marshal always returns valid JSON.
+		return nil, err
+	}
+	object["media_type"] = nil
+	return json.Marshal(object)
 }
 
 func marshalUserContent(part UserPromptPart) (json.RawMessage, error) {
@@ -666,7 +746,7 @@ func marshalFileURL(
 		return wireUserContent{}, err
 	}
 	mediaType, err := resolveMediaType()
-	if err != nil {
+	if err != nil && !errors.Is(err, errCannotInferMediaType) {
 		return wireUserContent{}, err
 	}
 	wireForceDownload := any(false)

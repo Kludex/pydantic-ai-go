@@ -225,9 +225,11 @@ The bundled providers use the same `ai.Model` interface.
 | Cerebras | `cerebras.NewModel("gpt-oss-120b")` | `CEREBRAS_API_KEY` |
 | Groq | `groq.NewModel("openai/gpt-oss-20b")` | `GROQ_API_KEY` |
 | Hugging Face | `huggingface.NewModel("Qwen/Qwen3-32B")` | `HF_TOKEN` |
+| Meta Muse | `meta.NewModel("muse-spark-1.3")` | `META_API_KEY` |
 | Mistral | `mistral.NewModel("mistral-large-latest")` | `MISTRAL_API_KEY` |
 | Ollama | `ollama.NewModel("qwen3")` | `OLLAMA_BASE_URL`, `OLLAMA_API_KEY` |
 | OpenRouter | `openrouter.NewModel("anthropic/claude-sonnet-4.6")` | `OPENROUTER_API_KEY` |
+| OpenAI Decisions | `openaidecisions.NewModel("gpt-6-luna")` | `OPENAI_API_KEY` |
 | Snowflake Cortex | `snowflake.NewModel("claude-sonnet-4-6")` | `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_TOKEN` |
 | Together AI | `together.NewModel("Qwen/Qwen3-32B")` | `TOGETHER_API_KEY` |
 | [System One decision models](docs/system-one.md) | `systemone.NewModel("clm-latest")` | `SYSTEM_ONE_BASE_URL`, optional `SYSTEM_ONE_API_KEY` |

@@ -120,6 +120,55 @@ The final queue drain is atomic with run completion. A concurrent enqueue is eit
 
 Realtime sessions provide the same closed-session guarantee through `Session.Enqueue` and `Session.EnqueueWhenIdle`. See [Realtime agents](realtime.md).
 
+## Request-scoped system prompts
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.AddTool(agent, "run_tests", func(_ context.Context, rc *ai.RunContext[struct{}], _ struct{}) (string, error) {
+		_, err := rc.Enqueue(ai.SystemPromptPart{
+			Content: "The user can't see this tool's output. Summarize the failures for them.",
+			Scope:   ai.SystemPromptScopeRequest,
+		})
+		return "3 failed, 41 passed", err
+	})
+	result, err := agent.Run(context.Background(), "Run the tests.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Some instructions are only true for one model request: a nudge against instruction fade, a note that the user can't see a tool's output, the budget left right now. Set `Scope: ai.SystemPromptScopeRequest` on the `ai.SystemPromptPart` and the model sees it for the request it is part of, and not for any request after that.
+
+The prompt stays in the message history like any other part, so the history records what each request was sent. How it reaches the model depends on the provider:
+
+| Provider support | What is sent |
+| --- | --- |
+| `ModelProfile.SupportsRequestScopedSystemPrompts` is `true` | Every request-scoped prompt, unchanged, with every request. The API stops showing it to the model once a later request exists. |
+| Everything else | The prompt only with its own request, moved to the end of that request. Later requests leave it out. |
+
+Sending it unchanged keeps the cached prefix valid. On models that tie their reasoning to the exact conversation, it keeps that reasoning valid too: removing an earlier instruction from a later request counts as editing the conversation. Anthropic supports this; see [Providers](providers.md#request-scoped-system-prompts).
+
+The cache breakpoints the library places for you, through settings like `anthropic.Settings.CacheMessages` or `openrouter.Settings.CacheMessages`, land before a request-scoped prompt. The next request does not send it, so a breakpoint on it would write a cache entry nothing reads.
+
+A request and any continuation of it, such as a resumed suspended response, count as the same request. So do retries and fallback attempts at it. When a capability asks for a retry without a response, the request-scoped prompts of that unanswered request are removed from the history, so they do not reach the next request beside its own.
+
+!!! tip "Use it for the current moment"
+    Something that stays true belongs in the agent's [instructions](instructions.md) or in a regular `ai.SystemPromptPart`. A request-scoped prompt is for something about the current request only.
+
 ## Sanitize untrusted history
 
 ```go
@@ -181,6 +230,64 @@ Retained audio and provider details in `SpeechPart` values are detached as well.
 Invalid allowlist values or malformed URLs return an error and no partial history.
 Reject the client request instead of passing the original history to an agent.
 
+## Resume a cancelled or timed-out run
+
+```go
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log"
+	"time"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.AddSimpleTool(agent, "research", func(ctx context.Context, _ struct{}) (string, error) {
+		select {
+		case <-time.After(time.Minute):
+			return "findings", nil
+		case <-ctx.Done():
+			return "", ctx.Err()
+		}
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	_, err := agent.Run(ctx, "Research HTTP caching.", struct{}{})
+
+	var cancelled *ai.RunCancelledError
+	if !errors.As(err, &cancelled) {
+		log.Fatal(err)
+	}
+	fmt.Println(errors.Is(err, context.DeadlineExceeded)) // true
+	fmt.Println(len(cancelled.Messages()))                // 3
+
+	resumed, err := agent.Run(
+		context.Background(), "Answer with what you have.", struct{}{},
+		ai.WithMessageHistory(cancelled.Messages()),
+	)
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(resumed.Output) // success
+}
+```
+
+Bound a whole run with the deadline of the `context.Context` you pass to it. `context.WithTimeout` covers every model request, tool call, and hook, and for `RunStream` and `StartRun` also the time you spend consuming events. Nested agent runs started with the tool's `ctx` share the deadline, and tools read it with `ctx.Deadline()`.
+
+When the deadline passes, the run stops exactly as if you had called `RunContext.Cancel` or `AgentRun.Cancel`. The in-flight model request and tool calls receive the expired context, concurrent tool calls are drained, and the run returns a `*RunCancelledError`. Its `Messages()` holds the completed history, including results of tools that finished before the deadline in an interrupted request. Pass it to `WithMessageHistory` to resume. Dangling tool calls are closed with interrupted results, as in [Repair incomplete tool history](#repair-incomplete-tool-history).
+
+The error matches both `ErrRunCancelled` and `context.DeadlineExceeded`, so existing deadline checks keep working while `errors.As` gives you the history. `Usage()` and `Metadata()` report what the run consumed and resolved.
+
+!!! note "Only the deadline keeps the history"
+    Cancelling the context with its `cancel` function is cancellation by the caller, not by the run. The run returns the bare `context.Canceled`, without a history snapshot, because the caller already decided to discard it. Use `RunContext.Cancel` or `AgentRun.Cancel` when you want to stop a run and keep its history.
+
 ## Repair incomplete tool history
 
 ```go
@@ -206,6 +313,8 @@ func main() {
 `RepairMessages` returns a detached history. It drops orphaned results, closes dangling calls with interrupted results, and merges adjacent messages. The example prints `interrupted`.
 
 Set `PreserveLastResponse` when the latest response still represents live work that you intend to resolve. Interior dangling calls are still repaired. The helper does not execute tools or recover deferred metadata that was never persisted. Store a `Conversation` when you need approval and external-execution details.
+
+Requests send the tool results answering a response in the order of the calls they answer, however the history stores them. A UI client may rebuild results in the order the tools completed. Without this, the same conversation would produce different request bytes and miss the provider's prompt cache. Parts that answer no call in the preceding response keep their positions. The stored history keeps its order.
 
 ## Replay realtime speech
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -319,6 +320,20 @@ func TestTransformActivities(t *testing.T) {
 		yield(ai.ToolAvailabilityDeltaEvent{Part: ai.ToolAvailabilityDeltaPart{
 			ToolsAdded: []string{"search"}, ToolCallID: "call",
 		}}, nil)
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "app", Content: "Sunny",
+			Metadata: map[string]any{ai.MCPAppMetadataKey: map[string]any{
+				"resource_uri": "ui://weather", "tool_input": map[string]any{"city": "Paris"},
+				"result": map[string]any{"isError": false}, "toolset_id": "weather",
+			}},
+		}}, nil)
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "anonymous", Content: "Sunny",
+			Metadata: map[string]any{ai.MCPAppMetadataKey: map[string]any{
+				"resource_uri": "ui://weather", "tool_input": map[string]any{}, "result": map[string]any{},
+			}},
+		}}, nil)
+		yield(ai.FunctionToolResultEvent{Part: ai.ToolReturnPart{ToolCallID: "invalid", Content: "Sunny",
+			Metadata: map[string]any{ai.MCPAppMetadataKey: map[string]any{"resource_uri": "ui://weather"}},
+		}}, nil)
 	})
 	for _, version := range []string{"0.1.18", "0.1.19"} {
 		var activities []agui.Event
@@ -334,7 +349,16 @@ func TestTransformActivities(t *testing.T) {
 			t.Fatalf("old version received activities: %#v", activities)
 		}
 		if version == "0.1.19" {
-			if len(activities) != 2 || activities[0].ActivityType != "pydantic_ai_compaction" ||
+			wantApp := map[string]any{
+				"resourceUri": "ui://weather", "toolInput": map[string]any{"city": "Paris"},
+				"result": map[string]any{"isError": false}, "serverId": "weather", "serverHash": "weather",
+			}
+			wantAnonymous := map[string]any{"resourceUri": "ui://weather", "toolInput": map[string]any{}, "result": map[string]any{}}
+			if len(activities) != 4 || activities[2].ActivityType != "mcp-apps" ||
+				!reflect.DeepEqual(activities[2].Content, wantApp) || !reflect.DeepEqual(activities[3].Content, wantAnonymous) {
+				t.Fatalf("unexpected MCP Apps activities: %#v", activities)
+			}
+			if activities[0].ActivityType != "pydantic_ai_compaction" ||
 				activities[0].Content.(map[string]any)["content"] != "summary" ||
 				activities[1].ActivityType != "pydantic_ai_tool_availability_delta" ||
 				activities[1].Content.(map[string]any)["tool_call_id"] != "call" ||
@@ -483,3 +507,108 @@ func TestTransformConsumerStops(t *testing.T) {
 }
 
 var _ iter.Seq2[agui.Event, error] = agui.TransformStream(nil, "thread", "run")
+
+func TestTransformEnqueuedMessages(t *testing.T) {
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		_ = yield(ai.EnqueuedMessagesEvent{EnqueueID: "hidden", Messages: []ai.ModelMessage{
+			ai.ModelRequest{Parts: []ai.RequestPart{ai.SystemPromptPart{Content: "secret"}}},
+		}}, nil) && yield(ai.EnqueuedMessagesEvent{EnqueueID: "e", Messages: []ai.ModelMessage{
+			ai.ModelResponse{Parts: []ai.ResponsePart{
+				ai.ThinkingPart{Content: "thought"}, ai.TextPart{Content: "re"}, ai.TextPart{Content: "ply"},
+				ai.ToolCallPart{ToolName: "skipped", ToolCallID: "call"},
+			}},
+			ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: "skipped", ToolCallID: "call"}}},
+			ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.SystemPromptPart{Content: "secret"},
+				ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.TextContent{Text: "look"},
+					ai.BinaryContent{Data: []byte("pdf"), MediaType: "application/pdf"},
+					ai.ImageURL{URL: "https://example.com/a.png", MediaType: "image/png"},
+					ai.AudioURL{URL: "https://example.com/a.mp3", MediaType: "audio/mpeg"},
+					ai.VideoURL{URL: "https://example.com/a.mp4", MediaType: "video/mp4"},
+					ai.DocumentURL{URL: "https://example.com/a.txt", MediaType: "text/plain",
+						VendorMetadata: map[string]any{"detail": "high"}},
+				}},
+			}},
+		}}, nil)
+	})
+	for _, version := range []string{"0.1.18", "0.1.19"} {
+		var activities []agui.Event
+		for event, err := range agui.TransformStreamWithConfig(stream, agui.StreamConfig{Version: version}) {
+			if err != nil {
+				t.Fatal(err)
+			}
+			if event.Type == agui.EventActivitySnapshot {
+				activities = append(activities, event)
+			}
+		}
+		if version == "0.1.18" {
+			if len(activities) != 0 {
+				t.Fatalf("old version received enqueued messages: %#v", activities)
+			}
+			continue
+		}
+		if len(activities) != 1 || activities[0].MessageID != "e" {
+			t.Fatalf("a server-owned system prompt was streamed or the delivery is missing: %#v", activities)
+		}
+		encoded, _ := json.Marshal(activities[0].Content)
+		want := `{"messages":[{"id":"e-0","role":"reasoning","content":"thought"},` +
+			`{"id":"e-1","role":"assistant","content":"reply"},` +
+			`{"id":"e-2","role":"user","content":[{"type":"text","text":"look"},` +
+			`{"type":"document","source":{"type":"data","value":"cGRm","mimeType":"application/pdf"}},` +
+			`{"type":"image","source":{"type":"url","value":"https://example.com/a.png","mimeType":"image/png"}},` +
+			`{"type":"audio","source":{"type":"url","value":"https://example.com/a.mp3","mimeType":"audio/mpeg"}},` +
+			`{"type":"video","source":{"type":"url","value":"https://example.com/a.mp4","mimeType":"video/mp4"}},` +
+			`{"type":"document","source":{"type":"url","value":"https://example.com/a.txt","mimeType":"text/plain"},` +
+			`"metadata":{"vendor_metadata":{"detail":"high"}}}]}]}`
+		if string(encoded) != want {
+			t.Fatalf("unexpected enqueued activity:\n got %s\nwant %s", encoded, want)
+		}
+
+		var content map[string]any
+		_ = json.Unmarshal(encoded, &content)
+		_, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+			{ID: "malformed", Role: "activity", ActivityType: "pydantic_ai_enqueued_messages",
+				Content: map[string]any{"messages": "not-a-list"}},
+			{ID: "e", Role: "activity", ActivityType: "pydantic_ai_enqueued_messages", Content: content},
+			{ID: "own", Role: "assistant", Content: "own"},
+			{ID: "next", Role: "user", Content: "next"},
+		}}, ai.MessageSanitizationOptions{})
+		if err != nil || len(history) != 3 {
+			t.Fatalf("unexpected history: %#v err=%v", history, err)
+		}
+		reply, request, own := history[0].(ai.ModelResponse), history[1].(ai.ModelRequest), history[2].(ai.ModelResponse)
+		if len(reply.Parts) != 2 || len(request.Parts[0].(ai.UserPromptPart).Contents) != 6 ||
+			own.Parts[0].(ai.TextPart).Content != "own" {
+			t.Fatalf("enqueued messages did not load in place: %#v", history)
+		}
+	}
+
+	_, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "e", Role: "activity", ActivityType: "pydantic_ai_enqueued_messages", Content: map[string]any{
+			"messages": []any{
+				map[string]any{"id": "reply", "role": "assistant", "content": "synthetic"},
+				map[string]any{"id": "nested", "role": "activity", "activityType": "pydantic_ai_enqueued_messages",
+					"content": map[string]any{"messages": []any{
+						map[string]any{"id": "x", "role": "user", "content": "dropped"},
+					}}},
+			},
+		}},
+		{ID: "own", Role: "assistant", Content: "own"},
+		{ID: "next", Role: "user", Content: "next"},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil || len(history) != 2 || history[0].(ai.ModelResponse).Parts[0].(ai.TextPart).Content != "synthetic" ||
+		history[1].(ai.ModelResponse).Parts[0].(ai.TextPart).Content != "own" {
+		t.Fatalf("nested activity was loaded or the next response extended an enqueued one: %#v err=%v", history, err)
+	}
+
+	_, _, _, err = agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "e", Role: "activity", ActivityType: "pydantic_ai_enqueued_messages", Content: map[string]any{
+			"messages": []any{map[string]any{"id": "", "role": "user", "content": "x"}},
+		}},
+		{ID: "next", Role: "user", Content: "next"},
+	}}, ai.MessageSanitizationOptions{})
+	if err == nil {
+		t.Fatal("expected invalid enqueued message error")
+	}
+}

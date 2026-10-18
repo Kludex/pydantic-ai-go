@@ -18,10 +18,12 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/google"
 	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
 	"github.com/Kludex/pydantic-ai-go/ai/models/huggingface"
+	"github.com/Kludex/pydantic-ai-go/ai/models/meta"
 	"github.com/Kludex/pydantic-ai-go/ai/models/mistral"
 	"github.com/Kludex/pydantic-ai-go/ai/models/ollama"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openaicodex"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openaidecisions"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openrouter"
 	"github.com/Kludex/pydantic-ai-go/ai/models/snowflake"
 	"github.com/Kludex/pydantic-ai-go/ai/models/systemone"
@@ -64,6 +66,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"openai":           func(name string) (ai.Model, error) { return openai.NewModel(name), nil },
 		"openai-responses": func(name string) (ai.Model, error) { return openai.NewResponsesModel(name), nil },
 		"openai-codex":     func(name string) (ai.Model, error) { return openaicodex.NewModel(name) },
+		"openai-decisions": func(name string) (ai.Model, error) { return openaidecisions.NewModel(name), nil },
 		"anthropic":        func(name string) (ai.Model, error) { return anthropic.NewModel(name), nil },
 		"google":           func(name string) (ai.Model, error) { return google.NewModel(name), nil },
 		"github-copilot":   func(name string) (ai.Model, error) { return githubcopilot.NewModel(name) },
@@ -78,6 +81,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		},
 		"groq":        func(name string) (ai.Model, error) { return groq.NewModel(name), nil },
 		"huggingface": func(name string) (ai.Model, error) { return huggingface.NewModel(name), nil },
+		"meta":        func(name string) (ai.Model, error) { return meta.NewModel(name), nil },
 		"mistral":     func(name string) (ai.Model, error) { return mistral.NewModel(name), nil },
 		"ollama":      func(name string) (ai.Model, error) { return ollama.NewModel(name), nil },
 		"openrouter":  func(name string) (ai.Model, error) { return openrouter.NewModel(name), nil },

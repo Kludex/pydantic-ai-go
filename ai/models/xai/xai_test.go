@@ -147,7 +147,11 @@ func TestProviderAndGateway(t *testing.T) {
 	if model.ProviderURL() != "https://gateway.example/v1" || model.ProviderName() != "xai" {
 		t.Fatalf("unexpected gateway identity: %q %q", model.ProviderURL(), model.ProviderName())
 	}
-	if !model.SupportsNativeTool(ai.XSearchTool{}) || model.SupportsNativeTool(ai.ImageGenerationTool{}) {
+	cached := false
+	if !model.SupportsNativeTool(ai.XSearchTool{}) || model.SupportsNativeTool(ai.ImageGenerationTool{}) ||
+		!model.SupportsNativeTool(ai.WebSearchTool{AllowedDomains: []string{"go.dev"}}) ||
+		model.SupportsNativeTool(ai.WebSearchTool{MaxUses: 1}) ||
+		model.SupportsNativeTool(ai.WebSearchTool{ExternalWebAccess: &cached}) {
 		t.Fatalf("unexpected native support")
 	}
 	legacy := xai.NewModel("grok-2")

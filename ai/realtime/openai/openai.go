@@ -19,6 +19,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
 	"github.com/Kludex/pydantic-ai-go/ai/realtime/internal/openaiprotocol"
+	"github.com/Kludex/pydantic-ai-go/ai/realtime/internal/seed"
 	"github.com/coder/websocket"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/propagation"
@@ -558,13 +559,13 @@ func SeedItems(messages []ai.ModelMessage, profile realtime.Profile) []map[strin
 				}
 			}
 		case ai.ModelResponse:
-			for _, part := range message.Parts {
+			for index, part := range message.Parts {
 				switch part := part.(type) {
 				case ai.TextPart:
 					items = append(items, textItem("assistant", part.Content, "text"))
 				case ai.SpeechPart:
-					if part.Transcript != nil {
-						items = append(items, textItem("assistant", *part.Transcript, "text"))
+					if part.Content() != "" {
+						items = append(items, textItem("assistant", seed.AssistantSpeech(message, index), "text"))
 					}
 				case ai.ToolCallPart:
 					items = append(items, map[string]any{

@@ -16,13 +16,22 @@ func translateCache(settings ai.ModelSettings, profile ai.ModelProfile) (ai.Mode
 	if settings.ExtraBody == nil {
 		settings.ExtraBody = map[string]any{}
 	}
-	mode := PromptCacheModeImplicit
+	options := portablePromptCacheOptions{PromptCacheOptions: PromptCacheOptions{
+		Mode: PromptCacheModeImplicit, TTL: PromptCacheTTL30Minutes,
+	}}
 	if cache.Messages != nil && !*cache.Messages {
-		mode = PromptCacheModeExplicit
+		options.Mode = PromptCacheModeExplicit
+		options.prefixOnly = true
 	}
-	settings.ExtraBody[promptCacheOptionsSetting] = PromptCacheOptions{Mode: mode, TTL: PromptCacheTTL30Minutes}
+	settings.ExtraBody[promptCacheOptionsSetting] = options
 	settings.ExtraBody[cacheInstructionsSetting] = true
 	return settings, nil
+}
+
+func keepImplicitCacheWithoutBreakpoints(cache *promptCacheSettings, hasBreakpoint bool) {
+	if cache.portablePrefixOnly && !hasBreakpoint {
+		cache.Options = &PromptCacheOptions{Mode: PromptCacheModeImplicit, TTL: PromptCacheTTL30Minutes}
+	}
 }
 
 func cacheRetention(settings ai.ModelSettings, profile ai.ModelProfile) (time.Duration, bool) {

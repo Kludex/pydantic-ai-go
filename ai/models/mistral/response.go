@@ -108,6 +108,7 @@ func (model *Model) reasoningEffort(thinking *ai.ThinkingSettings) string {
 func adjustableReasoningModel(name string) bool {
 	name = strings.ToLower(name)
 	return map[string]bool{
+		"mistral-large-4": true, "mistral-large-4-0": true,
 		"mistral-small-latest": true, "mistral-small-2603": true,
 		"mistral-medium-latest": true, "mistral-medium": true,
 		"mistral-medium-3": true, "mistral-medium-3-5": true,

@@ -158,3 +158,11 @@ func floatPointer(value float64) *float64 { return &value }
 var _ ai.Model = snowflake.NewModel("openai-gpt-5")
 var _ ai.StreamingModel = snowflake.NewModel("openai-gpt-5")
 var _ ai.ModelProviderIdentity = snowflake.NewModel("openai-gpt-5")
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	for name, want := range map[string]int{"mistral-large2": 9, "mixtral-8x7b": 9, "llama3.1-70b": 0} {
+		if got := snowflake.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
+			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
+		}
+	}
+}

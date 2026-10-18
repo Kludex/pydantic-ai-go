@@ -181,6 +181,7 @@ Codex uses a narrower Responses API dialect:
 - Every request uses streaming, including `Model.Request` calls. The wrapper drains the stream into a normal `ModelResponse`.
 - Every request sends `store: false`.
 - `MaxTokens`, `Temperature`, and `TopP` are omitted.
+- `CachePoint` content, the portable `Cache` setting, and `openai.Settings.CacheInstructions` send no prompt cache fields. The backend rejects explicit prompt cache breakpoints and caches prompts implicitly.
 - `CountTokens` returns `ai.ErrTokenCountingUnsupported` because the subscription endpoint does not expose `/responses/input_tokens`.
 - Suspended response continuation is rejected because `store: false` leaves no server-side response to retrieve.
 

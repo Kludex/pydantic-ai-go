@@ -168,6 +168,44 @@ Returned protocol values are detached copies. You can modify them without changi
 
 `CallTool` returns MCP tool failures through `CallToolResult.IsError`. It returns a Go error only when the protocol request fails. `SessionToolset` converts the same tool failure into the configured agent behavior: retry by default, a failed result with `ToolErrorFailed`, or a run error with `ToolErrorAbort`.
 
+## Render MCP Apps
+
+An [MCP App](https://modelcontextprotocol.io/extensions/apps/overview) is a tool that names an HTML page in `_meta.ui.resourceUri` (or the older `_meta["ui/resourceUri"]`). The page renders the tool result in the browser.
+
+```go
+result, err := agent.Run(ctx, "What is the weather in Paris?", deps)
+if err != nil {
+	return err
+}
+for _, message := range result.NewMessages() {
+	request, ok := message.(ai.ModelRequest)
+	if !ok {
+		continue
+	}
+	for _, part := range request.Parts {
+		if ret, ok := part.(ai.ToolReturnPart); ok && ret.Metadata[ai.MCPAppMetadataKey] != nil {
+			fmt.Println(ret.Metadata[ai.MCPAppMetadataKey])
+		}
+	}
+}
+```
+
+When the agent calls such a tool, the toolset adds a record under `ai.MCPAppMetadataKey` in the tool return metadata. The record holds `resource_uri`, `tool_input` (the model's arguments), `result` (the full MCP `CallToolResult` in wire form, including `structuredContent`, `_meta`, and `isError`), and `toolset_id`. The model never sees it. The [AG-UI](ag-ui.md#render-mcp-apps) and [Vercel AI](vercel-ai.md#render-mcp-apps) adapters forward it to the frontend.
+
+Tools whose `_meta.ui.visibility` omits `"model"` are app-only. The agent does not list them to the model.
+
+The page runs in the browser and cannot reach the MCP server, so your backend relays its requests on a shared `Session`:
+
+| Page request | Method |
+| --- | --- |
+| Load the page or a `resources/read` | `ReadResource`, which keeps each item's `MIMEType` and `Meta` (where `_meta.ui` holds the iframe's Content Security Policy) |
+| `tools/call` | `CallToolForApp` |
+
+`CallToolForApp` only calls tools visible to apps: those whose `_meta.ui.visibility` includes `"app"` or is omitted. Any other name returns a `*jsonrpc.Error` with code `jsonrpc.CodeInvalidParams`. Send that error, or the result, back to the page as is, including `IsError` results.
+
+!!! warning "Resources have no visibility setting"
+    MCP Apps lets a page read any resource on the server. Check the URI before you call `ReadResource` if a page should only reach some.
+
 ## Handle sampling and elicitation
 
 Let the server call a model through your MCP client and request approved structured input:

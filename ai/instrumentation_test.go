@@ -21,6 +21,66 @@ import (
 	"go.opentelemetry.io/otel/trace"
 )
 
+type providerRequestModel struct {
+	requestModel
+	provider string
+}
+
+func (model providerRequestModel) ProviderName() string { return model.provider }
+func (providerRequestModel) ProviderURL() string        { return "https://provider.test" }
+
+func TestFallbackAttemptInstrumentation(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tracerProvider.Shutdown(t.Context()) })
+
+	failure := providerRequestModel{provider: "first-provider", requestModel: requestModel{name: "first", request: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return nil, &fallbackAPIError{"offline"}
+	}}}
+	cost := 0.25
+	rejected := providerRequestModel{provider: "second-provider", requestModel: requestModel{name: "second", request: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "reject"}},
+			Usage: ai.Usage{InputTokens: 4, CostUSD: &cost}}, nil
+	}}}
+	accepted := providerRequestModel{provider: "third-provider", requestModel: requestModel{name: "third", request: func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	}}}
+	fallback := ai.NewFallbackModel(failure, ai.WithFallbackModels(rejected, accepted),
+		ai.WithFallbackOnError(func(_ context.Context, err error) (bool, error) {
+			var apiError ai.ModelAPIError
+			return errors.As(err, &apiError), nil
+		}),
+		ai.WithFallbackOnResponse(func(_ context.Context, response *ai.ModelResponse) (bool, error) {
+			return response.Text() == "reject", nil
+		}),
+	)
+	model := ai.NewInstrumentedModel(fallback, ai.WithInstrumentationTracerProvider(tracerProvider))
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil || response.Text() != "done" {
+		t.Fatalf("fallback instrumentation request = %+v, %v", response, err)
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 3 {
+		t.Fatalf("fallback attempt spans = %+v", spans)
+	}
+	for index, span := range spans[:2] {
+		attributes := instrumentationSpanAttributes(span.Attributes)
+		if span.Status.Code != codes.Error || attributes["pydantic_ai.model_request.attempt"] != int64(index) {
+			t.Fatalf("attempt %d = %+v attributes=%+v", index, span, attributes)
+		}
+	}
+	attributes := instrumentationSpanAttributes(spans[1].Attributes)
+	if attributes["gen_ai.provider.name"] != "second-provider" || attributes["operation.cost"] != cost {
+		t.Fatalf("rejected attempt attributes = %+v", attributes)
+	}
+}
+
 func TestInstrumentedModelRequest(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
@@ -818,4 +878,41 @@ func instrumentationSpanAttributes(values []attribute.KeyValue) map[string]any {
 		attributes[string(value.Key)] = value.Value.AsInterface()
 	}
 	return attributes
+}
+
+func TestResumedChatSpanReportsOnlyWhatTheRequestBilled(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tracerProvider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	t.Cleanup(func() { _ = tracerProvider.Shutdown(t.Context()) })
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}}},
+		ai.ModelResponse{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "a"}}, ModelName: "model", ProviderResponseID: "r1",
+			State: ai.ModelResponseStateSuspended, Usage: ai.Usage{Requests: 1, InputTokens: 5, OutputTokens: 2},
+		},
+	}
+	model := &continuationModel{responses: []*ai.ModelResponse{{
+		Parts: []ai.ResponsePart{ai.TextPart{Content: "b"}}, ModelName: "model", ProviderResponseID: "r2",
+		Usage: ai.Usage{Requests: 1, InputTokens: 8, OutputTokens: 6},
+	}}}
+	agent := ai.NewAgent[deps, string](
+		ai.NewInstrumentedModel(model, ai.WithInstrumentationTracerProvider(tracerProvider)),
+	)
+	if _, err := agent.Resume(t.Context(), history, deps{}); err != nil {
+		t.Fatal(err)
+	}
+	chats := 0
+	for _, span := range exporter.GetSpans() {
+		if !strings.HasPrefix(span.Name, "chat ") {
+			continue
+		}
+		chats++
+		attributes := instrumentationSpanAttributes(span.Attributes)
+		if attributes["gen_ai.usage.input_tokens"] != int64(8) || attributes["gen_ai.usage.output_tokens"] != int64(6) {
+			t.Fatalf("chat span attributes = %+v", attributes)
+		}
+	}
+	if chats != 1 {
+		t.Fatalf("chat spans = %d, want 1", chats)
+	}
 }

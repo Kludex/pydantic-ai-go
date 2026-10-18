@@ -167,3 +167,165 @@ var _ ai.StreamingModel = mistral.NewModel("model")
 var _ ai.ModelProviderIdentity = mistral.NewModel("model")
 var _ ai.ModelDefaultSettings = mistral.NewModel("model")
 var _ ai.ModelAPIError = (*mistral.APIError)(nil)
+
+func TestSingleForcedToolKeepsDeclarations(t *testing.T) {
+	forceKeep, err := (mistral.Settings{ToolChoice: mistral.ToolChoiceAny, AllowedTools: []string{"keep"}}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	disableFunctions, err := (mistral.Settings{ToolChoice: mistral.ToolChoiceNone}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tools := []ai.ToolDefinition{{Name: "keep"}, {Name: "other"}}
+	output := &ai.ToolDefinition{Name: "final_result"}
+	tests := []struct {
+		name   string
+		params ai.ModelRequestParams
+		tools  []string
+		choice any
+	}{
+		{
+			name:   "allowed single",
+			params: ai.ModelRequestParams{Tools: tools, AllowText: true, Settings: forceKeep},
+			tools:  []string{"keep", "other"},
+			choice: map[string]any{"type": "function", "function": map[string]any{"name": "keep"}},
+		},
+		{
+			name:   "none with output",
+			params: ai.ModelRequestParams{Tools: tools, OutputTool: output, Settings: disableFunctions},
+			tools:  []string{"keep", "other", "final_result"},
+			choice: map[string]any{"type": "function", "function": map[string]any{"name": "final_result"}},
+		},
+		{
+			name:   "only output",
+			params: ai.ModelRequestParams{OutputTool: output, Settings: disableFunctions},
+			tools:  []string{"final_result"},
+			choice: "any",
+		},
+		{
+			name:   "allowed single with output",
+			params: ai.ModelRequestParams{Tools: tools, OutputTool: output, AllowText: true, Settings: forceKeep},
+			tools:  []string{"keep", "final_result"},
+			choice: "any",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var captured map[string]any
+			server := responseServer(t, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`, &captured)
+			defer server.Close()
+			model := mistral.NewModel("mistral-small-latest", mistral.WithBaseURL(server.URL), mistral.WithHTTPClient(server.Client()))
+			if _, err := model.Request(t.Context(), nil, test.params); err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for _, tool := range captured["tools"].([]any) {
+				names = append(names, tool.(map[string]any)["function"].(map[string]any)["name"].(string))
+			}
+			if !reflect.DeepEqual(names, test.tools) || !reflect.DeepEqual(captured["tool_choice"], test.choice) {
+				t.Fatalf("unexpected tools %v and choice %#v", names, captured["tool_choice"])
+			}
+		})
+	}
+}
+
+func TestLarge4AdjustableReasoning(t *testing.T) {
+	for _, name := range []string{"mistral-large-4", "mistral-large-4-0", "mistral-large-4-preview"} {
+		for _, level := range []ai.ThinkingLevel{ai.ThinkingLevelHigh, ai.ThinkingLevelDisabled} {
+			var captured map[string]any
+			server := responseServer(t, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`, &captured)
+			model := mistral.NewModel(name, mistral.WithBaseURL(server.URL), mistral.WithHTTPClient(server.Client()))
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+				Settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: level}},
+			})
+			server.Close()
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := map[ai.ThinkingLevel]any{ai.ThinkingLevelHigh: "high", ai.ThinkingLevelDisabled: "none"}[level]
+			if name == "mistral-large-4-preview" {
+				want = nil
+			}
+			if captured["reasoning_effort"] != want {
+				t.Fatalf("%s %s: unexpected reasoning effort %#v", name, level, captured["reasoning_effort"])
+			}
+		}
+	}
+}
+
+func TestForeignToolCallIDsAreRewritten(t *testing.T) {
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		bodies = append(bodies, string(body))
+		_, _ = io.WriteString(response, `{"model":"voxtral-small-latest","choices":[
+			{"finish_reason":"stop","message":{"content":"Sunny, rainy and cloudy."}}],"usage":{}}`)
+	}))
+	defer server.Close()
+	model := mistral.NewModel("voxtral-small-latest", mistral.WithProvider(mistral.ProviderConfig{
+		Name: "mistral", BaseURL: server.URL, HTTPClient: server.Client(),
+	}))
+	agent := ai.NewAgent[struct{}, string](model)
+	call := func(city, id string) ai.ToolCallPart {
+		return ai.ToolCallPart{ToolName: "get_weather", ToolCallID: id, Args: json.RawMessage(`{"city":"` + city + `"}`)}
+	}
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Weather in Paris, London and Berlin?"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			call("Paris", "call_abc123def456ghi789jkl012"),
+			call("Londres", "toolu_01A09q90qw90lq917835lq9"),
+			call("Berlin", "pyd_ai_0123456789abcdef0123456789abcdef"),
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.ToolReturnPart{ToolName: "get_weather", ToolCallID: "call_abc123def456ghi789jkl012", Content: "Sunny"},
+			ai.RetryPromptPart{ToolName: "get_weather", ToolCallID: "toolu_01A09q90qw90lq917835lq9", Content: "English"},
+			ai.ToolReturnPart{ToolName: "get_weather", ToolCallID: "pyd_ai_0123456789abcdef0123456789abcdef", Content: "Cloudy"},
+		}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{call("London", "aB3dE5gH9")}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.ToolReturnPart{ToolName: "get_weather", ToolCallID: "aB3dE5gH9", Content: "Rainy"},
+		}},
+	}
+
+	for range 2 {
+		if _, err := agent.Run(t.Context(), "Summarize.", struct{}{}, ai.WithMessageHistory(history)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if len(bodies) != 2 || bodies[0] != bodies[1] {
+		t.Fatalf("the same history sent different bytes: %q", bodies)
+	}
+	var payload struct {
+		Messages []struct {
+			Role       string `json:"role"`
+			ToolCallID string `json:"tool_call_id"`
+			ToolCalls  []struct {
+				ID string `json:"id"`
+			} `json:"tool_calls"`
+		} `json:"messages"`
+	}
+	if err := json.Unmarshal([]byte(bodies[0]), &payload); err != nil {
+		t.Fatal(err)
+	}
+	var ids []string
+	for _, message := range payload.Messages {
+		for _, call := range message.ToolCalls {
+			ids = append(ids, message.Role+":"+call.ID)
+		}
+		if message.Role == "tool" {
+			ids = append(ids, "tool:"+message.ToolCallID)
+		}
+	}
+	want := []string{
+		"assistant:2pESUE4jw", "assistant:l4LUGq9qS", "assistant:9qOPVjwIC",
+		"tool:2pESUE4jw", "tool:l4LUGq9qS", "tool:9qOPVjwIC", "assistant:aB3dE5gH9", "tool:aB3dE5gH9",
+	}
+	if !reflect.DeepEqual(ids, want) {
+		t.Fatalf("wire IDs = %q, want %q", ids, want)
+	}
+	if id := history[1].(ai.ModelResponse).Parts[0].(ai.ToolCallPart).ToolCallID; id != "call_abc123def456ghi789jkl012" {
+		t.Fatalf("stored history changed: %q", id)
+	}
+}

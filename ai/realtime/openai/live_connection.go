@@ -64,6 +64,12 @@ type LiveConnection struct {
 	reasoning    map[string][]ai.ResponsePart
 	nativeIndex  int
 	seconds      float64
+
+	idleCancel    context.CancelFunc
+	idleDone      chan struct{}
+	inputAudioEnd time.Time
+	audioEnd      time.Time
+	nextIdleFrame time.Time
 }
 
 func newLiveConnection(socket *websocket.Conn, started map[string]any, common realtime.Settings, settings LiveSettings, rate int, baseURL string, sideband bool, dial liveDial) *LiveConnection {
@@ -73,6 +79,12 @@ func newLiveConnection(socket *websocket.Conn, started map[string]any, common re
 		stop: make(chan struct{}), delegations: map[string]*liveDelegation{}, calls: map[string]string{},
 		abandoned: map[string]bool{}, seenCalls: map[string]bool{}, reasoning: map[string][]ai.ResponsePart{}}
 	connection.startReader()
+	if settings.IdleAudio {
+		ctx, cancel := context.WithCancel(context.Background())
+		connection.idleCancel, connection.idleDone = cancel, make(chan struct{})
+		connection.inputAudioEnd = time.Now()
+		go connection.streamIdleAudio(ctx)
+	}
 	return connection
 }
 
@@ -137,7 +149,18 @@ func (connection *LiveConnection) Send(ctx context.Context, input realtime.Input
 		if len(input.Data)%2 != 0 {
 			return fmt.Errorf("openai GPT-Live: PCM16 audio length must be even")
 		}
-		return connection.write(ctx, map[string]any{"type": "session.input_audio.append", "audio": base64.StdEncoding.EncodeToString(input.Data)})
+		frame := map[string]any{"type": "session.input_audio.append", "audio": base64.StdEncoding.EncodeToString(input.Data)}
+		if connection.idleCancel == nil {
+			return connection.write(ctx, frame)
+		}
+		inputAudioEnd, audioEnd := connection.inputAudioEnd, connection.audioEnd
+		connection.inputAudioEnd = connection.queuedAudioStart().Add(time.Duration(len(input.Data)) * time.Second / time.Duration(2*connection.rate))
+		connection.audioEnd = connection.inputAudioEnd
+		err := connection.write(ctx, frame)
+		if err != nil {
+			connection.inputAudioEnd, connection.audioEnd = inputAudioEnd, audioEnd
+		}
+		return err
 	case realtime.TextInput:
 		return connection.appendText(ctx, "session.commentary.append", input.Text)
 	case realtime.TextContext:
@@ -248,6 +271,9 @@ func (connection *LiveConnection) Events(ctx context.Context) iter.Seq2[realtime
 					}
 					restored, err := connection.redialSession(ctx)
 					if err != nil {
+						connection.mu.Lock()
+						connection.ended = true
+						connection.mu.Unlock()
 						yield(nil, err)
 						return
 					}
@@ -311,6 +337,9 @@ func (connection *LiveConnection) EndSession(ctx context.Context) iter.Seq2[real
 			connection.mu.Unlock()
 			return
 		}
+		if connection.idleCancel != nil {
+			connection.idleCancel()
+		}
 		ended := connection.ended
 		var err error
 		if !ended {
@@ -351,6 +380,10 @@ func (connection *LiveConnection) EndSession(ctx context.Context) iter.Seq2[real
 
 // Close releases this websocket without ending a browser's media session.
 func (connection *LiveConnection) Close(context.Context) error {
+	if connection.idleCancel != nil {
+		connection.idleCancel()
+		<-connection.idleDone
+	}
 	connection.mu.Lock()
 	defer connection.mu.Unlock()
 	if connection.closed {

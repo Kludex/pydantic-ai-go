@@ -10,6 +10,35 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
 )
 
+func TestRepairMessagesRepeatedCallIDInOneResponse(t *testing.T) {
+	history := []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.ToolCallPart{ToolName: "first", ToolCallID: "same", Args: []byte(`{}`)},
+			ai.ToolCallPart{ToolName: "second", ToolCallID: "same", Args: []byte(`{}`)},
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.ToolReturnPart{ToolName: "first", ToolCallID: "same", Content: "one"},
+		}},
+	}
+	repaired := ai.RepairMessages(history, ai.MessageRepairOptions{})
+	request := repaired[1].(ai.ModelRequest)
+	if len(request.Parts) != 2 {
+		t.Fatalf("repeated call ID did not bind FIFO: %+v", repaired)
+	}
+	if returned := request.Parts[0].(ai.ToolReturnPart); returned.ToolName != "first" || returned.Content != "one" {
+		t.Fatalf("real result moved: %+v", returned)
+	}
+	assertSynthesizedReturn(t, request.Parts[1], "second", "same")
+
+	fullyAnswered := append([]ai.ModelMessage(nil), history...)
+	fullyAnswered[1] = ai.ModelRequest{Parts: append(request.Parts[:1], ai.ToolReturnPart{
+		ToolName: "second", ToolCallID: "same", Content: "two",
+	})}
+	if got := countSynthesizedReturns(ai.RepairMessages(fullyAnswered, ai.MessageRepairOptions{})); got != 0 {
+		t.Fatalf("fully answered repeated IDs synthesized %d returns", got)
+	}
+}
+
 func TestRepairMessagesPublicAPI(t *testing.T) {
 	timestamp := time.Date(2026, 10, 8, 12, 0, 0, 0, time.UTC)
 	history := []ai.ModelMessage{
@@ -107,7 +136,7 @@ func TestRunRepairsInteriorAndTrailingDanglingToolCalls(t *testing.T) {
 	if len(interior) != 6 {
 		t.Fatalf("interior request was not repaired: %+v", interior)
 	}
-	assertSynthesizedReturn(t, interior[2], "a", "a-1")
+	assertSynthesizedReturn(t, interior[0], "a", "a-1")
 	assertSynthesizedReturn(t, interior[3], "future", "future-1")
 	if _, ok := interior[4].(ai.RetryPromptPart); !ok {
 		t.Fatalf("synthesized result was not inserted before user-facing feedback: %+v", interior)

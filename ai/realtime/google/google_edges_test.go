@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"testing"
 	"time"
 
@@ -225,3 +226,31 @@ func TestGoogleClientCreationSuccessThenConnectFailure(t *testing.T) {
 }
 
 func ptr[T any](value T) *T { return &value }
+
+func TestGoogleSeedMarksInterruptedSpeech(t *testing.T) {
+	cut, leaves, empty := "Sure, the morning flight", "It leaves at", ""
+	heard := 640
+	live := newFakeSession()
+	model := googlert.NewModel("model", googlert.WithConnector(&fakeConnector{session: live}))
+	_, err := model.Connect(t.Context(), realtime.ConnectParams{Messages: []ai.ModelMessage{
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &cut, InterruptedAtMS: &heard},
+		}},
+		ai.ModelResponse{State: ai.ModelResponseStateInterrupted, Parts: []ai.ResponsePart{
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &leaves},
+			ai.SpeechPart{Speaker: ai.SpeechSpeakerAssistant, Transcript: &empty},
+		}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var texts []string
+	for _, turn := range live.client[0].Turns {
+		for _, part := range turn.Parts {
+			texts = append(texts, part.Text)
+		}
+	}
+	if want := []string{cut + "\n[Interrupted after 640 ms]", leaves}; !slices.Equal(texts, want) {
+		t.Fatalf("seeded %q", texts)
+	}
+}

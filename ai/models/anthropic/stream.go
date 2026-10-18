@@ -45,44 +45,29 @@ func (m *Model) StreamRequest(
 		}
 		return resp, nil
 	}
-	resp, err := send()
-	if err != nil {
-		return nil, err
-	}
-	if resp.StatusCode == http.StatusInternalServerError && payload.ContainerFromHistory &&
-		messagesHaveContainerUploads(payload.Messages) {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-		payload.Container = nil
-		resp, err = send()
+	for {
+		resp, err := send()
 		if err != nil {
 			return nil, err
 		}
-	}
-	if resp.StatusCode != http.StatusOK {
-		data, readErr := io.ReadAll(resp.Body)
+		if resp.StatusCode == http.StatusOK {
+			return m.eventStream(ctx, resp.Body), nil
+		}
+		data, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
-		if readErr != nil {
-			return nil, ai.NewModelTransportError(ctx, m, "read error response", readErr)
+		if err != nil {
+			return nil, ai.NewModelTransportError(ctx, m, "read error response", err)
 		}
-		if anthropicStaleThinkingError(m.name, resp.StatusCode, data, payload) {
+		switch {
+		case payload.Container != nil && payload.ContainerFromHistory && anthropicExpiredContainer(resp.StatusCode, data) &&
+			messagesHaveContainerUploads(payload.Messages):
+			payload.Container = nil
+		case anthropicStaleThinkingError(m.name, resp.StatusCode, anthropicErrorMessage(data), payload):
 			enableAnthropicStaleThinkingDrop(payload)
-			resp, err = send()
-			if err != nil {
-				return nil, err
-			}
-			if resp.StatusCode == http.StatusOK {
-				return m.eventStream(ctx, resp.Body), nil
-			}
-			data, readErr = io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			if readErr != nil {
-				return nil, ai.NewModelTransportError(ctx, m, "read error response", readErr)
-			}
+		default:
+			return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 		}
-		return nil, &APIError{StatusCode: resp.StatusCode, Body: string(data)}
 	}
-	return m.eventStream(ctx, resp.Body), nil
 }
 
 type streamEvent struct {

@@ -83,7 +83,7 @@ func TestXAIRealtimeSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	if session.Profile().SupportsTextOutput || !session.Profile().SupportsThinking ||
-		!session.ReconnectRestoresInFlightState() {
+		session.ReconnectRestoresInFlightState() {
 		t.Fatalf("unexpected xAI profile")
 	}
 	turns := 0

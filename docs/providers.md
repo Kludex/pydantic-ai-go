@@ -72,6 +72,40 @@ func main() {
 
 `Prediction` sends expected output to a compatible Chat Completions model. The provider can generate matching content faster and reports accepted and rejected prediction tokens in usage. Use `ContentParts` when the expected output has separately cacheable text boundaries. Predicted output is not supported by the Responses API.
 
+### Text verbosity
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
+)
+
+func main() {
+	settings, err := (openai.Settings{TextVerbosity: openai.TextVerbosityLow}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	agent := ai.NewAgent[struct{}, string](
+		openai.NewModel("gpt-5.6-luna"),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.Run(context.Background(), "What is 2+2?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`TextVerbosity` asks for more concise or more detailed text. Chat Completions sends it as `verbosity`, and the Responses API sends it as `text.verbosity`. The request omits it when unset, so the model uses its own default. Support differs by model.
+
 ### Prompt caching
 
 Use [`ai.Caching{}` or `ModelSettings.Cache`](caching.md) for portable configuration. The provider-local settings below take precedence over that configuration.
@@ -116,6 +150,8 @@ func main() {
 	fmt.Println(result.Output)
 }
 ```
+
+On GPT-5.6 and later, OpenAI routes requests to the cache automatically, so you don't need `PromptCacheKey` to get cache hits. Requests with different keys don't reuse each other's cached prefixes, so every new key pays the cache write again. Leave the key unset so all requests share a common prefix, or set one stable key per group you want cached separately, such as a customer. Don't set a new key per request or conversation. On earlier models, a stable key helps OpenAI send requests with the same prefix to the same cache.
 
 `PromptCacheOptions` controls request-wide caching for GPT-5.6 and GPT-6 models with Chat Completions and Responses. OpenAI applies its 30-minute TTL to every explicit `CachePoint` and ignores each marker's portable TTL. `PromptCacheRetention24Hours` requests the legacy maximum retention independently. `ai.ResolveCacheRetention` reports the longest requested lifetime without treating in-memory caching as durable.
 
@@ -183,6 +219,10 @@ func main() {
 
 `ProviderConfig.Name` is stored in message history and telemetry. Set it to a stable provider identifier. An empty `APIKey` omits the `Authorization` header, which supports local servers without authentication.
 
+Chat Completions keeps a tool call's `extra_content` in `ToolCallPart.ProviderDetails["extra_content"]` and sends it back unchanged with that call. Gemini's OpenAI-compatible endpoint returns tool-call thought signatures there and rejects the next request without them. Calls from another provider name are replayed without it, because signatures are only valid for the provider that issued them.
+
+When replayed history uses exactly one thinking field (`reasoning_content`, `reasoning`, or `reasoning_text`), Chat Completions also sends that field empty on tool-calling assistant turns after the last user message that lack it. DeepSeek-style APIs reject such a turn, for example a step served by another model, without the field. Earlier turns go out unchanged because those APIs accept them.
+
 Use `ProviderConfig.Headers` and `ProviderConfig.Query` for provider-wide values. Use `ProviderConfig.PrepareRequest` for credentials that must be refreshed before each request. Per-request `ModelSettings.ExtraHeaders` are applied last.
 
 Disable unsupported behavior explicitly:
@@ -212,6 +252,8 @@ func main() {
 ```
 
 The compatibility layer sends OpenAI wire formats. It cannot make an endpoint support OpenAI features that the endpoint does not implement.
+
+Responses models render deferred tools with OpenAI's hosted `tool_search` by default. `gpt-5.4-nano` and its dated snapshots default to `WithDeferredToolSupport(false)` because OpenAI rejects `tool_search` on them, so deferred tools are discovered through local search instead.
 
 ## DeepSeek
 
@@ -272,6 +314,41 @@ func main() {
 Set `TOGETHER_API_KEY`. Together uses Chat Completions and keeps vendor-qualified model IDs unchanged. DeepSeek V4 routes use automatic tool choice because Together has not verified a request-time thinking toggle that makes forced tools safe.
 
 Use `together.WithBaseURL` for a compatible gateway. A caller-provided HTTP client remains caller-owned.
+
+## Meta Muse
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/meta"
+)
+
+func main() {
+	model := meta.NewModel("muse-spark-1.3")
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "What is the capital of France?", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Set `META_API_KEY`. The `meta:` inference prefix resolves to `meta.NewModel`.
+
+`meta.NewModel` uses the Responses API. Muse labels the progress updates it writes before a tool call as `commentary`. The adapter sends that phase and Muse's encrypted reasoning back on later requests, so long tool-calling runs do not end on a progress update. `meta.NewChatModel` uses Chat Completions, which returns no reasoning parts.
+
+Muse models always reason. Meta rejects effort `none`, so `ThinkingLevelDisabled` is ignored and the endpoint default applies. Muse accepts `temperature` and `top_p` while reasoning, so they are sent as configured.
+
+Meta only accepts `tool_choice: "auto"`. An output tool falls back to automatic tool choice instead of being forced. Muse supports `ai.WebSearchTool` and no other native tool.
+
+Use `meta.WithBaseURL` or `meta.WithProvider` for a compatible gateway. A caller-provided HTTP client remains caller-owned.
 
 ## vLLM
 
@@ -374,6 +451,41 @@ Register your own GitHub OAuth application and enable device flow. `NewOAuthFlow
 Copilot model availability depends on your subscription. The adapter sends model IDs unchanged and uses the Chat Completions endpoint. It resolves Claude, GPT, o-series, Gemini, Grok, Kimi, MAI, OSWE, Raptor, and exec-agent model families. It normalizes `reasoning_text` for Claude and Gemini models, drops sampling settings rejected by the affected Claude families, and removes thinking settings from unknown or known non-reasoning models. Responses-only models, realtime, and embeddings are not supported by the service. The embedding inference prefix remains available for upstream compatibility, but Copilot currently rejects `/embeddings` requests.
 
 Use `githubcopilot.WithBaseURL` for an enterprise host or local proxy. The default integration headers match GitHub's Copilot clients. A caller-provided HTTP client remains caller-owned.
+
+## OpenAI Decisions
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    ai "github.com/Kludex/pydantic-ai-go/ai"
+    "github.com/Kludex/pydantic-ai-go/ai/models/openaidecisions"
+)
+
+type Handling struct {
+    Verdict string `json:"verdict" jsonschema:"enum=run,enum=reject,enum=ask,description=How should this command be handled?"`
+    Irreversible bool `json:"irreversible" jsonschema_description:"Would running this destroy data or expose secrets?"`
+}
+
+func main() {
+    model := openaidecisions.NewModel("gpt-6-luna")
+    agent := ai.NewAgent[struct{}, Handling](model)
+    result, err := agent.Run(context.Background(), "Delete production and publish its credentials.", struct{}{})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result.Output.Verdict, result.Output.Irreversible)
+}
+```
+
+Set `OPENAI_API_KEY`. You can also use the `openai-decisions:` inference prefix. The adapter calls `/v1/decisions`, not Chat Completions or Responses. It asks predicate, choice, and score questions derived from the same typed output schemas as TypeSafe Jev.
+
+OpenAI Decisions accepts image evidence. Pass `ImageURL` or image `BinaryContent` values through `RunParts`. URLs are downloaded safely before transport. The endpoint accepts at most 128 images, 200 questions, 255 choice options, and 10 score levels. Limits fail before transport. Large multi-route requests ask for the route first and fill its fields in a second request.
+
+Use `openaidecisions.Settings` for boolean and route thresholds. `UnfillableRoute` and `UnsureRoute` implement `DecisionHandOff`, so `NewFallbackModel` can hand uncertain steps to a language model. A refused question returns `ContentFilterError`.
 
 ## System One decision models
 
@@ -589,7 +701,15 @@ Set `MISTRAL_API_KEY`. Set `MISTRAL_BASE_URL` only when you use a compatible gat
 
 The adapter uses Mistral's native Chat Completions contract. It supports static and streamed text, thinking chunks, function tools, tool-based structured output, prompt cache keys, tool selection, parallel calls, usage, and portable generation settings.
 
-Mistral accepts direct or downloaded images, inline images, direct or downloaded PDFs, and downloaded text documents. Audio, video, uploaded-file references, and other binary media fail before transport. Models in the Mistral Small 4 and Medium 3.5 families map enabled reasoning to `high` and disabled reasoning to `none`. Magistral reasoning is always enabled, so the adapter omits `reasoning_effort`.
+Mistral accepts direct or downloaded images, inline images, direct or downloaded PDFs, and downloaded text documents. Audio, video, uploaded-file references, and other binary media fail before transport. Models in the Mistral Large 4, Small 4, and Medium 3.5 families map enabled reasoning to `high` and disabled reasoning to `none`. Older snapshots and `mistral-large-latest` do not support reasoning, so the adapter omits `reasoning_effort` for them. Magistral reasoning is always enabled, so the adapter omits `reasoning_effort`.
+
+When exactly one tool may be called and a call is required, the adapter forces it by name with `tool_choice: {"type": "function", ...}` and keeps every declaration. Filtering `tools` would change the prompt prefix and invalidate Mistral's prompt cache. This covers `ToolChoiceAny` with one `AllowedTools` name and `ToolChoiceNone` with a required output tool. A larger allowed subset is still sent by filtering `tools`, because Mistral cannot force a subset.
+
+### Tool call IDs
+
+Mistral models accept tool call IDs of exactly 9 ASCII letters and digits, and reject any other ID with a 400 error. IDs from another provider, like OpenAI's `call_...` or Anthropic's `toolu_...`, do not fit. A history started on another model, or a `FallbackModel` that switches to Mistral, can contain them.
+
+So the Mistral profile sets `ModelProfile.ToolCallIDLength` to `9`. Before each request, an ID that does not fit is replaced with a stable hash of it that does. An ID that already fits is sent unchanged. The stored history keeps the original IDs. Other adapters that serve Mistral models, like Azure, Bedrock, Groq, Hugging Face, Ollama, OpenRouter, Snowflake, Together and vLLM, set the same length. On a custom OpenAI-compatible endpoint, pass `openai.WithToolCallIDLength(9)`.
 
 ## Ollama
 
@@ -944,13 +1064,46 @@ func main() {
 }
 ```
 
-Claude Sonnet 4.6+, Opus 4.6+, Fable 5 and 5.1, and Mythos 5 and 5.1 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budgets and effort levels fail before transport. Sampling settings rejected by the selected model are omitted.
+Claude Haiku 5.5, Sonnet 4.6+, Opus 4.6+, Fable 5 and 5.1, and Mythos 5 and 5.1 use adaptive thinking. Older models receive a token budget. Portable thinking levels select provider effort automatically, while `anthropic.Settings.Effort` provides an explicit override. Unsupported budgets and effort levels fail before transport. Sampling settings rejected by the selected model are omitted.
 
 Claude Opus 5.5 cannot disable thinking. `ThinkingLevelDisabled` omits the `thinking` field and preserves an explicit effort, so Anthropic uses adaptive thinking. Lower the effort when you need a faster response.
 
 Claude Fable 5.1 and Opus 5.5 reject forced tool choices. A required output tool falls back to `tool_choice: auto`. The model can ignore it, so output validation and retry limits still apply.
 
-Claude Fable 5.1 and Opus 5.5 can reject a signed thinking block when the preceding instructions or tools changed. The adapter retries that request once with `prefix_mismatch_behavior: drop_block`. Anthropic reports the drop in `ModelResponse.ProviderDetails["input_transformations"]`, and later requests in the same normalized history preserve the recovery setting. Keep dynamic instructions and tool order stable when possible because the changed prefix also prevents prompt-cache reuse.
+Claude Fable 5.1, Opus 5.5, Sonnet 5.5, and Haiku 5.5 can reject a signed thinking block when the preceding instructions or tools changed. The adapter retries that request once with `prefix_mismatch_behavior: drop_block`. This includes their Bedrock IDs on the direct API and on the legacy Bedrock client. Anthropic reports the drop in `ModelResponse.ProviderDetails["input_transformations"]`, and later requests in the same normalized history preserve the recovery setting. Keep dynamic instructions and tool order stable when possible because the changed prefix also prevents prompt-cache reuse.
+
+### Carried-over thinking
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
+)
+
+func main() {
+	model := anthropic.NewModel("claude-sonnet-4-5", anthropic.WithMimicsAssistantMessageFormatting(false))
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Say hello.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+A `ThinkingPart` from history goes back to Claude as a signed `thinking` block when it still has an Anthropic signature. A part without one, because its signature did not survive your storage or it came from another provider in a `FallbackModel`, is sent as text instead of dropped.
+
+That text goes in a `user` message of its own, ahead of the assistant turn it came from. Claude copies formatting it sees in assistant turns, so reasoning in `<thinking>` tags there teaches it to write those tags into the answers your users read. That is why a request can carry a `user` turn you never wrote.
+
+The text is wrapped in an `<assistant_thinking>` tag, so it does not read as something you thought. The `model` and `provider` attributes come from the `ModelResponse` it belongs to, like `<assistant_thinking model="gpt-5" provider="openai">`, and an empty one is left off. A closing `</assistant_thinking>` inside the reasoning is escaped so it cannot end the block early. The tag is rendered per request and never stored in your history. Empty reasoning, like a redacted block from another provider, is dropped.
+
+`ModelProfile.MimicsAssistantMessageFormatting` reports this behavior and is on by default. Pass `anthropic.WithMimicsAssistantMessageFormatting(false)`, as in the example, to send the reasoning in `<thinking>` tags in the assistant turn instead. Claude on Bedrock Converse carries reasoning the same way; see [Amazon Bedrock](bedrock.md#messages-and-files).
 
 ### Prompt caching
 
@@ -989,6 +1142,39 @@ func main() {
 ```
 
 `Cache` lets Anthropic move one automatic breakpoint forward as the conversation grows. `CacheInstructions`, `CacheMessages`, and `CacheToolDefinitions` place explicit boundaries. Static instructions are cached before dynamic instructions. Automatic and explicit message caching are mutually exclusive. Anthropic keeps at most four cache points and removes the oldest message boundaries after reserving instruction, tool, and automatic slots.
+
+### Request-scoped system prompts
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
+)
+
+func main() {
+	model := anthropic.NewModel("claude-opus-5", anthropic.WithRequestScopedSystemPrompts(false))
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(context.Background(), "Summarize the product.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+A [request-scoped](history.md#request-scoped-system-prompts) `ai.SystemPromptPart` is sent as a [turn-scoped system message](https://platform.claude.com/docs/en/build-with-claude/mid-conversation-system-messages#turn-scoped-system-messages): a `system` entry with `clear_at: "next_user_message"`. The API stops showing it once a later user turn exists, including one that only carries tool results. The adapter sends every one of them with every request, current or not, and adds the `mid-conversation-system-clear-at-2026-08-21` beta header for you.
+
+This matters most on models that bind thinking blocks to the conversation, such as Claude Opus 5.5, Sonnet 5.5, and Fable 5.1. Deleting an earlier reminder from a later request invalidates every thinking block after it; a cleared entry left in place does not. A cleared entry costs no input tokens and is never part of a cache key, so `Cache` and `CacheMessages` put their breakpoints on the content before it.
+
+The API takes a `system` entry only between a user turn and the model's reply. An entry with no user content before it gets a minimal `.` user message, and one followed by another user turn moves to just before the reply it governs.
+
+Support covers Claude Fable 5, Mythos 5, Opus 4.8, Opus 5, Sonnet 5.5, and Haiku 5.5, and not the legacy Bedrock client. Elsewhere, a request-scoped prompt is sent only with its own request, and the cache breakpoint goes before it. `WithRequestScopedSystemPrompts(false)` turns the beta off, for example when your account does not have access to it.
 
 ### Code execution containers
 
@@ -1059,6 +1245,8 @@ Gemini accepts image, document, audio, and video content. Ordinary URLs are down
 
 Gemini 2.5 uses token budgets for portable thinking settings. Gemini 3 and unknown future model names use thinking levels. Known Gemini 2.0, Gemini 1.x, and Gemma models omit unsupported thinking settings. Future model names also receive the modern mixed native/function-tool and strict-tool behavior by default.
 
+`gemini-4-argon` supports the `low`, `medium`, and `high` thinking levels, so `ai.ThinkingLevelDisabled` and `ai.ThinkingLevelMinimal` resolve to `low`. On Vertex AI it rejects a thinking token budget with a 400 error: use a level instead.
+
 ### Cached content
 
 ```go
@@ -1122,6 +1310,50 @@ func main() {
 ```
 
 Model Armor is available only with Vertex AI. Google applies it only to non-streaming generation, so `StreamRequest` omits the configuration. The Gemini Developer API rejects the setting before transport.
+
+### Long decode
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/google"
+)
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](
+		google.NewModel("gemini-4-argon"),
+		ai.WithModelSettings(ai.ModelSettings{MaxTokens: 100_000}),
+	)
+	result, err := agent.Run(context.Background(), "Write the complete specification.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+`gemini-4-argon` caps the output of each request. Google's [long decode docs](https://ai.google.dev/gemini-api/docs/generate-content/long-decode) give the caps and defaults. When `MaxTokens` is above the cap, a request that reaches it returns a continuation token. The model sends the same request again with that token, until the response is done or `MaxTokens` is spent.
+
+The model merges the requests into one `ai.ModelResponse`, so to the agent a long decode is one model request:
+
+- Its usage is the sum over the requests, which is what Google bills. Each request's input counts the output so far again.
+- `ai.UsageLimits` counts it as one request. `PerRequestInputTokenLimit` and `ContextWindowUsed` use the input tokens of the first request, which the model records with `ai.MarkInitialInputTokens`. Usage limits are checked once every request is done, so `MaxTokens` is what bounds a long decode.
+- A streamed response continues in the same stream. Each request's text and thinking start new parts, like the parts of a response that isn't streamed.
+- If a later request fails, the model request fails, though the earlier requests are already billed.
+- A dropped stream resumes from its latest continuation token. A request that drops before any output is retried from the token it started with, up to three times. If output was streamed after the latest token, the model request fails with a `*google.APIError` instead, since the resumed request would repeat that output.
+
+Without `MaxTokens`, Google's default output limit applies, and a response that reaches it ends with `ai.FinishReasonLength`.
+
+!!! warning "Timeouts apply to each request"
+    The model uses `http.DefaultClient`, which has no timeout, unless you pass your own client with `google.WithHTTPClient`. `http.Client.Timeout` covers a whole request, including reading a streamed body, so give it at least the 20 minutes Google recommends. A context deadline covers the whole long decode.
+
+On Vertex AI, `gemini-4-argon` is served on the `global` location and the `us` and `eu` multi-regions, not in single regions.
 
 ## Google Cloud Vertex AI
 

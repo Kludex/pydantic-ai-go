@@ -292,6 +292,11 @@ func (model *InstrumentedModel) startOperation(
 	spanCtx, span := model.tracer.Start(
 		ctx, operation+" "+model.Name(), trace.WithSpanKind(trace.SpanKindClient), trace.WithAttributes(attributes...),
 	)
+	if operation == "chat" {
+		spanCtx = context.WithValue(spanCtx, modelRequestAttemptRecorderKey{}, &modelRequestAttemptRecorder{
+			tracer: model.tracer, parent: span, includeContent: model.includeContent,
+		})
+	}
 	if operation == "compact" {
 		spanCtx = context.WithValue(spanCtx, compactionSpanContextKey{}, true)
 	} else {
@@ -329,6 +334,7 @@ func (request *instrumentedRequest) finish(
 			request.span.End()
 			return
 		}
+		response = billedBeyond(response, request.observed.resumed)
 		if request.operation == "chat" {
 			if served != nil {
 				recordCacheHealth(request.span, request.observed.marks, request.observed.model,

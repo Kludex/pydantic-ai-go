@@ -10,6 +10,7 @@ import (
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 )
 
 // Config describes one decision request and its provider transport.
@@ -22,8 +23,11 @@ type Config struct {
 	RouteThreshold       float64
 	MaxChoiceOptions     int
 	MaxScoreLevels       int
+	MaxQuestions         int
+	MaxImages            int
+	SupportsImages       bool
 	RequiresInstructions bool
-	Call                 func(context.Context, any, map[string]Question, ai.ModelSettings) (Response, error)
+	Call                 func(context.Context, any, map[string]Question, []ai.BinaryContent, ai.ModelSettings) (Response, error)
 	HandOff              func(Route) error
 }
 
@@ -56,12 +60,11 @@ type Answer struct {
 
 // Response contains protocol answers and token usage.
 type Response struct {
-	Answers map[string]Answer `json:"answers"`
-	Model   string            `json:"model"`
-	Usage   struct {
-		InputTokens  int `json:"input_tokens"`
-		OutputTokens int `json:"output_tokens"`
-	} `json:"usage"`
+	Answers            map[string]Answer `json:"answers"`
+	Model              string            `json:"model"`
+	ProviderResponseID string            `json:"-"`
+	ProviderDetails    map[string]any    `json:"-"`
+	Usage              ai.Usage          `json:"usage"`
 }
 
 // Request maps messages and schemas to decisions and reconstructs tool output.
@@ -72,7 +75,12 @@ func Request(
 		return nil, fmt.Errorf("decision: text output is not supported")
 	}
 	settings := params.Settings
-	state, err := messageState(messages)
+	imageInputs := make([]any, 0)
+	var images *[]any
+	if config.SupportsImages {
+		images = &imageInputs
+	}
+	state, err := messageState(messages, images)
 	if err != nil {
 		return nil, err
 	}
@@ -182,11 +190,31 @@ func Request(
 				"question": "Which of these does this call for?", "background": params.Instructions,
 			}, Criteria: criteria,
 		}
+		for _, keepOutput := range []bool{true, false} {
+			if config.MaxQuestions == 0 || len(questions) <= config.MaxQuestions {
+				break
+			}
+			for _, label := range labels {
+				shape := routes[label]
+				if !shape.included || keepOutput && shape.tool == params.OutputTool {
+					continue
+				}
+				for _, scoped := range shape.scoped {
+					delete(questions, scoped)
+				}
+				shape.included, shape.scoped = false, nil
+				routes[label] = shape
+			}
+		}
 	}
 	if len(questions) == 0 {
 		return nil, fmt.Errorf("decision: request has no typed question")
 	}
-	response, err := call(ctx, config, state, questions, settings)
+	preparedImages, err := prepareImages(ctx, config, imageInputs, len(questions))
+	if err != nil {
+		return nil, err
+	}
+	response, err := call(ctx, config, state, questions, preparedImages, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +243,8 @@ func Request(
 			ToolName: selected.tool.Name, Name: selectedLabel, Probability: probability, Unfillable: true,
 		})
 	}
-	usage := ai.Usage{Requests: 1, InputTokens: response.Usage.InputTokens, OutputTokens: response.Usage.OutputTokens}
+	usage := response.Usage.Clone()
+	usage.Requests = 1
 	answers := response.Answers
 	if len(routes) > 1 && selected.included {
 		unscoped := make(map[string]Answer, len(selected.questions))
@@ -224,13 +253,19 @@ func Request(
 		}
 		answers = unscoped
 	} else if len(routes) > 1 && len(selected.questions) > 0 {
-		response, err = call(ctx, config, state, selected.questions, settings)
+		if config.MaxQuestions > 0 && len(selected.questions) > config.MaxQuestions {
+			return nil, config.HandOff(Route{
+				ToolName: selected.tool.Name, Name: selectedLabel, Probability: probability, Unfillable: true,
+			})
+		}
+		response, err = call(ctx, config, state, selected.questions, preparedImages, settings)
 		if err != nil {
 			return nil, fmt.Errorf("decision: selected %q but failed to fill its fields: %w", selectedLabel, err)
 		}
 		usage.Requests++
-		usage.InputTokens += response.Usage.InputTokens
-		usage.OutputTokens += response.Usage.OutputTokens
+		additionalUsage := response.Usage.Clone()
+		additionalUsage.Requests = 0
+		usage.Add(additionalUsage)
 		answers = response.Answers
 	}
 	arguments, details, err := decodeAnswers(
@@ -259,9 +294,69 @@ func Request(
 		}},
 		Usage:     usage,
 		ModelName: response.Model, ProviderName: config.ProviderName, ProviderURL: config.ProviderURL,
-		ProviderDetails: details, FinishReason: ai.FinishReasonToolCall,
+		ProviderResponseID: response.ProviderResponseID,
+		ProviderDetails:    mergeDecisionDetails(response.ProviderDetails, details), FinishReason: ai.FinishReasonToolCall,
 		State: ai.ModelResponseStateComplete, Timestamp: time.Now().UTC(),
 	}, nil
+}
+
+// LimitError reports a decision endpoint request limit before transport.
+type LimitError struct{ Message string }
+
+func (err *LimitError) Error() string     { return "decision: " + err.Message }
+func (*LimitError) IsModelAPIError() bool { return true }
+
+func prepareImages(
+	ctx context.Context, config Config, inputs []any, questionCount int,
+) ([]ai.BinaryContent, error) {
+	if config.MaxQuestions > 0 && questionCount > config.MaxQuestions {
+		return nil, &LimitError{Message: fmt.Sprintf(
+			"model %q accepts at most %d questions; got %d", config.ModelName, config.MaxQuestions, questionCount,
+		)}
+	}
+	if config.MaxImages > 0 && len(inputs) > config.MaxImages {
+		return nil, &LimitError{Message: fmt.Sprintf(
+			"model %q accepts at most %d images; got %d", config.ModelName, config.MaxImages, len(inputs),
+		)}
+	}
+	images := make([]ai.BinaryContent, 0, len(inputs))
+	for _, input := range inputs {
+		switch input := input.(type) {
+		case ai.BinaryContent:
+			images = append(images, input)
+		case ai.ImageURL:
+			if err := input.ForceDownload.Validate(); err != nil {
+				return nil, err
+			}
+			fetched, err := download.Fetch(ctx, input.URL, input.ForceDownload == ai.FileDownloadAllowLocal)
+			if err != nil {
+				return nil, err
+			}
+			mediaType := fetched.MediaType
+			if input.MediaType != "" {
+				mediaType = input.MediaType
+			}
+			if !strings.HasPrefix(strings.ToLower(mediaType), "image/") {
+				return nil, fmt.Errorf("decision: image URL %q returned non-image media type %q", input.URL, mediaType)
+			}
+			images = append(images, ai.BinaryContent{
+				Data: fetched.Data, MediaType: mediaType, Identifier: input.Identifier,
+				VendorMetadata: maps.Clone(input.VendorMetadata),
+			})
+		default: // pragma: no cover - message mapping admits only image values.
+			return nil, fmt.Errorf("decision: unsupported image input %T", input)
+		}
+	}
+	return images, nil
+}
+
+func mergeDecisionDetails(provider, decision map[string]any) map[string]any {
+	merged := maps.Clone(provider)
+	if merged == nil {
+		merged = map[string]any{}
+	}
+	maps.Copy(merged, decision)
+	return merged
 }
 
 func toolsLeft(messages []ai.ModelMessage, tools []ai.ToolDefinition) []ai.ToolDefinition {

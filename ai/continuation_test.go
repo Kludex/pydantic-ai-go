@@ -681,3 +681,163 @@ func TestStreamedContinuationsReindexAccumulatedParts(t *testing.T) {
 		t.Fatalf("unexpected streamed continuation result=%+v starts=%v finishes=%d", result, starts, finishes)
 	}
 }
+
+func TestResumeCountsOnlyUsageBilledBeyondSuspendedResponse(t *testing.T) {
+	cost := func(value float64) *float64 { return &value }
+	seed := func() ai.ModelResponse {
+		return ai.ModelResponse{
+			Parts:     []ai.ResponsePart{ai.TextPart{Content: "a"}},
+			ModelName: "model", ProviderResponseID: "r1", State: ai.ModelResponseStateSuspended,
+			Usage: ai.Usage{
+				Requests: 1, InputTokens: 5, OutputTokens: 2, CostUSD: cost(0.02), Details: map[string]int{"searches": 1},
+			},
+			FailedAttempts: []ai.ModelRequestAttempt{{
+				ModelName: "rejected", Outcome: ai.ModelRequestAttemptRejected,
+				Usage: &ai.Usage{InputTokens: 100, OutputTokens: 10},
+			}},
+		}
+	}
+	segment := func(id string, state ai.ModelResponseState, input, output int, usd float64) *ai.ModelResponse {
+		return &ai.ModelResponse{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: id}}, ModelName: "model", ProviderResponseID: id,
+			State: state, Usage: ai.Usage{Requests: 1, InputTokens: input, OutputTokens: output, CostUSD: cost(usd)},
+		}
+	}
+	shapes := map[string]struct {
+		segments func() []*ai.ModelResponse
+		billed   int
+		turn     int
+	}{
+		"pause turn": {
+			segments: func() []*ai.ModelResponse {
+				return []*ai.ModelResponse{segment("r2", ai.ModelResponseStateComplete, 8, 6, 0.003)}
+			},
+			billed: 14, turn: 21,
+		},
+		"background poll": {
+			segments: func() []*ai.ModelResponse {
+				return []*ai.ModelResponse{segment("r1", ai.ModelResponseStateComplete, 8, 6, 0.023)}
+			},
+			billed: 7, turn: 14,
+		},
+		"three segments": {
+			segments: func() []*ai.ModelResponse {
+				return []*ai.ModelResponse{
+					segment("r2", ai.ModelResponseStateSuspended, 4, 1, 0.001),
+					segment("r3", ai.ModelResponseStateComplete, 3, 1, 0.002),
+				}
+			},
+			billed: 9, turn: 16,
+		},
+	}
+	for name, shape := range shapes {
+		for _, streamed := range []bool{false, true} {
+			t.Run(name+"/stream="+strconv.FormatBool(streamed), func(t *testing.T) {
+				history := []ai.ModelMessage{
+					ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}}}, seed(),
+				}
+				model := &continuationModel{responses: shape.segments()}
+				agent := ai.NewAgent[deps, string](model, ai.WithUsageLimits(ai.UsageLimits{
+					TotalTokenLimit: shape.billed, PerRequestInputTokenLimit: shape.billed, CostLimitUSD: cost(0.01),
+				}))
+				var result *ai.RunResult[string]
+				var err error
+				if streamed {
+					stream := agent.ResumeStream(t.Context(), history, deps{})
+					for _, eventErr := range stream.Events() {
+						if eventErr != nil {
+							err = eventErr
+						}
+						if live := stream.Usage().TotalTokens(); live > shape.billed {
+							t.Fatalf("live usage %d counts the resumed response", live)
+						}
+					}
+					result = stream.Result()
+				} else {
+					result, err = agent.Resume(t.Context(), history, deps{})
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				usage := result.Usage()
+				if usage.TotalTokens() != shape.billed || usage.CostUSD == nil || *usage.CostUSD > 0.0031 ||
+					*usage.CostUSD < 0.0029 {
+					t.Fatalf("resumed run usage = %+v, want %d tokens and $0.003", usage, shape.billed)
+				}
+				messages := result.Messages()
+				response := messages[len(messages)-1].(ai.ModelResponse)
+				if usage.Details["searches"] != response.Usage.Details["searches"]-1 {
+					t.Fatalf("resumed run details = %v, turn details = %v", usage.Details, response.Usage.Details)
+				}
+				if response.Usage.TotalTokens() != shape.turn || len(response.FailedAttempts) != 1 {
+					t.Fatalf("committed response no longer covers the whole turn: %+v", response)
+				}
+			})
+		}
+	}
+}
+
+func TestResumingWithCarriedUsageCapsTheConversationTotal(t *testing.T) {
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "go"}}},
+		ai.ModelResponse{
+			ModelName: "model", ProviderResponseID: "r1", State: ai.ModelResponseStateSuspended,
+			Usage: ai.Usage{Requests: 1, InputTokens: 5, OutputTokens: 2},
+		},
+	}
+	model := &continuationModel{responses: []*ai.ModelResponse{{
+		Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}, ModelName: "model", ProviderResponseID: "r2",
+		Usage: ai.Usage{Requests: 1, InputTokens: 8, OutputTokens: 6},
+	}}}
+	carried := ai.Conversation{Messages: history, Usage: ai.Usage{Requests: 1, InputTokens: 5, OutputTokens: 2}}
+	agent := ai.NewAgent[deps, string](model, ai.WithUsageLimits(ai.UsageLimits{TotalTokenLimit: 21}))
+	result, err := agent.Resume(t.Context(), nil, deps{}, ai.WithConversation(carried))
+	if err != nil || result.Usage().TotalTokens() != 21 {
+		t.Fatalf("carried usage = %+v err=%v, want 21 tokens", result, err)
+	}
+}
+
+func TestWalkAwayAndResumeCountWhatTheProviderBilled(t *testing.T) {
+	model := &continuationModel{responses: []*ai.ModelResponse{
+		{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "a"}}, ModelName: "model", ProviderResponseID: "r1",
+			State: ai.ModelResponseStateSuspended, Usage: ai.Usage{Requests: 1, InputTokens: 5, OutputTokens: 2},
+		},
+		{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "b"}}, ModelName: "model", ProviderResponseID: "r2",
+			State: ai.ModelResponseStateSuspended, Usage: ai.Usage{Requests: 1, InputTokens: 4, OutputTokens: 1},
+		},
+		{
+			Parts: []ai.ResponsePart{ai.TextPart{Content: "c"}}, ModelName: "model", ProviderResponseID: "r3",
+			State: ai.ModelResponseStateComplete, Usage: ai.Usage{Requests: 1, InputTokens: 3, OutputTokens: 1},
+		},
+	}}
+	agent := ai.NewAgent[deps, string](model)
+	first := agent.RunStream(t.Context(), "go", deps{})
+	for range first.Events() {
+		break
+	}
+	walkedAway := first.Suspended()
+	if walkedAway == nil || walkedAway.Usage().TotalTokens() != 7 {
+		t.Fatalf("walk-away snapshot = %+v", walkedAway)
+	}
+	second := agent.ResumeStream(t.Context(), walkedAway.Messages(), deps{})
+	events := 0
+	for range second.Events() {
+		events++
+		if events == 3 {
+			break
+		}
+	}
+	resumed := second.Suspended()
+	if resumed == nil || resumed.Response().ProviderResponseID != "r2" || resumed.Usage().TotalTokens() != 5 {
+		t.Fatalf("second walk-away snapshot = %+v", resumed)
+	}
+	result, err := agent.Resume(t.Context(), resumed.Messages(), deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if total := walkedAway.Usage().TotalTokens() + resumed.Usage().TotalTokens() + result.Usage().TotalTokens(); total != 16 {
+		t.Fatalf("runs counted %d tokens, provider billed 16", total)
+	}
+}

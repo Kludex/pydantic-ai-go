@@ -54,3 +54,27 @@ func TestCompatibleChatCacheKeepsWideTurnPrefix(t *testing.T) {
 		t.Fatal("new conversation tail not cached")
 	}
 }
+
+func TestCompatibleChatCacheSkipsRequestScopedTail(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"model":"m","choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}],"usage":{}}`))
+	})
+	ctx := openai.WithChatPromptCache(t.Context(), openai.ChatPromptCache{
+		MessagesTTL: "5m", ExplicitMarkerStyle: openai.ChatPromptCacheMarkerControl,
+		RequestScopedTail: []string{"remind"},
+	})
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.UserPromptPart{Content: "go"}, ai.UserPromptPart{Content: "remind"},
+	}}}
+	if _, err := model.Request(ctx, messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	wire := body["messages"].([]any)
+	if _, cached := wire[0].(map[string]any)["content"].([]any); !cached || wire[1].(map[string]any)["content"] != "remind" {
+		t.Fatalf("breakpoint not placed before the request-scoped tail: %#v", wire)
+	}
+}

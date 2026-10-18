@@ -12,24 +12,25 @@ import (
 var errConsumerStopped = errors.New("agui: stream consumer stopped")
 
 type eventTransformer struct {
-	runID            string
-	version          protocolVersion
-	preserveFileData bool
-	messageID        string
-	messageOpen      bool
-	response         int
-	result           int
-	reasoning        int
-	reasoningID      string
-	reasoningStarted bool
-	reasoningText    bool
-	activity         int
-	calls            map[string]bool
-	partCalls        map[string]string
-	nativeCalls      map[string]string
-	partActivities   map[string]string
-	outcome          RunOutcome
-	stopped          bool
+	runID              string
+	version            protocolVersion
+	preserveFileData   bool
+	allowSystemPrompts bool
+	messageID          string
+	messageOpen        bool
+	response           int
+	result             int
+	reasoning          int
+	reasoningID        string
+	reasoningStarted   bool
+	reasoningText      bool
+	activity           int
+	calls              map[string]bool
+	partCalls          map[string]string
+	nativeCalls        map[string]string
+	partActivities     map[string]string
+	outcome            RunOutcome
+	stopped            bool
 }
 
 func (transformer *eventTransformer) emit(yield func(Event, error) bool, event ai.StreamEvent) error {
@@ -153,6 +154,11 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 		}
 		kind, outcome := toolResultMetadata(value.Part)
 		transformer.toolResult(yield, toolCallID, content, kind, outcome)
+		if result, ok := value.Part.(ai.ToolReturnPart); ok {
+			if payload, ok := mcpAppPayload(result.Metadata); ok {
+				transformer.activitySnapshot(yield, "mcp-apps", payload)
+			}
+		}
 	case ai.OutputToolResultEvent:
 		toolCallID, content, err := resultContent(value.Part)
 		if err != nil {
@@ -164,6 +170,11 @@ func (transformer *eventTransformer) emit(yield func(Event, error) bool, event a
 		transformer.activitySnapshot(yield, "pydantic_ai_tool_availability_delta", map[string]any{
 			"added": append([]string(nil), value.Part.ToolsAdded...), "tool_call_id": value.Part.ToolCallID,
 		})
+	case ai.EnqueuedMessagesEvent:
+		if content, ok := enqueuedContent(value, transformer.allowSystemPrompts); ok &&
+			transformer.version.atLeast(0, 1, 19) {
+			transformer.emitActivitySnapshot(yield, value.EnqueueID, enqueuedMessagesActivity, content)
+		}
 	case ai.DeferredToolRequestsEvent:
 		transformer.outcome = RunOutcome{Type: "interrupt"}
 		for _, call := range value.Requests.Calls {

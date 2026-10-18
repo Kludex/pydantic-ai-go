@@ -22,6 +22,11 @@ func TestAnthropicStreamContainerRecovery(t *testing.T) {
 			response.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		if calls == 3 {
+			response.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(response, `{"message":"Container not found: expired"}`)
+			return
+		}
 		response.Header().Set("Content-Type", "text/event-stream")
 		_, _ = io.WriteString(response, "data: {\"type\":\"message_stop\"}\n\n")
 	}))
@@ -45,6 +50,20 @@ func TestAnthropicStreamContainerRecovery(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Fatalf("unexpected request count: %d", calls)
+	}
+	stream, err = model.StreamRequest(t.Context(), history, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
+		ai.CodeExecutionTool{Files: []ai.UploadedFile{{FileID: "file", ProviderName: "anthropic"}}},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, streamErr := range stream {
+		if streamErr != nil {
+			t.Fatal(streamErr)
+		}
+	}
+	if calls != 4 {
+		t.Fatalf("unexpected request count after container not found: %d", calls)
 	}
 
 	calls = 0

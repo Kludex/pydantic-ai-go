@@ -10,7 +10,12 @@ import (
 )
 
 func call(
-	ctx context.Context, config Config, state any, questions map[string]Question, settings ai.ModelSettings,
+	ctx context.Context,
+	config Config,
+	state any,
+	questions map[string]Question,
+	images []ai.BinaryContent,
+	settings ai.ModelSettings,
 ) (result Response, err error) {
 	tracer := trace.SpanFromContext(ctx).TracerProvider().Tracer("github.com/Kludex/pydantic-ai-go/ai")
 	ctx, span := tracer.Start(ctx, "decide "+config.ModelName,
@@ -34,5 +39,5 @@ func call(
 		}
 		span.End()
 	}()
-	return config.Call(ctx, state, questions, settings)
+	return config.Call(ctx, state, questions, images, settings)
 }

@@ -40,4 +40,17 @@ func TestNativeToolSupport(t *testing.T) {
 	if !image.SupportsNativeTool(ai.ImageGenerationTool{}) {
 		t.Fatal("image model did not report image-generation support")
 	}
+	cached := false
+	for _, restricted := range []ai.NativeTool{
+		ai.WebSearchTool{AllowedDomains: []string{"go.dev"}}, ai.WebSearchTool{BlockedDomains: []string{}},
+		ai.WebSearchTool{MaxUses: 1}, ai.WebSearchTool{ExternalWebAccess: &cached},
+		ai.WebFetchTool{AllowedDomains: []string{"go.dev"}}, ai.WebFetchTool{MaxUses: 1},
+	} {
+		if model.SupportsNativeTool(restricted) {
+			t.Fatalf("Google supported restricted native tool %#v", restricted)
+		}
+	}
+	if !model.SupportsNativeTool(ai.WebFetchTool{}) {
+		t.Fatal("Google did not support unrestricted web fetch")
+	}
 }

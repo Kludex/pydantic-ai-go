@@ -10,6 +10,7 @@ import (
 const (
 	streamValidationFailed = "Output validation failed during streaming, and retries are not supported."
 	outputValidationFailed = "Output tool not used - output failed validation."
+	streamHookRetried      = "A model request hook rejected the streamed response with a retry, and retries are not supported."
 )
 
 func (r *run[Deps, Output]) streamedOutput(
@@ -48,6 +49,22 @@ func (r *run[Deps, Output]) streamedOutput(
 		}
 	}
 	return nil, -1, false, nil
+}
+
+func (r *run[Deps, Output]) streamedFinalResult(response *ModelResponse) bool {
+	for _, part := range response.Parts {
+		switch part := part.(type) {
+		case TextPart:
+			if r.params.AllowText {
+				return true
+			}
+		case ToolCallPart:
+			if r.isOutputCall(part) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (r *run[Deps, Output]) validatePartialOutput(

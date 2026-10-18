@@ -375,6 +375,51 @@ func TestConnectionReconnect(t *testing.T) {
 	_ = connection.Close(t.Context())
 }
 
+func TestProviderSessionEndReconnectsWhileReconnectsRemain(t *testing.T) {
+	var connections atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		socket, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = socket.CloseNow() }()
+		connections.Add(1)
+		_ = socket.Write(request.Context(), websocket.MessageText, []byte("ended"))
+		_, _, _ = socket.Read(request.Context())
+	}))
+	defer server.Close()
+	dial := func(ctx context.Context, _ []ai.ModelMessage) (*websocket.Conn, string, error) {
+		socket, _, err := openaiprotocol.DialSocket(ctx, websocketEndpoint(server.URL), nil, server.Client())
+		return socket, "model", err
+	}
+	socket, _, err := dial(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := errors.New("max_duration reached")
+	connection, _ := openaiprotocol.New(openaiprotocol.Config{
+		Socket: socket, Dial: dial,
+		Mapper: func([]byte) ([]realtime.CodecEvent, error) {
+			return []realtime.CodecEvent{realtime.SessionError{Err: ended}}, nil
+		},
+		Reconnect: &realtime.ReconnectPolicy{MaxAttempts: 1, MaxReconnects: 1},
+	})
+	defer func() { _ = connection.Close(t.Context()) }()
+	var events []realtime.CodecEvent
+	for event, err := range connection.Events(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		events = append(events, event)
+	}
+	want := []realtime.CodecEvent{
+		realtime.SessionError{Err: ended, Recoverable: true}, realtime.SessionReconnected{}, realtime.SessionError{Err: ended},
+	}
+	if !slices.Equal(events, want) || connections.Load() != 2 {
+		t.Fatalf("events %+v after %d connections", events, connections.Load())
+	}
+}
+
 func TestConnectionCancelledRead(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		socket, err := websocket.Accept(writer, request, nil)

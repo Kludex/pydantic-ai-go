@@ -1,6 +1,8 @@
 package ai
 
 import (
+	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -163,6 +165,30 @@ type BinaryContent struct {
 	Identifier string
 	// VendorMetadata carries detached provider-specific data.
 	VendorMetadata map[string]any
+}
+
+// BinaryContentFromDataURI decodes a base64 data URI and preserves its media type parameters.
+func BinaryContentFromDataURI(value string) (BinaryContent, error) {
+	body, found := strings.CutPrefix(value, "data:")
+	if !found {
+		return BinaryContent{}, errors.New(`ai: data URI must start with "data:"`)
+	}
+	mediaType, payload, found := strings.Cut(body, ";base64,")
+	if !found {
+		return BinaryContent{}, errors.New("ai: data URI must contain base64 data")
+	}
+	if mediaType == "" {
+		return BinaryContent{}, errors.New("ai: data URI must contain a media type")
+	}
+	payload, err := url.PathUnescape(payload)
+	if err != nil {
+		return BinaryContent{}, fmt.Errorf("ai: decode data URI escaping: %w", err)
+	}
+	data, err := base64.StdEncoding.DecodeString(payload)
+	if err != nil {
+		return BinaryContent{}, fmt.Errorf("ai: decode data URI: %w", err)
+	}
+	return BinaryContent{Data: data, MediaType: mediaType}, nil
 }
 
 // ResolvedIdentifier returns the caller-provided identifier or a stable content digest.

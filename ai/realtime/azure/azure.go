@@ -58,6 +58,10 @@ type Settings struct {
 	VoiceLiveTurnDetection map[string]any
 	// VoiceLiveVoice selects an Azure standard voice by name or a complete Voice Live voice object.
 	VoiceLiveVoice any
+	// VoiceLiveNoiseReduction selects Azure deep suppression or near/far-field processing.
+	VoiceLiveNoiseReduction string
+	// VoiceLiveEchoCancellation removes the model's playback from microphone input.
+	VoiceLiveEchoCancellation bool
 	// VoiceLiveTemperature controls sampling between zero and two on non-reasoning sessions.
 	VoiceLiveTemperature *float64
 	// WarningHandler receives configuration and provider warnings. Nil uses slog.Warn.
@@ -171,6 +175,10 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 	if err != nil {
 		return nil, err
 	}
+	config, err := sessionConfig(params.Request, params.Settings, settings, voiceLive, model.profile, model.name)
+	if err != nil {
+		return nil, err
+	}
 	dial := func(ctx context.Context, history []ai.ModelMessage) (*websocket.Conn, string, error) {
 		return model.dial(ctx, history, params.Request, params.Settings, settings, voiceLive, "")
 	}
@@ -178,7 +186,6 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 	if err != nil {
 		return nil, err
 	}
-	config, _ := sessionConfig(params.Request, params.Settings, settings, voiceLive, model.profile, model.name)
 	return openaiprotocol.New(openaiprotocol.Config{
 		Provider: "Azure Realtime", Model: model.name, Socket: socket, ServerModel: serverModel,
 		Dial: dial, Mapper: func(data []byte) ([]realtime.CodecEvent, error) {
@@ -376,10 +383,7 @@ func configureSocket(
 		return "", err
 	}
 	serverModel := stringValue(object(created["session"])["model"])
-	config, err := sessionConfig(request, common, settings, voiceLive, profile, modelName)
-	if err != nil {
-		return "", err
-	}
+	config, _ := sessionConfig(request, common, settings, voiceLive, profile, modelName)
 	if err := writeJSON(ctx, socket, map[string]any{"type": "session.update", "session": config}); err != nil {
 		return "", err
 	}
@@ -412,7 +416,7 @@ func sessionConfig(
 				return nil, fmt.Errorf("azure realtime: Voice Live temperature must be between zero and two")
 			}
 		}
-		return voiceLiveSessionConfig(request, common, settings, profile, modelName), nil
+		return voiceLiveSessionConfig(request, common, settings, profile, modelName)
 	}
 	config := map[string]any{
 		"type": "realtime", "instructions": request.Instructions,
@@ -460,7 +464,7 @@ func sessionConfig(
 
 func voiceLiveSessionConfig(
 	request ai.ModelRequestParams, common realtime.Settings, settings Settings, profile realtime.Profile, modelName string,
-) map[string]any {
+) (map[string]any, error) {
 	modalities := []string{"text", "audio"}
 	if defaultOutput(common.OutputModality) == realtime.OutputModalityText {
 		modalities = []string{"text"}
@@ -474,9 +478,23 @@ func voiceLiveSessionConfig(
 	case common.TurnDetection != nil:
 		turnDetection = portableTurnDetection(*common.TurnDetection)
 	}
-	if turnDetection["type"] == "semantic_vad" && isCascade(modelName) {
+	cascade := isCascade(modelName)
+	if turnDetection != nil && turnDetection["end_of_utterance_detection"] != nil && !cascade {
+		return nil, fmt.Errorf(
+			"azure realtime: end-of-utterance detection requires a Voice Live cascade model, got %q", modelName,
+		)
+	}
+	if turnDetection != nil && turnDetection["type"] == "semantic_vad" && cascade {
 		turnDetection["type"] = "azure_semantic_vad"
 		delete(turnDetection, "eagerness")
+	}
+	if turnDetection != nil {
+		if turnDetection["create_response"] == nil {
+			turnDetection["create_response"] = true
+		}
+		if turnDetection["interrupt_response"] == nil {
+			turnDetection["interrupt_response"] = true
+		}
 	}
 	config := map[string]any{
 		"instructions": request.Instructions, "modalities": modalities,
@@ -510,8 +528,18 @@ func voiceLiveSessionConfig(
 	} else if settings.OpenAI.Voice != "" {
 		config["voice"] = map[string]any{"type": "openai", "name": settings.OpenAI.Voice}
 	}
-	if settings.OpenAI.InputNoiseReduction != "" {
-		config["input_audio_noise_reduction"] = map[string]any{"type": settings.OpenAI.InputNoiseReduction}
+	noiseReduction := settings.VoiceLiveNoiseReduction
+	if noiseReduction == "" {
+		noiseReduction = settings.OpenAI.InputNoiseReduction
+		if cascade && noiseReduction != "" {
+			noiseReduction = "azure_deep_noise_suppression"
+		}
+	}
+	if noiseReduction != "" {
+		config["input_audio_noise_reduction"] = map[string]any{"type": noiseReduction}
+	}
+	if settings.VoiceLiveEchoCancellation {
+		config["input_audio_echo_cancellation"] = map[string]any{"type": "server_echo_cancellation"}
 	}
 	if common.Thinking != "" && profile.SupportsThinking {
 		effort := string(common.Thinking)
@@ -530,7 +558,7 @@ func voiceLiveSessionConfig(
 			config["temperature"] = *settings.VoiceLiveTemperature
 		}
 	}
-	return config
+	return config, nil
 }
 
 func validateToolChoice(choice realtime.ToolChoice) error {
@@ -598,6 +626,12 @@ func (model *Model) resolveSettings(common realtime.Settings) Settings {
 	}
 	if value, ok := common.Provider["azure_voice_live_voice"]; ok {
 		settings.VoiceLiveVoice = value
+	}
+	if value, ok := common.Provider["azure_voice_live_noise_reduction"].(string); ok {
+		settings.VoiceLiveNoiseReduction = value
+	}
+	if value, ok := common.Provider["azure_voice_live_echo_cancellation"].(bool); ok {
+		settings.VoiceLiveEchoCancellation = value
 	}
 	if value, ok := common.Provider["azure_voice_live_temperature"].(float64); ok {
 		settings.VoiceLiveTemperature = &value

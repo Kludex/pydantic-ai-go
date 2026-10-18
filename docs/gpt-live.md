@@ -79,6 +79,62 @@ Set `OPENAI_API_KEY`. Supply `question.pcm` as little-endian, mono PCM16 at 24 k
 
 `NewLiveModel` uses `/live/sessions`, not the Realtime API. `infer.Model("openai:gpt-live-1+gpt-5")` selects the same adapter. You can reuse `WithAPIKey`, `WithBaseURL`, `WithHTTPClient`, `WithHeaders`, and `WithProfile`.
 
+## Send text without a microphone
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+    "time"
+
+    ai "github.com/Kludex/pydantic-ai-go/ai"
+    "github.com/Kludex/pydantic-ai-go/ai/realtime"
+    openairt "github.com/Kludex/pydantic-ai-go/ai/realtime/openai"
+)
+
+func main() {
+    ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+    defer cancel()
+
+    model := openairt.NewLiveModel("gpt-live-1+gpt-5",
+        openairt.WithLiveSettings(openairt.LiveSettings{IdleAudio: true}),
+    )
+    session, err := realtime.Open(ctx, model, realtime.ConnectParams{})
+    if err != nil {
+        panic(err)
+    }
+    defer func() { _ = session.Close(context.Background()) }()
+
+    if err := session.Send(ctx, "Tell the user their package arrives on Friday."); err != nil {
+        panic(err)
+    }
+    for event, err := range session.Events(ctx) {
+        if err != nil {
+            panic(err)
+        }
+        if turn, ok := event.(realtime.TurnCompleteEvent); ok {
+            for _, part := range turn.Response.Parts {
+                if speech, ok := part.(ai.SpeechPart); ok && speech.Transcript != nil {
+                    fmt.Println(*speech.Transcript)
+                }
+            }
+            break
+        }
+    }
+}
+```
+
+`LiveSettings.IdleAudio` streams silence for you. GPT-Live places text on its audio timeline, and that timeline only advances while it receives audio. Without a microphone, text you send waits for audio that never comes.
+
+The connection starts streaming after `SendAudio` has been quiet for 300 milliseconds. It sends one 100-millisecond PCM16 frame of silence every 100 milliseconds, at the pace a microphone would. Audio you send in a burst plays on GPT-Live's timeline for as long as it lasts, so silence waits until that audio has played. A failed `SendAudio` does not delay silence.
+
+Silence continues on the replacement session after a reconnect. It stops before `session.close` is sent, and when you close the connection. A dropped socket is reported by `Events` as usual.
+
+!!! warning "Silence is billed"
+    GPT-Live bills the audio it receives by the second, silence included. With `IdleAudio`, the whole time the session is open is billed. That is why it defaults to false.
+
 ## Delegation and settings
 
 A delegation is work that the voice model sends to a Responses backend. Your `ConnectParams.Request.Instructions`, function tools, and native web search go to that backend. `LiveSettings.Instructions` controls the voice model's speaking style instead. Register a `realtime.WithToolExecutor` to execute function calls through the existing [session tool API](realtime.md#execute-tools).
@@ -92,15 +148,16 @@ A delegation is work that the voice model sends to a Responses backend. Your `Co
 | `realtime.Settings.ParallelToolCalls` | Configures the backend. An explicit delegated value takes precedence. |
 | `LiveSettings.TurnSilence` | Defaults to two seconds. Delegated work suspends the silence clock so a tool's wait does not end the turn. |
 | `LiveSettings.Store` | Defaults to false. With reconnect enabled, stored sessions are forked; other sessions replay recent text history. |
+| `LiveSettings.IdleAudio` | Defaults to false. Streams silence while `SendAudio` is quiet so text lands without a microphone. Rejected on a WebRTC sideband. |
 | `LiveSettings.DataChannel` | Controls browser event permissions. Both event lists are empty by default to keep instructions and tools server-owned. |
 
-Session-level `Settings.Provider` values override the matching model defaults: `openai_voice`, `openai_live_instructions`, `openai_live_delegation`, `openai_live_turn_silence_ms`, `openai_live_store`, and `openai_live_data_channel`. The silence value uses milliseconds.
+Session-level `Settings.Provider` values override the matching model defaults: `openai_voice`, `openai_live_instructions`, `openai_live_delegation`, `openai_live_turn_silence_ms`, `openai_live_store`, `openai_live_idle_audio`, and `openai_live_data_channel`. The silence value uses milliseconds.
 
 Tool results can include text, images, documents, and OpenAI uploaded files. They reach the backend as Responses input items. Audio and video attachments are rejected before any result is sent. Parallel calls continue only after every requested result arrives and the response that requested them ends.
 
 ## Protocol limits
 
-- `Send(ctx, "text")` appends speakable context. `WithResponse(false)` appends silent context. Neither is an ordinary user-text turn. Each append accepts at most 500 `o200k_base` tokens.
+- `Send(ctx, "text")` appends speakable context. `WithResponse(false)` appends silent context. Neither is an ordinary user-text turn. Each append accepts at most 500 `o200k_base` tokens. Text lands only while audio flows; set `LiveSettings.IdleAudio` for a session with no microphone.
 - Images require `WithResponse(true)`. The backend sees the image; the voice model does not.
 - Initial history accepts text and speech transcripts. Tool rounds become readable user and assistant text. Raw media cannot be seeded. Reconnect drops media and retains up to 128 recent items within an 8192-token budget.
 - Input and output PCM rates must match at 16 or 24 kHz. WebRTC negotiates its own format.
@@ -123,6 +180,8 @@ Malformed known events produce recoverable `SessionErrorEvent` values. Unknown e
 
 Relay the browser's offer with `model.AnswerWebRTCOffer`. GPT-Live uses a JSON `POST /live/sessions` request. Attach server control with `model.ConnectWebRTC(ctx, answer.Session, params)`.
 
-The offer fixes the session configuration. A sideband cannot reseed history, reconfigure the call, or reconnect automatically. It tracks audio for turn completion but does not forward playback audio. GPT-Live has no ephemeral client secrets.
+To continue an earlier conversation, relay the offer with `model.AnswerWebRTCOfferWithHistory` and pass the same messages in `params.Messages` to `ConnectWebRTC`. GPT-Live takes history only when a session starts, which on a WebRTC call is the offer. The sideband compares its messages with the history the session started with, ignoring whitespace differences, and returns an error when they differ. Otherwise it would record a conversation the model never saw.
+
+The offer fixes the session configuration. A sideband cannot reseed history, reconfigure the call, or reconnect automatically. It tracks audio for turn completion but does not forward playback audio. It rejects `IdleAudio`, because the browser carries the call's audio. GPT-Live has no ephemeral client secrets.
 
 Call `model.HangUp(ctx, answer.Session)` to end browser media. Closing the sideband alone does not hang up. The Realtime API's `openai.Model` also supports `HangUp` through its separate call endpoint.

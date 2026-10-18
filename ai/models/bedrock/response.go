@@ -156,7 +156,10 @@ func bedrockToolResultContent(blocks []types.ToolResultContentBlock) (any, error
 			return nil, fmt.Errorf("bedrock: unsupported native tool result content %T", block)
 		}
 	}
-	if len(content) == 1 {
+	switch len(content) {
+	case 0:
+		return nil, nil
+	case 1:
 		return content[0], nil
 	}
 	return content, nil

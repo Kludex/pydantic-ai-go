@@ -44,6 +44,31 @@ func TestModelResponsePrice(t *testing.T) {
 	}
 }
 
+func TestModelResponsePriceUsesReportedServiceTier(t *testing.T) {
+	for _, test := range []struct {
+		provider, model string
+		details         map[string]any
+		want            float64
+	}{
+		{provider: "openai", model: "gpt-6.1-sol", want: 0.2},
+		{provider: "openai", model: "gpt-6.1-sol", details: map[string]any{"service_tier": "priority"}, want: 0.4},
+		{provider: "openai", model: "gpt-6.1-sol", details: map[string]any{"service_tier": "scale"}, want: 0.2},
+		{provider: "openai", model: "gpt-6.1-sol", details: map[string]any{"service_tier": 1}, want: 0.2},
+		{provider: "google", model: "gemini-2.5-flash", details: map[string]any{"service_tier": "standard"}, want: 0.03},
+	} {
+		calculation, err := (ai.ModelResponse{
+			ModelName: test.model, ProviderName: test.provider, ProviderDetails: test.details,
+			Timestamp: time.Date(2026, 10, 13, 0, 0, 0, 0, time.UTC), Usage: ai.Usage{InputTokens: 100_000},
+		}).Price()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if math.Abs(calculation.TotalPrice-test.want) > 1e-9 || len(calculation.Warnings) != 0 {
+			t.Fatalf("%s %v: unexpected price %+v", test.model, test.details, calculation)
+		}
+	}
+}
+
 func TestDurationAndImageUsagePrices(t *testing.T) {
 	audio, err := (ai.ModelResponse{
 		ModelName: "grok-voice-latest", ProviderName: "x-ai", Usage: ai.Usage{AudioSeconds: 2.5},

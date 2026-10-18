@@ -508,6 +508,166 @@ func TestResponsesStreamRefusalFromSnapshot(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamFunctionArgumentsFromDoneEvents(t *testing.T) {
+	for name, streamEvents := range map[string][]string{
+		"arguments done": {
+			`{"type":"response.output_item.added","item":{"id":"fc","type":"function_call","call_id":"call","name":"lookup","arguments":""}}`,
+			`{"type":"response.function_call_arguments.done","item_id":"fc","arguments":"{\"city\":\"Paris\"}"}`,
+			`{"type":"response.output_item.done","item":{"id":"fc","type":"function_call","call_id":"call","name":"lookup","arguments":"{\"city\":\"Paris\"}"}}`,
+		},
+		"output item done": {
+			`{"type":"response.output_item.done","item":{"id":"fc","type":"function_call","call_id":"call","name":"lookup","arguments":"{\"city\":\"Paris\"}"}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				events := append([]string{`{"type":"response.created","response":{"model":"gpt-5"}}`}, streamEvents...)
+				events = append(events,
+					`{"type":"response.completed","response":{"id":"response","model":"gpt-5","status":"completed","output":[]}}`,
+				)
+				sseHandler(t, events)(w, nil)
+			})
+			events, err := collect(t, model, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			starts := 0
+			arguments := ""
+			for _, event := range events {
+				switch event := event.(type) {
+				case ai.ToolCallStartEvent:
+					starts++
+				case ai.ToolCallDeltaEvent:
+					arguments += event.ArgsDelta
+				}
+			}
+			if starts != 1 || arguments != `{"city":"Paris"}` {
+				t.Fatalf("starts=%d arguments=%q events=%+v", starts, arguments, events)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamFunctionArgumentReconciliation(t *testing.T) {
+	model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		sseHandler(t, []string{
+			`{"type":"response.created","response":{"model":"gpt-5"}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"unknown","delta":"ignored"}`,
+			`{"type":"response.function_call_arguments.done","item_id":"unknown","arguments":"{}"}`,
+			`{"type":"response.output_item.added","item":{"id":"a","type":"function_call","call_id":"a","name":"a","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"a","delta":"{\"x\":"}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"a","delta":"1}"}`,
+			`{"type":"response.function_call_arguments.done","item_id":"a","arguments":"{\"x\":1}"}`,
+			`{"type":"response.function_call_arguments.done","item_id":"a","arguments":"{\"x\":1}"}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"a","delta":"ignored"}`,
+			`{"type":"response.output_item.added","item":{"id":"b","type":"function_call","call_id":"b","name":"b","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"b","delta":"{"}`,
+			`{"type":"response.function_call_arguments.done","item_id":"b","arguments":""}`,
+			`{"type":"response.function_call_arguments.done","item_id":"b","arguments":"[]"}`,
+			`{"type":"response.output_item.added","item":{"id":"c","type":"function_call","call_id":"c","name":"c","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"c","delta":"{\"x\":"}`,
+			`{"type":"response.output_item.done","item":{"id":"c","type":"function_call","call_id":"c","name":"c","arguments":"{\"x\":2}"}}`,
+			`{"type":"response.output_item.done","item":{"id":"d","type":"function_call","call_id":"d","name":"d","namespace":"tools","arguments":""}}`,
+			`{"type":"response.completed","response":{"id":"response","model":"gpt-5","status":"completed","output":[]}}`,
+		})(w, nil)
+	})
+	events, err := collect(t, model, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	arguments := map[string]string{}
+	starts := 0
+	for _, event := range events {
+		switch event := event.(type) {
+		case ai.ToolCallStartEvent:
+			starts++
+			if event.ToolName == "d" && event.ProviderDetails["namespace"] != "tools" {
+				t.Fatalf("namespace was lost: %+v", event)
+			}
+		case ai.ToolCallDeltaEvent:
+			arguments[event.PartID] += event.ArgsDelta
+		}
+	}
+	if starts != 4 || arguments["item:a"] != `{"x":1}` || arguments["item:b"] != `{` ||
+		arguments["item:c"] != `{"x":2}` || arguments["item:d"] != "" {
+		t.Fatalf("reconciled arguments = %#v starts=%d", arguments, starts)
+	}
+}
+
+func TestResponsesStreamInvalidDoneArguments(t *testing.T) {
+	for name, streamEvents := range map[string][]string{
+		"arguments done": {
+			`{"type":"response.output_item.added","item":{"id":"a","type":"function_call","call_id":"a","name":"a","arguments":""}}`,
+			`{"type":"response.function_call_arguments.done","item_id":"a","arguments":"bad"}`,
+		},
+		"output done": {
+			`{"type":"response.output_item.done","item":{"id":"a","type":"function_call","call_id":"a","name":"a","arguments":"bad"}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				events := append([]string{`{"type":"response.created","response":{"model":"gpt-5"}}`}, streamEvents...)
+				sseHandler(t, events)(w, nil)
+			})
+			if _, err := collect(t, model, ai.ModelRequestParams{}); err == nil || !strings.Contains(err.Error(), "invalid response arguments") {
+				t.Fatalf("invalid done arguments = %v", err)
+			}
+		})
+	}
+}
+
+func TestResponsesStreamFunctionArgumentConsumerBreaks(t *testing.T) {
+	for name, streamEvents := range map[string][]string{
+		"arguments suffix": {
+			`{"type":"response.output_item.added","item":{"id":"a","type":"function_call","call_id":"a","name":"a","arguments":""}}`,
+			`{"type":"response.function_call_arguments.done","item_id":"a","arguments":"{}"}`,
+		},
+		"output start": {
+			`{"type":"response.output_item.done","item":{"id":"a","type":"function_call","call_id":"a","name":"a","arguments":"{}"}}`,
+		},
+		"output delta": {
+			`{"type":"response.output_item.done","item":{"id":"a","type":"function_call","call_id":"a","name":"a","arguments":"{}"}}`,
+		},
+		"output suffix": {
+			`{"type":"response.output_item.added","item":{"id":"a","type":"function_call","call_id":"a","name":"a","arguments":""}}`,
+			`{"type":"response.function_call_arguments.delta","item_id":"a","delta":"{"}`,
+			`{"type":"response.output_item.done","item":{"id":"a","type":"function_call","call_id":"a","name":"a","arguments":"{}"}}`,
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				events := append([]string{`{"type":"response.created","response":{"model":"gpt-5"}}`}, streamEvents...)
+				sseHandler(t, events)(w, nil)
+			})
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			deltas := 0
+			for event, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen++
+				if name == "output start" {
+					if _, ok := event.(ai.ToolCallStartEvent); ok {
+						break
+					}
+				} else if _, ok := event.(ai.ToolCallDeltaEvent); ok {
+					deltas++
+					if name != "output suffix" || deltas == 2 {
+						break
+					}
+				}
+			}
+			if seen == 0 {
+				t.Fatal("stream emitted no events")
+			}
+		})
+	}
+}
+
 func TestResponsesStreamEvents(t *testing.T) {
 	var streamed bool
 	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {

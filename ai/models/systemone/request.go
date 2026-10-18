@@ -14,7 +14,11 @@ import (
 )
 
 func (model *Model) call(
-	ctx context.Context, state any, questions map[string]decision.Question, settings ai.ModelSettings,
+	ctx context.Context,
+	state any,
+	questions map[string]decision.Question,
+	images []ai.BinaryContent,
+	settings ai.ModelSettings,
 ) (decision.Response, error) {
 	body := map[string]any{"state": state, "model": model.name, "questions": questions}
 	if settings.Temperature != nil {

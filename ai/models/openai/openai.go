@@ -42,6 +42,7 @@ type Model struct {
 	responsesFileSearchResults    bool
 	chatWebSearchSupport          *bool
 	chatCompatibility             ChatCompatibility
+	toolCallIDLength              int
 	contextWindow                 int
 }
 
@@ -126,6 +127,10 @@ type ChatCompatibility struct {
 	ReasoningEnabledByDefault bool
 	// ResponsesReasoningContent replays visible reasoning content in Responses history.
 	ResponsesReasoningContent bool
+	// ResponsesEncryptedReasoning requests encrypted reasoning content on Responses create requests.
+	ResponsesEncryptedReasoning bool
+	// SamplingWithReasoning keeps temperature and top_p while reasoning is active.
+	SamplingWithReasoning bool
 }
 
 // WithChatCompatibility configures OpenAI-compatible response and history
@@ -164,6 +169,8 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 			DisableForcedToolChoiceWithThinking: compatibility.DisableForcedToolChoiceWithThinking,
 			ReasoningEnabledByDefault:           compatibility.ReasoningEnabledByDefault,
 			ResponsesReasoningContent:           compatibility.ResponsesReasoningContent,
+			ResponsesEncryptedReasoning:         compatibility.ResponsesEncryptedReasoning,
+			SamplingWithReasoning:               compatibility.SamplingWithReasoning,
 		}
 	}
 }
@@ -248,9 +255,20 @@ func WithStrictToolSupport(enabled bool) Option {
 }
 
 // WithDeferredToolSupport configures native deferred-tool rendering for the
-// Responses API. Disable it for OpenAI-compatible endpoints without tool_search.
+// Responses API. It is enabled by default except on gpt-5.4-nano, which rejects
+// tool_search. Disable it for OpenAI-compatible endpoints without tool_search.
 func WithDeferredToolSupport(enabled bool) Option {
 	return func(m *Model) { m.deferredToolSupport = enabled }
+}
+
+// WithToolCallIDLength sets the exact number of ASCII letters and digits the
+// served model accepts in a tool call ID. Requests replace IDs that do not fit
+// with stable hashes that do. Zero, the default, accepts any ID.
+func WithToolCallIDLength(length int) Option {
+	if length < 0 {
+		panic("openai: tool call ID length must not be negative")
+	}
+	return func(m *Model) { m.toolCallIDLength = length }
 }
 
 // WithResponsesPhaseSupport overrides whether Responses API assistant-message
@@ -287,7 +305,7 @@ func NewModel(name string, opts ...Option) *Model {
 		baseURL:                strings.TrimRight(baseURL, "/"),
 		httpClient:             http.DefaultClient,
 		strictToolSupport:      true,
-		deferredToolSupport:    true,
+		deferredToolSupport:    !strings.HasPrefix(strings.TrimPrefix(strings.ToLower(name), "openai."), "gpt-5.4-nano"),
 		backgroundPollInterval: 2 * time.Second,
 	}
 	for _, opt := range opts {
@@ -302,7 +320,9 @@ func (m *Model) Name() string { return m.name }
 
 // ModelProfile returns model behavior and the bundled context window when known.
 func (m *Model) ModelProfile() ai.ModelProfile {
-	profile := ai.ModelProfile{DefaultOutputMode: ai.OutputModeTool, ContextWindow: m.contextWindow}
+	profile := ai.ModelProfile{
+		DefaultOutputMode: ai.OutputModeTool, ContextWindow: m.contextWindow, ToolCallIDLength: m.toolCallIDLength,
+	}
 	if m.providerName == "openai" && supportsOpenAIPromptCache(m.name) {
 		profile.DefaultCacheRetention = 30 * time.Minute
 		if m.providerName == "openai" {
@@ -326,8 +346,10 @@ func (m *Model) SupportsNativeTool(tool ai.NativeTool) bool {
 		_, include, err := m.chatCompatibility.NativeToolFunc(tool)
 		return err == nil && include
 	}
-	_, webSearch := tool.(ai.WebSearchTool)
-	return webSearch && supportsChatWebSearch(m.name, m.chatWebSearchSupport)
+	webSearch, ok := tool.(ai.WebSearchTool)
+	return ok && supportsChatWebSearch(m.name, m.chatWebSearchSupport) && webSearch.AllowedDomains == nil &&
+		webSearch.BlockedDomains == nil && webSearch.MaxUses == 0 &&
+		(webSearch.ExternalWebAccess == nil || *webSearch.ExternalWebAccess)
 }
 
 // ProviderName returns the durable provider identity.
@@ -470,6 +492,7 @@ type chatRequest struct {
 	PromptCacheKey       string                `json:"prompt_cache_key,omitempty"`
 	PromptCacheRetention PromptCacheRetention  `json:"prompt_cache_retention,omitempty"`
 	PromptCacheOptions   *PromptCacheOptions   `json:"prompt_cache_options,omitempty"`
+	Verbosity            TextVerbosity         `json:"verbosity,omitempty"`
 	Prediction           *chatPrediction       `json:"prediction,omitempty"`
 	WebSearchOptions     *chatWebSearchOptions `json:"web_search_options,omitempty"`
 	ExtraBody            map[string]any        `json:"-"`
@@ -478,9 +501,9 @@ type chatRequest struct {
 type chatMessage struct {
 	Role             string            `json:"role"`
 	Content          any               `json:"content,omitempty"` // string or []contentPart
-	ReasoningContent string            `json:"reasoning_content,omitempty"`
-	Reasoning        string            `json:"reasoning,omitempty"`
-	ReasoningText    string            `json:"reasoning_text,omitempty"`
+	ReasoningContent *string           `json:"reasoning_content,omitempty"`
+	Reasoning        *string           `json:"reasoning,omitempty"`
+	ReasoningText    *string           `json:"reasoning_text,omitempty"`
 	ReasoningDetails []reasoningDetail `json:"reasoning_details,omitempty"`
 	ToolCalls        []toolCall        `json:"tool_calls,omitempty"`
 	ToolCallID       string            `json:"tool_call_id,omitempty"`
@@ -495,6 +518,7 @@ type contentPart struct {
 	File                  *chatFile                    `json:"file,omitempty"`
 	CacheControl          *chatCacheControl            `json:"cache_control,omitempty"`
 	PromptCacheBreakpoint *openAIPromptCacheBreakpoint `json:"prompt_cache_breakpoint,omitempty"`
+	leadingCachePoint     bool
 }
 
 type imageURL struct {
@@ -521,6 +545,8 @@ type toolCall struct {
 	ID       string       `json:"id"`
 	Type     string       `json:"type"`
 	Function functionCall `json:"function"`
+	// Gemini returns each call's thought signature here and rejects the next request unless it comes back unchanged.
+	ExtraContent any `json:"extra_content,omitempty"`
 }
 
 type functionCall struct {
@@ -565,6 +591,10 @@ func (m *Model) buildPayload(
 		return nil, err
 	}
 	settings, prediction, err := extractPredictionSettings(settings)
+	if err != nil {
+		return nil, err
+	}
+	settings, verbosity, err := extractTextVerbosity(settings)
 	if err != nil {
 		return nil, err
 	}
@@ -638,6 +668,7 @@ func (m *Model) buildPayload(
 		PromptCacheKey:       promptCache.Key,
 		PromptCacheRetention: promptCache.Retention,
 		PromptCacheOptions:   promptCache.Options,
+		Verbosity:            verbosity,
 		Prediction:           prediction,
 		WebSearchOptions:     webSearchOptions,
 		ExtraBody:            params.Settings.ExtraBody,
@@ -646,7 +677,7 @@ func (m *Model) buildPayload(
 		req.LegacyMaxTokens = req.MaxTokens
 		req.MaxTokens = 0
 	}
-	if openAIModelReasoningActive(m.name, reasoningEffort) {
+	if openAIModelReasoningActive(m.name, reasoningEffort) && !m.chatCompatibility.SamplingWithReasoning {
 		req.Temperature = nil
 		req.TopP = nil
 	}
@@ -692,6 +723,34 @@ func (m *Model) buildPayload(
 			return nil, err
 		}
 		req.Messages = append(req.Messages, converted...)
+	}
+	// DeepSeek-style APIs reject current-turn tool calls that omit the one thinking field the request uses.
+	history := req.Messages[instructionCount:]
+	var usedField func(*chatMessage) **string
+	usedFields := 0
+	for _, field := range []func(*chatMessage) **string{
+		func(message *chatMessage) **string { return &message.ReasoningContent },
+		func(message *chatMessage) **string { return &message.Reasoning },
+		func(message *chatMessage) **string { return &message.ReasoningText },
+	} {
+		if slices.ContainsFunc(history, func(message chatMessage) bool { return *field(&message) != nil }) {
+			usedField = field
+			usedFields++
+		}
+	}
+	if usedFields == 1 {
+		lastUser := -1
+		for index, message := range history {
+			if message.Role == "user" {
+				lastUser = index
+			}
+		}
+		for index := lastUser + 1; index < len(history); index++ {
+			if field := usedField(&history[index]); history[index].Role == "assistant" &&
+				len(history[index].ToolCalls) > 0 && *field == nil {
+				*field = new(string)
+			}
+		}
 	}
 	if promptCache.Instructions && supportsOpenAIPromptCache(m.name) && m.chatSystemPromptRole() != "user" {
 		_, static, eligible := cacheableInstructions(msgs, params)
@@ -747,6 +806,52 @@ func (m *Model) buildPayload(
 			req.Messages[index].Content = content[1:]
 		}
 	}
+	for index := range req.Messages {
+		content, ok := req.Messages[index].Content.([]contentPart)
+		if !ok || len(content) == 0 || !content[0].leadingCachePoint {
+			continue
+		}
+		earlier, attached := false, false
+		for previous := index - 1; previous >= 0 && !attached && len(content) > 1; previous-- {
+			message := &req.Messages[previous]
+			if message.Role == "system" || message.Role == "developer" {
+				continue
+			}
+			earlier = true
+			// OpenRouter documents cache_control on user content, not on tool results.
+			if message.Role != "user" {
+				continue
+			}
+			switch body := message.Content.(type) {
+			case string:
+				if body != "" {
+					message.Content = []contentPart{{Type: "text", Text: body, CacheControl: content[0].CacheControl}}
+					attached = true
+				}
+			case []contentPart:
+				if len(body) > 0 {
+					if last := &body[len(body)-1]; last.CacheControl == nil || last.CacheControl.TTL != "1h" {
+						last.CacheControl = content[0].CacheControl
+					}
+					attached = true
+				}
+			}
+		}
+		if !earlier {
+			return nil, fmt.Errorf("openai: cache point must follow user content")
+		}
+		req.Messages[index].Content = content[1:]
+	}
+	hasPromptCacheBreakpoint := false
+	for _, message := range req.Messages {
+		if content, ok := message.Content.([]contentPart); ok {
+			for _, part := range content {
+				hasPromptCacheBreakpoint = hasPromptCacheBreakpoint || part.PromptCacheBreakpoint != nil
+			}
+		}
+	}
+	keepImplicitCacheWithoutBreakpoints(&promptCache, hasPromptCacheBreakpoint)
+	req.PromptCacheOptions = promptCache.Options
 	if cache.MessagesTTL != "" && len(req.Messages) > 0 {
 		roles := make([]string, len(req.Messages))
 		counts := make([]int, len(req.Messages))
@@ -765,7 +870,14 @@ func (m *Model) buildPayload(
 		if previous := promptcache.PreviousTail(roles, counts); previous >= 0 {
 			addChatMessageCache(&req.Messages[previous], cache.MessagesTTL, cache.IncludeTTL)
 		}
-		addChatMessageCache(&req.Messages[len(req.Messages)-1], cache.MessagesTTL, cache.IncludeTTL)
+		end, tail := len(req.Messages), cache.RequestScopedTail
+		for end > 0 && len(tail) > 0 && req.Messages[end-1].Role == "user" &&
+			req.Messages[end-1].Content == tail[len(tail)-1] {
+			end, tail = end-1, tail[:len(tail)-1]
+		}
+		if end > 0 {
+			addChatMessageCache(&req.Messages[end-1], cache.MessagesTTL, cache.IncludeTTL)
+		}
 	}
 	for _, tool := range params.Tools {
 		converted, err := convertTool(tool, m.strictToolSupport)
@@ -822,6 +934,7 @@ func (m *Model) buildPayload(
 	if err := limitChatCachePoints(req.Messages, req.Tools, cache.MaxPoints); err != nil {
 		return nil, err
 	}
+	raiseChatCacheTTLs(req.Messages, req.Tools, cache)
 	if params.OutputSchema != nil && params.OutputMode != ai.OutputModePrompted {
 		strict := true
 		schema, _, err := prepareOpenAISchema(params.OutputSchema, &strict)
@@ -973,29 +1086,40 @@ func (model *Model) convertResponse(m ai.ModelResponse) ([]chatMessage, error) {
 						continue
 					}
 				}
+				appendReasoning := func(field **string) {
+					text := p.Content
+					if *field != nil {
+						text = **field + text
+					}
+					*field = &text
+				}
 				if model.chatCompatibility.ReasoningContent {
-					msg.ReasoningContent += p.Content
+					appendReasoning(&msg.ReasoningContent)
 				}
 				if model.chatCompatibility.Reasoning {
-					msg.Reasoning += p.Content
+					appendReasoning(&msg.Reasoning)
 				}
 				if model.chatCompatibility.ReasoningText {
-					msg.ReasoningText += p.Content
+					appendReasoning(&msg.ReasoningText)
 				}
 				if model.chatCompatibility.ReasoningFallback {
 					if p.ID == "reasoning_content" {
-						msg.ReasoningContent += p.Content
+						appendReasoning(&msg.ReasoningContent)
 					} else {
-						msg.Reasoning += p.Content
+						appendReasoning(&msg.Reasoning)
 					}
 				}
 			}
 		case ai.ToolCallPart:
-			msg.ToolCalls = append(msg.ToolCalls, toolCall{
+			call := toolCall{
 				ID:       p.ToolCallID,
 				Type:     "function",
 				Function: functionCall{Name: p.ToolName, Arguments: string(p.Args)},
-			})
+			}
+			if p.ProviderName == model.providerName {
+				call.ExtraContent = p.ProviderDetails["extra_content"]
+			}
+			msg.ToolCalls = append(msg.ToolCalls, call)
 		}
 	}
 	return []chatMessage{msg}, nil
@@ -1296,10 +1420,11 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 			return nil, fmt.Errorf("openai: unsupported chat tool call type %q", call.Type)
 		}
 		resp.Parts = append(resp.Parts, ai.ToolCallPart{
-			ToolName:     call.Function.Name,
-			Args:         json.RawMessage(call.Function.Arguments),
-			ToolCallID:   call.ID,
-			ProviderName: model.providerName,
+			ToolName:        call.Function.Name,
+			Args:            json.RawMessage(call.Function.Arguments),
+			ToolCallID:      call.ID,
+			ProviderName:    model.providerName,
+			ProviderDetails: toolCallProviderDetails(call.ExtraContent),
 		})
 	}
 	splitTaggedThinking(resp)
@@ -1389,10 +1514,7 @@ func (model *Model) convertUserPrompt(
 				continue
 			}
 			if len(parts) == 0 {
-				if cache.ExplicitMarkerStyle != ChatPromptCacheMarkerBreakpoint {
-					return chatMessage{}, fmt.Errorf("openai: cache point must follow user content")
-				}
-				parts = append(parts, contentPart{Type: "text"})
+				parts = append(parts, contentPart{Type: "text", leadingCachePoint: true})
 			}
 			switch cache.ExplicitMarkerStyle {
 			case ChatPromptCacheMarkerBreakpoint:
@@ -1536,4 +1658,14 @@ func (model *Model) convertUserPrompt(
 		}
 	}
 	return chatMessage{Role: "user", Content: parts}, nil
+}
+
+func toolCallProviderDetails(extraContent any) map[string]any {
+	if extraContent == nil {
+		return nil
+	}
+	if content, ok := extraContent.(map[string]any); ok && len(content) == 0 {
+		return nil
+	}
+	return map[string]any{"extra_content": extraContent}
 }

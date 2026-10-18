@@ -81,6 +81,34 @@ const (
 	ModelResponseStateInterrupted ModelResponseState = "interrupted"
 )
 
+// ModelRequestAttemptOutcome describes why a model attempt did not answer.
+type ModelRequestAttemptOutcome string
+
+const (
+	// ModelRequestAttemptError means the request returned an error.
+	ModelRequestAttemptError ModelRequestAttemptOutcome = "error"
+	// ModelRequestAttemptRejected means a fallback response predicate rejected the response.
+	ModelRequestAttemptRejected ModelRequestAttemptOutcome = "rejected"
+)
+
+// ModelRequestAttempt records an earlier model attempt that failed or was rejected.
+type ModelRequestAttempt struct {
+	// ModelName identifies the attempted model.
+	ModelName string
+	// ProviderName identifies the attempted provider when known.
+	ProviderName string
+	// Outcome describes why the attempt did not answer.
+	Outcome ModelRequestAttemptOutcome
+	// Error describes the request error. It is empty for rejected responses.
+	Error string
+	// Timestamp is when the attempt started.
+	Timestamp time.Time
+	// Duration is how long the attempt took.
+	Duration time.Duration
+	// Usage contains billed usage for a rejected response. Nil means unknown.
+	Usage *Usage
+}
+
 // ModelResponse is a message received from the model.
 type ModelResponse struct {
 	// Parts contains detached model output in provider order.
@@ -111,6 +139,9 @@ type ModelResponse struct {
 	State ModelResponseState
 	// WorkspaceRef records the environment used by this run, for trusted continuation.
 	WorkspaceRef *WorkspaceRef
+	// FailedAttempts records earlier attempts at this logical request in order.
+	// Their usage is excluded from Usage but included in run token and cost totals.
+	FailedAttempts []ModelRequestAttempt
 
 	pricingAttempted bool
 }
@@ -216,6 +247,28 @@ type SystemPromptPart struct {
 	Timestamp time.Time
 	// DynamicRef identifies a registered prompt reevaluated during history reuse.
 	DynamicRef string
+	// Scope says how long the model sees the prompt. The zero value means SystemPromptScopeConversation.
+	Scope SystemPromptScope
+}
+
+// SystemPromptScope says how long the model sees a SystemPromptPart.
+type SystemPromptScope string
+
+const (
+	// SystemPromptScopeConversation shows the prompt from where it sits in the
+	// history for the rest of the conversation.
+	SystemPromptScopeConversation SystemPromptScope = "conversation"
+	// SystemPromptScopeRequest shows the prompt only for the model request it is
+	// part of, including a continuation of that request. The prompt stays in the
+	// message history, but once a later request exists the model no longer sees it.
+	// Use it for a nudge about the current moment, like a reminder against
+	// instruction fade, not for something that stays true.
+	SystemPromptScopeRequest SystemPromptScope = "request"
+)
+
+func isRequestScoped(part RequestPart) bool {
+	system, ok := part.(SystemPromptPart)
+	return ok && system.Scope == SystemPromptScopeRequest
 }
 
 func (SystemPromptPart) requestPartKind() string { return "system-prompt" }
@@ -336,6 +389,14 @@ const (
 // SynthesizedToolReturnMetadataKey marks tool returns created while repairing
 // incomplete history rather than produced by tool execution.
 const SynthesizedToolReturnMetadataKey = "pydantic_ai_synthesized_tool_return"
+
+// MCPAppMetadataKey holds the MCP Apps record that ai/mcp attaches to the
+// return of a tool with a UI resource. The model never sees it; the AG-UI
+// and Vercel AI adapters forward it to the frontend. The record is a
+// map[string]any with "resource_uri" (string), "tool_input" (the model's
+// arguments), "result" (the full MCP CallToolResult in wire form), and
+// "toolset_id" (string, empty when the toolset has no ID).
+const MCPAppMetadataKey = "mcp_app"
 
 // ToolReturn separates the value sent as a tool result from additional user
 // content and application-only metadata. Return it directly from a function

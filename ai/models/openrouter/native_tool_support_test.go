@@ -14,6 +14,11 @@ func TestNativeToolSupport(t *testing.T) {
 		model.SupportsNativeTool(ai.CodeExecutionTool{}) || model.SupportsNativeTool((*ai.WebSearchTool)(nil)) {
 		t.Fatal("unexpected OpenRouter native-tool support")
 	}
+	cached := false
+	if !model.SupportsNativeTool(ai.WebSearchTool{AllowedDomains: []string{"go.dev"}, MaxUses: 1}) ||
+		model.SupportsNativeTool(ai.WebSearchTool{ExternalWebAccess: &cached}) {
+		t.Fatal("unexpected OpenRouter restricted web search support")
+	}
 	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
 		NativeTools: []ai.NativeTool{(*ai.WebSearchTool)(nil)},
 	}); err == nil {

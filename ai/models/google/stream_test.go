@@ -1,10 +1,13 @@
 package google_test
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -638,6 +641,7 @@ func TestStreamProtocolErrors(t *testing.T) {
 	}{
 		{name: "malformed", chunks: []string{`not json`}, want: "parse stream chunk"},
 		{name: "file data", chunks: []string{`{"candidates":[{"content":{"parts":[{"fileData":{"mimeType":"image/png","fileUri":"gs://bucket/image.png"}}]}}]}`}, want: "file-data output"},
+		{name: "malformed part", chunks: []string{`{"candidates":[{"content":{"parts":[1]}}]}`}, want: "parse stream chunk"},
 		{name: "empty", want: "without a response"},
 	}
 	for _, test := range tests {
@@ -733,5 +737,286 @@ func TestStreamEarlyBreak(t *testing.T) {
 				break
 			}
 		}
+	}
+}
+
+func TestGoogleStreamMediaProcessing(t *testing.T) {
+	chunk := func(parts string) string {
+		return `{"responseId":"response","candidates":[{"content":{"parts":[` + parts + `]}}]}`
+	}
+	tests := map[string]struct {
+		chunks []string
+		want   []string
+	}{
+		"typed": {
+			chunks: []string{
+				chunk(`{"toolCall":{"id":"typed","toolType":"MEDIA_PROCESSING"},"thoughtSignature":"a"}`),
+				chunk(`{"toolResponse":{"id":"typed","toolType":"MEDIA_PROCESSING"},"thoughtSignature":"b"}`),
+			},
+			want: []string{"typed", "typed"},
+		},
+		"consecutive pairs without IDs": {
+			chunks: []string{
+				chunk(`{"toolCall":{}}`), chunk(`{"toolResponse":{}}`),
+				chunk(`{"toolCall":{"toolType":"MEDIA_PROCESSING"}}`), chunk(`{"toolResponse":{}}`),
+			},
+			want: []string{
+				"response:media_processing:0", "response:media_processing:0",
+				"response:media_processing:1", "response:media_processing:1",
+			},
+		},
+		"missing response ID": {
+			chunks: []string{chunk(`{"toolCall":{"id":"call"}}`), chunk(`{"toolResponse":{}}`)},
+			want:   []string{"call", "call"},
+		},
+		"missing call ID": {
+			chunks: []string{chunk(`{"toolCall":{}}`), chunk(`{"toolResponse":{"id":"response"}}`)},
+			want:   []string{"response", "response"},
+		},
+		"unanswered calls": {
+			chunks: []string{chunk(`{"toolCall":{}},{"toolCall":{}}`)},
+			want:   []string{"response:media_processing:0", "response:media_processing:1"},
+		},
+		"signature-only parts": {
+			chunks: []string{chunk(`{"thoughtSignature":"vertex-step"},{"text":"answer","thoughtSignature":"b"}`)},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			model := newServer(t, googleSSE(t, test.chunks))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			callIDs := map[string]string{}
+			response, err := ai.CollectModelStream(func(yield func(ai.ModelStreamEvent, error) bool) {
+				for event, err := range stream {
+					switch event := event.(type) {
+					case ai.ToolCallStartEvent:
+						callIDs[event.PartID] = event.ToolCallID
+					case ai.ToolCallDeltaEvent:
+						if event.ToolCallID != "" {
+							callIDs[event.PartID] = event.ToolCallID
+						}
+					case ai.NativeToolReturnEvent:
+						if !slices.Contains(slices.Collect(maps.Values(callIDs)), event.Part.ToolCallID) {
+							t.Errorf("return %q arrived before its call ID: %v", event.Part.ToolCallID, callIDs)
+						}
+					}
+					if !yield(event, err) {
+						return
+					}
+				}
+			}, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, part := range response.Parts {
+				switch part := part.(type) {
+				case ai.NativeToolCallPart:
+					if part.ToolName != "media_processing" {
+						t.Fatalf("unexpected call: %+v", part)
+					}
+					got = append(got, part.ToolCallID)
+				case ai.NativeToolReturnPart:
+					if part.ToolName != "media_processing" {
+						t.Fatalf("unexpected return: %+v", part)
+					}
+					got = append(got, part.ToolCallID)
+				case ai.TextPart:
+					if part.Content != "answer" || part.ProviderDetails["thought_signature"] != "b" {
+						t.Fatalf("unexpected text: %+v", part)
+					}
+				}
+			}
+			if !slices.Equal(got, test.want) {
+				t.Fatalf("media processing IDs = %v, want %v (parts %#v)", got, test.want, response.Parts)
+			}
+		})
+	}
+}
+
+func TestGoogleStreamMediaProcessingCanStop(t *testing.T) {
+	chunks := []string{
+		`{"candidates":[{"content":{"parts":[{"toolCall":{}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"toolCall":{}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"toolResponse":{}}]}}]}`,
+		`{"candidates":[{"content":{"parts":[{"toolCall":{}}]}}]}`,
+	}
+	for breakAfter := 1; breakAfter <= 10; breakAfter++ {
+		t.Run(fmt.Sprintf("event %d", breakAfter), func(t *testing.T) {
+			model := newServer(t, googleSSE(t, chunks))
+			stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			seen := 0
+			for _, err := range stream {
+				if err != nil {
+					t.Fatal(err)
+				}
+				seen++
+				if seen == breakAfter {
+					break
+				}
+			}
+			if seen != breakAfter {
+				t.Fatalf("stream ended after %d events", seen)
+			}
+		})
+	}
+}
+
+func googleLongDecodeServer(t *testing.T, hops ...http.HandlerFunc) (*google.Model, *[]any) {
+	t.Helper()
+	var tokens []any
+	model := newNamedServer(t, "gemini-4-argon", func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		tokens = append(tokens, body["continuationToken"])
+		hops[len(tokens)-1](w, r)
+	})
+	return model, &tokens
+}
+
+func googleDroppedSSE(t *testing.T, chunks ...string) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		if len(chunks) > 0 {
+			googleSSE(t, chunks)(w, r)
+			w.(http.Flusher).Flush()
+		}
+		panic(http.ErrAbortHandler)
+	}
+}
+
+func streamGoogleLongDecode(t *testing.T, model *google.Model) (*ai.ModelResponse, error) {
+	t.Helper()
+	stream := ai.StreamModel(t.Context(), model, []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "write"}}},
+	}, ai.ModelRequestParams{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			return stream.Response(), err
+		}
+	}
+	return stream.Response(), nil
+}
+
+func TestGoogleStreamLongDecode(t *testing.T) {
+	model, tokens := googleLongDecodeServer(t,
+		googleSSE(t, []string{
+			`{"responseId":"r1","candidates":[{"content":{"parts":[{"text":"plan","thought":true}]}}],` +
+				`"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":1}}`,
+			`{"responseId":"r1","candidates":[{"content":{"parts":[{"text":"Hello "}]},"continuationToken":"tok1"}],` +
+				`"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":4}}`,
+			`{"responseId":"r1","candidates":[{"content":{"parts":[{"text":""}]},"finishReason":"CONTINUATION",` +
+				`"continuationToken":"tok1"}],"usageMetadata":{"promptTokenCount":10,"candidatesTokenCount":5}}`,
+		}),
+		googleSSE(t, []string{
+			`{"responseId":"r2","candidates":[{"content":{"parts":[{"text":"world"}]},"continuationToken":"tok2"}],` +
+				`"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":3}}`,
+			`{"responseId":"r2","candidates":[{"content":{"parts":[{"text":"!"}]},"finishReason":"STOP"}],` +
+				`"usageMetadata":{"promptTokenCount":15,"candidatesTokenCount":4}}`,
+		}),
+	)
+	response, err := streamGoogleLongDecode(t, model)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fmt.Sprint(*tokens) != "[<nil> tok1]" {
+		t.Fatalf("unexpected continuation tokens: %v", *tokens)
+	}
+	if len(response.Parts) != 3 || response.Parts[1].(ai.TextPart).Content != "Hello " ||
+		response.Parts[2].(ai.TextPart).Content != "world!" {
+		t.Fatalf("unexpected streamed long decode parts: %#v", response.Parts)
+	}
+	if response.Usage.Requests != 1 || response.Usage.InputTokens != 25 || response.Usage.OutputTokens != 9 ||
+		response.FinishReason != ai.FinishReasonStop || response.ProviderResponseID != "r2" {
+		t.Fatalf("unexpected streamed long decode response: %+v", response)
+	}
+	if fmt.Sprint(response.Metadata) != "map[__pydantic_ai__:map[initial_input_tokens:10]]" {
+		t.Fatalf("unexpected initial input tokens: %v", response.Metadata)
+	}
+}
+
+func TestGoogleStreamLongDecodeResumption(t *testing.T) {
+	continuation := googleSSE(t, []string{
+		`{"candidates":[{"content":{"parts":[{"text":"a"}]},"finishReason":"CONTINUATION","continuationToken":"t1"}]}`,
+	})
+	finished := googleSSE(t, []string{`{"candidates":[{"content":{"parts":[{"text":"b"}]},"finishReason":"STOP"}]}`})
+	empty := googleSSE(t, nil)
+	tests := map[string]struct {
+		hops   []http.HandlerFunc
+		tokens string
+		check  func(*ai.ModelResponse, error) bool
+	}{
+		"resumes from checkpoint": {
+			hops: []http.HandlerFunc{
+				googleDroppedSSE(t, `{"candidates":[{"content":{"parts":[{"text":"a"}]},"continuationToken":"t1"}]}`),
+				finished,
+			},
+			tokens: "[<nil> t1]",
+			check: func(response *ai.ModelResponse, err error) bool {
+				return err == nil && response.Text() == "ab" && response.FinishReason == ai.FinishReasonStop
+			},
+		},
+		"retries a request that dropped before output": {
+			hops:   []http.HandlerFunc{continuation, googleDroppedSSE(t), finished},
+			tokens: "[<nil> t1 t1]",
+			check: func(response *ai.ModelResponse, err error) bool {
+				return err == nil && response.Text() == "ab"
+			},
+		},
+		"refuses to repeat uncheckpointed output": {
+			hops: []http.HandlerFunc{googleDroppedSSE(t,
+				`{"candidates":[{"content":{"parts":[{"text":"a"}]},"continuationToken":"t1"}]}`,
+				`{"candidates":[{"content":{"parts":[{"text":"b"}]}}]}`,
+			)},
+			tokens: "[<nil>]",
+			check: func(response *ai.ModelResponse, err error) bool {
+				var apiErr *google.APIError
+				return errors.As(err, &apiErr) && apiErr.IsModelAPIError() &&
+					strings.Contains(apiErr.Body, "no continuation token covers")
+			},
+		},
+		"gives up after three retries without progress": {
+			hops:   []http.HandlerFunc{continuation, googleDroppedSSE(t), empty, empty, empty},
+			tokens: "[<nil> t1 t1 t1 t1]",
+			check: func(_ *ai.ModelResponse, err error) bool {
+				var transportErr *ai.ModelTransportError
+				return errors.As(err, &transportErr) && transportErr.Operation == "request"
+			},
+		},
+		"surfaces a dropped stream it cannot resume": {
+			hops:   []http.HandlerFunc{googleDroppedSSE(t, `{"candidates":[{"content":{"parts":[{"text":"a"}]}}]}`)},
+			tokens: "[<nil>]",
+			check: func(_ *ai.ModelResponse, err error) bool {
+				var transportErr *ai.ModelTransportError
+				return errors.As(err, &transportErr) && transportErr.Operation == "read stream"
+			},
+		},
+		"fails on a rejected continuation request": {
+			hops: []http.HandlerFunc{continuation, func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusServiceUnavailable)
+			}},
+			tokens: "[<nil> t1]",
+			check: func(_ *ai.ModelResponse, err error) bool {
+				var apiErr *google.APIError
+				return errors.As(err, &apiErr) && apiErr.StatusCode == http.StatusServiceUnavailable
+			},
+		},
+	}
+	for name, test := range tests {
+		t.Run(name, func(t *testing.T) {
+			model, tokens := googleLongDecodeServer(t, test.hops...)
+			response, err := streamGoogleLongDecode(t, model)
+			if !test.check(response, err) || fmt.Sprint(*tokens) != test.tokens {
+				t.Fatalf("unexpected result: %+v %v tokens=%v", response, err, *tokens)
+			}
+		})
 	}
 }

@@ -37,12 +37,16 @@ func (model *LiveModel) resolveLiveSettings(common realtime.Settings) (LiveSetti
 			} else {
 				settings.DataChannel = cloneLiveMap(object)
 			}
-		case "openai_live_store":
-			stored, ok := value.(bool)
+		case "openai_live_store", "openai_live_idle_audio":
+			enabled, ok := value.(bool)
 			if !ok {
 				return settings, fmt.Errorf("openai GPT-Live: %s must be a boolean", key)
 			}
-			settings.Store = stored
+			if key == "openai_live_store" {
+				settings.Store = enabled
+			} else {
+				settings.IdleAudio = enabled
+			}
 		case "openai_live_turn_silence_ms":
 			switch number := value.(type) {
 			case int:
@@ -161,6 +165,12 @@ func (model *LiveModel) liveConfig(params realtime.ConnectParams, settings LiveS
 				continue
 			}
 			return nil, fmt.Errorf("openai GPT-Live: native tool %q is unsupported", native.Kind())
+		}
+		if search.MaxUses != 0 {
+			if search.Optional {
+				continue
+			}
+			return nil, fmt.Errorf("openai GPT-Live: web search cannot apply max uses")
 		}
 		size := search.SearchContextSize
 		if size == "" {

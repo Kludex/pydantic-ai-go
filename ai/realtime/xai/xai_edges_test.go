@@ -3,6 +3,7 @@ package xai_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -187,13 +188,13 @@ func TestXAISessionUpdateSerializationError(t *testing.T) {
 	}
 }
 
-func TestXAIReconnectUsesConversationID(t *testing.T) {
+func TestXAIReconnectStartsNewConversation(t *testing.T) {
 	var calls atomic.Int32
 	seenResume := make(chan bool, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		call := calls.Add(1)
 		if call == 2 {
-			seenResume <- request.URL.Query().Get("conversation_id") == "conversation"
+			seenResume <- request.URL.Query().Get("conversation_id") == ""
 		}
 		socket, err := websocket.Accept(writer, request, nil)
 		if err != nil {
@@ -250,9 +251,61 @@ func TestXAIReconnectUsesConversationID(t *testing.T) {
 		t.Fatalf("new conversation did not reset billed seconds: %g", billedSeconds)
 	}
 	if !<-seenResume {
-		t.Fatal("reconnect omitted conversation ID")
+		t.Fatal("reconnect reused the incomplete provider conversation")
 	}
 	_ = connection.Close(t.Context())
+}
+
+func TestXAIMaxDurationReconnectsIntoNewConversation(t *testing.T) {
+	var calls atomic.Int32
+	firstClosed := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		call := calls.Add(1)
+		socket, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		defer func() { _ = socket.CloseNow() }()
+		_ = writeFrame(request.Context(), socket, map[string]any{"type": "session.created", "session": map[string]any{}})
+		_, _, _ = socket.Read(request.Context())
+		_ = writeFrame(request.Context(), socket, map[string]any{"type": "session.updated", "session": map[string]any{}})
+		_ = writeFrame(request.Context(), socket, map[string]any{
+			"type": "error", "error": map[string]any{"type": "max_duration", "message": "Maximum conversation duration exceeded."},
+		})
+		_, _, _ = socket.Read(request.Context())
+		if call == 1 {
+			close(firstClosed)
+		}
+	}))
+	defer server.Close()
+	model := xairt.NewModel("model", xairt.WithAPIKey("key"), xairt.WithBaseURL(server.URL+"/v1"),
+		xairt.WithHTTPClient(server.Client()))
+	connection, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{
+		Reconnect: &realtime.ReconnectPolicy{MaxAttempts: 1, MaxReconnects: 1, MaxDelay: time.Second},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.Close(t.Context()) }()
+	var got []string
+	for event, err := range connection.Events(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case realtime.SessionError:
+			if !strings.Contains(event.Err.Error(), "Maximum conversation duration exceeded.") {
+				t.Fatal(event.Err)
+			}
+			got = append(got, fmt.Sprintf("error recoverable=%t", event.Recoverable))
+		case realtime.SessionReconnected:
+			got = append(got, "reconnected")
+		}
+	}
+	if strings.Join(got, ", ") != "error recoverable=true, reconnected, error recoverable=false" {
+		t.Fatal(got)
+	}
+	<-firstClosed
 }
 
 func TestXAIMapOpenAIError(t *testing.T) {

@@ -27,3 +27,11 @@ func TestDownstreamCacheProfiles(t *testing.T) {
 		}
 	}
 }
+
+func TestMistralToolCallIDLength(t *testing.T) {
+	for name, want := range map[string]int{"mistralai/mistral-large": 9, "~mistralai/mistral-latest": 9, "openai/gpt-5": 0} {
+		if got := openrouter.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
+			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
+		}
+	}
+}

@@ -203,6 +203,7 @@ func TestResponsesLeadingCachePointSkipsAssistantOutput(t *testing.T) {
 }
 
 func TestLeadingCachePointsAttachToPriorContent(t *testing.T) {
+	messages := false
 	for _, responses := range []bool{false, true} {
 		for _, prior := range []ai.ModelMessage{
 			ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "previous"}}},
@@ -233,8 +234,10 @@ func TestLeadingCachePointsAttachToPriorContent(t *testing.T) {
 				if !onlyPoint {
 					content = append(content, ai.TextContent{Text: "next"})
 				}
-				messages := []ai.ModelMessage{prior, ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: content}}}}
-				_, err := model.Request(t.Context(), messages, ai.ModelRequestParams{})
+				history := []ai.ModelMessage{prior, ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Contents: content}}}}
+				_, err := model.Request(t.Context(), history, ai.ModelRequestParams{Settings: ai.ModelSettings{
+					Cache: &ai.CacheConfig{Messages: &messages},
+				}})
 				server.Close()
 				if err != nil {
 					t.Fatal(err)
@@ -242,6 +245,9 @@ func TestLeadingCachePointsAttachToPriorContent(t *testing.T) {
 				encoded, _ := json.Marshal(body)
 				if !strings.Contains(string(encoded), "prompt_cache_breakpoint") {
 					t.Fatalf("leading marker lost: %s", encoded)
+				}
+				if body["prompt_cache_options"].(map[string]any)["mode"] != "explicit" {
+					t.Fatalf("explicit cache mode lost: %s", encoded)
 				}
 			}
 		}

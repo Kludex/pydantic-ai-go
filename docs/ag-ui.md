@@ -183,6 +183,19 @@ AG-UI `0.1.19` and later receives `ACTIVITY_SNAPSHOT` events for provider-neutra
 
 Keep those activity messages in client-held history. The adapter reconstructs `CompactionPart` and `ToolAvailabilityDeltaPart` values on the next request. Unknown application activity types remain UI-only and are not sent to the model. Older protocol versions omit activity events.
 
+## Keep enqueued messages
+
+Messages you deliver with `RunContext.Enqueue` reach AG-UI `0.1.19` and later as an `ACTIVITY_SNAPSHOT` with `activityType` `pydantic_ai_enqueued_messages`. Its `messageId` is the enqueue ID, and `content.messages` holds the delivered messages as AG-UI messages. A UI renders only activity types it registered a renderer for, so these stay out of the chat but stay in client-held history. On the next request the adapter restores them at their position, as their own messages.
+
+Enqueued system prompts are sent only when `Sanitization.AllowSystemPrompts` is `true` (`StreamConfig.AllowSystemPrompts` for `TransformStreamWithConfig`). When the server owns the system prompt, the client's copy would be stripped on the way back in, so sending it would only disclose it.
+
+!!! note "Enqueued responses keep text and reasoning"
+    Tool calls and files inside an enqueued `ModelResponse` are not streamed.
+
+## Render MCP Apps
+
+After the result of an [MCP Apps](mcp.md#render-mcp-apps) tool call, AG-UI `0.1.19` and later receives an `ACTIVITY_SNAPSHOT` with `activityType` `mcp-apps`. Its `content` holds `resourceUri`, `toolInput`, `result` (the full MCP `CallToolResult`), and `serverId` and `serverHash` (both the toolset ID, when set). This is the shape the AG-UI MCP Apps middleware emits, so renderers built for it work unchanged. The adapter ignores these activities when the client sends the history back.
+
 ## Preserve typed tools
 
 AG-UI `0.1.11` and later receives namespaced `REASONING_ENCRYPTED_VALUE` events for typed tool calls and non-successful results. Echo those encrypted values on `ToolCall.encryptedValue` and tool-message `encryptedValue` fields. The adapter accepts only known tool kinds and failed, denied, or interrupted outcomes. Invalid client claims degrade to ordinary tool history.

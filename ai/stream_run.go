@@ -186,6 +186,11 @@ func (s *StreamedRun[Output]) Suspended() *SuspendedRun {
 // RunStream executes the agent loop like Run, but yields events as the
 // model produces them. Models that do not implement StreamingModel are
 // driven with plain requests; each response is replayed as events.
+// The first output that matches the output type ends the run: text, an output
+// tool call, or a deferred tool call. Function tools called in the same
+// response still run, but their results are not sent back to the model. To run
+// to completion while observing events, register AddEventListener and call Run,
+// or drive the run with StartRun.
 // RunStream can't retry a response it already streamed as final output, so a
 // model request hook rejecting one with a retry fails the run with an
 // [UnexpectedModelBehaviorError]. Run retries it.

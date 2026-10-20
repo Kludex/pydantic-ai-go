@@ -142,6 +142,7 @@ func (model *Model) DefaultModelSettings() ai.ModelSettings { return model.defau
 func (model *Model) Request(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*ai.ModelResponse, error) {
+	ai.WarnUnsupportedSettings(ctx, model, params, ai.SettingParallelToolCalls)
 	payload, err := model.buildRequest(messages, params)
 	if err != nil {
 		return nil, err

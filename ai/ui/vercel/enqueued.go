@@ -27,7 +27,11 @@ func enqueuedChunk(event ai.EnqueuedMessagesEvent, allowSystemPrompts bool) (Chu
 						system = append(system, UIMessagePart{Type: "text", Text: part.Content, State: "done"})
 					}
 				case ai.UserPromptPart:
-					user = append(user, userUIParts(part)...)
+					parts := userUIParts(part)
+					if len(user) > 0 && len(parts) > 0 {
+						parts[0].ProviderMetadata = withUserPromptStart(parts[0].ProviderMetadata)
+					}
+					user = append(user, parts...)
 				}
 			}
 			metadata := dumpMessageMetadata(message.Metadata, message.Timestamp)
@@ -88,6 +92,22 @@ func userUIParts(part ai.UserPromptPart) []UIMessagePart {
 		}
 	}
 	return parts
+}
+
+// withUserPromptStart marks where a request's second or later prompt begins,
+// since all of a request's prompts share one user UIMessage.
+func withUserPromptStart(metadata map[string]any) map[string]any {
+	metadata = cloneMap(metadata)
+	if metadata == nil {
+		metadata = map[string]any{}
+	}
+	wrapped, _ := metadata[providerMetadataKey].(map[string]any)
+	if wrapped == nil {
+		wrapped = map[string]any{}
+	}
+	wrapped[userPromptStartKey] = true
+	metadata[providerMetadataKey] = wrapped
+	return metadata
 }
 
 func urlUIPart(url string, mediaType string, vendorMetadata map[string]any) UIMessagePart {

@@ -984,6 +984,9 @@ func cloneModelMessages(messages []ModelMessage) []ModelMessage {
 				switch part := part.(type) {
 				case SpeechPart:
 					message.Parts[partIndex] = cloneSpeechPart(part)
+				case SystemPromptPart:
+					part.Metadata = cloneSchemaMap(part.Metadata)
+					message.Parts[partIndex] = part
 				case UserPromptPart:
 					part.Contents = cloneUserContents(part.Contents)
 					message.Parts[partIndex] = part
@@ -4273,7 +4276,7 @@ func (r *run[Deps, Output]) prepareSystemPrompts(ctx context.Context, rc *RunCon
 				return fmt.Errorf("ai: dynamic system prompt %q: %w", part.DynamicRef, err)
 			}
 			parts[partIndex] = SystemPromptPart{
-				Content: content, Timestamp: time.Now().UTC(), DynamicRef: part.DynamicRef,
+				Content: content, Timestamp: time.Now().UTC(), DynamicRef: part.DynamicRef, Metadata: part.Metadata,
 			}
 		}
 		for _, part := range parts {

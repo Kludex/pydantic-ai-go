@@ -148,6 +148,8 @@ Call `StreamAudio` or `StreamTranscripts` before starting the goroutine that con
 
 Call `WaitForReply` after a responding send when you only need the model turn boundary. It does not consume `Events`, so another goroutine can continue handling events. `WaitForReply` returns immediately when no response is outstanding or when the session closes. Use `WaitForPlayback` separately when you also need buffered audio to finish playing.
 
+`TurnCompleteEvent` marks the end of what `WaitForReply` waits for. When a response ends, the session emits it only if the model owes nothing more: no reply to something you sent, no answer to a tool's result, and no response still under way. Text sent while the model is answering asks for a reply of its own, so the event comes once that reply ends. A response the user cuts off ends the exchange immediately. The user's transcript can still finish after it.
+
 A part's `Index` identifies it for the whole session. A provider can finish an output item after a later item started, so text of the item's transcript can arrive after its part ended. The session then streams that part again under the same `Index`, and the new `ai.PartStartEvent` replaces the part as it ended. `StreamTranscripts` yields the grown transcript under the same `Index` too. Keep parts by `Index` rather than adding one for every `ai.PartEndEvent`, and history still records one part per item.
 
 Set `WithAudioRetention` when you need raw audio in portable history. Retained audio is stored as WAV. Live audio events remain raw PCM.
@@ -229,6 +231,35 @@ A tool can call `session.Close(ctx)` to end the conversation. Closing from the r
 
 Use `session.Enqueue(ctx, ...)` to add an out-of-band prompt after the current response. Use `EnqueueWhenIdle` to place work after queued ASAP prompts. Both methods are safe to call from another goroutine and return an error after the session closes. Realtime enqueue accepts strings, `ai.TextContent`, `ai.UserPromptPart`, `ai.SystemPromptPart`, and matching `ai.ModelRequest` values. System prompt parts are wrapped in `<system>` tags because the live channel accepts only a user turn.
 
+### Prune finished tool rounds
+
+```go
+package main
+
+import (
+    "context"
+
+    "github.com/Kludex/pydantic-ai-go/ai/realtime"
+    openairt "github.com/Kludex/pydantic-ai-go/ai/realtime/openai"
+)
+
+func main() {
+    model := openairt.NewModel("gpt-realtime", openairt.WithSettings(openairt.Settings{
+        PruneToolItems: true,
+        KeepToolItems:  []string{"get_customer_profile"},
+    }))
+    session, err := realtime.Open(context.Background(), model, realtime.ConnectParams{})
+    if err != nil {
+        panic(err)
+    }
+    defer func() { _ = session.Close(context.Background()) }()
+}
+```
+
+OpenAI keeps the whole conversation server-side and bills each response for all of it. A tool-heavy agent pays again for every earlier tool call and result on every later response. `PruneToolItems` deletes a tool round's items once the model has answered it: when a response completes without calling a tool, the connection deletes each answered call together with its output and any content the tool returned beside it. Name tools in `KeepToolItems` when the model may need to refer back to their results.
+
+Session history keeps every tool round, and a reconnect's replay leaves pruned rounds out. The same settings are available as `openai_prune_tool_items` (a `bool`) and `openai_keep_tool_items` (a `[]string`) in `realtime.Settings.Provider`. Azure OpenAI's GA endpoint supports them through `azure.Settings.OpenAI`. Azure Voice Live ignores them.
+
 ## Use Gemini Live
 
 ```go
@@ -304,6 +335,10 @@ func main() {
 xAI reads `XAI_API_KEY`. Grok Voice always produces speech. It supports interruption but not output truncation. A reconnect starts a new provider conversation and replays finalized local history. xAI's native conversation resumption is not used because it drops typed user turns and tool calls.
 
 xAI ends a conversation that runs past its maximum duration with a `max_duration` error. With `Settings.Reconnect`, the session reports it as a recoverable `SessionErrorEvent` and reconnects right away, so the call carries on past the limit in a new conversation that gets the replayed history. Without a policy, or once its reconnects are used up, the error ends the session.
+
+## Use ElevenLabs Agents
+
+Use `elevenlabs.NewModel("agent_0101")` to run a session on a hosted ElevenLabs agent. Your instructions, voice, and tools take over the agent where its override toggles allow it. See [ElevenLabs Agents](elevenlabs.md) for a complete example, the toggles, tool sync, and limits.
 
 ## Resolve application providers
 

@@ -163,6 +163,8 @@ InvokeModel takes beta features in the request body, not in a header. The adapte
 
 Bedrock withholds structured output from some Claude models that have it on the direct API: Claude Opus 4.1, 4.7, 4.8, and 5, Sonnet 5, Haiku 5.5, and Fable 5. For these models the adapter sends tool definitions without `strict`, and `OutputModeNative` fails before transport. Other models keep strict tools and native output; the adapter matches them by the name after the `anthropic.` segment, so a geo prefix like `global.` works. `WithStrictToolSupport` overrides the strict default.
 
+InvokeModel serves Claude Opus 4.7 and later, Sonnet 5, Haiku 5.5, and Fable 5 from the Messages API infrastructure, so they take Anthropic's top-level automatic cache parameter. Other models reject it with a 400. On those, `anthropic.Settings.Cache` and the portable `ai.CacheConfig` place a breakpoint on the last message block instead, which gives a multi-turn conversation the same benefit. Use `anthropic.WithAutomaticCaching(true)` for a newer model this list does not know yet.
+
 You own the AWS client and its lifecycle. `ProviderURL` records telemetry identity and does not reconfigure the client.
 
 ## Messages and files

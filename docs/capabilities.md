@@ -258,6 +258,54 @@ An after model request hook can return `ai.Retryf(...)` with the response to ask
 !!! warning "`RunStream` can't retry streamed output"
     `RunStream` has already handed a final text or output tool call to your consumer when the hook runs. A retry rejecting that response fails the run with `UnexpectedModelBehaviorError`. `Run` and `StartRun` retry it.
 
+## Recognize a tool by its kind
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+const lookupKind ai.ToolPartKind = "inventory.lookup"
+
+type LookupArgs struct {
+	SKU string `json:"sku"`
+}
+
+func main() {
+	lookup := ai.NewTool("check_stock", func(_ context.Context, _ *ai.RunContext[struct{}], args LookupArgs) (bool, error) {
+		return args.SKU == "A-1", nil
+	}, ai.WithToolKind(lookupKind))
+
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	agent.AddToolset(ai.PrefixToolset(ai.NewFunctionToolset(lookup), "v2"))
+	result, err := agent.Run(context.Background(), "Is A-1 in stock?", struct{}{})
+	if err != nil {
+		panic(err)
+	}
+	for _, message := range result.Messages() {
+		if response, ok := message.(ai.ModelResponse); ok {
+			for _, part := range response.Parts {
+				if call, ok := part.(ai.ToolCallPart); ok && call.ToolKind == lookupKind {
+					fmt.Println(call.ToolName)
+				}
+			}
+		}
+	}
+}
+```
+
+A tool's name is chosen by whoever wrote or configured it, and a toolset can rename or prefix it. Code that needs to recognize a particular tool, such as a hook or a history processor, should not compare names. Declare what the tool is with `WithToolKind` instead. Its `ToolCallPart` and `ToolReturnPart` values carry the kind as `ToolKind`, whatever the tool is called.
+
+A kind is `namespace.name`. The namespace keeps kinds from different packages apart, which matters because every stored history records the kind. `WithToolKind` panics on a kind without one. The kinds the library assigns itself, such as `ai.ToolPartKindToolSearch`, are the only kinds without a namespace.
+
+A history recorded with a kind the current program does not use still loads and keeps it. The AG-UI and Vercel AI adapters round-trip a namespaced kind on every outcome, so a failed call stays recognizable. They drop a library kind on a failed or denied return, because those kinds signal a successful discovery.
+
 ## Emit typed events
 
 ```go

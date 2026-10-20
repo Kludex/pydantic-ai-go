@@ -1,6 +1,7 @@
 package cohere_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -304,3 +305,24 @@ type errorBody struct{}
 
 func (errorBody) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 func (errorBody) Close() error             { return nil }
+
+func TestWarnsAboutIgnoredParallelToolCalls(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(response, `{"finish_reason":"COMPLETE","message":{"content":[{"type":"text","text":"ok"}]}}`)
+	}))
+	defer server.Close()
+	model := cohere.NewModel("command-a", cohere.WithAPIKey("key"), cohere.WithBaseURL(server.URL),
+		cohere.WithHTTPClient(server.Client()))
+	var warnings []string
+	ctx := ai.WithUnsupportedSettingSink(t.Context(), func(_ context.Context, warning ai.UnsupportedSettingWarning) {
+		warnings = append(warnings, warning.Setting)
+	})
+	disabled := false
+	_, err := model.Request(ctx, nil, ai.ModelRequestParams{
+		Tools:    []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		Settings: ai.ModelSettings{ParallelToolCalls: &disabled},
+	})
+	if err != nil || len(warnings) != 1 || warnings[0] != ai.SettingParallelToolCalls {
+		t.Fatalf("warnings %v: %v", warnings, err)
+	}
+}

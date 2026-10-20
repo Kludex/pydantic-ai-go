@@ -1,8 +1,11 @@
 package ai_test
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
@@ -185,5 +188,55 @@ func TestInvalidThinkingLevelFailsBeforeRequest(t *testing.T) {
 	_, err := agent.Run(t.Context(), "go", deps{})
 	if err == nil || err.Error() != `ai: invalid thinking level "extreme"` {
 		t.Fatalf("unexpected thinking validation error: %v", err)
+	}
+}
+
+func TestWarnUnsupportedSettings(t *testing.T) {
+	model := fakes.NewTestModel()
+	disabled := false
+	params := ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{Name: "lookup"}},
+		Settings: ai.ModelSettings{
+			StopSequences: []string{"END"}, ParallelToolCalls: &disabled,
+			ExtraHeaders: map[string]string{"x": "y"}, ExtraBody: map[string]any{"raw": true},
+		},
+	}
+	all := []string{ai.SettingStopSequences, ai.SettingParallelToolCalls, ai.SettingExtraHeaders, ai.SettingExtraBody}
+	var warnings []string
+	ctx := ai.WithUnsupportedSettingSink(t.Context(), func(_ context.Context, warning ai.UnsupportedSettingWarning) {
+		warnings = append(warnings, warning.Setting)
+		if !strings.Contains(warning.Error(), warning.Setting) || warning.ModelName != model.Name() {
+			t.Fatalf("unexpected warning %#v: %v", warning, warning)
+		}
+	})
+	ai.WarnUnsupportedSettings(ctx, model, params, all...)
+	if !slices.Equal(warnings, all) {
+		t.Fatalf("warnings %v, want %v", warnings, all)
+	}
+
+	warnings = nil
+	enabled := true
+	params.Settings.ParallelToolCalls = &enabled
+	ai.WarnUnsupportedSettings(ctx, model, params, ai.SettingParallelToolCalls)
+	params.Settings.ParallelToolCalls, params.Tools = &disabled, nil
+	ai.WarnUnsupportedSettings(ctx, model, params, ai.SettingParallelToolCalls)
+	ai.WarnUnsupportedSettings(ctx, model, ai.ModelRequestParams{}, all...)
+	ai.WarnUnsupportedSettings(ctx, model, params, ai.SettingExtraHeaders)
+	if !slices.Equal(warnings, []string{ai.SettingExtraHeaders}) {
+		t.Fatalf("only a guarantee the request relies on warns, got %v", warnings)
+	}
+
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(previous)
+	ai.WarnUnsupportedSettings(t.Context(), model, params, ai.SettingStopSequences)
+	if !strings.Contains(logged.String(), "stop_sequences setting is not supported") {
+		t.Fatalf("default warning not logged: %q", logged.String())
+	}
+	logged.Reset()
+	ai.WarnUnsupportedSettings(ai.WithUnsupportedSettingSink(t.Context(), nil), model, params, all...)
+	if logged.Len() != 0 {
+		t.Fatalf("a nil sink did not silence warnings: %q", logged.String())
 	}
 }

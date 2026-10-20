@@ -1112,3 +1112,37 @@ func TestNonNativeThinkingIsCarriedInUserTurnForClaude(t *testing.T) {
 		t.Fatalf("expected foreign thinking dropped for other models, got %#v", got)
 	}
 }
+
+func TestWarnsAboutIgnoredParallelToolCalls(t *testing.T) {
+	client := &streamingClient{fakeClient: &fakeClient{converse: func(
+		*bedrockruntime.ConverseInput, ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		return completeOutput(types.StopReasonEndTurn), nil
+	}}, stream: func(*bedrockruntime.ConverseStreamInput, ...func(*bedrockruntime.Options)) (bedrock.EventStream, error) {
+		return newFakeStream(
+			&types.ConverseStreamOutputMemberMessageStop{Value: types.MessageStopEvent{StopReason: types.StopReasonEndTurn}},
+		), nil
+	}}
+	model := bedrock.NewModel("model", bedrock.WithClient(client))
+	var warnings []string
+	ctx := ai.WithUnsupportedSettingSink(t.Context(), func(_ context.Context, warning ai.UnsupportedSettingWarning) {
+		warnings = append(warnings, warning.Setting)
+	})
+	disabled := false
+	params := ai.ModelRequestParams{
+		Tools:    []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		Settings: ai.ModelSettings{ParallelToolCalls: &disabled},
+	}
+	if _, err := model.Request(ctx, nil, params); err != nil {
+		t.Fatal(err)
+	}
+	sequence, err := model.StreamRequest(ctx, nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range sequence {
+	}
+	if len(warnings) != 2 || warnings[0] != ai.SettingParallelToolCalls || warnings[1] != ai.SettingParallelToolCalls {
+		t.Fatalf("warnings %v", warnings)
+	}
+}

@@ -111,9 +111,9 @@ func TestLiveIdleAudioRejectsFailedSendsAndSettings(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	for _, err := range connection.Events(t.Context()) {
-		if err == nil {
-			t.Fatal("drop not reported")
+	for event, err := range connection.Events(t.Context()) {
+		if failure, ok := event.(realtime.SessionError); err != nil || !ok || failure.Recoverable {
+			t.Fatalf("drop not reported: %#v %v", event, err)
 		}
 	}
 	if err := connection.Send(t.Context(), realtime.AudioInput{Data: make([]byte, 2)}); err == nil {

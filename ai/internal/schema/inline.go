@@ -1,15 +1,14 @@
-package openrouter
+package schema
 
-import (
-	"strings"
+import "strings"
 
-	jsonschema "github.com/Kludex/pydantic-ai-go/ai/internal/schema"
-)
-
-func inlineSchemaDefinitions(source map[string]any) map[string]any {
-	cloned := jsonschema.Transform(source, func(map[string]any) {})
+// InlineDefinitions returns a detached schema with every local $defs reference
+// expanded in place. Recursive definitions cannot be inlined, so such schemas are
+// returned unchanged apart from the copy.
+func InlineDefinitions(source map[string]any) map[string]any {
+	cloned := Transform(source, func(map[string]any) {})
 	definitions, ok := cloned["$defs"].(map[string]any)
-	if !ok || len(definitions) == 0 || recursiveSchemaDefinitions(definitions) {
+	if !ok || len(definitions) == 0 || recursiveDefinitions(definitions) {
 		return cloned
 	}
 	delete(cloned, "$defs")
@@ -22,7 +21,7 @@ func inlineSchemaDefinitions(source map[string]any) map[string]any {
 				if key != reference {
 					key = strings.ReplaceAll(strings.ReplaceAll(key, "~1", "/"), "~0", "~")
 					if definition, ok := definitions[key].(map[string]any); ok {
-						merged := jsonschema.Transform(definition, func(map[string]any) {})
+						merged := Transform(definition, func(map[string]any) {})
 						for sibling, siblingValue := range value {
 							if sibling != "$ref" {
 								merged[sibling] = siblingValue
@@ -48,7 +47,7 @@ func inlineSchemaDefinitions(source map[string]any) map[string]any {
 	return expand(cloned).(map[string]any)
 }
 
-func recursiveSchemaDefinitions(definitions map[string]any) bool {
+func recursiveDefinitions(definitions map[string]any) bool {
 	var visit func(string, map[string]bool) bool
 	visit = func(name string, stack map[string]bool) bool {
 		if stack[name] {

@@ -1,7 +1,9 @@
 package anthropic
 
 import (
+	"encoding/json"
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 
@@ -98,6 +100,9 @@ func transformAnthropicStrictSchema(source map[string]any) (map[string]any, erro
 		return strict, nil
 	}
 
+	if _, typed := remaining["type"]; !typed {
+		constToTypedEnum(remaining)
+	}
 	typeName, _ := remaining["type"].(string)
 	delete(remaining, "type")
 	if variants, key, ok := schemaVariants(remaining); ok {
@@ -204,6 +209,39 @@ func transformAnthropicStrictSchema(source map[string]any) (map[string]any, erro
 		strict["description"] = description + "{" + strings.Join(notes, ", ") + "}"
 	}
 	return strict, nil
+}
+
+// constToTypedEnum rewrites an untyped const as the one-value enum of its type.
+// Described choices render as anyOf of untyped consts, and Anthropic rejects an
+// untyped node in strict mode and would otherwise demote const to a description.
+func constToTypedEnum(schema map[string]any) {
+	var typeName string
+	switch value := schema["const"].(type) {
+	case bool:
+		typeName = "boolean"
+	case string:
+		typeName = "string"
+	case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
+		typeName = "integer"
+	case float32:
+		typeName = "number"
+	case float64:
+		// Decoded JSON integers arrive as float64.
+		typeName = "number"
+		if value == math.Trunc(value) {
+			typeName = "integer"
+		}
+	case json.Number:
+		typeName = "number"
+		if _, err := value.Int64(); err == nil {
+			typeName = "integer"
+		}
+	default:
+		return
+	}
+	schema["type"] = typeName
+	schema["enum"] = []any{schema["const"]}
+	delete(schema, "const")
 }
 
 func schemaVariants(schema map[string]any) ([]any, string, bool) {

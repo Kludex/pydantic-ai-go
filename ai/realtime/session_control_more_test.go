@@ -437,3 +437,64 @@ func openSessionWithProfile(t *testing.T, profile realtime.Profile, options ...r
 	}
 	return session, connection
 }
+
+func TestTurnCompleteWaitsForEveryOwedReply(t *testing.T) {
+	session, connection := openSessionWithProfile(t, fullProfile())
+	defer func() { connection.end(); _ = session.Close(t.Context()) }()
+	events := make(chan realtime.Event, 32)
+	go func() {
+		for event, err := range session.Events(t.Context()) {
+			if err != nil {
+				return
+			}
+			events <- event
+		}
+	}()
+	turns := func() int {
+		count := 0
+		for {
+			select {
+			case event := <-events:
+				if _, ok := event.(realtime.TurnCompleteEvent); ok {
+					count++
+				}
+			case <-time.After(50 * time.Millisecond):
+				return count
+			}
+		}
+	}
+	connection.events <- realtime.ResponseStarted{ResponseID: "first"}
+	connection.events <- realtime.OutputTranscript{Text: "Let me", Final: true}
+	if got := turns(); got != 0 {
+		t.Fatalf("turn completed before the response ended: %d", got)
+	}
+	if err := session.Send(t.Context(), "also this"); err != nil {
+		t.Fatal(err)
+	}
+	<-connection.sent
+	connection.events <- realtime.ResponseDone{}
+	if got := turns(); got != 0 {
+		t.Fatalf("turn completed while a reply to the text was owed: %d", got)
+	}
+	connection.events <- realtime.ResponseStarted{ResponseID: "second"}
+	connection.events <- realtime.ResponseDone{}
+	if got := turns(); got != 1 {
+		t.Fatalf("turn completions after the owed reply: %d", got)
+	}
+	if err := session.Send(t.Context(), "and this"); err != nil {
+		t.Fatal(err)
+	}
+	<-connection.sent
+	connection.events <- realtime.ResponseStarted{ResponseID: "third"}
+	if got := turns(); got != 0 {
+		t.Fatalf("turn completed before the response ended: %d", got)
+	}
+	if err := session.Send(t.Context(), "interrupting"); err != nil {
+		t.Fatal(err)
+	}
+	<-connection.sent
+	connection.events <- realtime.ResponseDone{Interrupted: true}
+	if got := turns(); got != 1 {
+		t.Fatalf("a cut-off response must end the exchange: %d", got)
+	}
+}

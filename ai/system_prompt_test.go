@@ -3,11 +3,15 @@ package ai_test
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
 func TestDynamicSystemPromptReevaluatesResumedHistory(t *testing.T) {
@@ -187,4 +191,64 @@ func assertSystemPromptPanic(t *testing.T, want string, fn func()) {
 		}
 	}()
 	fn()
+}
+
+func TestSystemPromptMetadataSurvivesMergeAndContinuation(t *testing.T) {
+	origin := map[string]any{"origin": "my_app.note"}
+	var bodies []string
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body, _ := io.ReadAll(request.Body)
+		bodies = append(bodies, string(body))
+		reply := `{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}`
+		if len(bodies) == 1 {
+			reply = `{"choices":[{"message":{"tool_calls":[{"id":"c1","type":"function",` +
+				`"function":{"name":"note","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`
+		}
+		_, _ = io.WriteString(response, reply)
+	}))
+	defer server.Close()
+	model := openai.NewModel("gpt-5", openai.WithAPIKey("key"), openai.WithBaseURL(server.URL),
+		openai.WithHTTPClient(server.Client()))
+	agent := ai.NewAgent[struct{}, string](model)
+	ai.AddTool(agent, "note", func(_ context.Context, rc *ai.RunContext[struct{}], _ struct{}) (string, error) {
+		_, err := rc.Enqueue(ai.ModelRequest{
+			Parts:    []ai.RequestPart{ai.SystemPromptPart{Content: "Keep it short.", Metadata: origin}},
+			Metadata: map[string]any{"lost": "on merge"},
+		})
+		return "noted", err
+	})
+	result, err := agent.Run(t.Context(), "go", struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	origin["origin"] = "mutated"
+	data, err := ai.MarshalMessages(result.Messages())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(strings.Join(bodies, ""), "my_app.note") {
+		t.Fatalf("system prompt metadata reached the model: %s", bodies)
+	}
+	restored, err := ai.UnmarshalMessages(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := agent.Run(t.Context(), "again", struct{}{}, ai.WithMessageHistory(restored)); err != nil {
+		t.Fatal(err)
+	}
+	var marked int
+	for _, message := range restored {
+		request, ok := message.(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		for _, part := range request.Parts {
+			if prompt, ok := part.(ai.SystemPromptPart); ok && prompt.Metadata["origin"] == "my_app.note" {
+				marked++
+			}
+		}
+	}
+	if marked != 1 || strings.Contains(strings.Join(bodies, ""), "my_app.note") {
+		t.Fatalf("metadata was lost or sent: marked=%d bodies=%s", marked, bodies)
+	}
 }

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/settingwarnings"
 	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -21,6 +22,8 @@ func samplingModelHandler(model ai.Model) func(
 		if err != nil {
 			return nil, err
 		}
+		// The server chose these stop sequences, not the user, so a model that ignores them does not warn.
+		ctx = settingwarnings.Suppress(ctx, ai.SettingStopSequences)
 		response, err := ai.RequestModel(ctx, model, messages, ai.ModelRequestParams{Settings: settings})
 		if err != nil {
 			return nil, fmt.Errorf("ai/mcp: sampling model request: %w", err)

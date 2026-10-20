@@ -173,7 +173,7 @@ Every event includes a Unix-millisecond `timestamp`. A canceled agent run closes
 
 Set `Config.PreserveFileData` to emit generated `FilePart` values as `pydantic_ai_file` activity snapshots. File replacement deltas reuse the same activity message ID. The activity carries a data URL plus detached provider metadata.
 
-The same setting reconstructs echoed `pydantic_ai_file` and `pydantic_ai_uploaded_file` activities. Uploaded provider references still require `Config.Sanitization.AllowUploadedFiles`. This second trust gate prevents file preservation from granting access to client-supplied provider files by itself.
+The same setting reconstructs `pydantic_ai_file` and `pydantic_ai_uploaded_file` activities the frontend sends back. `@ag-ui/client` does not send activities back; see [Send activity records back](#send-activity-records-back). Uploaded provider references still require `Config.Sanitization.AllowUploadedFiles`. This second trust gate prevents file preservation from granting access to client-supplied provider files by itself.
 
 File activities require AG-UI `0.1.19` or later. The default remains disabled because data URLs duplicate binary output in client-held history.
 
@@ -183,9 +183,46 @@ AG-UI `0.1.19` and later receives `ACTIVITY_SNAPSHOT` events for provider-neutra
 
 Keep those activity messages in client-held history. The adapter reconstructs `CompactionPart` and `ToolAvailabilityDeltaPart` values on the next request. Unknown application activity types remain UI-only and are not sent to the model. Older protocol versions omit activity events.
 
+## Send activity records back
+
+The adapter restores reserved `pydantic_ai_*` activities only when the frontend sends them back. The JavaScript client `@ag-ui/client`, whose `HttpAgent` most AG-UI frontends use, does not. It keeps activity messages in `agent.messages` for rendering and leaves them out of every request. AG-UI treats activities as client-side state, and has since it added them in `0.0.42`.
+
+Without them, the next run loads a different history:
+
+- Tools a `ToolAvailabilityDeltaPart` revealed are hidden from the model again.
+- The model sees everything before a compaction again, without the compaction boundary.
+- Enqueued messages, such as a background task's result, are missing.
+- Files kept with `Config.PreserveFileData` are dropped.
+
+The request no longer starts with the same bytes either, so the prompt cache misses.
+
+Keep history on the server when you can. Store the run's messages under the thread ID, pass them with `ai.WithMessageHistory`, and let the client supply only the latest turn. The records then never depend on the client.
+
+If the frontend must hold the history, add this middleware. It puts the reserved activities from `agent.messages` back into each request, in their original positions:
+
+```ts
+import { HttpAgent } from '@ag-ui/client';
+
+const agent = new HttpAgent({ url: '/agent' });
+agent.use((input, next) => {
+  const sent = new Map(input.messages.map((message) => [message.id, message]));
+  const messages = agent.messages.flatMap((message) =>
+    sent.has(message.id)
+      ? [sent.get(message.id)!]
+      : message.role === 'activity' && message.activityType.startsWith('pydantic_ai_')
+        ? [message]
+        : [],
+  );
+  return next.run({ ...input, messages });
+});
+```
+
+!!! warning "Returned records are client-controlled"
+    Activities the client sends back are untrusted like the rest of client-held history. The adapter applies the same sanitization to them.
+
 ## Keep enqueued messages
 
-Messages you deliver with `RunContext.Enqueue` reach AG-UI `0.1.19` and later as an `ACTIVITY_SNAPSHOT` with `activityType` `pydantic_ai_enqueued_messages`. Its `messageId` is the enqueue ID, and `content.messages` holds the delivered messages as AG-UI messages. A UI renders only activity types it registered a renderer for, so these stay out of the chat but stay in client-held history. On the next request the adapter restores them at their position, as their own messages.
+Messages you deliver with `RunContext.Enqueue` reach AG-UI `0.1.19` and later as an `ACTIVITY_SNAPSHOT` with `activityType` `pydantic_ai_enqueued_messages`. Its `messageId` is the enqueue ID, and `content.messages` holds the delivered messages as AG-UI messages. A UI renders only activity types it registered a renderer for, so these stay out of the chat but stay in client-held history. If the frontend sends the activity back on the next request, the adapter restores them at their position, as their own messages. `@ag-ui/client` does not send activities back; see [Send activity records back](#send-activity-records-back).
 
 Enqueued system prompts are sent only when `Sanitization.AllowSystemPrompts` is `true` (`StreamConfig.AllowSystemPrompts` for `TransformStreamWithConfig`). When the server owns the system prompt, the client's copy would be stripped on the way back in, so sending it would only disclose it.
 

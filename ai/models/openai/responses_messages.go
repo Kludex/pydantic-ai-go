@@ -84,6 +84,7 @@ type responsesMessageConverter struct {
 	promptCacheBreakpoints    bool
 	responsesReasoningContent bool
 	storeDisabled             bool
+	systemRole                string
 }
 
 func (c *responsesMessageConverter) convert(msg ai.ModelMessage) ([]responsesInput, error) {
@@ -104,7 +105,7 @@ func (c *responsesMessageConverter) convertRequest(message ai.ModelRequest) ([]r
 		case ai.SpeechPart:
 			return nil, ai.ErrUnpreparedSpeech
 		case ai.SystemPromptPart:
-			out = append(out, responsesInput{Role: "system", Content: part.Content})
+			out = append(out, responsesInput{Role: c.systemRole, Content: part.Content})
 		case ai.UserPromptPart:
 			content, err := responsesUserContent(c.ctx, part, c.providerName, c.promptCacheBreakpoints)
 			if err != nil {

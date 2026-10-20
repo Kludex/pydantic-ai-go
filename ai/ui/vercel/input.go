@@ -104,8 +104,41 @@ func messageText(parts []UIMessagePart) (string, error) {
 	return strings.Join(text, ""), nil
 }
 
+// userMessage splits a user message at each part marked as a later prompt's
+// start, so a request's separate UserPromptParts survive a round trip.
 func userMessage(parts []UIMessagePart) ([]ai.RequestPart, error) {
-	if onlyText := len(parts) == 0 || allText(parts); onlyText {
+	starts := []int{0}
+	for index := 1; index < len(parts); index++ {
+		if startsUserPrompt(parts[index]) {
+			starts = append(starts, index)
+		}
+	}
+	var requestParts []ai.RequestPart
+	for position, start := range starts {
+		end := len(parts)
+		if position+1 < len(starts) {
+			end = starts[position+1]
+		}
+		prompt, err := userPrompt(parts[start:end])
+		if err != nil {
+			return nil, err
+		}
+		requestParts = append(requestParts, prompt...)
+	}
+	return requestParts, nil
+}
+
+func startsUserPrompt(part UIMessagePart) bool {
+	if part.Type != "text" && part.Type != "file" {
+		return false
+	}
+	wrapped, _ := part.ProviderMetadata[providerMetadataKey].(map[string]any)
+	start, _ := wrapped[userPromptStartKey].(bool)
+	return start
+}
+
+func userPrompt(parts []UIMessagePart) ([]ai.RequestPart, error) {
+	if allText(parts) {
 		text, err := messageText(parts)
 		return []ai.RequestPart{ai.UserPromptPart{Content: text}}, err
 	}

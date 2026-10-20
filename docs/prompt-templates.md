@@ -59,11 +59,11 @@ The built-in `xml` template function calls `FormatAsXML` with its defaults. It f
 
 - Strings, booleans, integer and floating-point values.
 - `[]byte`, `time.Time`, `time.Duration`, and `encoding.TextMarshaler` values.
-- Maps with string or integer keys. Map output is sorted by the formatted key.
+- Maps with string or integer keys. Map output is sorted by the formatted key. A key that is a valid XML name without a colon, such as `name` or `first_name`, becomes the element name. Any other key, such as `my key`, `1abc`, or an integer, is written to the `key` attribute of an item element: `<item key="my key">1</item>`. The key is escaped like any attribute value, so map keys from untrusted data cannot inject tags.
 - Slices and arrays.
 - Exported struct fields. A `json` tag changes the element name, and `json:"-"` excludes a field.
 - Pointers, interfaces, and `nil` values.
 
 The default output has no root wrapper, uses `item` for sequence values, writes `null` for nil values, and indents nested elements with two spaces. Configure it with `WithXMLRoot`, `WithXMLItemTag`, `WithXMLNull`, and `WithXMLIndent`. An empty indent emits compact XML.
 
-`FormatAsXML` returns an error for unsupported values, unsupported map keys, invalid element names, text-marshaling failures, and cyclic data. It escapes text content before adding it to the prompt.
+`FormatAsXML` returns an error for unsupported values, unsupported map key types, invalid struct field or option tags, text-marshaling failures, and cyclic data. It escapes text content before adding it to the prompt.

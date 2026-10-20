@@ -84,6 +84,16 @@ func TestLiveConfigurationPrecedence(t *testing.T) {
 		t.Fatal("auto backend")
 	}
 	_ = connection.Close(t.Context())
+	for _, thinking := range []ai.ThinkingLevel{"", ai.ThinkingLevelHigh} {
+		connection, peer = livePair(t, realtime.ConnectParams{Settings: realtime.Settings{Thinking: thinking, Provider: map[string]any{
+			"openai_live_delegation": map[string]any{"model": "gpt-5", "reasoning_summary": "detailed"},
+		}}})
+		reasoning := peer.start["delegation"].(map[string]any)["responses"].(map[string]any)["reasoning"].(map[string]any)
+		if reasoning["summary"] != "detailed" || (thinking == "") != (reasoning["effort"] == nil) {
+			t.Fatalf("thinking=%q: unexpected reasoning %v", thinking, reasoning)
+		}
+		_ = connection.Close(t.Context())
+	}
 }
 
 func TestLiveHandshakeFailures(t *testing.T) {

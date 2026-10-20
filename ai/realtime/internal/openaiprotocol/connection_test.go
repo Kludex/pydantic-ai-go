@@ -633,3 +633,113 @@ func websocketEndpoint(serverURL string) string {
 }
 
 var _ iter.Seq2[realtime.CodecEvent, error]
+
+func TestToolItemPruning(t *testing.T) {
+	type peer struct {
+		socket *websocket.Conn
+		frames chan string
+	}
+	peers := make(chan peer, 4)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		socket, err := websocket.Accept(writer, request, nil)
+		if err != nil {
+			return
+		}
+		frames := make(chan string, 64)
+		peers <- peer{socket: socket, frames: frames}
+		for {
+			_, data, err := socket.Read(request.Context())
+			if err != nil {
+				return
+			}
+			frames <- string(data)
+		}
+	}))
+	defer server.Close()
+	var replays [][]ai.ModelMessage
+	dial := func(ctx context.Context, history []ai.ModelMessage) (*websocket.Conn, string, error) {
+		replays = append(replays, history)
+		socket, _, err := openaiprotocol.DialSocket(ctx, websocketEndpoint(server.URL), nil, server.Client())
+		return socket, "", err
+	}
+	socket, _, _ := dial(t.Context(), nil)
+	mapper := func(data []byte) ([]realtime.CodecEvent, error) {
+		if strings.Contains(string(data), `"response.done"`) {
+			return []realtime.CodecEvent{realtime.ResponseDone{}}, nil
+		}
+		return nil, nil
+	}
+	connection, err := openaiprotocol.New(openaiprotocol.Config{
+		Socket: socket, Dial: dial, Mapper: mapper, ToolItemPruning: openaiprotocol.ToolItemPruning{Enabled: true},
+		Reconnect: &realtime.ReconnectPolicy{MaxAttempts: 1, MaxReconnects: 3},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.Close(t.Context()) }()
+	history := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolCallID: "call"}}}}
+	connection.SetMessageHistory(func() []ai.ModelMessage { return history })
+	current := <-peers
+	responses := make(chan struct{}, 16)
+	reconnected := make(chan struct{}, 4)
+	go func() {
+		for event, err := range connection.Events(t.Context()) {
+			if err != nil {
+				return
+			}
+			switch event.(type) {
+			case realtime.ResponseDone:
+				responses <- struct{}{}
+			case realtime.SessionReconnected:
+				reconnected <- struct{}{}
+			}
+		}
+	}()
+	round := func(socket *websocket.Conn) {
+		for _, frame := range []string{
+			`not json`,
+			`{"type":"conversation.item.added","item":{"type":"function_call","id":"fc","call_id":"call","name":"tool"}}`,
+			`{"type":"conversation.item.added","item":{"type":"function_call_output","id":"out","call_id":"call"}}`,
+			`{"type":"response.created","response":{"id":"r"}}`,
+			`{"type":"response.done","response":{"id":"r","status":"completed","output":[{"type":"message"}]}}`,
+		} {
+			_ = socket.Write(t.Context(), websocket.MessageText, []byte(frame))
+		}
+		<-responses
+	}
+	round(current.socket)
+	if frame := <-current.frames; !strings.Contains(frame, `"item_id":"fc"`) {
+		t.Fatalf("unexpected delete %s", frame)
+	}
+	<-current.frames
+	_ = current.socket.CloseNow()
+	<-reconnected
+	if len(replays) != 2 || len(replays[1]) != 0 {
+		t.Fatalf("a pruned call was replayed: %+v", replays)
+	}
+	<-peers
+
+	socket, _, _ = dial(t.Context(), nil)
+	closing, err := openaiprotocol.New(openaiprotocol.Config{
+		Socket: socket, Mapper: mapper, ToolItemPruning: openaiprotocol.ToolItemPruning{Enabled: true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	current = <-peers
+	go func() {
+		for event := range closing.Events(t.Context()) {
+			if _, done := event.(realtime.ResponseDone); done {
+				// Closed before the frame is handled, so its deletes cannot be written.
+				_ = closing.Close(t.Context())
+				responses <- struct{}{}
+			}
+		}
+	}()
+	round(current.socket)
+	select {
+	case frame := <-current.frames:
+		t.Fatalf("a delete was written after close: %s", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+}

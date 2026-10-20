@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -74,6 +75,7 @@ type Option func(*Model)
 // WithSettings adds model-level Azure realtime defaults.
 func WithSettings(settings Settings) Option {
 	settings.OpenAI.TurnDetection = cloneMap(settings.OpenAI.TurnDetection)
+	settings.OpenAI.KeepToolItems = slices.Clone(settings.OpenAI.KeepToolItems)
 	settings.VoiceLiveTurnDetection = cloneMap(settings.VoiceLiveTurnDetection)
 	return func(model *Model) { model.settings = settings }
 }
@@ -208,7 +210,19 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
 		SupportsImages:             true,
 		OutputSampleRate:           model.profile.AudioOutputSampleRate,
+		ToolItemPruning:            toolItemPruning(settings, voiceLive),
 	})
+}
+
+// toolItemPruning applies the OpenAI pruning settings on the GA path. Voice Live's
+// beta protocol is not known to take conversation.item.delete, so it ignores them.
+func toolItemPruning(settings Settings, voiceLive bool) openaiprotocol.ToolItemPruning {
+	if voiceLive {
+		return openaiprotocol.ToolItemPruning{}
+	}
+	return openaiprotocol.ToolItemPruning{
+		Enabled: settings.OpenAI.PruneToolItems, Keep: slices.Clone(settings.OpenAI.KeepToolItems),
+	}
 }
 
 // CreateClientSecret mints an ephemeral Azure OpenAI browser credential.
@@ -323,6 +337,7 @@ func (model *Model) ConnectWebRTC(
 		Provider: "Azure Realtime", Model: model.name, Socket: socket, ServerModel: serverModel,
 		Mapper: openairt.MapEvent, InputTranscriptionEnabled: transcriptionEnabled(params.Settings),
 		SupportsImages: true, OutputSampleRate: model.profile.AudioOutputSampleRate,
+		ToolItemPruning: toolItemPruning(settings, false),
 	})
 }
 
@@ -617,6 +632,7 @@ func applyTranscription(target map[string]any, key string, common realtime.Setti
 func (model *Model) resolveSettings(common realtime.Settings) Settings {
 	settings := model.settings
 	settings.OpenAI.TurnDetection = cloneMap(settings.OpenAI.TurnDetection)
+	settings.OpenAI.KeepToolItems = slices.Clone(settings.OpenAI.KeepToolItems)
 	settings.VoiceLiveTurnDetection = cloneMap(settings.VoiceLiveTurnDetection)
 	if value, ok := common.Provider["azure_voice_live"].(bool); ok {
 		settings.VoiceLive = value
@@ -650,6 +666,12 @@ func (model *Model) resolveSettings(common realtime.Settings) Settings {
 	}
 	if value, ok := common.Provider["openai_truncation"]; ok {
 		settings.OpenAI.Truncation = value
+	}
+	if value, ok := common.Provider["openai_prune_tool_items"].(bool); ok {
+		settings.OpenAI.PruneToolItems = value
+	}
+	if value, ok := common.Provider["openai_keep_tool_items"].([]string); ok {
+		settings.OpenAI.KeepToolItems = slices.Clone(value)
 	}
 	return settings
 }

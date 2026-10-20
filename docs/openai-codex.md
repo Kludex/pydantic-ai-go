@@ -124,7 +124,7 @@ func main() {
 
 Refresh tokens are single-use. Coordinate writers when multiple processes share one source. The built-in refresh is single-flight inside one model instance, but it cannot lock your external store across processes.
 
-If `Save` fails, the new credentials remain active in memory and the request returns `CredentialsPersistenceError`. This makes failed durability visible without reverting to a token that OpenAI already rotated.
+If `Save` fails, the new credentials remain active in memory and the request returns `CredentialsPersistenceError`. This makes failed durability visible without reverting to a token that OpenAI already rotated. A later refresh does not adopt the spent set the source still holds, so it refreshes the unsaved credentials and saves them once the source recovers.
 
 Store application credentials outside `~/.codex`. That directory belongs to the Codex CLI.
 

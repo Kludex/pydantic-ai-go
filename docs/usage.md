@@ -106,6 +106,8 @@ Use `errors.Is(err, ai.ErrTokenCountingUnsupported)` when a model may not suppor
 
 `Usage` keeps provider token totals and the subsets needed for pricing. `InputImageTokens` and `CacheImageReadTokens` price realtime images at image rates. `CacheWrite1HTokens` prices one-hour Anthropic cache writes separately from five-minute writes. `AudioSeconds` prices voice models that bill by duration instead of tokens.
 
+`ReasoningTokens` counts the reasoning a model generated, as a subset of `OutputTokens`. OpenAI and Google report it directly. Anthropic reports it as thinking tokens, which also stay in `Details["thinking_tokens"]`; the key is absent when a response used no thinking tokens.
+
 Provider-specific integer counters remain in `Details`. The first-class fields are accumulated across requests and nested tool usage.
 
 `ModelResponse.Price` passes the response's string `ProviderDetails` to `genai-prices` as price context. OpenAI can serve a request on a different tier than the one you asked for, for example when it downgrades a `priority` request. The tier that served it is stored in `ProviderDetails["service_tier"]`, so the cost uses that tier's rates. A tier without published rates, such as Gemini's `standard`, is priced at standard rates.

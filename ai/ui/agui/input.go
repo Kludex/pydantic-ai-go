@@ -326,17 +326,24 @@ func encryptedToolMetadata(value string) (ai.ToolPartKind, ai.ToolReturnOutcome)
 		return "", ""
 	}
 	kind := ai.ToolPartKind(metadata.PydanticAI.ToolKind)
+	core := false
 	switch kind {
 	case ai.ToolPartKindToolSearch, ai.ToolPartKindCapabilityLoad, ai.ToolPartKindWebSearch,
 		ai.ToolPartKindWebFetch, ai.ToolPartKindCodeExecution, ai.ToolPartKindImageGeneration,
 		ai.ToolPartKindFileSearch, ai.ToolPartKindMCPServer, ai.ToolPartKindAdvisor:
+		core = true
 	default:
-		kind = ""
+		if !strings.Contains(string(kind), ".") {
+			kind = ""
+		}
 	}
 	outcome := ai.ToolReturnOutcome(metadata.PydanticAI.Outcome)
 	switch outcome {
 	case ai.ToolReturnOutcomeFailed, ai.ToolReturnOutcomeDenied, ai.ToolReturnOutcomeInterrupted:
-		kind = ""
+		// A core kind on a failure would read as a successful discovery; an application kind stays.
+		if core {
+			kind = ""
+		}
 	default:
 		outcome = ""
 	}

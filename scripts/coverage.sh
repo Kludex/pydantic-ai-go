@@ -15,6 +15,9 @@ packages=(
     ./ai/internal/download
     ./ai/internal/schema
     ./ai/internal/promptcache
+    ./ai/internal/oauthcreds
+    ./ai/internal/requestschema
+    ./ai/internal/settingwarnings
     ./ai/internal/thinking
     ./ai/images
     ./ai/images/fakes
@@ -35,6 +38,7 @@ packages=(
     ./ai/embeddings/voyageai
     ./ai/models/fakes
     ./ai/models/openai
+    ./ai/models/openaichatgpt
     ./ai/models/openaicodex
     ./ai/models/openaidecisions
     ./ai/models/openrouter
@@ -65,6 +69,7 @@ packages=(
     ./ai/mcp
     ./ai/realtime
     ./ai/realtime/azure
+    ./ai/realtime/elevenlabs
     ./ai/realtime/google
     ./ai/realtime/infer
     ./ai/realtime/internal/openaiprotocol
@@ -83,6 +88,16 @@ for pkg in "${packages[@]}"; do
     elif [ "$pkg" = "./ai/internal/promptcache" ]; then
         go test ./ai/models/anthropic ./ai/models/bedrock ./ai/models/openai ./ai/models/openrouter \
             -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+    elif [ "$pkg" = "./ai/internal/requestschema" ]; then
+        go test ./ai/models/openrouter ./ai/models/vllm ./ai/models/zai ./ai/models/mistral \
+            -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+    elif [ "$pkg" = "./ai/realtime/internal/openaiprotocol" ]; then
+        go test ./ai/realtime/internal/openaiprotocol ./ai/realtime/openai ./ai/realtime/azure ./ai/realtime/xai \
+            -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+    elif [ "$pkg" = "./ai/internal/oauthcreds" ]; then
+        go test ./ai/models/openaicodex ./ai/models/openaichatgpt -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+    elif [ "$pkg" = "./ai/internal/settingwarnings" ]; then
+        go test ./ai ./ai/mcp -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     elif [ "$pkg" = "./ai/internal/thinking" ]; then
         go test ./ai/models/anthropic ./ai/models/bedrock -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     else

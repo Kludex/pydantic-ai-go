@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -137,7 +138,8 @@ func TestOpenAIRealtimeSession(t *testing.T) {
 			Provider: map[string]any{
 				"openai_voice": "coral", "openai_input_noise_reduction": "far_field",
 				"openai_output_speed": 1.25, "openai_turn_detection": map[string]any{"type": "semantic_vad"},
-				"openai_truncation": map[string]any{"type": "retention_ratio"},
+				"openai_truncation":       map[string]any{"type": "retention_ratio"},
+				"openai_prune_tool_items": true, "openai_keep_tool_items": []string{"lookup"},
 			},
 		},
 		Request: ai.ModelRequestParams{
@@ -331,4 +333,180 @@ func writeFrame(ctx context.Context, socket *websocket.Conn, value any) error {
 		return err
 	}
 	return socket.Write(ctx, websocket.MessageText, data)
+}
+
+func TestOpenAIPrunesAnsweredToolRounds(t *testing.T) {
+	type peerSocket struct {
+		socket *websocket.Conn
+		frames chan map[string]any
+	}
+	peers := make(chan peerSocket, 2)
+	server := handshakeServer(t, func(_ map[string]any, socket *websocket.Conn, ctx context.Context) {
+		_ = writeFrame(ctx, socket, map[string]any{"type": "session.updated", "session": map[string]any{}})
+		frames := make(chan map[string]any, 64)
+		peers <- peerSocket{socket: socket, frames: frames}
+		for {
+			_, data, err := socket.Read(ctx)
+			if err != nil {
+				return
+			}
+			var frame map[string]any
+			_ = json.Unmarshal(data, &frame)
+			frames <- frame
+		}
+	})
+	defer server.Close()
+	model := openairt.NewModel("gpt-realtime", openairt.WithAPIKey("secret"), openairt.WithBaseURL(wsBase(server.URL)),
+		openairt.WithHTTPClient(server.Client()),
+		openairt.WithSettings(openairt.Settings{PruneToolItems: true, KeepToolItems: []string{"profile"}}))
+	connection, err := model.Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{
+		Reconnect: &realtime.ReconnectPolicy{MaxAttempts: 1, MaxReconnects: 1},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.Close(t.Context()) }()
+	peer := <-peers
+	var historyMu sync.Mutex
+	var history []ai.ModelMessage
+	connection.(interface {
+		SetMessageHistory(func() []ai.ModelMessage)
+	}).SetMessageHistory(func() []ai.ModelMessage {
+		historyMu.Lock()
+		defer historyMu.Unlock()
+		return history
+	})
+	events := make(chan realtime.CodecEvent, 64)
+	go func() {
+		for event, err := range connection.Events(t.Context()) {
+			if err != nil {
+				return
+			}
+			events <- event
+		}
+	}()
+	send := func(frames ...map[string]any) {
+		for _, frame := range frames {
+			if err := writeFrame(t.Context(), peer.socket, frame); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	added := func(item map[string]any) map[string]any {
+		return map[string]any{"type": "conversation.item.added", "item": item}
+	}
+	call := func(id, callID, name string) map[string]any {
+		return map[string]any{"type": "function_call", "id": id, "call_id": callID, "name": name, "arguments": "{}"}
+	}
+	created := func(id string) map[string]any {
+		return map[string]any{"type": "response.created", "response": map[string]any{"id": id}}
+	}
+	done := func(id, status string, output ...any) map[string]any {
+		return map[string]any{"type": "response.done", "response": map[string]any{"id": id, "status": status, "output": output}}
+	}
+	next := func(kind string) map[string]any {
+		for {
+			select {
+			case frame := <-peer.frames:
+				if frame["type"] == kind {
+					return frame
+				}
+			case <-time.After(time.Second):
+				t.Fatalf("no %s frame", kind)
+			}
+		}
+	}
+	waitFor := func(count int) {
+		for count > 0 {
+			select {
+			case event := <-events:
+				if _, ok := event.(realtime.ResponseDone); ok {
+					count--
+				}
+			case <-time.After(time.Second):
+				t.Fatal("no response done")
+			}
+		}
+	}
+	send(
+		created("r1"), added(call("fc1", "call_1", "lookup")), added(call("fc2", "call_2", "profile")),
+		added(map[string]any{"type": "function_call", "id": "fc3"}),
+		done("r1", "completed", call("fc1", "call_1", "lookup"), call("fc2", "call_2", "profile")),
+	)
+	waitFor(1)
+	image := ai.BinaryContent{Data: []byte("png"), MediaType: "image/png"}
+	if err := connection.Send(t.Context(), realtime.ToolResult{ToolCallID: "call_1", Output: "found", Content: []ai.UserContent{image}}); err != nil {
+		t.Fatal(err)
+	}
+	next("conversation.item.create")
+	content := next("conversation.item.create")["item"].(map[string]any)
+	if err := connection.Send(t.Context(), realtime.ToolResult{ToolCallID: "call_2", Output: "kept", Content: []ai.UserContent{image}}); err != nil {
+		t.Fatal(err)
+	}
+	next("conversation.item.create")
+	if kept := next("conversation.item.create")["item"].(map[string]any); kept["id"] != nil {
+		t.Fatalf("a kept tool's content was named for pruning: %v", kept)
+	}
+	next("response.create")
+	send(
+		added(map[string]any{"type": "function_call_output", "id": "out1", "call_id": "call_1"}),
+		added(map[string]any{"type": "function_call_output", "id": "out2", "call_id": "call_2"}),
+		added(map[string]any{"type": "message", "id": content["id"], "role": "user"}),
+		created("r2"), done("r2", "completed", map[string]any{"type": "message"}),
+	)
+	waitFor(1)
+	var deleted []string
+	for range 3 {
+		deleted = append(deleted, next("conversation.item.delete")["item_id"].(string))
+	}
+	if want := []string{"fc1", "out1", "pydantic_ai_content_0"}; !slices.Equal(deleted, want) || content["id"] != want[2] {
+		t.Fatalf("deleted %v, want %v (content %v)", deleted, want, content["id"])
+	}
+
+	message := map[string]any{"type": "message"}
+	send(
+		created("r3"), added(call("fc4", "call_4", "lookup")), done("r3", "completed", call("fc4", "call_4", "lookup")),
+		created("r4"), added(map[string]any{"type": "function_call_output", "id": "out4", "call_id": "call_4"}),
+		done("r4", "completed", message),
+		done("unknown", "completed", message),
+		created("r5"), done("r5", "cancelled", message),
+		created("r6"), done("r6", "completed"),
+		map[string]any{"type": "response.done"}, added(nil),
+	)
+	waitFor(5)
+	select {
+	case frame := <-peer.frames:
+		t.Fatalf("an output added after its answer started was pruned: %v", frame)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	historyMu.Lock()
+	history = []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{
+			ai.ToolCallPart{ToolName: "lookup", ToolCallID: "call_1", Args: []byte(`{}`)},
+			ai.ToolCallPart{ToolName: "profile", ToolCallID: "call_2", Args: []byte(`{}`)},
+		}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "lookup", ToolCallID: "call_1", Content: "found"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.RetryPromptPart{ToolName: "lookup", ToolCallID: "call_1", Content: "again"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "profile", ToolCallID: "call_2", Content: "kept"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: "lookup", ToolCallID: "call_1"}}},
+	}
+	historyMu.Unlock()
+	_ = peer.socket.CloseNow()
+	peer = <-peers
+	var calls []string
+	for {
+		frame := next("conversation.item.create")
+		item := frame["item"].(map[string]any)
+		if callID, ok := item["call_id"].(string); ok {
+			calls = append(calls, callID)
+		}
+		if item["type"] == "function_call_output" {
+			break
+		}
+	}
+	if want := []string{"call_2", "call_2"}; !slices.Equal(calls, want) {
+		t.Fatalf("replayed calls %v, want %v", calls, want)
+	}
 }

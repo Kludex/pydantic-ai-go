@@ -2,6 +2,48 @@
 
 Choose a model package and pass the model to your agent. Most packages read their standard API key environment variable by default. OpenAI Codex reads your Codex CLI login instead.
 
+## Ignored settings
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
+)
+
+func main() {
+	ctx := ai.WithUnsupportedSettingSink(context.Background(),
+		func(_ context.Context, warning ai.UnsupportedSettingWarning) {
+			panic(warning)
+		})
+	model := openai.NewResponsesModel("gpt-5.6-luna")
+	agent := ai.NewAgent[struct{}, string](model)
+	result, err := agent.Run(ctx, "Count to ten.", struct{}{},
+		ai.WithRunModelSettings(ai.ModelSettings{StopSequences: []string{"5"}}))
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(result.Output)
+}
+```
+
+Most settings a model does not support, like `Temperature` or `Seed`, are tuning knobs. Models ignore them silently, so the same settings work across providers. Four settings change what a request guarantees, so a model that ignores one warns instead:
+
+| Setting | Warns when |
+| --- | --- |
+| `StopSequences` | Non-empty |
+| `ParallelToolCalls` | `false` and the request has function tools |
+| `ExtraHeaders` | Non-empty |
+| `ExtraBody` | Holds fields other than the provider's own typed settings |
+
+The warning goes to `slog.Warn` by default. `ai.WithUnsupportedSettingSink` sends it to your function instead, as an `ai.UnsupportedSettingWarning`. The example panics, so an ignored guarantee fails loudly. A nil sink silences the warnings.
+
+OpenAI Responses ignores `StopSequences`. Gemini ignores `ParallelToolCalls` and raw `ExtraBody` fields. Bedrock Converse and Cohere ignore `ParallelToolCalls`. The MCP `SamplingModel` ignores `ParallelToolCalls`, `ExtraHeaders`, and raw `ExtraBody` fields. Stop sequences an MCP server chooses for a sampling request never warn, because you did not choose them.
+
 ## OpenAI
 
 ```go
@@ -188,6 +230,10 @@ func main() {
 Run `codex login` first. The model reads the Codex CLI credentials but never writes them. Use a caller-owned `CredentialSource` when refreshed credentials must survive the process.
 
 See [OpenAI Codex subscription](openai-codex.md) for OAuth PKCE login, durable rotation, request security, and wire limitations.
+
+## OpenAI ChatGPT plan usage
+
+`openaichatgpt.NewModel` lets the users of your open-source or local app pay with their own ChatGPT plan through Sign in with ChatGPT, instead of an API key. See [OpenAI ChatGPT plan usage](openai-chatgpt.md) for the sign-in, credential persistence, and the plan-usage dialect.
 
 ## OpenAI-compatible endpoints
 
@@ -792,7 +838,7 @@ Use `openrouter.Settings` for fallback models, provider routing, presets, contex
 
 `Settings.Build` validates conflicts with `ExtraBody` and returns a detached `ModelSettings` snapshot.
 
-OpenRouter adjusts JSON Schema for the routed provider. Google routes inline definitions, simplify nullable unions, stringify enum values, convert `oneOf`, move string formats into descriptions, and remove unsupported fields. Qwen, Amazon, and Meta routes inline non-recursive definitions. Recursive definitions remain referenced instead of expanding forever.
+OpenRouter adjusts JSON Schema for the routed provider. Google routes inline definitions, simplify nullable unions, stringify enum values, convert `oneOf`, move string formats into descriptions, and remove unsupported fields. Qwen, Amazon, Meta, and Z.AI GLM 5.3 routes inline non-recursive definitions. Recursive definitions remain referenced instead of expanding forever.
 
 Anthropic routes cannot combine reasoning with forced tool choice. When structured output infers a required output tool, the model sends `tool_choice: "auto"` and keeps reasoning enabled. An explicit required or list choice fails before transport instead of letting OpenRouter silently remove reasoning.
 
@@ -936,6 +982,8 @@ Z.AI returns reasoning in `reasoning_content`. The model stores it as `ThinkingP
 Thinking-capable GLM models use `clear_thinking: false` by default. This preserves earlier reasoning for multi-turn consistency. Set `Settings.ClearThinking` to `true` to clear it instead.
 
 GLM 5.2 accepts the portable effort names. GLM 5.3 only accepts `low`, `high`, and `max`. The model maps `minimal`, `medium`, and `xhigh` to the nearest supported value.
+
+GLM 5.3 returns nested tool arguments as JSON strings when a field's schema is a `$ref` into `$defs`. The adapter inlines non-recursive definitions in GLM 5.3 tool and output schemas, so nested arguments arrive as objects. Mistral's `zai-glm-5-3` and OpenRouter's `z-ai/glm-5.3` routes get the same treatment.
 
 The model normalizes the `sensitive`, `model_context_window_exceeded`, and `network_error` finish reasons.
 
@@ -1141,7 +1189,7 @@ func main() {
 }
 ```
 
-`Cache` lets Anthropic move one automatic breakpoint forward as the conversation grows. `CacheInstructions`, `CacheMessages`, and `CacheToolDefinitions` place explicit boundaries. Static instructions are cached before dynamic instructions. Automatic and explicit message caching are mutually exclusive. Anthropic keeps at most four cache points and removes the oldest message boundaries after reserving instruction, tool, and automatic slots.
+`Cache` lets Anthropic move one automatic breakpoint forward as the conversation grows. `anthropic.WithAutomaticCaching(false)` falls back to a breakpoint on the last message block, for an Anthropic-compatible gateway that rejects the top-level parameter. `CacheInstructions`, `CacheMessages`, and `CacheToolDefinitions` place explicit boundaries. Static instructions are cached before dynamic instructions. Automatic and explicit message caching are mutually exclusive. Anthropic keeps at most four cache points and removes the oldest message boundaries after reserving instruction, tool, and automatic slots.
 
 ### Request-scoped system prompts
 

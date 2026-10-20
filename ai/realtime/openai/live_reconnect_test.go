@@ -3,8 +3,10 @@ package openai_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -116,6 +118,8 @@ func TestLiveReconnectForkAndReplay(t *testing.T) {
 					break
 				}
 				switch event := event.(type) {
+				case realtime.SessionError:
+					failed = !event.Recoverable
 				case realtime.ToolCall:
 					if mode == "cancel" {
 						cancel()
@@ -223,10 +227,42 @@ func TestLiveReplayTokenBudgetAndDroppedWithoutPolicy(t *testing.T) {
 	}
 	connection, peer := livePair(t, realtime.ConnectParams{})
 	_ = peer.socket.CloseNow()
-	for _, err := range connection.Events(t.Context()) {
-		if err == nil {
-			t.Fatal("drop error absent")
+	for event, err := range connection.Events(t.Context()) {
+		if failure, ok := event.(realtime.SessionError); err != nil || !ok || failure.Recoverable ||
+			!strings.Contains(failure.Err.Error(), "reconnection unavailable") {
+			t.Fatalf("drop was not a non-recoverable session error: %#v %v", event, err)
 		}
 		break
+	}
+
+	connection, peer = livePair(t, realtime.ConnectParams{})
+	_ = writeFrame(t.Context(), peer.socket, map[string]any{"type": "session.output_transcript.delta", "delta": "Hi"})
+	var events []string
+	for event, err := range connection.Events(t.Context()) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch event := event.(type) {
+		case realtime.OutputTranscript:
+			_ = peer.socket.CloseNow()
+		case realtime.ResponseDone:
+			events = append(events, fmt.Sprintf("done interrupted=%v", event.Interrupted))
+		case realtime.SessionError:
+			events = append(events, fmt.Sprintf("error recoverable=%v", event.Recoverable))
+		}
+	}
+	if want := []string{"done interrupted=true", "error recoverable=false"}; !slices.Equal(events, want) {
+		t.Fatalf("got %v, want %v", events, want)
+	}
+
+	connection, peer = livePair(t, realtime.ConnectParams{})
+	_ = writeFrame(t.Context(), peer.socket, map[string]any{"type": "session.output_transcript.delta", "delta": "Hi"})
+	for event := range connection.Events(t.Context()) {
+		if _, ok := event.(realtime.OutputTranscript); ok {
+			_ = peer.socket.CloseNow()
+		}
+		if _, ok := event.(realtime.ResponseDone); ok {
+			break
+		}
 	}
 }

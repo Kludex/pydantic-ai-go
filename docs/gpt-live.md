@@ -143,11 +143,13 @@ A delegation is work that the voice model sends to a Responses backend. Your `Co
 | --- | --- |
 | Model suffix, such as `+gpt-5` | Selects the delegated Responses model. |
 | `LiveSettings.Delegation["model"]` | Overrides the suffix. An empty model or `auto` selects `gpt-6-sol`. |
-| `LiveSettings.Delegation` | Accepts extra `instructions`, `max_output_tokens`, `parallel_tool_calls`, `reasoning_effort`, `verbosity`, and `service_tier`. |
+| `LiveSettings.Delegation` | Accepts extra `instructions`, `max_output_tokens`, `parallel_tool_calls`, `reasoning_effort`, `reasoning_summary`, `verbosity`, and `service_tier`. |
 | `realtime.Settings.Thinking` | Configures the backend's reasoning. An explicit delegated `reasoning_effort` takes precedence. |
+| `LiveSettings.Delegation["reasoning_summary"]` | Requests `detailed`, `concise`, or `auto` reasoning summaries from the backend. Reasoning recorded ahead of a backend web search then carries the summary as its `ThinkingPart` content. |
 | `realtime.Settings.ParallelToolCalls` | Configures the backend. An explicit delegated value takes precedence. |
 | `LiveSettings.TurnSilence` | Defaults to two seconds. Delegated work suspends the silence clock so a tool's wait does not end the turn. |
 | `LiveSettings.Store` | Defaults to false. With reconnect enabled, stored sessions are forked; other sessions replay recent text history. |
+| `realtime.Settings.Reconnect` | Re-dials a dropped connection. Without it, or once its attempts run out, a drop ends the session with a non-recoverable `realtime.SessionError`, as on the other providers. |
 | `LiveSettings.IdleAudio` | Defaults to false. Streams silence while `SendAudio` is quiet so text lands without a microphone. Rejected on a WebRTC sideband. |
 | `LiveSettings.DataChannel` | Controls browser event permissions. Both event lists are empty by default to keep instructions and tools server-owned. |
 

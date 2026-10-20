@@ -2357,3 +2357,48 @@ func TestGoogleLongDecodeContinuationFailures(t *testing.T) {
 		})
 	}
 }
+
+func TestGoogleWarnsAboutIgnoredSettings(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ":streamGenerateContent") {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}]}\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}]}`))
+	})
+	var warnings []string
+	ctx := ai.WithUnsupportedSettingSink(t.Context(), func(_ context.Context, warning ai.UnsupportedSettingWarning) {
+		warnings = append(warnings, warning.Setting)
+	})
+	typed, err := (google.Settings{CachedContent: "cachedContents/abc"}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := model.Request(ctx, nil, ai.ModelRequestParams{Settings: typed}); err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("typed settings warned: %v", warnings)
+	}
+	disabled := false
+	params := ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+		Settings: ai.ModelSettings{
+			ParallelToolCalls: &disabled, ExtraBody: map[string]any{"raw": true},
+		},
+	}
+	if _, err := model.Request(ctx, nil, params); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := model.StreamRequest(ctx, nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+	}
+	want := []string{ai.SettingParallelToolCalls, ai.SettingExtraBody, ai.SettingParallelToolCalls, ai.SettingExtraBody}
+	if !reflect.DeepEqual(warnings, want) {
+		t.Fatalf("warnings %v, want %v", warnings, want)
+	}
+}

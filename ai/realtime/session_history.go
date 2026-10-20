@@ -50,7 +50,11 @@ func (session *Session) flushUsersLocked(force bool) {
 		}
 		session.userOrder = session.userOrder[1:]
 		position := min(active.position, len(session.history))
-		request := ai.ModelRequest{Parts: []ai.RequestPart{session.userSpeechLocked(active)},
+		speech := session.userSpeechLocked(active)
+		if speech.Audio != nil {
+			session.retainAudioLocked(speech.Audio, int64(len(active.audio))*int64(session.profile.AudioOutputSampleRate))
+		}
+		request := ai.ModelRequest{Parts: []ai.RequestPart{speech},
 			Timestamp: active.timestamp, ConversationID: session.conversationID}
 		session.history = slices.Insert(session.history, position, ai.ModelMessage(request))
 		for _, pending := range session.userOrder {
@@ -69,6 +73,25 @@ func requestsAsMessages(requests []ai.ModelRequest) []ai.ModelMessage {
 	return messages
 }
 
+// retainedAudio is a SpeechPart's audio counted against the retention budget.
+// Its weight is in a unit both sample rates divide: an input byte weighs the
+// output rate and an output byte the input rate.
+type retainedAudio struct {
+	audio  *ai.BinaryContent
+	weight int64
+}
+
+func (session *Session) retainAudioLocked(audio *ai.BinaryContent, weight int64) {
+	if session.config.retainAudioMax < 0 {
+		return
+	}
+	session.retainedAudio = append(session.retainedAudio, retainedAudio{audio: audio, weight: weight})
+	session.retainedAudioWeight += weight
+}
+
+// boundAudioLocked keeps retained audio within the budget. A running total of
+// recorded audio keeps a frame within budget from walking the history; over
+// budget, recorded audio goes oldest first, then the oldest buffered audio.
 func (session *Session) boundAudioLocked() {
 	if session.config.retainAudioMax < 0 {
 		return
@@ -76,78 +99,19 @@ func (session *Session) boundAudioLocked() {
 	inputRate := int64(session.profile.AudioInputSampleRate)
 	outputRate := int64(session.profile.AudioOutputSampleRate)
 	maximum := int64(session.config.retainAudioMax.Seconds() * float64(2*inputRate*outputRate))
-	weight := int64(len(session.inputAudio)) * outputRate
+	weight := session.retainedAudioWeight + int64(len(session.inputAudio))*outputRate
 	if session.activeAssistant != nil {
 		weight += int64(len(session.activeAssistant.audio)) * inputRate
 	}
 	for _, active := range session.userOrder {
 		weight += int64(len(active.audio)) * outputRate
 	}
-	count := func(part ai.SpeechPart) int64 {
-		if part.Audio == nil {
-			return 0
-		}
-		rate := inputRate
-		if part.Speaker == ai.SpeechSpeakerAssistant {
-			rate = outputRate
-		}
-		return int64(max(0, len(part.Audio.Data)-44)) * (inputRate * outputRate / rate)
-	}
-	for _, message := range session.history {
-		switch message := message.(type) {
-		case ai.ModelRequest:
-			for _, part := range message.Parts {
-				if speech, ok := part.(ai.SpeechPart); ok {
-					weight += count(speech)
-				}
-			}
-		case ai.ModelResponse:
-			for _, part := range message.Parts {
-				if speech, ok := part.(ai.SpeechPart); ok {
-					weight += count(speech)
-				}
-			}
-		}
-	}
-	for _, part := range session.responseParts {
-		if speech, ok := part.(ai.SpeechPart); ok {
-			weight += count(speech)
-		}
-	}
-	if weight <= maximum {
-		return
-	}
-	strip := func(part ai.SpeechPart) ai.SpeechPart {
-		if weight > maximum {
-			weight -= count(part)
-			part.Audio = nil
-		}
-		return part
-	}
-	for index, message := range session.history {
-		switch message := message.(type) {
-		case ai.ModelRequest:
-			message.Parts = slices.Clone(message.Parts)
-			for index, part := range message.Parts {
-				if speech, ok := part.(ai.SpeechPart); ok {
-					message.Parts[index] = strip(speech)
-				}
-			}
-			session.history[index] = message
-		case ai.ModelResponse:
-			message.Parts = slices.Clone(message.Parts)
-			for index, part := range message.Parts {
-				if speech, ok := part.(ai.SpeechPart); ok {
-					message.Parts[index] = strip(speech)
-				}
-			}
-			session.history[index] = message
-		}
-	}
-	for index, part := range session.responseParts {
-		if speech, ok := part.(ai.SpeechPart); ok {
-			session.responseParts[index] = strip(speech)
-		}
+	for weight > maximum && len(session.retainedAudio) > 0 {
+		oldest := session.retainedAudio[0]
+		session.retainedAudio = session.retainedAudio[1:]
+		session.retainedAudioWeight -= oldest.weight
+		weight -= oldest.weight
+		session.stripAudioLocked(oldest.audio)
 	}
 	trim := func(buffer []byte, byteWeight int64) []byte {
 		excess := weight - maximum
@@ -165,4 +129,45 @@ func (session *Session) boundAudioLocked() {
 	if session.activeAssistant != nil {
 		session.activeAssistant.audio = trim(session.activeAssistant.audio, inputRate)
 	}
+}
+
+// stripAudioLocked drops audio from the part that holds it, keeping its
+// transcript. Messages are replaced rather than edited, so snapshots already
+// handed out do not change.
+func (session *Session) stripAudioLocked(audio *ai.BinaryContent) {
+	if index := strippedAudioIndex(session.responseParts, audio); index >= 0 {
+		session.responseParts[index] = stripSpeechAudio(session.responseParts[index])
+		return
+	}
+	for index, message := range session.history {
+		switch message := message.(type) {
+		case ai.ModelRequest:
+			if position := strippedAudioIndex(message.Parts, audio); position >= 0 {
+				message.Parts = slices.Clone(message.Parts)
+				message.Parts[position] = stripSpeechAudio(message.Parts[position])
+				session.history[index] = message
+				return
+			}
+		case ai.ModelResponse:
+			if position := strippedAudioIndex(message.Parts, audio); position >= 0 {
+				message.Parts = slices.Clone(message.Parts)
+				message.Parts[position] = stripSpeechAudio(message.Parts[position])
+				session.history[index] = message
+				return
+			}
+		}
+	}
+}
+
+func strippedAudioIndex[Part any](parts []Part, audio *ai.BinaryContent) int {
+	return slices.IndexFunc(parts, func(part Part) bool {
+		speech, ok := any(part).(ai.SpeechPart)
+		return ok && speech.Audio == audio
+	})
+}
+
+func stripSpeechAudio[Part any](part Part) Part {
+	speech := any(part).(ai.SpeechPart)
+	speech.Audio = nil
+	return any(speech).(Part)
 }

@@ -13,6 +13,7 @@ func (state *messageSanitizer) request(message ModelRequest) (ModelRequest, bool
 				state.strippedSystems++
 				continue
 			}
+			part.Metadata = cloneSchemaMap(part.Metadata)
 			parts = append(parts, part)
 		case UserPromptPart:
 			contents, err := state.userContents(part.Contents)

@@ -147,6 +147,7 @@ func (m *ResponsesModel) Request(ctx context.Context, msgs []ai.ModelMessage, pa
 			ctx, responseID, params.Settings.ExtraHeaders, responseSettings.IncludeRawAnnotations,
 		)
 	}
+	ai.WarnUnsupportedSettings(ctx, m, params, ai.SettingStopSequences)
 	payload, err := m.buildResponsesPayload(ctx, msgs, params, true)
 	if err != nil {
 		return nil, err
@@ -898,8 +899,13 @@ func (m *ResponsesModel) buildResponsesPayload(
 			deferred[tool.Name] = tool
 		}
 	}
-	// The Codex backend rejects explicit prompt cache breakpoints and caches implicitly.
-	promptCacheBreakpoints := supportsOpenAIPromptCache(m.name) && m.providerName != "openai-codex"
+	// The ChatGPT and Codex backends reject explicit prompt cache breakpoints.
+	promptCacheBreakpoints := supportsOpenAIPromptCache(m.name) &&
+		m.providerName != "openai-codex" && m.providerName != "openai-chatgpt"
+	systemRole := "system"
+	if m.chatCompatibility.DeveloperSystemPrompts {
+		systemRole = "developer"
+	}
 	converter := responsesMessageConverter{
 		ctx:                       ctx,
 		providerName:              m.providerName,
@@ -912,6 +918,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		promptCacheBreakpoints:    promptCacheBreakpoints,
 		responsesReasoningContent: m.chatCompatibility.ResponsesReasoningContent,
 		storeDisabled:             params.Settings.ExtraBody["store"] == false,
+		systemRole:                systemRole,
 	}
 	for _, msg := range trimOpenAICompactionMessages(msgs, m.providerName) {
 		items, err := converter.convert(msg)

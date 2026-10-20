@@ -126,6 +126,7 @@ func (m *Model) DefaultModelSettings() ai.ModelSettings { return m.defaultSettin
 
 // Request implements ai.Model.
 func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams) (*ai.ModelResponse, error) {
+	m.warnUnsupportedSettings(ctx, params)
 	payload, err := m.buildPayload(ctx, msgs, params)
 	if err != nil {
 		return nil, err
@@ -666,6 +667,16 @@ func hasGoogleFileSearch(tools []ai.NativeTool) bool {
 
 func supportsImageOutput(modelName string) bool {
 	return strings.Contains(strings.ToLower(modelName), "image")
+}
+
+// warnUnsupportedSettings reports the guarantee settings Gemini has no field
+// for. Its own typed settings travel in ExtraBody, so only other keys count.
+func (m *Model) warnUnsupportedSettings(ctx context.Context, params ai.ModelRequestParams) {
+	extra := maps.Clone(params.Settings.ExtraBody)
+	delete(extra, cachedContentSetting)
+	delete(extra, modelArmorSetting)
+	params.Settings.ExtraBody = extra
+	ai.WarnUnsupportedSettings(ctx, m, params, ai.SettingParallelToolCalls, ai.SettingExtraBody)
 }
 
 func (m *Model) buildPayload(

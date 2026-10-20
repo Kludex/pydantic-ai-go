@@ -206,6 +206,8 @@ func TestPrepareInputMetadata(t *testing.T) {
 				},
 				{Type: "tool-future", ToolCallID: "future", State: "input-available", Input: []byte(`{}`), ProviderExecuted: &providerExecuted,
 					CallProviderMetadata: providerMetadata(map[string]any{"tool_kind": "future"})},
+				{Type: "tool-lookup_v2", ToolCallID: "app", State: "output-error", Input: []byte(`{}`), ErrorText: "down",
+					CallProviderMetadata: providerMetadata(map[string]any{"tool_kind": "inventory.lookup"})},
 			}},
 			{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "continue"}}},
 		},
@@ -216,8 +218,13 @@ func TestPrepareInputMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if prompt.Content != "continue" || len(history) != 2 {
+	if prompt.Content != "continue" || len(history) != 3 {
 		t.Fatalf("unexpected metadata history: prompt=%#v history=%#v", prompt, history)
+	}
+	appResult := history[2].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
+	if appCall := history[1].(ai.ModelResponse).Parts[6].(ai.ToolCallPart); appCall.ToolKind != "inventory.lookup" ||
+		appResult.ToolKind != "inventory.lookup" || appResult.Outcome != ai.ToolReturnOutcomeFailed {
+		t.Fatalf("application tool kind was not kept: %#v %#v", appCall, appResult)
 	}
 	request := history[0].(ai.ModelRequest)
 	if request.Timestamp.Format(time.RFC3339) != "2026-09-04T10:00:00Z" ||

@@ -188,6 +188,8 @@ type Session struct {
 	inputAudio               []byte
 	imageCount               int
 	retainedImages           []ai.ModelRequest
+	retainedAudio            []retainedAudio
+	retainedAudioWeight      int64
 	pendingUsage             ai.Usage
 	pendingProviderDetails   map[string]any
 	closeRequested           bool
@@ -1487,6 +1489,7 @@ func (session *Session) finishAssistantPartLocked() {
 		}
 		if len(active.audio) > 0 && (session.config.audioRetention == AudioRetentionOutput || session.config.audioRetention == AudioRetentionAll) {
 			speech.Audio = &ai.BinaryContent{Data: pcmToWAV(active.audio, session.profile.AudioOutputSampleRate), MediaType: "audio/wav"}
+			session.retainAudioLocked(speech.Audio, int64(len(active.audio))*int64(session.profile.AudioInputSampleRate))
 		}
 		part = speech
 	}
@@ -1658,8 +1661,10 @@ func (session *Session) finishResponse(event ResponseDone) {
 	clear(session.inputRequests)
 	session.notifyReplyLocked()
 	session.serverCancelling = false
+	// The turn is over only when the model owes nothing more; a cut-off response ends it regardless.
+	owed := session.pendingResponses > 0 || session.pendingToolCalls > 0
 	session.mu.Unlock()
-	if !event.MoreExpected || event.Interrupted {
+	if !event.MoreExpected && !owed || event.Interrupted {
 		session.publish(TurnCompleteEvent{Response: *cloneResponse(&response)})
 		go session.deliverEnqueued()
 	}

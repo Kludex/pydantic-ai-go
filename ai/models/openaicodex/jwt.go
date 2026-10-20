@@ -1,36 +1,13 @@
 package openaicodex
 
 import (
-	"encoding/base64"
 	"encoding/json"
-	"math"
-	"strings"
-	"time"
+
+	"github.com/Kludex/pydantic-ai-go/ai/internal/oauthcreds"
 )
 
-func jwtExpiresAt(token string) (time.Time, bool) {
-	payload, ok := jwtPayload(token)
-	if !ok {
-		return time.Time{}, false
-	}
-	raw, exists := payload["exp"]
-	if !exists {
-		return time.Time{}, false
-	}
-	var seconds float64
-	if err := json.Unmarshal(raw, &seconds); err != nil || math.IsInf(seconds, 0) || math.IsNaN(seconds) {
-		return time.Time{}, false
-	}
-	whole, fraction := math.Modf(seconds)
-	expires := time.Unix(int64(whole), int64(fraction*float64(time.Second))).UTC()
-	if expires.Year() < 1 || expires.Year() > 9999 {
-		return time.Time{}, false
-	}
-	return expires, true
-}
-
 func accountIDFromJWT(token string) string {
-	payload, ok := jwtPayload(token)
+	payload, ok := oauthcreds.Claims(token)
 	if !ok {
 		return ""
 	}
@@ -50,20 +27,4 @@ func accountIDFromJWT(token string) string {
 		}
 	}
 	return ""
-}
-
-func jwtPayload(token string) (map[string]json.RawMessage, bool) {
-	parts := strings.Split(token, ".")
-	if len(parts) < 2 {
-		return nil, false
-	}
-	data, err := base64.RawURLEncoding.DecodeString(parts[1])
-	if err != nil {
-		return nil, false
-	}
-	var payload map[string]json.RawMessage
-	if json.Unmarshal(data, &payload) != nil || payload == nil {
-		return nil, false
-	}
-	return payload, true
 }

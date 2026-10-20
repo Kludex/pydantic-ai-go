@@ -30,6 +30,24 @@ func BedrockRetentions(name string) []ai.CacheRetention {
 	return tiers
 }
 
+// BedrockSupportsAutomaticCaching reports whether the legacy Bedrock InvokeModel
+// API takes Anthropic's top-level automatic cache_control parameter for a model.
+// It serves these Claude models from the Messages API infrastructure; the
+// ARN-versioned ones reject the parameter with a 400.
+func BedrockSupportsAutomaticCaching(name string) bool {
+	if _, bare, found := strings.Cut(name, "anthropic."); found {
+		name = bare
+	}
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-haiku-5-5", "claude-opus-4-7", "claude-opus-4-8", "claude-opus-5", "claude-sonnet-5",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // RaiseEarlierTTLs raises each five-minute boundary before a later one-hour boundary.
 func RaiseEarlierTTLs(ttls []string) []string {
 	raised := make([]string, len(ttls))

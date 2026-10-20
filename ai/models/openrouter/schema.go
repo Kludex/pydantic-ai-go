@@ -2,56 +2,30 @@ package openrouter
 
 import (
 	"fmt"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/requestschema"
 	jsonschema "github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
-func transformSchemas(params ai.ModelRequestParams, provider string) ai.ModelRequestParams {
+func transformSchemas(params ai.ModelRequestParams, provider, routedModel string) ai.ModelRequestParams {
 	var transform func(map[string]any) map[string]any
-	switch provider {
-	case "google":
+	switch {
+	case provider == "google":
 		transform = transformGoogleSchema
-	case "amazon", "meta-llama", "qwen":
-		transform = inlineSchemaDefinitions
+	case provider == "amazon", provider == "meta-llama", provider == "qwen",
+		// GLM-5.3 stringifies nested tool arguments whose schema is a $ref into $defs.
+		provider == "z-ai" && strings.HasPrefix(strings.ToLower(routedModel), "glm-5.3"):
+		transform = jsonschema.InlineDefinitions
 	default:
 		return params
 	}
-	params.Tools = transformToolDefinitions(params.Tools, transform)
-	params.DeferredTools = transformToolDefinitions(params.DeferredTools, transform)
-	if params.OutputTool != nil {
-		output := *params.OutputTool
-		output.Schema = transform(output.Schema)
-		if output.ReturnSchema != nil {
-			output.ReturnSchema = transform(output.ReturnSchema)
-		}
-		params.OutputTool = &output
-	}
-	if params.OutputSchema != nil {
-		params.OutputSchema = transform(params.OutputSchema)
-	}
-	return params
-}
-
-func transformToolDefinitions(
-	definitions []ai.ToolDefinition, transform func(map[string]any) map[string]any,
-) []ai.ToolDefinition {
-	if definitions == nil {
-		return nil
-	}
-	transformed := make([]ai.ToolDefinition, len(definitions))
-	for index, definition := range definitions {
-		transformed[index] = definition
-		transformed[index].Schema = transform(definition.Schema)
-		if definition.ReturnSchema != nil {
-			transformed[index].ReturnSchema = transform(definition.ReturnSchema)
-		}
-	}
-	return transformed
+	return requestschema.Transform(params, transform)
 }
 
 func transformGoogleSchema(source map[string]any) map[string]any {
-	result := inlineSchemaDefinitions(source)
+	result := jsonschema.InlineDefinitions(source)
 	transform := func(schema map[string]any) {
 		for _, key := range []string{
 			"$schema", "title", "discriminator", "examples", "exclusiveMaximum", "exclusiveMinimum",

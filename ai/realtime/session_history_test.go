@@ -3,6 +3,8 @@ package realtime_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -99,6 +101,36 @@ func TestRetainedAudioBoundsBothSpeakers(t *testing.T) {
 	}
 	if _, err := realtime.Open(t.Context(), &fakeModel{connection: newFakeConnection(), profile: fullProfile()}, realtime.ConnectParams{}, realtime.WithAudioRetentionLimit(-2)); err == nil {
 		t.Fatal("accepted negative limit")
+	}
+}
+
+func TestRetainedAudioEvictsOldestTurnsFirst(t *testing.T) {
+	connection := newFakeConnection()
+	session, err := realtime.Open(t.Context(), &fakeModel{connection: connection, profile: fullProfile()}, realtime.ConnectParams{},
+		realtime.WithAudioRetention(realtime.AudioRetentionOutput), realtime.WithAudioRetentionLimit(time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	half := make([]byte, 24000)
+	for turn := range 10 {
+		connection.events <- realtime.AudioDelta{Data: half[:12000], ItemID: fmt.Sprint(turn)}
+		connection.events <- realtime.AudioDelta{Data: half[12000:], ItemID: fmt.Sprint(turn)}
+		connection.events <- realtime.OutputTranscript{Text: fmt.Sprint(turn), Final: true}
+		connection.events <- realtime.ResponseDone{}
+	}
+	connection.end()
+	for range session.Events(t.Context()) {
+	}
+	var retained []bool
+	for _, message := range session.NewMessages() {
+		speech := message.(ai.ModelResponse).Parts[0].(ai.SpeechPart)
+		if *speech.Transcript != fmt.Sprint(len(retained)) {
+			t.Fatalf("transcript lost: %+v", speech)
+		}
+		retained = append(retained, speech.Audio != nil)
+	}
+	if want := []bool{false, false, false, false, false, false, false, false, true, true}; !slices.Equal(retained, want) {
+		t.Fatalf("retained audio %v, want %v", retained, want)
 	}
 }
 

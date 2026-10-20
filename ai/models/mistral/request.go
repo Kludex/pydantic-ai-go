@@ -7,6 +7,8 @@ import (
 	"slices"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/requestschema"
+	jsonschema "github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 func (model *Model) buildRequest(
@@ -17,6 +19,10 @@ func (model *Model) buildRequest(
 	}
 	if params.OutputMode == ai.OutputModeNative && len(params.OutputSchema) > 0 {
 		return chatRequest{}, fmt.Errorf("mistral: native structured output is not supported; use tool or prompted output")
+	}
+	if model.name == "zai-glm-5-3" {
+		// GLM-5.3 stringifies nested tool arguments whose schema is a $ref into $defs.
+		params = requestschema.Transform(params, jsonschema.InlineDefinitions)
 	}
 	settings, provider, err := extractSettings(params.Settings)
 	if err != nil {

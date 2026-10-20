@@ -169,6 +169,63 @@ A request and any continuation of it, such as a resumed suspended response, coun
 !!! tip "Use it for the current moment"
     Something that stays true belongs in the agent's [instructions](instructions.md) or in a regular `ai.SystemPromptPart`. A request-scoped prompt is for something about the current request only.
 
+## Identify system prompts
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/fakes"
+)
+
+const origin = "my_app.stay_terse"
+
+func reminders(messages []ai.ModelMessage) int {
+	count := 0
+	for _, message := range messages {
+		request, ok := message.(ai.ModelRequest)
+		if !ok {
+			continue
+		}
+		for _, part := range request.Parts {
+			if prompt, ok := part.(ai.SystemPromptPart); ok && prompt.Metadata["origin"] == origin {
+				count++
+			}
+		}
+	}
+	return count
+}
+
+func main() {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.AddTool(agent, "search", func(_ context.Context, rc *ai.RunContext[struct{}], _ struct{}) (string, error) {
+		_, err := rc.Enqueue(ai.SystemPromptPart{
+			Content:  fmt.Sprintf("Reminder %d: keep answers to one line.", reminders(rc.Messages())+1),
+			Scope:    ai.SystemPromptScopeRequest,
+			Metadata: map[string]any{"origin": origin},
+		})
+		return "found it", err
+	})
+	result, err := agent.Run(context.Background(), "Search.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	fmt.Println(reminders(result.Messages()))
+}
+```
+
+Code that adds a system prompt sometimes needs to find it again: to count the reminders it sent, to replace a note it wrote, or to tell its own prompts apart from others. Set `ai.SystemPromptPart.Metadata` and match on it, never on the visible text. The wording changes, and a user can type the same words.
+
+The metadata is never sent to the model, so it does not change the request or the prompt cache. It stays with the part through `RunResult.Messages`, `MarshalMessages`, and a continued conversation. `ModelRequest.Metadata` is no substitute: consecutive requests are merged before a model request, and the merged request combines their metadata, so it no longer says which prompt a value belonged to.
+
+!!! note "UI adapters drop it"
+    The AG-UI and Vercel AI wire formats have no place for it. A system prompt that comes back from a frontend has no metadata.
+
 ## Sanitize untrusted history
 
 ```go

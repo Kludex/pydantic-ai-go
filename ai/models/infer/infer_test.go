@@ -77,6 +77,12 @@ func TestModels(t *testing.T) {
 	}
 }
 
+func TestChatGPTPrefixExplainsHowToSignIn(t *testing.T) {
+	if _, err := infer.Model("openai-chatgpt:gpt-6.1-sol"); err == nil || !strings.Contains(err.Error(), "sign in with NewOAuthFlow") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCustomProvider(t *testing.T) {
 	model, err := infer.Model("custom:model", infer.WithProvider("custom", func(name string) (ai.Model, error) {
 		if name != "model" {

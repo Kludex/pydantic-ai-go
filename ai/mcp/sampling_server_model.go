@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
 	"strings"
 
@@ -100,6 +101,11 @@ func (model *SamplingModel) Request(
 	if model == nil || model.session == nil {
 		return nil, errors.New("ai/mcp: sampling model is not connected")
 	}
+	unsupported := params
+	unsupported.Settings.ExtraBody = maps.Clone(unsupported.Settings.ExtraBody)
+	delete(unsupported.Settings.ExtraBody, samplingPreferencesKey)
+	ai.WarnUnsupportedSettings(ctx, model, unsupported,
+		ai.SettingParallelToolCalls, ai.SettingExtraHeaders, ai.SettingExtraBody)
 	maxTokens := params.Settings.MaxTokens
 	if maxTokens < 0 {
 		return nil, fmt.Errorf("ai/mcp: sampling max tokens must not be negative, got %d", maxTokens)

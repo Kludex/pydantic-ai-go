@@ -240,7 +240,7 @@ The bundled providers use the same `ai.Model` interface.
 | xAI | `xai.NewModel("grok-4.3")` | `XAI_API_KEY` |
 | Z.AI | `zai.NewModel("glm-5.3-flash")` | `ZAI_API_KEY` |
 
-Provider options configure caller-owned clients, endpoints, credentials, and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints and Azure API versions. See [OpenAI Codex subscription](docs/openai-codex.md) for read-only CLI credentials, OAuth PKCE, and rotated credential storage. See [Amazon Bedrock](docs/bedrock.md) for AWS SDK configuration and Converse behavior.
+Provider options configure caller-owned clients, endpoints, credentials, and default model settings. See [Provider configuration](docs/providers.md) for OpenAI-compatible endpoints and Azure API versions. See [OpenAI Codex subscription](docs/openai-codex.md) for read-only CLI credentials, OAuth PKCE, and rotated credential storage. See [OpenAI ChatGPT plan usage](docs/openai-chatgpt.md) to let your app's users pay with their own ChatGPT plan. See [Amazon Bedrock](docs/bedrock.md) for AWS SDK configuration and Converse behavior.
 
 ## Test an agent without network calls
 
@@ -302,6 +302,7 @@ func TestAgent(t *testing.T) {
 | Serve an agent over A2A | [`a2a.Executor`](docs/a2a.md) |
 | Chat in a terminal or browser | [`cli.Run` and `webchat.NewHandler`](docs/chat.md) |
 | Run a speech-to-speech session | [`realtime.Open`](docs/realtime.md) |
+| Run a session on a hosted ElevenLabs agent | [`elevenlabs.NewModel`](docs/elevenlabs.md) |
 | Build a durable operation backend | [`durable.Backend` and `durable.Operation`](docs/durable.md) |
 | Limit usage or cost | [`UsageLimits` and pre-request token counting](docs/usage.md) |
 | Sanitize, trim, or summarize conversation history | [`SanitizeMessages` and history capabilities](docs/history.md) |

@@ -42,6 +42,7 @@ type Config struct {
 	SupportsImages             bool
 	OutputSampleRate           int
 	ManualAudioTurns           bool
+	ToolItemPruning            ToolItemPruning
 }
 
 // Connection implements the common OpenAI realtime websocket protocol.
@@ -78,6 +79,10 @@ type Connection struct {
 	audioUncommitted bool
 	audioLatest      bool
 	speechDetected   bool
+	frames           int
+	responseFrames   map[string]int
+	toolItems        map[string]*toolItems
+	prunedCalls      map[string]bool
 }
 
 type outputItem struct {
@@ -103,6 +108,7 @@ func New(config Config) (*Connection, error) {
 	return &Connection{
 		config: config, socket: config.Socket, model: config.ServerModel, seenToolCalls: map[string]struct{}{},
 		toolBatches: map[string]*toolBatch{}, toolResponses: map[string]string{}, idleTimeoutItems: map[string]bool{},
+		responseFrames: map[string]int{}, toolItems: map[string]*toolItems{}, prunedCalls: map[string]bool{},
 	}, nil
 }
 
@@ -210,7 +216,15 @@ func (connection *Connection) Send(ctx context.Context, input realtime.Input) er
 		}
 		items := []map[string]any{{"type": "function_call_output", "call_id": input.ToolCallID, "output": input.Output}}
 		if len(parts) > 0 {
-			items = append(items, map[string]any{"type": "message", "role": "user", "content": parts})
+			content := map[string]any{"type": "message", "role": "user", "content": parts}
+			connection.stateMu.Lock()
+			if tracked := connection.toolItems[input.ToolCallID]; tracked != nil {
+				// Named so it can be deleted with the call it followed.
+				content["id"] = toolContentItemID(inputIndex)
+				tracked.content = append(tracked.content, toolContentItemID(inputIndex))
+			}
+			connection.stateMu.Unlock()
+			items = append(items, content)
 		}
 		for _, item := range items {
 			if err := connection.writeJSON(ctx, map[string]any{"type": "conversation.item.create", "item": item}); err != nil {
@@ -367,6 +381,7 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 			if lifecycle.Type == "input_audio_buffer.timeout_triggered" && connection.config.InputTranscriptionEnabled {
 				connection.idleTimeoutItems[lifecycle.ItemID] = true
 			}
+			answered := connection.trackToolItems(data)
 			events, err := connection.config.Mapper(data)
 			if err != nil {
 				if !yield(realtime.SessionError{Err: err, Recoverable: true}, nil) {
@@ -461,6 +476,8 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 					}
 				}
 			}
+			// The frame is handled, so what the server holds of tool rounds that are over can go.
+			connection.pruneToolItems(ctx, answered)
 		}
 	}
 }
@@ -653,7 +670,7 @@ func (connection *Connection) reconnect(ctx context.Context) (bool, error) {
 				}
 			}
 		}
-		socket, model, err := connection.config.Dial(ctx, messages)
+		socket, model, err := connection.config.Dial(ctx, connection.withoutPrunedCalls(messages))
 		if err == nil && socket == nil {
 			err = fmt.Errorf("realtime: reconnect dial returned a nil socket")
 		}
@@ -678,6 +695,9 @@ func (connection *Connection) reconnect(ctx context.Context) (bool, error) {
 			clear(connection.toolResponses)
 			connection.outputItems = nil
 		}
+		// The new conversation's items have ids of their own, which its replay reports as it adds them.
+		clear(connection.toolItems)
+		clear(connection.responseFrames)
 		connection.stateMu.Unlock()
 		return true, nil
 	}

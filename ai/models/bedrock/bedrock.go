@@ -171,6 +171,7 @@ func (model *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Durati
 func (model *Model) Request(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*ai.ModelResponse, error) {
+	ai.WarnUnsupportedSettings(ctx, model, params, ai.SettingParallelToolCalls)
 	input, err := buildConverseInput(ctx, model.name, messages, params)
 	if err != nil {
 		return nil, err

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"reflect"
 	"slices"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -638,6 +639,19 @@ func WithExternalExecution() ToolOption {
 // RequestExternalToolExecution for selected calls.
 func WithDynamicExternalExecution() ToolOption {
 	return func(d *ToolDefinition) { d.DynamicExternalExecution = true }
+}
+
+// WithToolKind declares what a tool is, independent of its name. Its calls and
+// returns carry kind as ToolKind, so a hook or history processor can recognize
+// the tool even after it is renamed or prefixed. Use a namespaced
+// "namespace.name" kind such as "inventory.lookup", since every stored history
+// records it.
+func WithToolKind(kind ToolPartKind) ToolOption {
+	segments := strings.Split(string(kind), ".")
+	if len(segments) < 2 || slices.Contains(segments, "") {
+		panic(fmt.Sprintf("ai: tool kind must be namespace.name, got %q", kind))
+	}
+	return func(d *ToolDefinition) { d.ToolKind = kind }
 }
 
 // WithToolMaxRetries overrides the function-tool retry budget for this tool.

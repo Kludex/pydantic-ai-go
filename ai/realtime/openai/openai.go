@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -39,6 +40,19 @@ type Settings struct {
 	TurnDetection map[string]any
 	// Truncation configures provider conversation-window retention.
 	Truncation any
+	// PruneToolItems deletes a tool round's call, output, and returned content
+	// items from the server conversation once a response completes without
+	// calling a tool. OpenAI bills every response for the whole conversation it
+	// keeps, so a tool-heavy agent otherwise pays for every earlier round again.
+	// History keeps every round, and a reconnect's replay leaves pruned ones out.
+	PruneToolItems bool
+	// KeepToolItems names tools whose items PruneToolItems leaves in place, for
+	// results the model may need to refer back to.
+	KeepToolItems []string
+}
+
+func (settings Settings) toolItemPruning() openaiprotocol.ToolItemPruning {
+	return openaiprotocol.ToolItemPruning{Enabled: settings.PruneToolItems, Keep: slices.Clone(settings.KeepToolItems)}
 }
 
 // Option configures a Model.
@@ -62,6 +76,7 @@ func WithHeaders(headers http.Header) Option {
 // WithSettings adds model-level OpenAI realtime defaults.
 func WithSettings(settings Settings) Option {
 	settings.TurnDetection = cloneMap(settings.TurnDetection)
+	settings.KeepToolItems = slices.Clone(settings.KeepToolItems)
 	return func(model *Model) { model.settings = settings }
 }
 
@@ -147,6 +162,7 @@ func (model *Model) Connect(ctx context.Context, params realtime.ConnectParams) 
 		InterruptsResponseOnSpeech: openaiprotocol.InterruptsResponseOnSpeech(config, true),
 		SupportsImages:             true,
 		OutputSampleRate:           model.profile.AudioOutputSampleRate,
+		ToolItemPruning:            settings.toolItemPruning(),
 	})
 }
 
@@ -281,9 +297,9 @@ func (model *Model) ConnectWebRTC(
 		}
 		return nil, fmt.Errorf("openai realtime: sideband handshake: %w", err)
 	}
+	settings := model.resolveSettings(params.Settings)
 	serverModel, err := configureSocket(
-		ctx, socket, params.Messages, params.Request, params.Settings,
-		model.resolveSettings(params.Settings), model.profile,
+		ctx, socket, params.Messages, params.Request, params.Settings, settings, model.profile,
 	)
 	if err != nil {
 		_ = socket.Close(websocket.StatusPolicyViolation, "handshake failed")
@@ -293,6 +309,7 @@ func (model *Model) ConnectWebRTC(
 		Provider: "OpenAI Realtime", Model: model.name, Socket: socket, ServerModel: serverModel,
 		Mapper: MapEvent, InputTranscriptionEnabled: transcriptionEnabled(params.Settings),
 		SupportsImages: true, OutputSampleRate: model.profile.AudioOutputSampleRate,
+		ToolItemPruning: settings.toolItemPruning(),
 	})
 }
 
@@ -479,6 +496,7 @@ func sessionConfig(
 func (model *Model) resolveSettings(common realtime.Settings) Settings {
 	settings := model.settings
 	settings.TurnDetection = cloneMap(settings.TurnDetection)
+	settings.KeepToolItems = slices.Clone(settings.KeepToolItems)
 	if common.Provider == nil {
 		return settings
 	}
@@ -496,6 +514,12 @@ func (model *Model) resolveSettings(common realtime.Settings) Settings {
 	}
 	if value, ok := common.Provider["openai_truncation"]; ok {
 		settings.Truncation = value
+	}
+	if value, ok := common.Provider["openai_prune_tool_items"].(bool); ok {
+		settings.PruneToolItems = value
+	}
+	if value, ok := common.Provider["openai_keep_tool_items"].([]string); ok {
+		settings.KeepToolItems = slices.Clone(value)
 	}
 	return settings
 }

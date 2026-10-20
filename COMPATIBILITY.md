@@ -65,6 +65,13 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `281549b20d70b04212145c5c23728e922e639dc7` | Native tools whose constraints a model cannot apply report unsupported, so local fallbacks run |
 | `dd5749fe17623975885a3aaeb9c21ae33f5f5f6d` | `ai/models/meta` and the `meta:` inference prefix |
 | `69b8fb456fd594c9c4512b54d6052d648dc41dcc` | Responses are priced with their string provider details as `genai-prices` price context, including the reported service tier |
+| `4ed2399c84dd0a86f2781eaf029976fe7a81a5ee` | `ai/realtime/elevenlabs` runs realtime sessions on hosted ElevenLabs Agents; Go's `ToolChoice` has no allow-list, so only `ToolChoiceNone` narrows the agent's tools |
+| `4dd2e0fa69222cbe32c34e09d464bd1f0e5551ed` | `ai/models/openaichatgpt` and the `openai-chatgpt:` prefix sign app users in with ChatGPT |
+| `bbe9f1afad18501322629e0e109c8895f466116e` | `UnsupportedSettingWarning` reports ignored settings through `slog` or `WithUnsupportedSettingSink`; Python's `timeout` and `max_retries` client settings have no Go counterpart |
+| `47f87229b1d4523d9f2fd1a6da0707ff3e7923bb` | A dropped GPT-Live session without a working reconnect ends with a non-recoverable `SessionErrorEvent` |
+| `5049c94cb94b529ab6da092c59564fb3bc19cdf2` | Realtime `TurnCompleteEvent` waits for every pending response and tool call |
+| `977e56bbb62fa93b641d5b04305447264725c306` | `FormatAsXML` writes keys that are not XML names as `<item key="...">` |
+| `478f1a2a1cea49417426da9d45ef22a124d87806` | `WithToolKind` accepts validated `namespace.name` kinds; Python's typed tool-part registry has no Go counterpart |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 

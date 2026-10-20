@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/oauthcreds"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
@@ -15,7 +16,7 @@ import (
 type Model struct {
 	*ai.ModelWrapper
 	model   *openai.ResponsesModel
-	manager *credentialManager
+	manager *oauthcreds.Manager[Credentials]
 }
 
 type config struct {
@@ -90,9 +91,26 @@ func NewModel(name string, options ...Option) (*Model, error) {
 	}
 	tokenClient := *configuration.httpClient
 	tokenClient.Transport = baseTransport
-	manager := newCredentialManager(configuration.credentials, configuration.credentialSource, &tokenClient)
+	var source oauthcreds.Source[Credentials]
+	if configuration.credentialSource != nil {
+		source = configuration.credentialSource
+	}
+	manager := oauthcreds.New(configuration.credentials, source, &tokenClient, oauthcreds.Hooks[Credentials]{
+		Refresh:     RefreshCredentials,
+		Validate:    Credentials.validate,
+		AccessToken: func(credentials Credentials) string { return credentials.AccessToken },
+		Persistence: func(err error) error { return &CredentialsPersistenceError{err: err} },
+	})
 	requestClient := *configuration.httpClient
-	requestClient.Transport = &codexTransport{base: baseTransport, manager: manager}
+	requestClient.Transport = &oauthcreds.Transport[Credentials]{
+		Base: baseTransport, Host: "chatgpt.com", Manager: manager,
+		Headers: func(credentials Credentials) map[string]string {
+			return map[string]string{
+				"Authorization": "Bearer " + credentials.AccessToken, "chatgpt-account-id": credentials.AccountID,
+				"originator": "pydantic-ai",
+			}
+		},
+	}
 	delegate := openai.NewResponsesModel(name,
 		openai.WithProvider(openai.ProviderConfig{
 			Name: "openai-codex", BaseURL: defaultBaseURL, HTTPClient: &requestClient,
@@ -105,7 +123,7 @@ func NewModel(name string, options ...Option) (*Model, error) {
 // Credentials returns the credential set currently held in memory. A model
 // with a credential source has no current set until its first request loads one.
 func (model *Model) Credentials() (Credentials, error) {
-	credentials, ok := model.manager.current()
+	credentials, ok := model.manager.Current()
 	if !ok {
 		return Credentials{}, errors.New("openai-codex: credentials are unavailable before the credential source is loaded")
 	}

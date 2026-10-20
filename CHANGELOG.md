@@ -6,6 +6,30 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+### Added
+
+- ElevenLabs Agents realtime sessions through `ai/realtime/elevenlabs` and the `elevenlabs-agents:` inference prefix, with override-toggle preflight, tool sync, hosted MCP tool parts, and audio-tag stripping.
+- `ai/models/openaichatgpt` and the `openai-chatgpt:` inference prefix let your app's users sign in with ChatGPT and use their plan.
+- `UnsupportedSettingWarning`, `WithUnsupportedSettingSink`, and `WarnUnsupportedSettings` report settings a model ignores, such as `StopSequences` on OpenAI Responses or disabled parallel tool calls on Google, Bedrock, and Cohere. Warnings go to `slog` by default.
+- `SystemPromptPart.Metadata` identifies system prompts across merged requests and continued conversations.
+- `WithToolKind` accepts namespaced `namespace.name` kinds, and AG-UI and Vercel AI frontends keep them on every outcome.
+- `openairt.Settings.PruneToolItems` and `KeepToolItems`, or `openai_prune_tool_items` and `openai_keep_tool_items`, delete answered tool rounds from OpenAI and Azure GA Realtime conversations.
+- `anthropic.WithAutomaticCaching` overrides whether a model uses automatic prompt caching. Bedrock Claude Opus 4.7 and later use it by default.
+- `openai.ChatCompatibility.DeveloperSystemPrompts` sends system prompts with the `developer` role.
+- GPT-Live `openai_live_delegation` accepts `reasoning_summary`.
+- Anthropic `thinking_tokens` usage is reported as reasoning tokens.
+
+### Changed
+
+- A dropped GPT-Live session without a reconnect policy, or whose reconnect fails, ends with a non-recoverable `SessionErrorEvent` after settling its open turns.
+- Realtime `TurnCompleteEvent` waits until every pending response and tool call has finished.
+- Realtime retained-audio accounting costs the same per frame however long the session runs.
+- `FormatAsXML` writes map keys that are not valid XML names as `<item key="...">` elements.
+- Anthropic strict schemas give untyped `const` values a type, so described choices stay strict.
+- GLM-5.3 tool schemas are sent with inlined definitions on Z.AI, Mistral, OpenRouter, and vLLM.
+- Vercel AI frontends keep separate user prompts through a round trip, and a run that hits its context deadline aborts with "The agent run timed out."
+- OpenAI Codex keeps a refreshed token it could not save instead of reverting to the stored one it spent.
+
 ## [0.6.0] - 2026-10-18
 
 ### Added

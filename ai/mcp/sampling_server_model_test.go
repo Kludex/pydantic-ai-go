@@ -100,11 +100,18 @@ func TestSamplingServerModelWithoutTools(t *testing.T) {
 			ai.FilePart{Content: ai.BinaryContent{Data: []byte("old image"), MediaType: "image/jpeg"}},
 		}},
 	}
-	response, err := model.Request(t.Context(), messages, ai.ModelRequestParams{
+	var warnings []string
+	ctx := ai.WithUnsupportedSettingSink(t.Context(), func(_ context.Context, warning ai.UnsupportedSettingWarning) {
+		warnings = append(warnings, warning.Setting)
+	})
+	response, err := model.Request(ctx, messages, ai.ModelRequestParams{
 		Instructions: "Current system.", Settings: settings,
 	})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(warnings) != 1 || warnings[0] != ai.SettingExtraBody {
+		t.Fatalf("only the custom extra body field should warn, got %v", warnings)
 	}
 	file := response.Parts[0].(ai.FilePart)
 	if response.ModelName != "client-model" || response.ProviderName != "mcp" ||

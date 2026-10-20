@@ -2063,6 +2063,34 @@ func TestResponsesParallelToolCallsSetting(t *testing.T) {
 	}
 }
 
+func TestResponsesWarnsAboutIgnoredStopSequences(t *testing.T) {
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") == "text/event-stream" {
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"type\":\"response.completed\",\"response\":{\"model\":\"gpt-5\",\"output\":[]}}\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"model":"gpt-5","output":[],"usage":{}}`))
+	})
+	var warnings []string
+	ctx := ai.WithUnsupportedSettingSink(t.Context(), func(_ context.Context, warning ai.UnsupportedSettingWarning) {
+		warnings = append(warnings, warning.Setting)
+	})
+	params := ai.ModelRequestParams{AllowText: true, Settings: ai.ModelSettings{StopSequences: []string{"END"}}}
+	if _, err := model.Request(ctx, nil, params); err != nil {
+		t.Fatal(err)
+	}
+	stream, err := model.StreamRequest(ctx, nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range stream {
+	}
+	if !slices.Equal(warnings, []string{ai.SettingStopSequences, ai.SettingStopSequences}) {
+		t.Fatalf("warnings %v", warnings)
+	}
+}
+
 func TestResponsesCompactionRoundTripTrimsHistory(t *testing.T) {
 	var input []map[string]any
 	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {

@@ -242,7 +242,7 @@ The adapter stores part metadata under `providerMetadata.pydantic_ai`. It round-
 
 Message metadata remains application-owned. The stream emits one final `message-metadata` chunk so the AI SDK merges the response timestamp and deferred-call state into the assistant message. The adapter reserves `metadata.pydantic_ai.timestamp` for the original message timestamp and `metadata.pydantic_ai.external_tool_call_ids` for deferred external work. Preserve reserved values exactly. It does not trust client-held provider response IDs or provider URLs.
 
-A canceled run emits an `abort` chunk followed by `[DONE]`. This keeps cancellation distinct from model and adapter errors.
+A canceled run emits an `abort` chunk followed by `[DONE]`. This keeps cancellation distinct from model and adapter errors. A run that ends because the context deadline passed, such as one started with `context.WithTimeout`, reports `The agent run timed out.` as the abort reason. Any other cancellation reports `The agent run was cancelled.`
 
 ## Current scope
 

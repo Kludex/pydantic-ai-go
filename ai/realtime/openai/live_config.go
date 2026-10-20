@@ -139,8 +139,15 @@ func (model *LiveModel) liveConfig(params realtime.ConnectParams, settings LiveS
 			effort = "low"
 		}
 	}
+	reasoning := map[string]any{}
 	if effort != "" {
-		responses["reasoning"] = map[string]any{"effort": effort}
+		reasoning["effort"] = effort
+	}
+	if summary, ok := delegation["reasoning_summary"]; ok {
+		reasoning["summary"] = summary
+	}
+	if len(reasoning) > 0 {
+		responses["reasoning"] = reasoning
 	}
 	if verbosity, ok := delegation["verbosity"]; ok {
 		responses["text"] = map[string]any{"verbosity": verbosity}

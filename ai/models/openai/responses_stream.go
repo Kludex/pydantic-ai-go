@@ -41,6 +41,7 @@ func (m *ResponsesModel) StreamRequest(
 			ctx, responseID, sequence, params.Settings.ExtraHeaders, responseSettings.IncludeRawAnnotations,
 		)
 	}
+	ai.WarnUnsupportedSettings(ctx, m, params, ai.SettingStopSequences)
 	payload, err := m.buildResponsesPayload(ctx, msgs, params, true)
 	if err != nil {
 		return nil, err

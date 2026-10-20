@@ -131,6 +131,9 @@ type ChatCompatibility struct {
 	ResponsesEncryptedReasoning bool
 	// SamplingWithReasoning keeps temperature and top_p while reasoning is active.
 	SamplingWithReasoning bool
+	// DeveloperSystemPrompts sends Responses system prompts with the developer
+	// role, for endpoints that reject explicit system messages.
+	DeveloperSystemPrompts bool
 }
 
 // WithChatCompatibility configures OpenAI-compatible response and history
@@ -149,29 +152,8 @@ func WithChatCompatibility(compatibility ChatCompatibility) Option {
 		}
 	}
 	return func(model *Model) {
-		model.chatCompatibility = ChatCompatibility{
-			ReasoningContent:                    compatibility.ReasoningContent,
-			Reasoning:                           compatibility.Reasoning,
-			ReasoningText:                       compatibility.ReasoningText,
-			ReasoningFallback:                   compatibility.ReasoningFallback,
-			ReasoningDetails:                    compatibility.ReasoningDetails,
-			LegacyMaxTokens:                     compatibility.LegacyMaxTokens,
-			ExtendedMetadata:                    compatibility.ExtendedMetadata,
-			ExecutedTools:                       compatibility.ExecutedTools,
-			VideoInput:                          compatibility.VideoInput,
-			FileURLInput:                        compatibility.FileURLInput,
-			AudioInputDataURI:                   compatibility.AudioInputDataURI,
-			DisableDocumentInput:                compatibility.DisableDocumentInput,
-			NativeToolFunc:                      compatibility.NativeToolFunc,
-			FinishReasons:                       maps.Clone(finishReasons),
-			RequireFinishReason:                 compatibility.RequireFinishReason,
-			DisableRequiredToolChoice:           compatibility.DisableRequiredToolChoice,
-			DisableForcedToolChoiceWithThinking: compatibility.DisableForcedToolChoiceWithThinking,
-			ReasoningEnabledByDefault:           compatibility.ReasoningEnabledByDefault,
-			ResponsesReasoningContent:           compatibility.ResponsesReasoningContent,
-			ResponsesEncryptedReasoning:         compatibility.ResponsesEncryptedReasoning,
-			SamplingWithReasoning:               compatibility.SamplingWithReasoning,
-		}
+		model.chatCompatibility = compatibility
+		model.chatCompatibility.FinishReasons = maps.Clone(finishReasons)
 	}
 }
 

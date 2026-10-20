@@ -245,7 +245,7 @@ func (model *Model) prepareParams(
 	if err != nil {
 		return ctx, ai.ModelRequestParams{}, err
 	}
-	params = transformSchemas(params, provider)
+	params = transformSchemas(params, provider, routedModel)
 	thinkingActive := false
 	if reasoning, exists := settings.ExtraBody["reasoning"]; exists {
 		switch reasoning := reasoning.(type) {

@@ -239,6 +239,13 @@ func (m *Model) eventStream(
 				}
 			case "message_delta":
 				usage.OutputTokens = event.Usage.OutputTokens
+				if thinking := event.Usage.thinkingTokens(); thinking > 0 {
+					usage.ReasoningTokens = thinking
+					if usage.Details == nil {
+						usage.Details = map[string]int{}
+					}
+					usage.Details["thinking_tokens"] = thinking
+				}
 				if event.Delta.Container != nil {
 					containerID = event.Delta.Container.ID
 				}

@@ -1,6 +1,7 @@
 package vercel
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -47,7 +48,11 @@ func TransformStreamWithConfig(stream ai.EventStream, config StreamConfig) iter.
 					return
 				}
 				if errors.Is(eventErr, ai.ErrRunCancelled) {
-					if yield(Chunk{Type: ChunkAbort, Reason: "The agent run was cancelled."}, nil) {
+					reason := "The agent run was cancelled."
+					if errors.Is(eventErr, context.DeadlineExceeded) {
+						reason = "The agent run timed out."
+					}
+					if yield(Chunk{Type: ChunkAbort, Reason: reason}, nil) {
 						yield(Chunk{Type: ChunkDone}, nil)
 					}
 					return

@@ -3,12 +3,15 @@ package vercel
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
 
 const providerMetadataKey = "pydantic_ai"
+
+const userPromptStartKey = "user_prompt_start"
 
 type partMetadata struct {
 	id              string
@@ -51,6 +54,10 @@ func toolPartKind(value string) ai.ToolPartKind {
 		ai.ToolPartKindFileSearch, ai.ToolPartKindMCPServer, ai.ToolPartKindAdvisor:
 		return kind
 	default:
+		// An application's namespaced kind round-trips; anything else is dropped.
+		if strings.Contains(value, ".") {
+			return kind
+		}
 		return ""
 	}
 }

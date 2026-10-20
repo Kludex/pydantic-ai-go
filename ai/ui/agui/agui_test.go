@@ -271,6 +271,24 @@ func TestPrepareTypedToolHistory(t *testing.T) {
 		returns[0].Outcome != ai.ToolReturnOutcomeSuccess || returns[1].Outcome != ai.ToolReturnOutcomeFailed {
 		t.Fatalf("malformed metadata did not degrade safely: %#v", history)
 	}
+	_, history, _, err = agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{{
+			ID: "app", Function: agui.ToolCallFunction{Name: "lookup_v2", Arguments: `{}`},
+			EncryptedValue: `{"pydantic_ai":{"tool_kind":"inventory.lookup"}}`,
+		}}},
+		{ID: "result", Role: "tool", ToolCallID: "app", Content: "failed", Error: "failed",
+			EncryptedValue: `{"pydantic_ai":{"tool_kind":"inventory.lookup","outcome":"failed"}}`},
+		{ID: "user", Role: "user", Content: "continue"},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	appCall := history[0].(ai.ModelResponse).Parts[0].(ai.ToolCallPart)
+	appResult := history[1].(ai.ModelRequest).Parts[0].(ai.ToolReturnPart)
+	if appCall.ToolKind != "inventory.lookup" || appResult.ToolKind != "inventory.lookup" ||
+		appResult.Outcome != ai.ToolReturnOutcomeFailed {
+		t.Fatalf("application tool kind was not kept: %#v %#v", appCall, appResult)
+	}
 	_, _, _, err = agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
 		{ID: "orphan", Role: "tool", Name: "fallback", ToolCallID: "orphan", Content: "result"},
 		{ID: "user", Role: "user", Content: "continue"},
@@ -415,6 +433,21 @@ func TestPrepareReasoningInput(t *testing.T) {
 	if thinking.Content != "thought" || thinking.ID != "thinking-id" || thinking.Signature != "signature" ||
 		thinking.ProviderName != "anthropic" || thinking.ProviderDetails["redacted"] != false || text.Content != "answer" {
 		t.Fatalf("unexpected reasoning history: %#v", response)
+	}
+}
+
+func TestPrepareReasoningInputIgnoresDeeplyNestedEncryptedValue(t *testing.T) {
+	nested := strings.Repeat("[", 100_000) + strings.Repeat("]", 100_000)
+	_, history, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "reasoning", Role: "reasoning", Content: "thought", EncryptedValue: nested},
+		{ID: "user", Role: "user", Content: "continue"},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	thinking := history[0].(ai.ModelResponse).Parts[0].(ai.ThinkingPart)
+	if thinking.Content != "thought" || thinking.ID != "" || thinking.ProviderDetails != nil {
+		t.Fatalf("unexpected reasoning from nested metadata: %#v", thinking)
 	}
 }
 

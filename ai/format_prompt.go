@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // XMLFormatOption configures FormatAsXML.
@@ -92,6 +93,7 @@ func FormatAsXML(value any, options ...XMLFormatOption) (string, error) {
 
 type xmlPromptNode struct {
 	tag       string
+	key       *string
 	text      string
 	children  []xmlPromptNode
 	composite bool
@@ -147,9 +149,16 @@ func (formatter *xmlFormatter) node(value reflect.Value, tag string, inferStruct
 			return xmlPromptNode{}, err
 		}
 		for _, entry := range entries {
-			child, err := formatter.node(entry.value, entry.key, false)
+			tag := entry.key
+			if !isXMLNCName(tag) {
+				tag = formatter.config.itemTag
+			}
+			child, err := formatter.node(entry.value, tag, false)
 			if err != nil {
 				return xmlPromptNode{}, err
+			}
+			if tag != entry.key {
+				child.key = &entry.key
 			}
 			node.children = append(node.children, child)
 		}
@@ -225,11 +234,6 @@ func (formatter *xmlFormatter) mapEntries(value reflect.Value) ([]xmlMapEntry, e
 		default:
 			return nil, fmt.Errorf("ai: unsupported XML map key type %s", key.Type())
 		}
-		if key.Kind() == reflect.String {
-			if err := validateXMLTag(text); err != nil {
-				return nil, fmt.Errorf("ai: map key %q: %w", text, err)
-			}
-		}
 		entries = append(entries, xmlMapEntry{key: text, value: iterator.Value()})
 	}
 	sort.Slice(entries, func(left, right int) bool { return entries[left].key < entries[right].key })
@@ -286,6 +290,27 @@ func validateXMLTag(tag string) error {
 	}
 }
 
+// isXMLNCName reports whether name is an XML 1.0 name without colons, which
+// would otherwise be read as a namespace prefix.
+func isXMLNCName(name string) bool {
+	for index, r := range name {
+		start := r == '_' || 'A' <= r && r <= 'Z' || 'a' <= r && r <= 'z' ||
+			0xC0 <= r && r <= 0xD6 || 0xD8 <= r && r <= 0xF6 || 0xF8 <= r && r <= 0x2FF ||
+			0x370 <= r && r <= 0x37D || 0x37F <= r && r <= 0x1FFF || r == 0x200C || r == 0x200D ||
+			0x2070 <= r && r <= 0x218F || 0x2C00 <= r && r <= 0x2FEF || 0x3001 <= r && r <= 0xD7FF ||
+			0xF900 <= r && r <= 0xFDCF || 0xFDF0 <= r && r <= 0xFFFD || 0x10000 <= r && r <= 0xEFFFF
+		if start {
+			continue
+		}
+		continuation := r == '-' || r == '.' || '0' <= r && r <= '9' || r == 0xB7 ||
+			0x300 <= r && r <= 0x36F || r == 0x203F || r == 0x2040
+		if index == 0 || !continuation {
+			return false
+		}
+	}
+	return name != "" && utf8.ValidString(name)
+}
+
 func encodeXMLNodes(nodes []xmlPromptNode, indent string) string {
 	var output bytes.Buffer
 	for index, node := range nodes {
@@ -300,6 +325,11 @@ func encodeXMLNodes(nodes []xmlPromptNode, indent string) string {
 func encodeXMLNode(output *bytes.Buffer, node xmlPromptNode, indent string, depth int) {
 	output.WriteByte('<')
 	output.WriteString(node.tag)
+	if node.key != nil {
+		output.WriteString(` key="`)
+		_ = xml.EscapeText(output, []byte(*node.key))
+		output.WriteByte('"')
+	}
 	output.WriteByte('>')
 	if len(node.children) != 0 {
 		if indent != "" {

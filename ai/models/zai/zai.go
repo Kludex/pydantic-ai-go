@@ -11,6 +11,8 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/requestschema"
+	jsonschema "github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
@@ -217,5 +219,9 @@ func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequest
 	}
 	settings.ExtraBody = extra
 	params.Settings = settings
+	if strings.HasPrefix(name, "glm-5.3") {
+		// GLM-5.3 stringifies nested tool arguments whose schema is a $ref into $defs.
+		params = requestschema.Transform(params, jsonschema.InlineDefinitions)
+	}
 	return params, nil
 }

@@ -2,8 +2,10 @@ package anthropic_test
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
@@ -230,6 +232,58 @@ func TestAnthropicStrictSchemaTransform(t *testing.T) {
 	}
 }
 
+func TestAnthropicStrictSchemaTypesDescribedOptions(t *testing.T) {
+	var body map[string]any
+	model := newServer(t, anthropicRecorder(t, &body))
+	strict := true
+	choices := ai.NewChoices("team", "", ai.Choice[string]{Key: "finance", Description: "Money matters."})
+	option := func(value any, description string) map[string]any {
+		return map[string]any{"const": value, "description": description}
+	}
+	params := ai.ModelRequestParams{Tools: []ai.ToolDefinition{{
+		Name: "triage", Strict: &strict,
+		Schema: map[string]any{
+			"type": "object",
+			"properties": map[string]any{
+				"team": choices.Schema(),
+				"urgent": map[string]any{"anyOf": []any{
+					option(true, "The customer is blocked."), option(false, "The customer can wait."),
+				}},
+				"priority": map[string]any{"anyOf": []any{option(1, "Low."), option(int64(2), "High.")}},
+				"weight": map[string]any{"anyOf": []any{
+					option(0.5, "Half."), option(float32(1.5), "More."), option(json.Number("3"), "Decoded."),
+					option(json.Number("3.5"), "Fraction."), option(float64(4), "Whole."),
+				}},
+			},
+		},
+	}}}
+	if _, err := model.Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	properties := body["tools"].([]any)[0].(map[string]any)["input_schema"].(map[string]any)["properties"].(map[string]any)
+	typed := func(property string) []string {
+		var types []string
+		for _, variant := range properties[property].(map[string]any)["anyOf"].([]any) {
+			variant := variant.(map[string]any)
+			if variant["const"] != nil {
+				t.Fatalf("%s kept an untyped const: %v", property, variant)
+			}
+			types = append(types, fmt.Sprintf("%v=%v", variant["type"], variant["enum"]))
+		}
+		return types
+	}
+	for property, want := range map[string][]string{
+		"team":     {"string=[finance]"},
+		"urgent":   {"boolean=[true]", "boolean=[false]"},
+		"priority": {"integer=[1]", "integer=[2]"},
+		"weight":   {"number=[0.5]", "number=[1.5]", "integer=[3]", "number=[3.5]", "integer=[4]"},
+	} {
+		if got := typed(property); !slices.Equal(got, want) {
+			t.Fatalf("%s: got %v, want %v", property, got, want)
+		}
+	}
+}
+
 func TestAnthropicStrictSchemaErrors(t *testing.T) {
 	strict := true
 	tests := []struct {
@@ -240,6 +294,7 @@ func TestAnthropicStrictSchemaErrors(t *testing.T) {
 		{name: "definition value", schema: map[string]any{"type": "object", "$defs": map[string]any{"Bad": true}}},
 		{name: "definition schema", schema: map[string]any{"type": "object", "$defs": map[string]any{"Bad": map[string]any{}}}},
 		{name: "missing type", schema: map[string]any{}},
+		{name: "untyped null const", schema: map[string]any{"const": nil}},
 		{name: "any variant value", schema: map[string]any{"anyOf": []any{true}}},
 		{name: "one variant schema", schema: map[string]any{"oneOf": []any{map[string]any{}}}},
 		{name: "all variant schema", schema: map[string]any{"allOf": []any{map[string]any{}}}},

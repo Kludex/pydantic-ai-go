@@ -198,6 +198,7 @@ func marshalRequestPart(p RequestPart) (wirePart, error) {
 	case SystemPromptPart:
 		wire := wirePart{
 			PartKind: "system-prompt", Content: mustJSON(part.Content), DynamicRef: part.DynamicRef, Scope: part.Scope,
+			Metadata: part.Metadata,
 		}
 		return wirePartWithTimestamp(wire, part.Timestamp), nil
 	case UserPromptPart:
@@ -409,7 +410,9 @@ func unmarshalRequestPart(wp wirePart) (RequestPart, error) {
 		default:
 			return nil, fmt.Errorf("ai: invalid system prompt scope %q", wp.Scope)
 		}
-		part := SystemPromptPart{Content: stringContent(wp.Content), DynamicRef: wp.DynamicRef, Scope: wp.Scope}
+		part := SystemPromptPart{
+			Content: stringContent(wp.Content), DynamicRef: wp.DynamicRef, Scope: wp.Scope, Metadata: wp.Metadata,
+		}
 		if wp.Timestamp != nil {
 			part.Timestamp = *wp.Timestamp
 		}

@@ -1,6 +1,7 @@
 package vercel_test
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -661,6 +662,17 @@ func TestTransformErrors(t *testing.T) {
 		chunks[len(chunks)-2].Reason != "The agent run was cancelled." || chunks[len(chunks)-1].Type != vercel.ChunkDone {
 		t.Fatalf("unexpected cancellation chunks: %#v", chunks)
 	}
+
+	timedOut := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(nil, fmt.Errorf("%w: %w", ai.ErrRunCancelled, context.DeadlineExceeded))
+	})
+	chunks = nil
+	for chunk := range vercel.TransformStream(timedOut, "message") {
+		chunks = append(chunks, chunk)
+	}
+	if chunks[len(chunks)-2].Reason != "The agent run timed out." {
+		t.Fatalf("unexpected timeout chunks: %#v", chunks)
+	}
 }
 
 func TestTransformConsumerStops(t *testing.T) {
@@ -850,5 +862,51 @@ func TestTransformEnqueuedMessages(t *testing.T) {
 	}}, ai.MessageSanitizationOptions{})
 	if err == nil {
 		t.Fatal("expected invalid enqueued message error")
+	}
+}
+
+func TestTransformEnqueuedMessagesKeepSeparateUserPrompts(t *testing.T) {
+	stream := ai.EventStream(func(yield func(ai.StreamEvent, error) bool) {
+		yield(ai.EnqueuedMessagesEvent{EnqueueID: "e", Messages: []ai.ModelMessage{
+			ai.ModelRequest{Parts: []ai.RequestPart{
+				ai.UserPromptPart{Content: "first"},
+				ai.UserPromptPart{Contents: []ai.UserContent{
+					ai.ImageURL{URL: "https://example.com/a.png", MediaType: "image/png",
+						VendorMetadata: map[string]any{"detail": "high"}},
+					ai.TextContent{Text: "caption"},
+				}},
+				ai.UserPromptPart{Content: "third"},
+			}},
+		}}, nil)
+	})
+	var data any
+	for chunk, err := range vercel.TransformStream(stream, "") {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if chunk.Type == vercel.ChunkDataEnqueuedMessages {
+			encoded, _ := json.Marshal(chunk.Data)
+			_ = json.Unmarshal(encoded, &data)
+		}
+	}
+	_, history, _, err := vercel.PrepareInput(vercel.RequestData{Trigger: "submit-message", ID: "chat", Messages: []vercel.UIMessage{
+		{ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{
+			{Type: string(vercel.ChunkDataEnqueuedMessages), Data: data},
+		}},
+		{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "next"}}},
+	}}, ai.MessageSanitizationOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parts := history[0].(ai.ModelRequest).Parts
+	if len(parts) != 3 || parts[0].(ai.UserPromptPart).Content != "first" ||
+		parts[2].(ai.UserPromptPart).Content != "third" {
+		t.Fatalf("separate prompts were merged: %#v", parts)
+	}
+	contents := parts[1].(ai.UserPromptPart).Contents
+	image, ok := contents[0].(ai.ImageURL)
+	if len(contents) != 2 || !ok || image.VendorMetadata["detail"] != "high" ||
+		contents[1].(ai.TextContent).Text != "caption" {
+		t.Fatalf("the second prompt lost its content: %#v", contents)
 	}
 }

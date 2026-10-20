@@ -434,6 +434,51 @@ func TestRequestTextResponse(t *testing.T) {
 	}
 }
 
+func TestThinkingTokensAreReasoningUsage(t *testing.T) {
+	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"model": "claude", "stop_reason": "end_turn", "content": [{"type": "text", "text": "ok"}],
+			"usage": {"input_tokens": 3, "output_tokens": 100, "output_tokens_details": {"thinking_tokens": 40}}
+		}`))
+	})
+	resp, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.Usage.ReasoningTokens != 40 || resp.Usage.Details["thinking_tokens"] != 40 || resp.Usage.OutputTokens != 100 {
+		t.Fatalf("unexpected thinking usage %+v", resp.Usage)
+	}
+	streamed := newServer(t, anthropicSSE(t, []string{
+		`{"type":"message_start","message":{"model":"claude","usage":{"input_tokens":2,"output_tokens":0}}}`,
+		`{"type":"message_delta","usage":{"output_tokens":9}}`,
+		`{"type":"message_delta","usage":{"output_tokens":10,"output_tokens_details":{"thinking_tokens":7}}}`,
+		`{"type":"message_stop"}`,
+	}))
+	stream := ai.StreamModel(t.Context(), streamed, nil, ai.ModelRequestParams{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage := stream.Response().Usage
+	if usage.ReasoningTokens != 7 || usage.Details["thinking_tokens"] != 7 || usage.OutputTokens != 10 {
+		t.Fatalf("unexpected streamed thinking usage %+v", usage)
+	}
+	withoutStart := newServer(t, anthropicSSE(t, []string{
+		`{"type":"message_delta","usage":{"output_tokens":3,"output_tokens_details":{"thinking_tokens":2}}}`,
+		`{"type":"message_stop"}`,
+	}))
+	stream = ai.StreamModel(t.Context(), withoutStart, nil, ai.ModelRequestParams{})
+	for _, err := range stream.Events() {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if usage := stream.Response().Usage; usage.Details["thinking_tokens"] != 2 {
+		t.Fatalf("unexpected thinking usage without message_start %+v", usage)
+	}
+}
+
 func TestPauseTurnResponseIsSuspended(t *testing.T) {
 	model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`{

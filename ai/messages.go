@@ -249,6 +249,10 @@ type SystemPromptPart struct {
 	DynamicRef string
 	// Scope says how long the model sees the prompt. The zero value means SystemPromptScopeConversation.
 	Scope SystemPromptScope
+	// Metadata is detached application data that is never sent to the model.
+	// Unlike ModelRequest.Metadata, it stays with the prompt when requests are
+	// merged, so use it to find a system prompt your code added, never its text.
+	Metadata map[string]any
 }
 
 // SystemPromptScope says how long the model sees a SystemPromptPart.
@@ -539,7 +543,10 @@ type FilePart struct {
 
 func (FilePart) responsePartKind() string { return "file" }
 
-// ToolPartKind identifies a typed cross-provider tool part.
+// ToolPartKind says what a tool is, independent of its name. The constants
+// below are the kinds the library assigns. An application declares its own,
+// namespaced as "namespace.name", with WithToolKind. A history recorded with a
+// kind the current process does not know still loads and keeps it.
 type ToolPartKind string
 
 const (

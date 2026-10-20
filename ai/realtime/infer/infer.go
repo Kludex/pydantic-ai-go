@@ -8,6 +8,7 @@ import (
 
 	"github.com/Kludex/pydantic-ai-go/ai/realtime"
 	azurert "github.com/Kludex/pydantic-ai-go/ai/realtime/azure"
+	"github.com/Kludex/pydantic-ai-go/ai/realtime/elevenlabs"
 	googlert "github.com/Kludex/pydantic-ai-go/ai/realtime/google"
 	openairt "github.com/Kludex/pydantic-ai-go/ai/realtime/openai"
 	xairt "github.com/Kludex/pydantic-ai-go/ai/realtime/xai"
@@ -49,7 +50,10 @@ func Model(name string, options ...Option) (realtime.Model, error) {
 			}
 			return openairt.NewModel(name), nil
 		},
-		"xai":    func(name string) (realtime.Model, error) { return xairt.NewModel(name), nil },
+		"xai": func(name string) (realtime.Model, error) { return xairt.NewModel(name), nil },
+		"elevenlabs-agents": func(name string) (realtime.Model, error) {
+			return elevenlabs.NewModel(name), nil
+		},
 		"google": func(name string) (realtime.Model, error) { return googlert.NewModel(name), nil },
 		"google-cloud": func(name string) (realtime.Model, error) {
 			return googlert.NewModel(name, googlert.WithVertex("", "")), nil

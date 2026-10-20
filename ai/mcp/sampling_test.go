@@ -32,10 +32,14 @@ func inputRequestServer(
 
 func TestSamplingModelAndElicitationRoundTrip(t *testing.T) {
 	modelCalls := 0
-	model := fakes.NewFunctionModel(func(
-		_ context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+	var model *fakes.FunctionModel
+	model = fakes.NewFunctionModel(func(
+		ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 	) (*ai.ModelResponse, error) {
 		modelCalls++
+		ai.WarnUnsupportedSettings(ai.WithUnsupportedSettingSink(ctx, func(context.Context, ai.UnsupportedSettingWarning) {
+			t.Error("the server's stop sequences warned")
+		}), model, params, ai.SettingStopSequences)
 		if len(messages) != 3 {
 			t.Fatalf("unexpected sampling messages: %#v", messages)
 		}

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -581,6 +582,61 @@ func TestPersistenceFailureKeepsRotatedCredentials(t *testing.T) {
 				t.Fatalf("unexpected requests before persistence failure: %d", codexRequests)
 			}
 		})
+	}
+}
+
+type flakySource struct {
+	memorySource
+	failing bool
+}
+
+func (source *flakySource) Save(ctx context.Context, credentials openaicodex.Credentials) error {
+	if source.failing {
+		return errors.New("storage unavailable")
+	}
+	return source.memorySource.Save(ctx, credentials)
+}
+
+func TestFailedSaveKeepsTheRefreshedSetOverTheStoredOneItSpent(t *testing.T) {
+	source := &flakySource{memorySource: memorySource{
+		credentials: openaicodex.Credentials{
+			AccessToken:  jwt(map[string]any{"exp": time.Now().Add(-time.Hour).Unix()}),
+			RefreshToken: "refresh-1", AccountID: "account",
+		},
+	}, failing: true}
+	var grants []string
+	rotation := 1
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Hostname() == "auth.openai.com" {
+			_ = request.ParseForm()
+			grants = append(grants, request.PostForm.Get("refresh_token"))
+			rotation++
+			return response(http.StatusOK, fmt.Sprintf(
+				`{"access_token":"access-%d","refresh_token":"refresh-%d"}`, rotation, rotation,
+			)), nil
+		}
+		if request.Header.Get("Authorization") != "Bearer access-3" {
+			return response(http.StatusUnauthorized, `{}`), nil
+		}
+		return codexSSE("ok"), nil
+	})
+	model, err := openaicodex.NewModel("model", openaicodex.WithCredentialSource(source),
+		openaicodex.WithHTTPClient(&http.Client{Transport: transport}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var persistence *openaicodex.CredentialsPersistenceError
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); !errors.As(err, &persistence) {
+		t.Fatalf("unexpected first error: %v", err)
+	}
+	source.failing = false
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	current, _ := model.Credentials()
+	if !slices.Equal(grants, []string{"refresh-1", "refresh-2"}) ||
+		current.RefreshToken != "refresh-3" || source.credentials.RefreshToken != "refresh-3" {
+		t.Fatalf("spent credentials were adopted: grants=%v current=%v stored=%v", grants, current, source.credentials)
 	}
 }
 

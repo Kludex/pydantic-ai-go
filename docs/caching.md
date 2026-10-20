@@ -118,8 +118,8 @@ Repeated `Caching` capabilities share the ID `caching`. The last configuration w
 
 | Provider | Default portable configuration | Stable-prefix-only behavior |
 | --- | --- | --- |
-| Anthropic HTTP API | Automatic cache, five minutes; one hour supported | Static instruction and tool-definition boundaries |
-| Anthropic legacy Bedrock client | Instruction, tool-definition, and conversation boundaries | Omit the conversation boundary |
+| Anthropic HTTP API, and the legacy Bedrock client on Claude Opus 4.7 and later, Sonnet 5, Haiku 5.5, and Fable 5 | Automatic cache, five minutes; one hour supported | Static instruction and tool-definition boundaries |
+| Anthropic legacy Bedrock client on other models | Instruction, tool-definition, and conversation boundaries | Omit the conversation boundary |
 | Bedrock Converse Claude | Instruction, tool-definition, and conversation boundaries | Omit the conversation boundary |
 | Bedrock Converse Nova | Instruction and conversation boundaries, five minutes | Cache instructions only |
 | OpenRouter Anthropic routes | Instruction, tool-definition, and conversation boundaries | Omit the conversation boundary |

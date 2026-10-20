@@ -254,6 +254,30 @@ func TestLarge4AdjustableReasoning(t *testing.T) {
 	}
 }
 
+func TestGLM53ToolSchemasAreInlined(t *testing.T) {
+	schema := map[string]any{
+		"type":       "object",
+		"$defs":      map[string]any{"Guest": map[string]any{"type": "object"}},
+		"properties": map[string]any{"guest": map[string]any{"$ref": "#/$defs/Guest"}},
+	}
+	for name, inlined := range map[string]bool{"zai-glm-5-3": true, "mistral-large-4": false} {
+		var captured map[string]any
+		server := responseServer(t, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`, &captured)
+		model := mistral.NewModel(name, mistral.WithBaseURL(server.URL), mistral.WithHTTPClient(server.Client()))
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+			Tools: []ai.ToolDefinition{{Name: "book", Schema: schema}},
+		})
+		server.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		parameters := captured["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)["parameters"].(map[string]any)
+		if (parameters["$defs"] == nil) != inlined {
+			t.Fatalf("%s: unexpected schema %#v", name, parameters)
+		}
+	}
+}
+
 func TestForeignToolCallIDsAreRewritten(t *testing.T) {
 	var bodies []string
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

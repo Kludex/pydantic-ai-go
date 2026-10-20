@@ -133,3 +133,55 @@ func TestLegacyBedrockUnifiedCacheWideTurn(t *testing.T) {
 		}
 	}
 }
+
+func TestLegacyBedrockAutomaticCachingByModel(t *testing.T) {
+	var body map[string]any
+	client := &legacyBedrockClient{invoke: func(input *bedrockruntime.InvokeModelInput) (*bedrockruntime.InvokeModelOutput, error) {
+		body = nil
+		if err := json.Unmarshal(input.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		return &bedrockruntime.InvokeModelOutput{Body: []byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`)}, nil
+	}}
+	explicit, err := (anthropic.Settings{Cache: anthropic.CacheTTL5Minutes}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	messages := []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hello"}}}}
+	for _, test := range []struct {
+		name      string
+		options   []anthropic.Option
+		automatic bool
+	}{
+		{name: "us.anthropic.claude-opus-4-8", automatic: true},
+		{name: "global.anthropic.claude-sonnet-5-5-v1:0", automatic: true},
+		{name: "us.anthropic.claude-sonnet-4-5-v1:0"},
+		{name: "us.anthropic.claude-sonnet-4-5-v1:0", options: []anthropic.Option{anthropic.WithAutomaticCaching(true)}, automatic: true},
+		{name: "us.anthropic.claude-opus-4-8", options: []anthropic.Option{anthropic.WithAutomaticCaching(false)}},
+	} {
+		model := anthropic.NewLegacyBedrockModel(test.name, anthropic.LegacyBedrockConfig{Client: client}, test.options...)
+		if model.ModelProfile().SupportsAutoCache != test.automatic {
+			t.Fatalf("%s: profile automatic caching = %v", test.name, !test.automatic)
+		}
+		for _, settings := range []ai.ModelSettings{explicit, {Cache: &ai.CacheConfig{}}} {
+			if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{Settings: settings}); err != nil {
+				t.Fatal(err)
+			}
+			block := body["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)
+			if (body["cache_control"] != nil) != test.automatic || (block["cache_control"] != nil) == test.automatic {
+				t.Fatalf("%s %+v: cache_control=%v block=%v", test.name, settings, body["cache_control"], block)
+			}
+		}
+	}
+	var direct map[string]any
+	model := newServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&direct)
+		_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"text","text":"ok"}],"usage":{}}`))
+	}, anthropic.WithAutomaticCaching(false))
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{Settings: explicit}); err != nil {
+		t.Fatal(err)
+	}
+	if direct["cache_control"] != nil || direct["messages"].([]any)[0].(map[string]any)["content"].([]any)[0].(map[string]any)["cache_control"] == nil {
+		t.Fatalf("gateway without automatic caching: %+v", direct)
+	}
+}

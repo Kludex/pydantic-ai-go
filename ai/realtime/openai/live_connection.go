@@ -271,10 +271,22 @@ func (connection *LiveConnection) Events(ctx context.Context) iter.Seq2[realtime
 					}
 					restored, err := connection.redialSession(ctx)
 					if err != nil {
+						if ctx.Err() != nil {
+							yield(nil, err)
+							return
+						}
+						// Without a reconnect, a drop ends the session like on the other providers: whatever
+						// was under way is lost, then a non-recoverable session error.
 						connection.mu.Lock()
 						connection.ended = true
+						lost := connection.settleTurns(true)
 						connection.mu.Unlock()
-						yield(nil, err)
+						for _, event := range lost {
+							if !yield(event, nil) {
+								return
+							}
+						}
+						yield(realtime.SessionError{Err: fmt.Errorf("%w: %w", err, frame.err)}, nil)
 						return
 					}
 					if !yield(realtime.SessionReconnected{StateRestored: restored}, nil) {

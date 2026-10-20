@@ -373,6 +373,37 @@ func TestOpenRouterDownstreamSchemaAndToolChoice(t *testing.T) {
 	}
 }
 
+func TestOpenRouterInlinesGLM53ToolSchemas(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	params := ai.ModelRequestParams{Tools: []ai.ToolDefinition{{Name: "book", Schema: map[string]any{
+		"type":       "object",
+		"$defs":      map[string]any{"Guest": map[string]any{"type": "object"}},
+		"properties": map[string]any{"guest": map[string]any{"$ref": "#/$defs/Guest"}},
+	}}}}
+	for _, name := range []string{"z-ai/GLM-5.3", "z-ai/glm-5.2"} {
+		model := openrouter.NewModel(name, openrouter.WithBaseURL(server.URL), openrouter.WithHTTPClient(server.Client()))
+		if _, err := model.Request(t.Context(), nil, params); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inlined := func(body map[string]any) bool {
+		schema := body["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)["parameters"].(map[string]any)
+		return schema["$defs"] == nil
+	}
+	if !inlined(bodies[0]) || inlined(bodies[1]) {
+		t.Fatalf("only GLM-5.3 schemas should be inlined: %#v", bodies)
+	}
+}
+
 func TestOpenRouterModelNameValidation(t *testing.T) {
 	for _, name := range []string{"model", "/model", "provider/", "~/model"} {
 		model := openrouter.NewModel(name)

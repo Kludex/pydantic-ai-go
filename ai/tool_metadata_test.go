@@ -105,3 +105,58 @@ func TestRawToolDefinitionIsClonedAtRegistration(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestToolKindIdentifiesARenamedTool(t *testing.T) {
+	var kinds []ai.ToolPartKind
+	model := fakes.NewFunctionModel(func(
+		_ context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		if len(messages) == 1 {
+			return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+				ToolName: params.Tools[0].Name, ToolCallID: "call", Args: []byte(`{"sku":"A-1"}`),
+			}}}, nil
+		}
+		return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+	})
+	type lookupArgs struct {
+		SKU string `json:"sku"`
+	}
+	lookup := ai.NewTool("check_stock", func(_ context.Context, _ *ai.RunContext[deps], args lookupArgs) (bool, error) {
+		return args.SKU == "A-1", nil
+	}, ai.WithToolKind("inventory.lookup"))
+	agent := ai.NewAgent[deps, string](model)
+	agent.AddToolset(ai.PrefixToolset(ai.NewFunctionToolset(lookup), "v2"))
+	result, err := agent.Run(t.Context(), "go", deps{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range result.Messages() {
+		switch message := message.(type) {
+		case ai.ModelResponse:
+			for _, part := range message.Parts {
+				if call, ok := part.(ai.ToolCallPart); ok {
+					kinds = append(kinds, call.ToolKind)
+				}
+			}
+		case ai.ModelRequest:
+			for _, part := range message.Parts {
+				if returned, ok := part.(ai.ToolReturnPart); ok {
+					kinds = append(kinds, returned.ToolKind)
+				}
+			}
+		}
+	}
+	if len(kinds) != 2 || kinds[0] != "inventory.lookup" || kinds[1] != "inventory.lookup" {
+		t.Fatalf("tool kinds %v", kinds)
+	}
+	for _, kind := range []ai.ToolPartKind{"lookup", ".lookup", "inventory.", "inventory..lookup", ""} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("accepted tool kind %q", kind)
+				}
+			}()
+			ai.WithToolKind(kind)
+		}()
+	}
+}

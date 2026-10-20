@@ -120,6 +120,37 @@ func TestZAIThinkingRoundTripAndSettings(t *testing.T) {
 	}
 }
 
+func TestZAIInlinesGLM53ToolSchemas(t *testing.T) {
+	schema := map[string]any{
+		"type":       "object",
+		"$defs":      map[string]any{"Guest": map[string]any{"type": "object"}},
+		"properties": map[string]any{"guest": map[string]any{"$ref": "#/$defs/Guest"}},
+	}
+	server := newResponseServer(t, chatResponse("ok", "", "stop"), chatResponse("ok", "", "stop"))
+	defer server.Close()
+	for _, name := range []string{"GLM-5.3-flash", "glm-5.2"} {
+		model := zai.NewModel(name, zai.WithAPIKey("key"), zai.WithBaseURL(server.URL), zai.WithHTTPClient(server.Client()))
+		params := ai.ModelRequestParams{
+			Tools:      []ai.ToolDefinition{{Name: "book", Schema: schema, ReturnSchema: schema}},
+			OutputTool: &ai.ToolDefinition{Name: "final_result", Schema: schema}, AllowText: true,
+		}
+		if _, err := model.Request(t.Context(), nil, params); err != nil {
+			t.Fatal(err)
+		}
+	}
+	inlined := func(body map[string]any) bool {
+		for _, tool := range body["tools"].([]any) {
+			if tool.(map[string]any)["function"].(map[string]any)["parameters"].(map[string]any)["$defs"] != nil {
+				return false
+			}
+		}
+		return true
+	}
+	if !inlined(server.bodies[0]) || inlined(server.bodies[1]) || schema["$defs"] == nil {
+		t.Fatalf("only GLM-5.3 schemas should be inlined: %#v", server.bodies)
+	}
+}
+
 func TestZAIThinkingProfiles(t *testing.T) {
 	t.Setenv("ZAI_API_KEY", "environment-key")
 	for _, test := range []struct {

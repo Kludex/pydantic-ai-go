@@ -37,6 +37,7 @@ type Model struct {
 	schemaWarning       func(SchemaWarning)
 	defaultSettings     ai.ModelSettings
 	legacyBedrockClient LegacyBedrockClient
+	automaticCaching    *bool
 	contextWindow       int
 }
 
@@ -47,7 +48,7 @@ func (m *Model) ModelProfile() ai.ModelProfile {
 		tiers = promptcache.BedrockRetentions(m.name)
 	}
 	return ai.ModelProfile{
-		SupportsCache: true, SupportsAutoCache: m.legacyBedrockClient == nil, SupportedCacheRetentions: tiers,
+		SupportsCache: true, SupportsAutoCache: m.supportsAutomaticCaching(), SupportedCacheRetentions: tiers,
 		DefaultOutputMode:                  ai.OutputModeTool,
 		SupportsToolAvailabilityDelta:      m.deferredToolSupport,
 		MimicsAssistantMessageFormatting:   m.carryThinking,
@@ -55,6 +56,16 @@ func (m *Model) ModelProfile() ai.ModelProfile {
 		ContextWindow:                      m.contextWindow,
 		DefaultCacheRetention:              5 * time.Minute,
 	}
+}
+
+// supportsAutomaticCaching reports whether the API takes the top-level
+// cache_control parameter. The legacy Bedrock InvokeModel API rejects it on the
+// models it does not serve from the Messages API infrastructure.
+func (m *Model) supportsAutomaticCaching() bool {
+	if m.automaticCaching != nil {
+		return *m.automaticCaching
+	}
+	return m.legacyBedrockClient == nil || promptcache.BedrockSupportsAutomaticCaching(m.name)
 }
 
 // clearsRequestScopedPrompts excludes the legacy Bedrock client, which sends no
@@ -112,6 +123,15 @@ func WithMimicsAssistantMessageFormatting(enabled bool) Option {
 // without access to the beta: each prompt is then sent only with its own request.
 func WithRequestScopedSystemPrompts(enabled bool) Option {
 	return func(m *Model) { m.requestScoped = enabled }
+}
+
+// WithAutomaticCaching overrides whether the API takes Anthropic's top-level
+// automatic cache_control parameter. Without it, Settings.Cache and the portable
+// cache setting place a breakpoint on the last message block instead. Enable it
+// for a legacy Bedrock model this package does not know supports automatic
+// caching yet, or disable it for an Anthropic-compatible gateway that rejects it.
+func WithAutomaticCaching(enabled bool) Option {
+	return func(m *Model) { m.automaticCaching = &enabled }
 }
 
 // SchemaWarning describes a lossy strict-schema conversion.
@@ -1191,6 +1211,9 @@ func (m *Model) buildPayload(
 	settings, cache, err := extractCacheSettings(translated)
 	if err != nil {
 		return nil, err
+	}
+	if cache.Automatic != "" && !m.supportsAutomaticCaching() {
+		cache.Messages, cache.Automatic = cache.Automatic, ""
 	}
 	settings, providerSettings, err := extractProviderSettings(settings)
 	if err != nil {
@@ -2321,6 +2344,16 @@ type anthropicUsage struct {
 	ServerToolUse            *struct {
 		WebSearchRequests int `json:"web_search_requests"`
 	} `json:"server_tool_use"`
+	OutputTokensDetails *struct {
+		ThinkingTokens int `json:"thinking_tokens"`
+	} `json:"output_tokens_details"`
+}
+
+func (u anthropicUsage) thinkingTokens() int {
+	if u.OutputTokensDetails == nil {
+		return 0
+	}
+	return u.OutputTokensDetails.ThinkingTokens
 }
 
 type anthropicIterationUsage struct {
@@ -2354,6 +2387,10 @@ func (u anthropicUsage) usage() ai.Usage {
 	}
 	if u.ServerToolUse != nil && u.ServerToolUse.WebSearchRequests > 0 {
 		details["web_search_requests"] = u.ServerToolUse.WebSearchRequests
+	}
+	// Billed inside output_tokens, so a readable subset of it rather than an addition.
+	if thinking := u.thinkingTokens(); thinking > 0 {
+		details["thinking_tokens"] = thinking
 	}
 	if len(u.Iterations) > 0 {
 		for _, iteration := range u.Iterations {
@@ -2397,6 +2434,7 @@ func (u anthropicUsage) usage() ai.Usage {
 		CacheWrite1HTokens: oneHourCacheWrites,
 		CacheReadTokens:    u.CacheReadInputTokens + compactionCacheReadTokens,
 		OutputTokens:       u.OutputTokens + compactionOutputTokens,
+		ReasoningTokens:    u.thinkingTokens(),
 		Details:            details,
 	}
 }

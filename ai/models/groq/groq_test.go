@@ -437,7 +437,7 @@ func TestModelFamilyThinking(t *testing.T) {
 		{name: "explicit", model: "openai/gpt-oss-120b", level: ai.ThinkingLevelHigh,
 			extra:          map[string]any{"reasoning_format": "raw", "reasoning_effort": "low"},
 			expectedFormat: "raw", expectedEffort: "low"},
-		{name: "empty", model: "llama-4-maverick-17b", level: ""},
+		{name: "empty", model: "deepseek-r1-distill-llama-70b", level: ""},
 	}
 	for index, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

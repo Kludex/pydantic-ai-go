@@ -450,7 +450,7 @@ func groqReasoningEffort(level ai.ThinkingLevel) string {
 
 func isReasoningModel(name string) bool {
 	for _, prefix := range []string{
-		"openai/gpt-oss", "qwen/qwen3", "qwen-qwq", "deepseek-r1", "llama-4-maverick",
+		"openai/gpt-oss", "qwen/qwen3", "qwen-qwq", "deepseek-r1",
 	} {
 		if strings.HasPrefix(name, prefix) {
 			return true

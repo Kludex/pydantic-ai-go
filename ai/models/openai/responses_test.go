@@ -1164,7 +1164,11 @@ func TestResponsesRejectInvalidThinkingLevel(t *testing.T) {
 }
 
 func TestResponsesPreservesEncryptedReasoningWithoutSummary(t *testing.T) {
-	model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
+	var body map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
 		_, _ = w.Write([]byte(`{
 			"model":"gpt-5","service_tier":"priority",
 			"output":[{"id":"reasoning-1","type":"reasoning","encrypted_content":"signature"}]
@@ -1178,6 +1182,13 @@ func TestResponsesPreservesEncryptedReasoningWithoutSummary(t *testing.T) {
 	if thinking.Content != "" || thinking.ID != "reasoning-1" || thinking.Signature != "signature" ||
 		thinking.ProviderName != "openai" || response.ProviderDetails["service_tier"] != "priority" {
 		t.Fatalf("encrypted reasoning was not retained: %+v", thinking)
+	}
+	if _, err := model.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	item := body["input"].([]any)[0].(map[string]any)
+	if summary, ok := item["summary"].([]any); !ok || len(summary) != 0 {
+		t.Fatalf("encrypted reasoning needs an empty summary: %#v", item)
 	}
 }
 
@@ -1974,6 +1985,7 @@ func TestResponsesAssistantHistoryWithThinking(t *testing.T) {
 	msgs := []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
 		ai.ThinkingPart{Content: "hidden"},
 		ai.ThinkingPart{ID: "reasoning-1", Signature: "signature", ProviderName: "openai"},
+		ai.ThinkingPart{Content: "summary", ID: "reasoning-1", ProviderName: "openai"},
 		ai.TextPart{Content: "previous"},
 	}}}
 	if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{AllowText: true}); err != nil {
@@ -1985,6 +1997,75 @@ func TestResponsesAssistantHistoryWithThinking(t *testing.T) {
 		input[0].(map[string]any)["encrypted_content"] != "signature" ||
 		input[1].(map[string]any)["role"] != "assistant" {
 		t.Fatalf("provider reasoning metadata was not round-tripped: %v", input)
+	}
+	summary := input[0].(map[string]any)["summary"].([]any)
+	if len(summary) != 1 || summary[0].(map[string]any)["text"] != "summary" {
+		t.Fatalf("reasoning summary was not grouped: %v", input)
+	}
+}
+
+func TestResponsesReasoningHistoryGrouping(t *testing.T) {
+	tests := []struct {
+		name         string
+		options      []openai.Option
+		parts        []ai.ResponsePart
+		wantItems    int
+		wantSummary  []int
+		wantContents []int
+	}{
+		{
+			name: "different ids stay separate",
+			parts: []ai.ResponsePart{
+				ai.ThinkingPart{Content: "one", ID: "a", ProviderName: "openai"},
+				ai.ThinkingPart{Content: "two", ID: "b", ProviderName: "openai"},
+			},
+			wantItems:    2,
+			wantSummary:  []int{1, 1},
+			wantContents: []int{0, 0},
+		},
+		{
+			name: "reasoning content leaves summary empty",
+			options: []openai.Option{
+				openai.WithChatCompatibility(openai.ChatCompatibility{ResponsesReasoningContent: true}),
+			},
+			parts: []ai.ResponsePart{
+				ai.ThinkingPart{Content: "one", ID: "a", ProviderName: "openai"},
+				ai.ThinkingPart{Content: "two", ID: "a", ProviderName: "openai"},
+			},
+			wantItems:    1,
+			wantSummary:  []int{0},
+			wantContents: []int{2},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var body map[string]any
+			model := newResponsesServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"model":"gpt-5","output":[],"usage":{}}`))
+			}, test.options...)
+			msgs := []ai.ModelMessage{ai.ModelResponse{Parts: test.parts}}
+			if _, err := model.Request(t.Context(), msgs, ai.ModelRequestParams{}); err != nil {
+				t.Fatal(err)
+			}
+			input, _ := body["input"].([]any)
+			if len(input) != test.wantItems {
+				t.Fatalf("got %d input items, want %d: %v", len(input), test.wantItems, input)
+			}
+			for i, raw := range input {
+				item, _ := raw.(map[string]any)
+				summary, ok := item["summary"].([]any)
+				if !ok || len(summary) != test.wantSummary[i] {
+					t.Fatalf("item %d summary = %v, want %d entries", i, item["summary"], test.wantSummary[i])
+				}
+				content, _ := item["content"].([]any)
+				if len(content) != test.wantContents[i] {
+					t.Fatalf("item %d content = %v, want %d entries", i, item["content"], test.wantContents[i])
+				}
+			}
+		})
 	}
 }
 

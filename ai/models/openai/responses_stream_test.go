@@ -1322,7 +1322,16 @@ func TestResponsesStreamReasoningAndWebSearchHistory(t *testing.T) {
 			finish = completed
 		}
 	}
-	if len(finish.Parts) != 4 {
+	var thinking, search int
+	for _, part := range finish.Parts {
+		switch part.(type) {
+		case ai.ThinkingPart:
+			thinking++
+		case ai.NativeToolCallPart:
+			search++
+		}
+	}
+	if thinking != 1 || search != 1 {
 		t.Fatalf("unexpected streamed response parts: %#v", finish.Parts)
 	}
 	_, err = model.Request(t.Context(), []ai.ModelMessage{
@@ -1332,15 +1341,21 @@ func TestResponsesStreamReasoningAndWebSearchHistory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	input := replay["input"].([]any)
-	reasoning := input[0].(map[string]any)
-	summary, ok := reasoning["summary"].([]any)
-	if !ok || len(summary) != 1 || summary[0].(map[string]any)["text"] != "Checked the source" ||
-		summary[0].(map[string]any)["type"] != "summary_text" {
+	input, _ := replay["input"].([]any)
+	if len(input) < 2 {
+		t.Fatalf("unexpected replay input: %#v", replay["input"])
+	}
+	reasoning, _ := input[0].(map[string]any)
+	summary, _ := reasoning["summary"].([]any)
+	if len(summary) != 1 {
 		t.Fatalf("reasoning summary was not replayed: %#v", reasoning)
 	}
-	if search := input[1].(map[string]any); search["type"] != "web_search_call" {
-		t.Fatalf("web search was not replayed: %#v", search)
+	entry, _ := summary[0].(map[string]any)
+	if entry["text"] != "Checked the source" || entry["type"] != "summary_text" {
+		t.Fatalf("reasoning summary was not replayed: %#v", reasoning)
+	}
+	if search, _ := input[1].(map[string]any); search["type"] != "web_search_call" {
+		t.Fatalf("web search was not replayed: %#v", input[1])
 	}
 }
 

@@ -312,9 +312,8 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				continue
 			}
 			if part.ID != "" || part.Signature != "" {
-				if len(out) == 0 || out[len(out)-1].Type != "reasoning" || out[len(out)-1].ID != part.ID || part.ID == "" {
-					summary := make([]responsesReasoningSummary, 0)
-					out = append(out, responsesInput{Type: "reasoning", ID: part.ID, Summary: &summary})
+				if part.ID == "" || len(out) == 0 || out[len(out)-1].Type != "reasoning" || out[len(out)-1].ID != part.ID {
+					out = append(out, responsesInput{Type: "reasoning", ID: part.ID})
 				}
 				input := &out[len(out)-1]
 				if part.Signature != "" {
@@ -326,7 +325,7 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 						content = append(content, map[string]string{"type": "reasoning_text", "text": part.Content})
 						input.Content = content
 					} else {
-						*input.Summary = append(*input.Summary, responsesReasoningSummary{Type: "summary_text", Text: part.Content})
+						input.Summary = append(input.Summary, responsesReasoningSummary{Type: "summary_text", Text: part.Content})
 					}
 				}
 			}

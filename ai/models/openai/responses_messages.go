@@ -312,11 +312,23 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 				continue
 			}
 			if part.ID != "" || part.Signature != "" {
-				input := responsesInput{Type: "reasoning", ID: part.ID, EncryptedContent: part.Signature}
-				if c.responsesReasoningContent && part.ID != "" && part.Content != "" {
-					input.Content = []map[string]string{{"type": "reasoning_text", "text": part.Content}}
+				if len(out) == 0 || out[len(out)-1].Type != "reasoning" || out[len(out)-1].ID != part.ID || part.ID == "" {
+					summary := make([]responsesReasoningSummary, 0)
+					out = append(out, responsesInput{Type: "reasoning", ID: part.ID, Summary: &summary})
 				}
-				out = append(out, input)
+				input := &out[len(out)-1]
+				if part.Signature != "" {
+					input.EncryptedContent = part.Signature
+				}
+				if part.Content != "" {
+					if c.responsesReasoningContent && part.ID != "" {
+						content, _ := input.Content.([]map[string]string)
+						content = append(content, map[string]string{"type": "reasoning_text", "text": part.Content})
+						input.Content = content
+					} else {
+						*input.Summary = append(*input.Summary, responsesReasoningSummary{Type: "summary_text", Text: part.Content})
+					}
+				}
 			}
 		case ai.ToolCallPart:
 			id := ""

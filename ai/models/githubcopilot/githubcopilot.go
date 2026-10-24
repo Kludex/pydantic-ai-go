@@ -217,7 +217,7 @@ func copilotGrokThinking(name string) (bool, bool) {
 	case "grok-4.3", "grok-4.3-latest", "grok-latest", "grok-4-0709", "grok-4-1-fast-reasoning",
 		"grok-4-1-fast-non-reasoning", "grok-4-fast-reasoning", "grok-4-fast-non-reasoning", "grok-3":
 		return true, false
-	case "grok-4.5", "grok-4.5-latest", "grok-4.6", "grok-build-latest":
+	case "grok-4.5", "grok-4.5-latest", "grok-4.6", "grok-4.7", "grok-build-latest":
 		return true, true
 	}
 	return strings.HasPrefix(name, "grok-3-mini"), strings.HasPrefix(name, "grok-3-mini")

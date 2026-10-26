@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 )
 
 // ErrUsageLimitExceeded is returned by Agent.Run when a UsageLimits bound is hit.
@@ -256,3 +257,153 @@ func (e *ToolFailedError) Error() string { return "ai: tool failed: " + e.Messag
 func ToolFailedf(format string, args ...any) error {
 	return &ToolFailedError{Message: fmt.Sprintf(format, args...)}
 }
+
+// Provider model error categories. Each is a sentinel that wraps the same
+// underlying cause with a precise classification callers can match with
+// errors.Is. The wrapping types below also implement ModelAPIError, so a
+// FallbackModel chain configured without explicit predicates will try the
+// next candidate on any of them.
+
+var (
+	// ErrModelRateLimit reports a rate-limited provider response that named no retry interval.
+	ErrModelRateLimit = errors.New("ai: model rate limited")
+	// ErrModelQuotaExceeded reports an exhausted billing or quota block the provider announced explicitly.
+	ErrModelQuotaExceeded = errors.New("ai: model quota exceeded")
+	// ErrModelUnavailable reports the provider refusing requests without a recoverable cause.
+	ErrModelUnavailable = errors.New("ai: model unavailable")
+	// ErrModelOverloaded reports an explicit overload response from the provider (HTTP 529).
+	ErrModelOverloaded = errors.New("ai: model overloaded")
+	// ErrModelServerError reports an unrecoverable provider 5xx response.
+	ErrModelServerError = errors.New("ai: model server error")
+	// ErrModelConnection reports a transport failure on the way to the provider.
+	ErrModelConnection = errors.New("ai: model connection error")
+	// ErrModelTimeout reports a client-side timeout reaching the provider.
+	ErrModelTimeout = errors.New("ai: model timeout")
+	// ErrModelContextWindowExceeded reports that the configured inputs exceeded the model's context window.
+	ErrModelContextWindowExceeded = errors.New("ai: model context window exceeded")
+)
+
+// ModelRateLimitError reports a rate-limited response with the optional retry
+// hint the provider advertised.
+type ModelRateLimitError struct {
+	// ModelName is the model active when the limit was hit.
+	ModelName string
+	// ProviderName is the provider identity when available.
+	ProviderName string
+	// RetryAfter is the wait the provider asked for, or zero when none was reported.
+	RetryAfter time.Duration
+	// Cause is the underlying provider error.
+	Cause error
+}
+
+// Error describes the rate limit and retry interval when known.
+func (e *ModelRateLimitError) Error() string {
+	if e.RetryAfter > 0 {
+		return fmt.Sprintf("%s: retry after %s", ErrModelRateLimit, e.RetryAfter)
+	}
+	return ErrModelRateLimit.Error()
+}
+
+// IsModelAPIError marks the rate limit as eligible for default model fallback.
+func (*ModelRateLimitError) IsModelAPIError() bool { return true }
+
+// Unwrap exposes the underlying cause to errors.Is and errors.As.
+func (e *ModelRateLimitError) Unwrap() error { return e.Cause }
+
+// Is matches the ModelRateLimit sentinel and any wrapped cause.
+func (e *ModelRateLimitError) Is(target error) bool {
+	return target == ErrModelRateLimit
+}
+
+// ModelContextWindowExceededError reports inputs that the model's profile
+// classified as larger than its context window. Token counts are reported
+// when the provider supplied them.
+type ModelContextWindowExceededError struct {
+	// ModelName is the model active when the limit was hit.
+	ModelName string
+	// ProviderName is the provider identity when available.
+	ProviderName string
+	// MaxTokens is the model's known context window when the provider reported it.
+	MaxTokens int
+	// Tokens is the attempted input size when the provider reported it.
+	Tokens int
+	// Cause is the underlying provider error.
+	Cause error
+}
+
+// Error describes the exceeded window.
+func (e *ModelContextWindowExceededError) Error() string {
+	if e.MaxTokens > 0 && e.Tokens > 0 {
+		return fmt.Sprintf("%s: %d tokens > %d window", ErrModelContextWindowExceeded, e.Tokens, e.MaxTokens)
+	}
+	return ErrModelContextWindowExceeded.Error()
+}
+
+// IsModelAPIError marks the overflow as eligible for default model fallback.
+func (*ModelContextWindowExceededError) IsModelAPIError() bool { return true }
+
+// Unwrap exposes the underlying cause to errors.Is and errors.As.
+func (e *ModelContextWindowExceededError) Unwrap() error { return e.Cause }
+
+// Is matches the ModelContextWindowExceeded sentinel and any wrapped cause.
+func (e *ModelContextWindowExceededError) Is(target error) bool {
+	return target == ErrModelContextWindowExceeded
+}
+
+// ConnectionErrorPhase says where a transport failure occurred.
+type ConnectionErrorPhase string
+
+const (
+	// ConnectionPhasePool reports failing to obtain a connection from the pool.
+	ConnectionPhasePool ConnectionErrorPhase = "pool"
+	// ConnectionPhaseConnect reports failing to open a TCP/TLS connection.
+	ConnectionPhaseConnect ConnectionErrorPhase = "connect"
+	// ConnectionPhaseWrite reports failing to send the request.
+	ConnectionPhaseWrite ConnectionErrorPhase = "write"
+	// ConnectionPhaseRead reports failing to receive the response.
+	ConnectionPhaseRead ConnectionErrorPhase = "read"
+)
+
+// ModelConnectionError reports a transport failure classified by phase.
+type ModelConnectionError struct {
+	// ModelName is the model active when the failure occurred.
+	ModelName string
+	// ProviderName is the provider identity when available.
+	ProviderName string
+	// Phase identifies where the failure happened.
+	Phase ConnectionErrorPhase
+	// InStream reports whether the failure occurred after the stream opened.
+	InStream bool
+	// Cause is the underlying transport error.
+	Cause error
+}
+
+// Error describes the failed phase.
+func (e *ModelConnectionError) Error() string {
+	phase := string(e.Phase)
+	if phase == "" {
+		phase = "transport"
+	}
+	source := transportErrorSource(e.ModelName, e.ProviderName)
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %s: %s: %v", source, ErrModelConnection, phase, e.Cause)
+	}
+	return fmt.Sprintf("%s: %s: %s", source, ErrModelConnection, phase)
+}
+
+// IsModelAPIError marks the connection failure as eligible for default model fallback.
+func (*ModelConnectionError) IsModelAPIError() bool { return true }
+
+// Unwrap exposes the underlying cause to errors.Is and errors.As.
+func (e *ModelConnectionError) Unwrap() error { return e.Cause }
+
+// Is matches the ModelConnection sentinel and any wrapped cause.
+func (e *ModelConnectionError) Is(target error) bool {
+	return target == ErrModelConnection
+}
+
+// UsageLimitUnavailableWarning is a sentinel callers can match with errors.Is
+// when a configured limit could not be evaluated because the model reported
+// no usage. Combine with errors.As on ErrUsageLimitExceeded to decide whether
+// to treat the warning as terminal.
+var UsageLimitUnavailableWarning = errors.New("ai: usage limit unavailable")

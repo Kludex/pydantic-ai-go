@@ -980,7 +980,7 @@ func openAIThinkingEffort(settings *ai.ThinkingSettings) (string, error) {
 	case ai.ThinkingLevelEnabled:
 		return "medium", nil
 	case ai.ThinkingLevelMinimal, ai.ThinkingLevelLow, ai.ThinkingLevelMedium,
-		ai.ThinkingLevelHigh, ai.ThinkingLevelXHigh:
+		ai.ThinkingLevelHigh, ai.ThinkingLevelXHigh, ai.ThinkingLevelMax:
 		return string(settings.Level), nil
 	default:
 		return "", fmt.Errorf("openai: invalid thinking level %q", settings.Level)

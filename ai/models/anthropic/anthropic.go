@@ -1836,6 +1836,8 @@ func anthropicThinking(
 			budget = 16384
 		case ai.ThinkingLevelXHigh:
 			budget = 32768
+		case ai.ThinkingLevelMax:
+			budget = 65536
 		default:
 			return nil, "", fmt.Errorf("anthropic: invalid thinking level %q", settings.Level)
 		}

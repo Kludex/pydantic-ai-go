@@ -357,8 +357,10 @@ const (
 	ThinkingLevelMedium ThinkingLevel = "medium"
 	// ThinkingLevelHigh requests high reasoning effort.
 	ThinkingLevelHigh ThinkingLevel = "high"
-	// ThinkingLevelXHigh requests the largest portable reasoning effort.
+	// ThinkingLevelXHigh requests the largest previously portable reasoning effort.
 	ThinkingLevelXHigh ThinkingLevel = "xhigh"
+	// ThinkingLevelMax requests the maximum portable reasoning effort.
+	ThinkingLevelMax ThinkingLevel = "max"
 )
 
 // ThinkingSettings configures reasoning generation. Level maps to the closest
@@ -482,7 +484,7 @@ func validateThinkingSettings(settings *ThinkingSettings) error {
 	}
 	switch settings.Level {
 	case ThinkingLevelDisabled, ThinkingLevelEnabled, ThinkingLevelMinimal, ThinkingLevelLow,
-		ThinkingLevelMedium, ThinkingLevelHigh, ThinkingLevelXHigh:
+		ThinkingLevelMedium, ThinkingLevelHigh, ThinkingLevelXHigh, ThinkingLevelMax:
 		return nil
 	default:
 		return fmt.Errorf("ai: invalid thinking level %q", settings.Level)

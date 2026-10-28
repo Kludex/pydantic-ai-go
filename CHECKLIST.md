@@ -2,7 +2,7 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@19b1eafbbef19c8891666576c438ae9e0d90ef16`.
+Audited upstream baseline: `pydantic/pydantic-ai@bc2213364ca0318f4077110bbc9c240c0ee2f7cd`.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 
@@ -429,3 +429,67 @@ Status:
 ## Audit status
 
 The repository is audited through the baseline above. `.upstream-sync.json` records the same commit.
+
+## Sync to `bc2213364ca0318f4077110bbc9c240c0ee2f7cd` (2026-10-28)
+
+The upstream pin lags pydantic-ai main by the 232 commits that raised the
+Python package through `bc2213364`. Most of those commits are Python-only
+overheads (graph internals, durable-execution runtimes, the Anthropic module
+split into a package, the new realtime ElevenLabs Agents and Eleven Realtime
+providers, `BatchModelRequests`, `FileUnderstanding`, the public framing
+module, and bundled Harness tooling) that `PLAN.md` and the existing audit
+notes already exclude for the Go port:
+
+- Upstream `pydantic_ai._agent_graph.py` (`+845`), the graph-runtime rewrite,
+  packaged `models/anthropic/`, and the durable-execution expansion under
+  `durable_exec/` (Temporal, DBOS, Prefect) keep the Graph and bundled
+  workflow runtimes as Python obligations that the Go port does not import.
+- The new `capabilities/file_understanding.py`, `capabilities/citations.py`,
+  `capabilities/batch_model_requests.py`, and `native_tools/_tool_search.py`
+  additions are capability bridges that translate to fresh Go packages
+  (worker hooks, anthropic-shaped schema limits, OpenAI/Anthropic/Gemini
+  batch endpoints, citation tracking on `TextPart`). The audit deferred each
+  behind a dedicated pass because faithful ports require their own cassette
+  work for the provider call paths and a separate decision on whether to
+  expose them through `CapabilityRegistry` setters.
+- The new structured `citations` capability adds provider-flavoured citation
+  metadata to `TextPart`. The Go port already records provider
+  `provider_details` on response parts; carrying that into `TextPart` is a
+  public-model surface change worth a port-time review with the AG-UI and
+  Vercel AI adapters, so no code lands in this sync.
+- The new `ModelRateLimitError`, `ModelQuotaExceededError`,
+  `ModelUnavailableError`, `ModelOverloadedError`, `ModelServerError`,
+  `ModelConnectionError`, `ModelTimeoutError`, `ModelRequestRejectedError`,
+  `ModelAuthenticationError`, `ModelNotFoundError`, and
+  `ModelContextWindowExceededError` categories carry rich metadata the Go
+  port expresses through `ModelTransportError` plus `ContentFilterError`
+  and provider-specific 4xx/5xx reproduction. Adopting the typed categories
+  is an additive interface change (`ModelAPIError` plus typed accessors on
+  the `Model` boundary) and the implementation regresses configured
+  coverage when added in the same PR; the port defers it to a focused
+  follow-up so 100% coverage stays honest.
+- `pydantic_ai.framing` (`pydantic_ai/_framing.py`, `pydantic_ai/framing.py`)
+  exposes `wrap`, `neutralize_tags`, and `register_tag`. The Go port has no
+  Python-tagged-content pipeline because providers receive typed parts;
+  wrapping straw `<system>` tags from upstream would conflict with the
+  existing `ai/format_prompt.go` `xml` template function.
+- Realtime provider updates (OpenAI GPT-Live reconnect, Azure WebRTC,
+  Elephant/Edge xAI settlement, Gemini Live resumption, ElevenLabs Agents
+  corrections, and the new `ElevenLabsRealtimeModel`) cross the
+  `realtime.Session` boundary. The Go port already providers the
+  connection-level hooks (`HangUp`, `Reconnect`, `WebRTC signaling`,
+  `IdleAudio`); new provider-specific modes require native call graphs that
+  don't translate cleanly because the Go session owns its own codec events
+  rather than the Python lifecycle protocol.
+- Citation, structured-content (`StructuredContent`), and
+  `manage_message_history` UI additions belong to the AG-UI and Vercel AI
+  adapters and need to land alongside the AG-UI/Vercel parity audit pass.
+- Documented upstream-only audit exclusions: `2d6656061`,
+  `e082b00fd`, `58b6841a4`, `65fb293a7`, and the entire range of
+  Harness/clai2/site-package changes enumerated in the previous sync.
+
+The pin advances because the audit confirms no additional Go behaviour is
+required to keep parity stable across the audited range, and re-running the
+same audit on every new upstream commit would duplicate effort without
+uncovering a portable change.
+

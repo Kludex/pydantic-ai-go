@@ -90,6 +90,15 @@ These upstream changes are permanently excluded. No Go code is added for them:
 - `d585ba81623ee6b12015ff91ba7ff2dea1a928ee`: `ModelSettings['max_retries']` for provider SDK retries. Go adapters use direct HTTP with caller-owned clients and the `ai/retries` transport.
 - `c0128863f56fc5d034cc894aac8d9a720da477df`: `xai_sdk` gRPC tool-result replay. Go's xAI adapter uses the Responses HTTP API.
 
+- `9341`, `10610`, `11367`: `DockerSandbox`, `DaytonaSandbox`, `BoxdSandbox`. `PLAN.md` keeps the local workspace backend and does not bundle runtime sandboxes.
+- `11370`, `11369`, `10610`, and the durable-`OperationBackend` rewrites for Temporal, DBOS, and Prefect backends stay out because the public `durable` callback contract composes application-owned SDK callbacks and these runtimes have no Go equivalents bundled here.
+- `11128` introduces a workflow-side determinism check for core changes. The Go module does not bundle a Python-side test runner; the analogous guard lives in `scripts/coverage.sh` and the per-package 100% coverage pragma.
+- `11499` labels core-changing PRs `needs-durable-exec-review` and gives CI Review a durable engine site list. Go has no bundled durable engine and the durable public surface is just `ai/durable`, so no engine-specific review site is needed.
+
+- `10957` introduces `pydantic_ai.framing` with `wrap`, `neutralize_tags`, `register_tag`, and the `FramingTag` union. Go already wraps and neutralizes system, validation-errors, retry-feedback, context, and context-diff tags inside per-provider request adapters and `SanitizeMessages`. The package-level `Wrap`/`RegisterTag` helpers are tracked under "Future work" in `CHECKLIST.md`.
+
+- `838198923`, `10957`, `10790`, `11351`, `8188`, `11445`, `11426`: `<context_diff>` tag framing, `on_change='append'` dynamic system prompts, and the `ContextDelta` / `InstructionDigest` families are documented in Python but already implemented through `ContextDiff` markers, `AppendOnChange`, `ClearAt`, and the per-step instruction cache snapshot in Go; no new public Go type is added.
+
 Upstream patches are reference data, not executable inputs. These additions do not introduce harness capability loading or self-extension.
 
 ## Reporting compatibility problems

@@ -2,7 +2,9 @@
 
 This is the living source of truth for parity work. Update it whenever a feature lands, a gap is discovered, or an API decision changes.
 
-Audited upstream baseline: `pydantic/pydantic-ai@19b1eafbbef19c8891666576c438ae9e0d90ef16`.
+Audited upstream baseline: `pydantic/pydantic-ai@79e157e8b7bbea20d2354740e981478dd54dbb23`.
+
+This sync range (19b1eafbb..79e157e8, ~267 commits) is dominated by Python-only architectural work that does not have a Go port surface: a complete rewrite of `_agent_graph.py`, the durable execution runtimes (Temporal, DBOS, Prefect), the `models/anthropic` package reorganization, and the kernel harness (sandboxes, `FileUnderstanding`, `BatchModelRequests`, the `ModelFallback` capability, agent specs, `on_demand` capability loaders, Realtime turn tracking, AG-UI/Vercel 1.0). These were reviewed and skipped with reasons recorded in the pull request body. No Go runtime change was required for the bulk because the public-API parity surface is intact, and the architectural Python work targets Python-only infrastructure.
 
 Python-only type-overload and error-helper refactors require no Go runtime change because Go constructors are explicit and the direct HTTP embedding adapters already share their error paths.
 

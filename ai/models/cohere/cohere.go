@@ -4,8 +4,6 @@ package cohere
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -210,8 +208,7 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		}
 		callID := call.ID
 		if callID == "" {
-			digest := sha256.Sum256([]byte(call.Function.Name + "\x00" + call.Function.Arguments))
-			callID = "cohere-" + hex.EncodeToString(digest[:8])
+			callID = syntheticCallID(call.Function.Name, call.Function.Arguments)
 		}
 		parts = append(parts, ai.ToolCallPart{
 			ToolName: call.Function.Name, Args: json.RawMessage(call.Function.Arguments),

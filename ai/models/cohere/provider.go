@@ -2,6 +2,8 @@
 package cohere
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 )
@@ -47,4 +49,11 @@ type APIError struct {
 // Error implements error.
 func (err *APIError) Error() string {
 	return fmt.Sprintf("%s API returned status %d: %s", err.ProviderName, err.StatusCode, err.Body)
+}
+
+// syntheticCallID derives a stable tool-call identity when Cohere omits one.
+// The same name and arguments yield the same ID across non-stream and stream paths.
+func syntheticCallID(name, arguments string) string {
+	digest := sha256.Sum256([]byte(name + "\x00" + arguments))
+	return "cohere-" + hex.EncodeToString(digest[:8])
 }

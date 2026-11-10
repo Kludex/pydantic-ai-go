@@ -66,7 +66,7 @@ type chatChunk struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Delta struct {
-			Content          string             `json:"content"`
+			Content          chatText           `json:"content"`
 			Refusal          string             `json:"refusal"`
 			ReasoningContent string             `json:"reasoning_content"`
 			Reasoning        string             `json:"reasoning"`
@@ -319,7 +319,7 @@ func (m *Model) eventStream(
 			}
 			if delta.Content != "" {
 				if !yield(ai.TextDeltaEvent{
-					PartID: "text", Delta: delta.Content, ProviderName: m.providerName,
+					PartID: "text", Delta: string(delta.Content), ProviderName: m.providerName,
 				}, nil) {
 					return
 				}

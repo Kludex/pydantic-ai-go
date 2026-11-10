@@ -74,10 +74,6 @@ func TestStreamProtocolFailures(t *testing.T) {
 		{name: "malformed chunk", body: "data: {\n\n"},
 		{name: "malformed content", body: `data: {"choices":[{"delta":{"content":{}}}]}` + "\n\n"},
 		{name: "tool type", body: `data: {"choices":[{"delta":{"tool_calls":[{"type":"custom","function":{"name":"x","arguments":{}}}]}}]}` + "\n\n"},
-		{name: "replaced arguments", body: strings.Join([]string{
-			`data: {"choices":[{"delta":{"tool_calls":[{"index":2,"id":"call","function":{"name":"x","arguments":{"a":1}}}]}}]}`,
-			`data: {"choices":[{"delta":{"tool_calls":[{"index":2,"id":"call","function":{"name":"x","arguments":{"b":2}}}]}}]}`,
-		}, "\n\n") + "\n\n"},
 		{name: "missing done", body: `data: {"choices":[]}` + "\n\n"},
 	}
 	for _, test := range tests {

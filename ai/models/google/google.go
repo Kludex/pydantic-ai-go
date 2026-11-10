@@ -880,7 +880,26 @@ func googleIsModernModel(modelName string) bool {
 }
 
 func googleSupportsThinking(modelName string) bool {
-	return strings.Contains(strings.ToLower(modelName), "gemini-2.5") || googleIsModernModel(modelName)
+	name := strings.ToLower(modelName)
+	return !strings.Contains(name, "gemini-2.5-flash-image") &&
+		(strings.Contains(name, "gemini-2.5") || googleIsModernModel(modelName))
+}
+
+func containsRef(node any) bool {
+	switch node := node.(type) {
+	case map[string]any:
+		if _, ok := node["$ref"]; ok {
+			return true
+		}
+		for _, value := range node {
+			if containsRef(value) {
+				return true
+			}
+		}
+	case []any:
+		return slices.ContainsFunc(node, containsRef)
+	}
+	return false
 }
 
 func googleThinkingLevel(modelName string, transport Transport, requested string) string {
@@ -943,8 +962,15 @@ func (model *Model) convertRequest(ctx context.Context, m ai.ModelRequest) ([]co
 			if rp.Outcome == ai.ToolReturnOutcomeFailed || rp.Outcome == ai.ToolReturnOutcomeInterrupted {
 				key = "error"
 			}
+			content := rp.Content
+			// Gemini reads any `$ref` key as a reference to a named function-response part.
+			data, _ := json.Marshal(content)
+			var decoded any
+			if json.Unmarshal(data, &decoded) == nil && containsRef(decoded) {
+				content = string(data)
+			}
 			parts = append(parts, part{FunctionResponse: &functionResponse{
-				ID: rp.ToolCallID, Name: rp.ToolName, Response: map[string]any{key: rp.Content},
+				ID: rp.ToolCallID, Name: rp.ToolName, Response: map[string]any{key: content},
 			}})
 		case ai.ToolAvailabilityDeltaPart:
 		case ai.RetryPromptPart:

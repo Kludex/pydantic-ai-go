@@ -521,14 +521,15 @@ func TestResponsesFileSearchNativeTool(t *testing.T) {
 		}`))
 	}, openai.WithResponsesFileSearchResults(true))
 	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{NativeTools: []ai.NativeTool{
-		ai.FileSearchTool{FileStoreIDs: []string{"vs-1", "vs-2"}},
-	}})
+		ai.FileSearchTool{FileStoreIDs: []string{"vs-1", "vs-2"}, MaxNumResults: func() *int { value := 5; return &value }()},
+	}, Settings: ai.ModelSettings{ServiceTier: "ultrafast"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	tool := body["tools"].([]any)[0].(map[string]any)
 	stores := tool["vector_store_ids"].([]any)
-	if tool["type"] != "file_search" || len(stores) != 2 || stores[0] != "vs-1" ||
+	if tool["type"] != "file_search" || len(stores) != 2 || stores[0] != "vs-1" || tool["max_num_results"] != float64(5) ||
+		body["service_tier"] != "ultrafast" ||
 		body["include"].([]any)[0] != "file_search_call.results" {
 		t.Fatalf("unexpected file search request: %#v", body)
 	}

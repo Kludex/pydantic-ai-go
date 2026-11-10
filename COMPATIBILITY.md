@@ -34,7 +34,7 @@ Raising the minimum Go version may happen in a minor release before `v1.0.0`. Af
 
 `MarshalMessages`, `UnmarshalMessages`, and `Conversation` JSON are the stable persistence boundary. The project preserves documented discriminators and continues to decode supported legacy aliases. New optional fields may appear in serialized messages without a major release.
 
-Compatibility claims apply to the PydanticAI baseline recorded in `CHECKLIST.md` and `.upstream-sync.json`. A checklist item marked partial does not promise compatibility for the missing upstream variants.
+Compatibility claims apply to the PydanticAI baseline recorded in `CHECKLIST.md` and `.upstream-sync.json`. A checklist item marked partial does not promise compatibility for the missing upstream variants, and an upstream change the checklist lists as open is not claimed.
 
 Application-defined values in metadata or tool returns must remain valid for the application's own decoder. Provider-specific opaque values may stop replaying when a provider removes the corresponding API.
 
@@ -46,7 +46,7 @@ A provider can reject a model or feature that its remote API no longer supports.
 
 ## Audited upstream additions
 
-The port includes these applicable changes through the baseline recorded in `.upstream-sync.json`:
+The port includes these applicable changes through the baseline recorded in `.upstream-sync.json`. Changes `CHECKLIST.md` lists as open are not included:
 
 | Commit | Go behavior |
 | --- | --- |
@@ -72,6 +72,8 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `5049c94cb94b529ab6da092c59564fb3bc19cdf2` | Realtime `TurnCompleteEvent` waits for every pending response and tool call |
 | `977e56bbb62fa93b641d5b04305447264725c306` | `FormatAsXML` writes keys that are not XML names as `<item key="...">` |
 | `478f1a2a1cea49417426da9d45ef22a124d87806` | `WithToolKind` accepts validated `namespace.name` kinds; Python's typed tool-part registry has no Go counterpart |
+| `4645db8f1bee825a2648b7e613520996139ec671` | `ChatCompatibility.ReasoningContentOnToolCalls` sends an empty `reasoning_content` on current-turn tool calls when the request reasons; Go keeps its current-turn-only backfill instead of Python's every-turn `'field'` mode |
+| `8404728a6de1b741a3371defefd285961e8acc3e` | OpenAI accepts `scale`, `fast`, and `ultrafast` through the open `ServiceTier` string; the portable constants are unchanged |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 

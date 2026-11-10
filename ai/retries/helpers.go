@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"math/big"
 	"net/http"
+	"strconv"
 	"time"
 )
 
@@ -51,8 +53,9 @@ func ExponentialBackoff(initial time.Duration, maximum time.Duration) WaitFunc {
 	}
 }
 
-// WaitRetryAfter honors Retry-After seconds or HTTP dates, capped by maximum.
-// It uses fallback when the header is absent or invalid.
+// WaitRetryAfter honors retry-after-ms milliseconds, as OpenAI and Anthropic
+// send them, then Retry-After seconds or HTTP dates, capped by maximum.
+// It uses fallback when the headers are absent or invalid.
 func WaitRetryAfter(fallback WaitFunc, maximum time.Duration) WaitFunc {
 	if maximum <= 0 {
 		panic("retries: Retry-After maximum must be positive")
@@ -62,6 +65,10 @@ func WaitRetryAfter(fallback WaitFunc, maximum time.Duration) WaitFunc {
 	}
 	return func(attempt Attempt) time.Duration {
 		if attempt.Response != nil {
+			milliseconds, err := strconv.ParseFloat(attempt.Response.Header.Get("Retry-After-Ms"), 64)
+			if err == nil && milliseconds >= 0 && !math.IsInf(milliseconds, 0) {
+				return min(time.Duration(min(milliseconds*float64(time.Millisecond), float64(maximum))), maximum)
+			}
 			value := attempt.Response.Header.Get("Retry-After")
 			if seconds, ok := new(big.Int).SetString(value, 10); ok && seconds.Sign() >= 0 {
 				if !seconds.IsInt64() || seconds.Int64() > int64(maximum/time.Second) {

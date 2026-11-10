@@ -18,6 +18,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - `openai.ChatCompatibility.DeveloperSystemPrompts` sends system prompts with the `developer` role.
 - GPT-Live `openai_live_delegation` accepts `reasoning_summary`.
 - Anthropic `thinking_tokens` usage is reported as reasoning tokens.
+- `openai.ChatCompatibility.ReasoningContentOnToolCalls` sends an empty `reasoning_content` on current-turn tool calls whenever the request reasons. DeepSeek uses it, so a run that falls back to DeepSeek or resumes with thinking is not rejected.
+- OpenAI Responses sends `FileSearchTool.MaxNumResults` as `max_num_results`.
+- OpenAI accepts its own `scale`, `fast`, and `ultrafast` service tiers in `ModelSettings.ServiceTier`.
+- `retries.WaitRetryAfter` honors the `retry-after-ms` header OpenAI and Anthropic send, ahead of `Retry-After`.
+- `deepseek-flash` thinks by default, like DeepSeek V4.
 
 ### Changed
 
@@ -29,6 +34,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - GLM-5.3 tool schemas are sent with inlined definitions on Z.AI, Mistral, OpenRouter, and vLLM.
 - Vercel AI frontends keep separate user prompts through a round trip, and a run that hits its context deadline aborts with "The agent run timed out."
 - OpenAI Codex keeps a refreshed token it could not save instead of reverting to the stored one it spent.
+- DeepSeek Chat sends `MaxTokens` as `max_tokens`, which DeepSeek honors, instead of `max_completion_tokens`, which it ignores.
+- Mistral streams accumulate tool-call argument fragments that share an index into one call, keeping the first name and ID.
+- OpenAI-compatible Chat Completions responses whose `content` is a list of parts keep the text parts.
+- Gemini tool returns that contain a `$ref` key are sent as JSON text, which Gemini otherwise rejects. `gemini-2.5-flash-image` is no longer sent a thinking configuration.
+- Downloads and web fetches treat `fec0::/10`, `::ffff:0:0:0/96`, `100:0:0:1::/64`, `2001:2::/48`, `3fff::/20`, and `5f00::/16` as private addresses.
 
 ## [0.6.0] - 2026-10-18
 

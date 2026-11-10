@@ -478,6 +478,41 @@ func TestThinkingSettings(t *testing.T) {
 	}
 }
 
+func TestFlashImageOmitsThinkingAndRefToolReturnIsText(t *testing.T) {
+	var body map[string]any
+	model := newNamedServer(t, "gemini-2.5-flash-image", func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+	})
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "layout?"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: "get_layout", ToolCallID: "a"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{
+			ai.ToolReturnPart{ToolName: "get_layout", ToolCallID: "a", Content: map[string]any{
+				"items": []any{map[string]any{"$ref": "#/defs/title"}},
+			}},
+			ai.ToolReturnPart{ToolName: "get_layout", ToolCallID: "b", Content: map[string]any{"title": "Home"}},
+		}},
+	}
+	_, err := model.Request(t.Context(), history, ai.ModelRequestParams{Settings: ai.ModelSettings{
+		Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := body["generationConfig"].(map[string]any)["thinkingConfig"]; ok {
+		t.Fatalf("thinking config sent to a non-thinking model: %v", body["generationConfig"])
+	}
+	parts := body["contents"].([]any)[2].(map[string]any)["parts"].([]any)
+	withRef := parts[0].(map[string]any)["functionResponse"].(map[string]any)["response"].(map[string]any)["result"]
+	plain := parts[1].(map[string]any)["functionResponse"].(map[string]any)["response"].(map[string]any)["result"]
+	if withRef != `{"items":[{"$ref":"#/defs/title"}]}` || plain.(map[string]any)["title"] != "Home" {
+		t.Fatalf("unexpected function responses: %#v", parts)
+	}
+}
+
 func TestServiceTierMapping(t *testing.T) {
 	var body map[string]any
 	model := newServer(t, func(w http.ResponseWriter, r *http.Request) {

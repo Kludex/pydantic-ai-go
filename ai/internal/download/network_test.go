@@ -26,6 +26,12 @@ func TestValidateAddress(t *testing.T) {
 		"ISATAP variant":    {address: "2001:4860::200:5efe:a00:1", wantError: "private or internal"},
 		"embedded metadata": {address: "2001:4860::a9fe:a9fe", allowLocal: true, wantError: "cloud metadata"},
 		"Teredo metadata":   {address: "2001::5601:5601", allowLocal: true, wantError: "cloud metadata"},
+		"site local":        {address: "fec0::1", wantError: "private or internal"},
+		"IPv4 translated":   {address: "::ffff:0:808:808", wantError: "private or internal"},
+		"dummy prefix":      {address: "100:0:0:1::1", wantError: "private or internal"},
+		"benchmarking":      {address: "2001:2::1", wantError: "private or internal"},
+		"documentation":     {address: "3fff::1", wantError: "private or internal"},
+		"SRv6 SID":          {address: "5f00::1", wantError: "private or internal"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := validateAddress(netip.MustParseAddr(test.address), test.allowLocal)

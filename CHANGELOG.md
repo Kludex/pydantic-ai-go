@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-11-10
+
 ### Added
 
 - ElevenLabs Agents realtime sessions through `ai/realtime/elevenlabs` and the `elevenlabs-agents:` inference prefix, with override-toggle preflight, tool sync, hosted MCP tool parts, and audio-tag stripping.
@@ -26,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- **Breaking:** `SystemPromptPart` is no longer comparable with `==`, because its new `Metadata` field is a map.
 - A dropped GPT-Live session without a reconnect policy, or whose reconnect fails, ends with a non-recoverable `SessionErrorEvent` after settling its open turns.
 - Realtime `TurnCompleteEvent` waits until every pending response and tool call has finished.
 - Realtime retained-audio accounting costs the same per frame however long the session runs.
@@ -39,6 +42,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - OpenAI-compatible Chat Completions responses whose `content` is a list of parts keep the text parts.
 - Gemini tool returns that contain a `$ref` key are sent as JSON text, which Gemini otherwise rejects. `gemini-2.5-flash-image` is no longer sent a thinking configuration.
 - Downloads and web fetches treat `fec0::/10`, `::ffff:0:0:0/96`, `100:0:0:1::/64`, `2001:2::/48`, `3fff::/20`, and `5f00::/16` as private addresses.
+- OpenAI Responses history replays reasoning items with their required `summary` array, grouping consecutive reasoning parts that share an ID. A follow-up turn after a web search no longer fails with `Missing required parameter: 'input[3].summary'`.
 
 ## [0.6.0] - 2026-10-18
 
@@ -251,7 +255,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 - No security fixes have been released yet.
 
-[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/Kludex/pydantic-ai-go/commits/v0.4.0

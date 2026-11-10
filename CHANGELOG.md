@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-10
+
+### Fixed
+
+- A realtime session no longer hangs without a `TurnCompleteEvent` when the provider's final reply arrives before the session finishes recording a sent tool result.
+
 ## [0.7.0] - 2026-11-10
 
 ### Added
@@ -255,7 +261,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 - No security fixes have been released yet.
 
-[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/Kludex/pydantic-ai-go/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.4.0...v0.5.0

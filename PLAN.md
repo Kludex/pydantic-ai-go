@@ -281,14 +281,12 @@ The minimal useful agent: typed runs against OpenAI.
 - Thinking/reasoning part support surfaced per provider
 - Evals integration: first-class task adapter for pydantic-evals-go
 
-### Post-parity - Agentic upstream sync
+### Post-parity - Daily upstream sync
 
-Once the package is up to date with PydanticAI itself, add a [gh-aw](https://github.com/githubnext/gh-aw) agentic workflow so the repo keeps itself current - the same setup as [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go)'s `agentic-evals-sync`, but running **daily** instead of weekly.
+A daily scheduled Pi job keeps the repo current with PydanticAI, the same setup as [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go).
 
-- `.github/workflows/agentic-ai-sync.md` (compiled `.lock.yml` committed alongside), `schedule: daily` + `workflow_dispatch`.
-- Upstream commit pinned in `.upstream-sync.json`; the agent diffs `pydantic/pydantic-ai` since the pin, ports relevant changes into Go, bumps the pin, and opens a draft PR (`[ai-sync]` prefix, `agentic-workflows` + `upstream-sync` labels, max 1 PR per run).
+- Upstream commit pinned in `.upstream-sync.json`; the agent diffs `pydantic/pydantic-ai` since the pin, ports relevant changes into Go, bumps the pin, and squash-merges the sync PR once CI passes.
 - Python-only or non-applicable changes (graph internals, durable execution, harness features) are skipped and noted in the PR body.
-- Same guardrails as evals-go: read-only permissions plus `create-pull-request` safe output, allowlisted bash tools (`git`, `rg`, `gofmt`, `go build/vet/test`), `AGENTIC_WORKFLOWS_ENABLED` repo variable as kill switch, concurrency group, turn/timeout caps.
 
 ### Explicitly out of scope
 

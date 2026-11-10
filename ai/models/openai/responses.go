@@ -469,24 +469,41 @@ type responsesInput struct {
 	Role    string `json:"role,omitempty"`
 	Content any    `json:"content,omitempty"`
 	// function_call and function_call_output items
-	Type             string           `json:"type,omitempty"`
-	ID               string           `json:"id,omitempty"`
-	CallID           any              `json:"call_id,omitempty"`
-	Name             string           `json:"name,omitempty"`
-	Arguments        any              `json:"arguments,omitempty"`
-	Action           json.RawMessage  `json:"action,omitempty"`
-	Namespace        string           `json:"namespace,omitempty"`
-	Output           any              `json:"output,omitempty"`
-	Execution        string           `json:"execution,omitempty"`
-	Status           string           `json:"status,omitempty"`
-	Phase            string           `json:"phase,omitempty"`
-	Tools            *[]responsesTool `json:"tools,omitempty"`
-	EncryptedContent string           `json:"encrypted_content,omitempty"`
-	ContainerID      string           `json:"container_id,omitempty"`
-	Code             string           `json:"code,omitempty"`
-	Outputs          any              `json:"outputs,omitempty"`
-	Queries          []string         `json:"queries,omitempty"`
-	ServerLabel      string           `json:"server_label,omitempty"`
+	Type             string                      `json:"type,omitempty"`
+	ID               string                      `json:"id,omitempty"`
+	CallID           any                         `json:"call_id,omitempty"`
+	Name             string                      `json:"name,omitempty"`
+	Arguments        any                         `json:"arguments,omitempty"`
+	Action           json.RawMessage             `json:"action,omitempty"`
+	Namespace        string                      `json:"namespace,omitempty"`
+	Output           any                         `json:"output,omitempty"`
+	Execution        string                      `json:"execution,omitempty"`
+	Status           string                      `json:"status,omitempty"`
+	Phase            string                      `json:"phase,omitempty"`
+	Tools            *[]responsesTool            `json:"tools,omitempty"`
+	EncryptedContent string                      `json:"encrypted_content,omitempty"`
+	Summary          []responsesReasoningSummary `json:"summary,omitempty"`
+	ContainerID      string                      `json:"container_id,omitempty"`
+	Code             string                      `json:"code,omitempty"`
+	Outputs          any                         `json:"outputs,omitempty"`
+	Queries          []string                    `json:"queries,omitempty"`
+	ServerLabel      string                      `json:"server_label,omitempty"`
+}
+
+func (i responsesInput) MarshalJSON() ([]byte, error) {
+	type plain responsesInput
+	if i.Type != "reasoning" {
+		return json.Marshal(plain(i))
+	}
+	return json.Marshal(struct {
+		plain
+		Summary []responsesReasoningSummary `json:"summary"`
+	}{plain(i), append([]responsesReasoningSummary{}, i.Summary...)})
+}
+
+type responsesReasoningSummary struct {
+	Type string `json:"type"`
+	Text string `json:"text"`
 }
 
 type responsesInputContent struct {

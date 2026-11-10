@@ -1289,6 +1289,76 @@ func TestResponsesStreamWebSearchNativeTool(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamReasoningAndWebSearchHistory(t *testing.T) {
+	var replay map[string]any
+	requests := 0
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			sseHandler(t, []string{
+				`{"type":"response.created","response":{"id":"first","status":"in_progress"}}`,
+				`{"type":"response.completed","response":{"id":"first","model":"gpt-5","status":"completed","output":[{"id":"reason","type":"reasoning","encrypted_content":"opaque","summary":[{"text":"Checked the source"}]},{"id":"web","type":"web_search_call","status":"completed","action":{"type":"search","query":"Go news"}},{"id":"message","type":"message","content":[{"type":"output_text","text":"Found news"}]}],"usage":{}}}`,
+				`[DONE]`,
+			})(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&replay); err != nil {
+			t.Error(err)
+		}
+		_, _ = w.Write([]byte(`{"id":"second","model":"gpt-5","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"done"}]}]}`))
+	})
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finish ai.FinishEvent
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if completed, ok := event.(ai.FinishEvent); ok {
+			finish = completed
+		}
+	}
+	var thinking, search int
+	for _, part := range finish.Parts {
+		switch part.(type) {
+		case ai.ThinkingPart:
+			thinking++
+		case ai.NativeToolCallPart:
+			search++
+		}
+	}
+	if thinking != 1 || search != 1 {
+		t.Fatalf("unexpected streamed response parts: %#v", finish.Parts)
+	}
+	_, err = model.Request(t.Context(), []ai.ModelMessage{
+		ai.ModelResponse{ProviderName: "openai", Parts: finish.Parts},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "What source?"}}},
+	}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	input, _ := replay["input"].([]any)
+	if len(input) < 2 {
+		t.Fatalf("unexpected replay input: %#v", replay["input"])
+	}
+	reasoning, _ := input[0].(map[string]any)
+	summary, _ := reasoning["summary"].([]any)
+	if len(summary) != 1 {
+		t.Fatalf("reasoning summary was not replayed: %#v", reasoning)
+	}
+	entry, _ := summary[0].(map[string]any)
+	if entry["text"] != "Checked the source" || entry["type"] != "summary_text" {
+		t.Fatalf("reasoning summary was not replayed: %#v", reasoning)
+	}
+	if search, _ := input[1].(map[string]any); search["type"] != "web_search_call" {
+		t.Fatalf("web search was not replayed: %#v", input[1])
+	}
+}
+
 func TestResponsesStreamWebSearchConsumerBreaks(t *testing.T) {
 	for _, breakAfter := range []int{1, 2, 3} {
 		t.Run(fmt.Sprintf("event %d", breakAfter), func(t *testing.T) {

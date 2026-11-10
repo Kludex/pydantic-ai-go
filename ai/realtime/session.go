@@ -832,15 +832,6 @@ func (session *Session) releaseResponseReservation() {
 	session.mu.Unlock()
 }
 
-func (session *Session) finishPendingTool() {
-	session.mu.Lock()
-	if session.pendingToolCalls > 0 {
-		session.pendingToolCalls--
-	}
-	session.notifyReplyLocked()
-	session.mu.Unlock()
-}
-
 func (session *Session) notifyReplyLocked() {
 	select {
 	case session.replyProgress <- struct{}{}:
@@ -1762,7 +1753,6 @@ func normalizeToolResult(call ai.ToolCallPart, value any, err error) (ai.Request
 }
 
 func (session *Session) completeTool(call ai.ToolCallPart, part ai.RequestPart, extra []ai.UserContent) {
-	defer session.finishPendingTool()
 	output := renderToolPart(part)
 	session.mu.Lock()
 	cancelled := session.cancelledTools[call.ToolCallID]
@@ -1778,10 +1768,15 @@ func (session *Session) completeTool(call ai.ToolCallPart, part ai.RequestPart, 
 		batch.remaining--
 		reserve = reserve && batch.countAnswer()
 	}
-	session.mu.Unlock()
-	if reserve {
-		session.reserveResponse()
+	// Settle the call before sending its result, so a reply that beats this goroutine back still ends the turn.
+	if session.pendingToolCalls > 0 {
+		session.pendingToolCalls--
 	}
+	if reserve {
+		session.pendingResponses++
+	}
+	session.notifyReplyLocked()
+	session.mu.Unlock()
 	var sendErr error
 	if !cancelled {
 		sendErr = session.send(session.ctx, ToolResult{ToolCallID: call.ToolCallID, Output: output, Content: slices.Clone(extra)})

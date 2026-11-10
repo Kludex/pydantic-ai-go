@@ -76,6 +76,8 @@ Chat Completions accepts provider-hosted documents as `ai.UploadedFile` values w
 
 Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, `gpt-5.6`, and the GPT-6 Astra, Sol, and Luna families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
 
+`ModelSettings.ServiceTier` also accepts OpenAI's own tiers `"scale"`, `"fast"`, and `"ultrafast"`. `fast` is OpenAI's newer name for `priority`. OpenAI accepts `ultrafast` only on the Responses API, so Chat Completions returns the API's error for it.
+
 GPT-6 Sol and Luna reason at medium effort by default. Set `ThinkingLevelDisabled` to send `reasoning_effort: "none"` when you need Chat Completions function calling. Use the Responses API when you need reasoning and tools together.
 
 ### Predicted output
@@ -328,7 +330,9 @@ func main() {
 
 Set `DEEPSEEK_API_KEY`. Use `deepseek.NewResponsesModel` when you need DeepSeek's Responses API or native JSON Schema output.
 
-DeepSeek V4 rejects forced tools while thinking is active. The adapter sends `tool_choice: "auto"` in that case. It restores `tool_choice: "required"` when you disable thinking. `deepseek-reasoner` always reasons, so its disabled-thinking request is omitted and its tool choice remains automatic.
+DeepSeek Chat Completions documents only `max_tokens` and ignores `max_completion_tokens`, so the adapter sends `MaxTokens` as `max_tokens`. DeepSeek rejects a thinking request whose current-turn tool call lacks `reasoning_content`, even when an earlier step ran without thinking, so the adapter sends it empty on those calls.
+
+DeepSeek V4 and `deepseek-flash` reject forced tools while thinking is active. The adapter sends `tool_choice: "auto"` in that case. It restores `tool_choice: "required"` when you disable thinking. `deepseek-reasoner` always reasons, so its disabled-thinking request is omitted and its tool choice remains automatic.
 
 Reasoning from Chat Completions becomes a `ThinkingPart` and returns through `reasoning_content` on later turns. A caller-provided HTTP client remains caller-owned.
 

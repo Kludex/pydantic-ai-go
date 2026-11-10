@@ -2,6 +2,7 @@ package mistral
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -59,8 +60,8 @@ func (model *Model) eventStream(
 		timestamp := time.Now().UTC()
 		providerTimestamp := false
 		finishReason := ""
-		startedTools := map[int]bool{}
-		toolArguments := map[int]string{}
+		toolCalls := map[int]*streamedToolCall{}
+		var order []int
 		scanner := bufio.NewScanner(body)
 		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 		for scanner.Scan() {
@@ -70,6 +71,26 @@ func (model *Model) eventStream(
 			}
 			data = strings.TrimSpace(data)
 			if data == "[DONE]" {
+				for _, index := range order {
+					state := toolCalls[index]
+					partID := fmt.Sprintf("tool:%d", index)
+					if !state.started {
+						if state.id == "" {
+							state.id = generatedToolCallID(state.name, json.RawMessage(state.arguments))
+						}
+						if !yield(ai.ToolCallStartEvent{
+							PartID: partID, ToolName: state.name, ToolCallID: state.id, ProviderName: model.providerName,
+						}, nil) {
+							return
+						}
+						if state.arguments != "" && !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: state.arguments}, nil) {
+							return
+						}
+					}
+					if state.arguments == "" && !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: "{}"}, nil) {
+						return
+					}
+				}
 				details := map[string]any{"finish_reason": finishReason}
 				if providerTimestamp {
 					details["timestamp"] = timestamp
@@ -133,35 +154,42 @@ func (model *Model) eventStream(
 					yield(nil, fmt.Errorf("mistral: unsupported stream tool call type %q", call.Type))
 					return
 				}
-				arguments := normalizeArguments(call.Function.Arguments)
-				callID := call.ID
-				if callID == "" {
-					callID = generatedToolCallID(call.Function.Name, arguments)
+				state := toolCalls[index]
+				if state == nil {
+					state = &streamedToolCall{}
+					toolCalls[index] = state
+					order = append(order, index)
 				}
-				partID := fmt.Sprintf("tool:%d", index)
-				if !startedTools[index] {
-					startedTools[index] = true
+				if state.name == "" {
+					state.name = call.Function.Name
+				}
+				if state.id == "" && call.ID != "null" {
+					state.id = call.ID
+				}
+				// Mistral sends whole snapshots or fragments; a snapshot repeats what came before.
+				fragment := ""
+				if raw := bytes.TrimSpace(call.Function.Arguments); len(raw) != 0 && !bytes.Equal(raw, []byte("null")) {
+					fragment = string(normalizeArguments(raw))
+				}
+				fragment = strings.TrimPrefix(fragment, state.arguments)
+				state.arguments += fragment
+				if !state.started && state.name == "" {
+					continue
+				}
+				if !state.started {
+					state.started = true
+					if state.id == "" {
+						state.id = generatedToolCallID(state.name, json.RawMessage(state.arguments))
+					}
 					if !yield(ai.ToolCallStartEvent{
-						PartID: partID, ToolName: call.Function.Name, ToolCallID: callID,
+						PartID: fmt.Sprintf("tool:%d", index), ToolName: state.name, ToolCallID: state.id,
 						ProviderName: model.providerName,
 					}, nil) {
 						return
 					}
+					fragment = state.arguments
 				}
-				current := string(arguments)
-				previous := toolArguments[index]
-				if current == previous {
-					continue
-				}
-				if previous != "" && !strings.HasPrefix(current, previous) {
-					yield(nil, &ai.UnexpectedModelBehaviorError{Message: fmt.Sprintf(
-						"Mistral replaced tool arguments for stream index %d", index,
-					)})
-					return
-				}
-				delta := strings.TrimPrefix(current, previous)
-				toolArguments[index] = current
-				if delta != "" && !yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: delta}, nil) {
+				if fragment != "" && !yield(ai.ToolCallDeltaEvent{PartID: fmt.Sprintf("tool:%d", index), ArgsDelta: fragment}, nil) {
 					return
 				}
 			}
@@ -172,4 +200,9 @@ func (model *Model) eventStream(
 		}
 		yield(nil, fmt.Errorf("mistral: stream ended without [DONE]"))
 	}
+}
+
+type streamedToolCall struct {
+	name, id, arguments string
+	started             bool
 }

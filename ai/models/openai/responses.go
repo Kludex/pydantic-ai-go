@@ -635,18 +635,18 @@ func prepareResponsesNativeTool(nativeTool ai.NativeTool, providerName string) (
 }
 
 func responsesFileSearchTool(tool ai.FileSearchTool, providerName string) responsesTool {
+	prepared := responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}
 	if providerName == "xai" {
-		prepared := responsesTool{
+		prepared = responsesTool{
 			Type: "collections_search", CollectionIDs: slices.Clone(tool.FileStoreIDs),
 			Instructions: tool.Instructions, RetrievalMode: tool.RetrievalMode,
 		}
-		if tool.MaxNumResults != nil {
-			maximum := *tool.MaxNumResults
-			prepared.MaxNumResults = &maximum
-		}
-		return prepared
 	}
-	return responsesTool{Type: "file_search", VectorStoreIDs: slices.Clone(tool.FileStoreIDs)}
+	if tool.MaxNumResults != nil {
+		maximum := *tool.MaxNumResults
+		prepared.MaxNumResults = &maximum
+	}
+	return prepared
 }
 
 func responsesXSearchTool(tool ai.XSearchTool, providerName string) (responsesTool, bool, error) {

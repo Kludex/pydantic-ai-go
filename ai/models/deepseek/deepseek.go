@@ -246,9 +246,11 @@ func (configuration config) providerConfig() openai.ProviderConfig {
 
 func deepSeekCompatibility(name string) openai.ChatCompatibility {
 	name = strings.ToLower(name)
-	isV4 := strings.HasPrefix(name, "deepseek-v4-")
+	isV4 := name == "deepseek-flash" || strings.HasPrefix(name, "deepseek-v4-")
 	return openai.ChatCompatibility{
 		ReasoningContent:                    true,
+		ReasoningContentOnToolCalls:         true,
+		LegacyMaxTokens:                     true,
 		DisableRequiredToolChoice:           name == "deepseek-reasoner",
 		DisableForcedToolChoiceWithThinking: isV4,
 		ReasoningEnabledByDefault:           isV4 || name == "deepseek-reasoner",
@@ -263,7 +265,7 @@ func prepareThinking(name string, settings ai.ModelSettings) ai.ModelSettings {
 		settings.Thinking = nil
 		return settings
 	}
-	if name != "deepseek-reasoner" && !strings.HasPrefix(name, "deepseek-v4-") {
+	if name != "deepseek-reasoner" && name != "deepseek-flash" && !strings.HasPrefix(name, "deepseek-v4-") {
 		settings = settings.Clone()
 		settings.Thinking = nil
 	}

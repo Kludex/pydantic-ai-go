@@ -125,6 +125,9 @@ type ChatCompatibility struct {
 	DisableForcedToolChoiceWithThinking bool
 	// ReasoningEnabledByDefault marks models that reason without an explicit effort.
 	ReasoningEnabledByDefault bool
+	// ReasoningContentOnToolCalls sends an empty reasoning_content on current-turn
+	// tool calls whenever the request reasons, even before any response has.
+	ReasoningContentOnToolCalls bool
 	// ResponsesReasoningContent replays visible reasoning content in Responses history.
 	ResponsesReasoningContent bool
 	// ResponsesEncryptedReasoning requests encrypted reasoning content on Responses create requests.
@@ -720,6 +723,10 @@ func (m *Model) buildPayload(
 			usedFields++
 		}
 	}
+	if usedFields == 0 && m.chatCompatibility.ReasoningContentOnToolCalls && reasoningEffort != "none" &&
+		(reasoningEffort != "" || m.chatCompatibility.ReasoningEnabledByDefault) {
+		usedField, usedFields = func(message *chatMessage) **string { return &message.ReasoningContent }, 1
+	}
 	if usedFields == 1 {
 		lastUser := -1
 		for index, message := range history {
@@ -948,7 +955,7 @@ type jsonSchemaFormat struct {
 
 func openAIServiceTier(tier ai.ServiceTier) (ai.ServiceTier, error) {
 	switch tier {
-	case "", ai.ServiceTierAuto, ai.ServiceTierDefault, ai.ServiceTierFlex, ai.ServiceTierPriority:
+	case "", ai.ServiceTierAuto, ai.ServiceTierDefault, ai.ServiceTierFlex, ai.ServiceTierPriority, "scale", "fast", "ultrafast":
 		return tier, nil
 	default:
 		return "", fmt.Errorf("openai: invalid service tier %q", tier)
@@ -1139,6 +1146,39 @@ func (err *chatError) apiError(providerName string) error {
 	return &APIError{StatusCode: status, Body: body, ProviderName: providerName}
 }
 
+// chatText decodes Chat Completions content that some compatible servers send
+// as a list of parts, keeping only the text.
+type chatText string
+
+func (text *chatText) UnmarshalJSON(data []byte) error {
+	var parts []json.RawMessage
+	if json.Unmarshal(data, &parts) != nil {
+		var value *string
+		if err := json.Unmarshal(data, &value); err != nil {
+			return err
+		}
+		if value != nil {
+			*text = chatText(*value)
+		}
+		return nil
+	}
+	var joined strings.Builder
+	for _, raw := range parts {
+		var part struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		var plain string
+		if json.Unmarshal(raw, &plain) == nil {
+			joined.WriteString(plain)
+		} else if json.Unmarshal(raw, &part) == nil && part.Type == "text" {
+			joined.WriteString(part.Text)
+		}
+	}
+	*text = chatText(joined.String())
+	return nil
+}
+
 type chatResponse struct {
 	ID                string `json:"id"`
 	Model             string `json:"model"`
@@ -1148,7 +1188,7 @@ type chatResponse struct {
 	SystemFingerprint string `json:"system_fingerprint"`
 	Choices           []struct {
 		Message struct {
-			Content          string             `json:"content"`
+			Content          chatText           `json:"content"`
 			Refusal          string             `json:"refusal"`
 			ReasoningContent string             `json:"reasoning_content"`
 			Reasoning        string             `json:"reasoning"`
@@ -1395,7 +1435,7 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		}
 	}
 	if msg.Content != "" {
-		resp.Parts = append(resp.Parts, ai.TextPart{Content: msg.Content, ProviderName: model.providerName})
+		resp.Parts = append(resp.Parts, ai.TextPart{Content: string(msg.Content), ProviderName: model.providerName})
 	}
 	for _, call := range msg.ToolCalls {
 		if call.Type != "" && call.Type != "function" {

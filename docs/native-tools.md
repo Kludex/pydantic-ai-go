@@ -387,7 +387,7 @@ func main() {
 }
 ```
 
-`FileSearchTool` references managed vector stores. OpenAI Responses sends `FileStoreIDs` as vector-store IDs. `WithResponsesFileSearchResults` requests the matched chunks in each normalized `NativeToolReturnPart`; leave it disabled when you only need the model's answer.
+`FileSearchTool` references managed vector stores. OpenAI Responses sends `FileStoreIDs` as vector-store IDs and `MaxNumResults` as `max_num_results`, which OpenAI accepts from 1 to 50. `WithResponsesFileSearchResults` requests the matched chunks in each normalized `NativeToolReturnPart`; leave it disabled when you only need the model's answer.
 
 Google sends the same IDs as Gemini file-search store names. Older Gemini responses are reconstructed from executable queries and grounding contexts. Gemini 3 responses preserve explicit provider call IDs and fill empty tool responses from later grounding metadata. Same-provider histories replay explicit Gemini 3 parts through Google `toolCall` and `toolResponse` parts. Parts reconstructed from grounding metadata stay in history but are not replayed.
 

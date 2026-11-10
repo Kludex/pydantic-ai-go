@@ -439,6 +439,23 @@ func TestWaitStrategies(t *testing.T) {
 			t.Fatalf("Retry-After %q delay was %s, expected %s", value, delay, expected)
 		}
 	}
+	for value, expected := range map[string]time.Duration{
+		"1500": 1500 * time.Millisecond, "0.5": 500 * time.Microsecond, "1e300": 2 * time.Second,
+		"-1": time.Second, "NaN": time.Second, "Inf": time.Second, "invalid": time.Second,
+	} {
+		result := response(http.StatusTooManyRequests, nil)
+		result.Header.Set("Retry-After-Ms", value)
+		result.Header.Set("Retry-After", "invalid")
+		if delay := wait(retries.Attempt{Number: 1, Response: result}); delay != expected {
+			t.Fatalf("retry-after-ms %q delay was %s, expected %s", value, delay, expected)
+		}
+	}
+	preferred := response(http.StatusTooManyRequests, nil)
+	preferred.Header.Set("Retry-After-Ms", "250")
+	preferred.Header.Set("Retry-After", "2")
+	if delay := wait(retries.Attempt{Response: preferred}); delay != 250*time.Millisecond {
+		t.Fatalf("retry-after-ms did not take precedence: %s", delay)
+	}
 	future := response(http.StatusTooManyRequests, nil)
 	future.Header.Set("Retry-After", time.Now().Add(time.Hour).UTC().Format(http.TimeFormat))
 	if delay := wait(retries.Attempt{Response: future}); delay != 2*time.Second {

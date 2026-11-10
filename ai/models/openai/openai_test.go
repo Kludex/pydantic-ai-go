@@ -1257,3 +1257,96 @@ func TestChatBackfillsThinkingFieldOnCurrentTurnToolCalls(t *testing.T) {
 		})
 	}
 }
+
+func TestChatAcceptsListContent(t *testing.T) {
+	model := newOpenAIServer(t, func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body["stream"] == true {
+			_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":[{"type":"text","text":"Hel"}]}}]}` + "\n\n" +
+				`data: {"choices":[{"delta":{"content":null},"finish_reason":"stop"}]}` + "\n\n" +
+				`data: {"choices":[{"delta":{"content":["lo"]}}]}` + "\n\ndata: [DONE]\n\n"))
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":[{"type":"text","text":"Paris "},` +
+			`{"type":"reference","reference_ids":[1]},"is sunny"]},"finish_reason":"stop"}],"usage":{}}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := response.Parts[0].(ai.TextPart).Content; text != "Paris is sunny" {
+		t.Fatalf("unexpected text: %q", text)
+	}
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamed, err := ai.CollectModelStream(stream, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := streamed.Parts[0].(ai.TextPart).Content; text != "Hello" {
+		t.Fatalf("unexpected streamed text: %q", text)
+	}
+	stream, err = newOpenAIServer(t, func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`data: {"choices":[{"delta":{"content":7}}]}` + "\n\ndata: [DONE]\n\n"))
+	}).StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ai.CollectModelStream(stream, ai.ModelRequestParams{}); err == nil {
+		t.Fatal("expected a decode error for non-text content")
+	}
+}
+
+func TestChatSendsReasoningContentOnToolCallsWhenRequestReasons(t *testing.T) {
+	var body map[string]any
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Weather?"}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: "weather", Args: json.RawMessage(`{}`), ToolCallID: "a"}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "weather", Content: "sunny", ToolCallID: "a"}}},
+	}
+	for name, test := range map[string]struct {
+		compatibility openai.ChatCompatibility
+		thinking      *ai.ThinkingSettings
+		want          any
+	}{
+		"explicit effort":      {compatibility: openai.ChatCompatibility{ReasoningContentOnToolCalls: true}, thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, want: ""},
+		"reasons by default":   {compatibility: openai.ChatCompatibility{ReasoningContentOnToolCalls: true, ReasoningEnabledByDefault: true}, want: ""},
+		"no reasoning":         {compatibility: openai.ChatCompatibility{ReasoningContentOnToolCalls: true}},
+		"disabled reasoning":   {compatibility: openai.ChatCompatibility{ReasoningContentOnToolCalls: true, ReasoningEnabledByDefault: true}, thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}},
+		"compatibility not on": {thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := newOpenAIServer(t, openAIRequestRecorder(t, &body), openai.WithChatCompatibility(test.compatibility))
+			if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{Settings: ai.ModelSettings{Thinking: test.thinking}}); err != nil {
+				t.Fatal(err)
+			}
+			if got := body["messages"].([]any)[1].(map[string]any)["reasoning_content"]; got != test.want {
+				t.Fatalf("reasoning_content = %#v, want %#v", got, test.want)
+			}
+		})
+	}
+}
+
+func TestResponsesDeveloperSystemPrompts(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServerWithOptions(t, func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		_, _ = response.Write([]byte(`{"id":"response","status":"completed","output":[]}`))
+	}, openai.WithChatCompatibility(openai.ChatCompatibility{DeveloperSystemPrompts: true}))
+	_, err := model.Request(t.Context(), []ai.ModelMessage{ai.ModelRequest{Parts: []ai.RequestPart{
+		ai.SystemPromptPart{Content: "Be brief."}, ai.UserPromptPart{Content: "Hi"},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if role := body["input"].([]any)[0].(map[string]any)["role"]; role != "developer" {
+		t.Fatalf("system prompt role = %v", role)
+	}
+}

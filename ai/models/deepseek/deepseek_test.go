@@ -20,9 +20,10 @@ func TestDeepSeekChatThinkingAndToolChoice(t *testing.T) {
 		wantChoice    string
 		wantReasoning string
 	}{
-		"V4 default thinking":  {model: "deepseek-v4-flash", wantChoice: "auto"},
-		"V4 disabled thinking": {model: "deepseek-v4-pro", thinking: disabledThinking(), wantChoice: "required", wantReasoning: "none"},
-		"reasoner":             {model: "deepseek-reasoner", wantChoice: "auto"},
+		"V4 default thinking":    {model: "deepseek-v4-flash", wantChoice: "auto"},
+		"flash default thinking": {model: "deepseek-flash", wantChoice: "auto"},
+		"V4 disabled thinking":   {model: "deepseek-v4-pro", thinking: disabledThinking(), wantChoice: "required", wantReasoning: "none"},
+		"reasoner":               {model: "deepseek-reasoner", wantChoice: "auto"},
 		"reasoner cannot disable": {
 			model: "deepseek-reasoner", thinking: disabledThinking(), wantChoice: "auto",
 		},
@@ -112,6 +113,50 @@ func TestDeepSeekChatReasoningRoundTripAndStream(t *testing.T) {
 	if !sawThinking || model.DefaultModelSettings().MaxTokens != 20 ||
 		model.ModelProfile().DefaultOutputMode != ai.OutputModeTool {
 		t.Fatal("DeepSeek chat configuration was not retained")
+	}
+}
+
+func TestDeepSeekChatSendsMaxTokensAndReasoningOnToolCalls(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(response, `{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}],"usage":{}}`)
+	}))
+	defer server.Close()
+	history := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Weather in Paris?"}}},
+		ai.ModelResponse{ProviderName: "other", Parts: []ai.ResponsePart{ai.ToolCallPart{
+			ToolName: "get_weather", Args: json.RawMessage(`{"city":"Paris"}`), ToolCallID: "call_1",
+		}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "get_weather", Content: "sunny", ToolCallID: "call_1"}}},
+	}
+	for name, test := range map[string]struct {
+		model    string
+		thinking *ai.ThinkingSettings
+		want     any
+	}{
+		"thinking by default": {model: "deepseek-v4-flash", want: ""},
+		"thinking disabled":   {model: "deepseek-v4-flash", thinking: disabledThinking()},
+		"chat never thinks":   {model: "deepseek-chat"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			model := deepseek.NewModel(test.model, deepseek.WithBaseURL(server.URL), deepseek.WithHTTPClient(server.Client()))
+			_, err := model.Request(t.Context(), history, ai.ModelRequestParams{
+				Settings: ai.ModelSettings{MaxTokens: 50, Thinking: test.thinking},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if body["max_tokens"] != float64(50) || body["max_completion_tokens"] != nil {
+				t.Fatalf("unexpected token limit: %#v", body)
+			}
+			assistant := body["messages"].([]any)[1].(map[string]any)
+			if assistant["reasoning_content"] != test.want {
+				t.Fatalf("unexpected reasoning_content: %#v", assistant)
+			}
+		})
 	}
 }
 

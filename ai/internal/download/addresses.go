@@ -21,9 +21,15 @@ var privateNetworks = []netip.Prefix{
 	netip.MustParsePrefix("::1/128"),
 	netip.MustParsePrefix("fe80::/10"),
 	netip.MustParsePrefix("fc00::/7"),
+	netip.MustParsePrefix("fec0::/10"),
+	netip.MustParsePrefix("::ffff:0:0:0/96"),
 	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("100:0:0:1::/64"),
 	netip.MustParsePrefix("2001::/32"),
+	netip.MustParsePrefix("2001:2::/48"),
 	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("3fff::/20"),
+	netip.MustParsePrefix("5f00::/16"),
 	netip.MustParsePrefix("ff00::/8"),
 }
 

@@ -306,6 +306,7 @@ func (a *Agent[Deps, Output]) runStreamPrompt(
 		for event, err := range stream {
 			if err != nil {
 				runErr = err
+				streamedRun.result = nil
 			}
 			if !yield(event, err) {
 				return

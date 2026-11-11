@@ -7,6 +7,7 @@ import (
 	"slices"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/requestschema"
 	jsonschema "github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
@@ -14,6 +15,7 @@ import (
 func (model *Model) buildRequest(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams, stream bool,
 ) (chatRequest, error) {
+	ctx = download.WithRequestBudget(ctx)
 	if len(params.NativeTools) > 0 {
 		return chatRequest{}, fmt.Errorf("mistral: provider-native tools are not supported")
 	}

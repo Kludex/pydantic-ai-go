@@ -294,3 +294,36 @@ func TestResolveHostHonorsCancellation(t *testing.T) {
 		t.Fatal("cancelled resolution succeeded")
 	}
 }
+
+func TestFetchChargesRequestBudget(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		_, _ = writer.Write([]byte(strings.TrimPrefix(request.URL.Path, "/")))
+	}))
+	t.Cleanup(server.Close)
+	if WithRequestBudget(t.Context()).Value(budgetKey{}).(*requestBudget).remaining != maxRequestBytes {
+		t.Fatal("request budget does not start at the request maximum")
+	}
+	ctx := context.WithValue(t.Context(), budgetKey{}, &requestBudget{total: 8, remaining: 8})
+	options := Options{AllowLocal: true}
+	if result, err := FetchWithOptions(ctx, server.URL+"/abcde", options); err != nil || string(result.Data) != "abcde" {
+		t.Fatalf("first download result=%+v err=%v", result, err)
+	}
+	if _, err := FetchWithOptions(ctx, server.URL+"/fghij", options); err == nil ||
+		!strings.Contains(err.Error(), "total of 8 bytes") {
+		t.Fatalf("expected request total error, got %v", err)
+	}
+	if result, err := FetchWithOptions(ctx, server.URL+"/xyz", options); err != nil || string(result.Data) != "xyz" {
+		t.Fatalf("refunded download result=%+v err=%v", result, err)
+	}
+	if _, err := FetchWithOptions(ctx, server.URL+"/z", options); err == nil ||
+		!strings.Contains(err.Error(), "total of 8 bytes") {
+		t.Fatalf("expected exhausted request total error, got %v", err)
+	}
+	perFile := options
+	perFile.MaxBytes = 2
+	fresh := context.WithValue(t.Context(), budgetKey{}, &requestBudget{total: 8, remaining: 8})
+	if _, err := FetchWithOptions(fresh, server.URL+"/abc", perFile); err == nil ||
+		!strings.Contains(err.Error(), "exceeds 2 bytes") {
+		t.Fatalf("expected per-file error, got %v", err)
+	}
+}

@@ -416,6 +416,10 @@ func TestThinkingSettings(t *testing.T) {
 			model: "gemini-4-argon", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
 			level: "MEDIUM", include: true, hasInclude: true,
 		},
+		"carbon minimal snaps up": {
+			model: "gemini-4-carbon", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
+			level: "LOW", include: true, hasInclude: true,
+		},
 		"pro medium tie snaps down": {
 			model: "gemini-3-pro-preview", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
 			level: "LOW", include: true, hasInclude: true,

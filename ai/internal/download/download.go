@@ -44,6 +44,7 @@ func Fetch(ctx context.Context, rawURL string, allowLocal bool) (Result, error) 
 }
 
 // FetchWithOptions downloads an HTTP resource under explicit security and resource limits.
+// Within a [WithRequestBudget] context, it also charges the request's total.
 func FetchWithOptions(ctx context.Context, rawURL string, options Options) (Result, error) {
 	if options.Timeout < 0 {
 		return Result{}, fmt.Errorf("download: timeout must not be negative")
@@ -54,14 +55,22 @@ func FetchWithOptions(ctx context.Context, rawURL string, options Options) (Resu
 	if options.MaxBytes == 1<<63-1 {
 		return Result{}, fmt.Errorf("download: maximum bytes is too large")
 	}
+	if options.MaxBytes == 0 {
+		options.MaxBytes = maxResponseBytes
+	}
+	budget, _ := ctx.Value(budgetKey{}).(*requestBudget)
+	if budget == nil {
+		return fetch(ctx, rawURL, options)
+	}
+	return budget.fetch(ctx, rawURL, options)
+}
+
+func fetch(ctx context.Context, rawURL string, options Options) (Result, error) {
 	timeout := options.Timeout
 	if timeout == 0 {
 		timeout = 30 * time.Second
 	}
 	maximumBytes := options.MaxBytes
-	if maximumBytes == 0 {
-		maximumBytes = maxResponseBytes
-	}
 	parsed, err := validatedDestination(rawURL, options)
 	if err != nil {
 		return Result{}, err
@@ -228,7 +237,7 @@ func readLimited(reader io.Reader, maximumBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("download: read response: %w", err)
 	}
 	if int64(len(data)) > maximumBytes {
-		return nil, fmt.Errorf("download: response exceeds %d bytes", maximumBytes)
+		return nil, &tooLargeError{maximumBytes: maximumBytes}
 	}
 	return data, nil
 }

@@ -19,6 +19,7 @@ import (
 )
 
 func (model *Model) prepareMessages(ctx context.Context, messages []ai.ModelMessage) ([]ai.ModelMessage, error) {
+	ctx = download.WithRequestBudget(ctx)
 	prepared := ai.ModelRequestContext{Messages: messages}.Clone().Messages
 	for messageIndex, message := range prepared {
 		request, ok := message.(ai.ModelRequest)

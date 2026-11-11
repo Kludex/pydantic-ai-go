@@ -868,3 +868,36 @@ func TestAnthropicStreamNativeToolSearchCanStop(t *testing.T) {
 		})
 	}
 }
+
+func TestFastModeProviderDetails(t *testing.T) {
+	for _, speed := range []string{"fast", "standard"} {
+		usage := `{"input_tokens":1,"output_tokens":1,"speed":"` + speed + `"}`
+		want := map[string]bool{"fast": true}[speed]
+		t.Run(speed+" request", func(t *testing.T) {
+			model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = io.WriteString(w, `{"model":"claude-opus-4-6","content":[{"type":"text","text":"hi"}],"usage":`+usage+`}`)
+			})
+			resp, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := resp.ProviderDetails["speed"] == "fast"; got != want {
+				t.Fatalf("speed recorded = %v, want %v: %#v", got, want, resp.ProviderDetails)
+			}
+		})
+		t.Run(speed+" stream", func(t *testing.T) {
+			model := newServer(t, anthropicSSE(t, []string{
+				`{"type":"message_start","message":{"id":"m","model":"claude-opus-4-6","usage":` + usage + `}}`,
+				`{"type":"message_stop"}`,
+			}))
+			events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{AllowText: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			finish := events[len(events)-1].(ai.FinishEvent)
+			if got := finish.ProviderDetails["speed"] == "fast"; got != want {
+				t.Fatalf("speed recorded = %v, want %v: %#v", got, want, finish.ProviderDetails)
+			}
+		})
+	}
+}

@@ -790,6 +790,8 @@ func TestOutputToolChoice(t *testing.T) {
 		{name: "extended thinking", model: "claude", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled}, want: "auto"},
 		{name: "Fable 5.1", model: "claude-fable-5-1", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled}, want: "auto"},
 		{name: "Opus 5.5", model: "claude-opus-5-5", want: "auto"},
+		{name: "Fable 5.2", model: "claude-fable-5-2", want: "auto"},
+		{name: "Mythos 5.2", model: "claude-mythos-5-2", want: "auto"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var body map[string]any
@@ -2245,7 +2247,7 @@ func TestAnthropicContainerUploadsAndRecovery(t *testing.T) {
 }
 
 func TestAnthropicStaleThinkingRecoveryPersists(t *testing.T) {
-	for _, modelName := range []string{"claude-fable-5-1", "claude-opus-5-5"} {
+	for _, modelName := range []string{"claude-fable-5-1", "claude-fable-5-2", "claude-mythos-5-2", "claude-opus-5-5"} {
 		t.Run(modelName, func(t *testing.T) {
 			calls := 0
 			var bodies []map[string]any

@@ -682,6 +682,7 @@ func (m *Model) warnUnsupportedSettings(ctx context.Context, params ai.ModelRequ
 func (m *Model) buildPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*generateRequest, error) {
+	ctx = download.WithRequestBudget(ctx)
 	params, err := ai.ResolveNativeToolPreferences(m, params)
 	if err != nil {
 		return nil, err
@@ -910,7 +911,8 @@ func googleThinkingLevel(modelName string, transport Transport, requested string
 		strings.HasPrefix(name, "gemini-3.1-flash-lite-image")):
 		supported = []string{"MINIMAL", "HIGH"}
 	case strings.HasPrefix(name, "gemini-3.7-flash"), strings.HasPrefix(name, "gemini-3.8-flash"),
-		strings.HasPrefix(name, "gemini-3.1-pro-preview"), strings.HasPrefix(name, "gemini-4-argon"):
+		strings.HasPrefix(name, "gemini-3.1-pro-preview"), strings.HasPrefix(name, "gemini-4-argon"),
+		strings.HasPrefix(name, "gemini-4-carbon"):
 		supported = []string{"LOW", "MEDIUM", "HIGH"}
 	case strings.HasPrefix(name, "gemini-3-pro-preview"):
 		supported = []string{"LOW", "HIGH"}

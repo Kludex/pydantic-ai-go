@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 )
 
 // ResponsesModel calls the OpenAI Responses API, the successor to Chat
@@ -788,6 +789,7 @@ func responsesImageGenerationSize(size ai.ImageGenerationSize, aspectRatio ai.Im
 func (m *ResponsesModel) buildResponsesPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams, nativeDeferred bool,
 ) (*responsesRequest, error) {
+	ctx = download.WithRequestBudget(ctx)
 	params, err := ai.ResolveNativeToolPreferences(m, params)
 	if err != nil {
 		return nil, err

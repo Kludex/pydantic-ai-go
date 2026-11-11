@@ -114,6 +114,7 @@ func (m *Model) eventStream(
 		responseID := ""
 		stopReason := ""
 		containerID := ""
+		fast := false
 		var inputTransformations []map[string]any
 		var diagnostics map[string]any
 		scanner := bufio.NewScanner(body)
@@ -143,6 +144,7 @@ func (m *Model) eventStream(
 					modelName = event.Message.Model
 				}
 				usage = event.Message.Usage.usage()
+				fast = event.Message.Usage.Speed == "fast"
 				if event.Message.Container != nil {
 					containerID = event.Message.Container.ID
 				}
@@ -265,6 +267,9 @@ func (m *Model) eventStream(
 				}
 				if containerID != "" {
 					providerDetails["container_id"] = containerID
+				}
+				if fast {
+					providerDetails["speed"] = "fast"
 				}
 				if len(inputTransformations) > 0 {
 					providerDetails["input_transformations"] = slices.Clone(inputTransformations)

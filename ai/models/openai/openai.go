@@ -19,6 +19,7 @@ import (
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
 )
 
@@ -563,6 +564,7 @@ type chatFunction struct {
 func (m *Model) buildPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*chatRequest, error) {
+	ctx = download.WithRequestBudget(ctx)
 	params, err := ai.ResolveNativeToolPreferences(m, params)
 	if err != nil {
 		return nil, err

@@ -6,6 +6,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+### Added
+
+- Claude Fable 5.2 and Claude Mythos 5.2 fall back to automatic output-tool selection and retry stale thinking blocks, as Fable 5.1 does.
+- Gemini 4 Carbon snaps thinking levels to `LOW`, `MEDIUM`, or `HIGH`.
+- Anthropic responses that ran in fast mode record `speed: fast` in `ProviderDetails`, the price context `genai-prices` uses for fast mode rates.
+
+### Changed
+
+- The file URLs one model request downloads share a 500 MiB total on top of the 50 MiB per-file limit. Pass larger inputs as `BinaryContent`.
+
+### Fixed
+
+- `StreamedRun.Result` returns nil when an event-stream capability fails after the run finished, as its documentation says.
+
 ## [0.7.1] - 2026-11-10
 
 ### Fixed

@@ -172,7 +172,7 @@ On the Gemini API, each processing step appears in the response as a `NativeTool
 
 The zero-value `FileDownloadNever` mode lets a provider fetch a URL directly when its API supports that behavior. An adapter still downloads the file when its API requires inline data.
 
-Set `ForceDownload: ai.FileDownloadSafe` to always download an image, document, audio file, or video. The downloader limits responses to 50 MiB, pins validated DNS addresses to prevent rebinding, and blocks private networks and cloud metadata endpoints. YouTube and Vertex `gs://` video references remain provider-hosted because they cannot be downloaded safely as ordinary HTTP files.
+Set `ForceDownload: ai.FileDownloadSafe` to always download an image, document, audio file, or video. The downloader limits each response to 50 MiB and the files one model request downloads to 500 MiB in total, so a request carrying many URLs can't download the per-file limit once per URL. It also pins validated DNS addresses to prevent rebinding, and blocks private networks and cloud metadata endpoints. YouTube and Vertex `gs://` video references remain provider-hosted because they cannot be downloaded safely as ordinary HTTP files.
 
 Set `ForceDownload: ai.FileDownloadAllowLocal` only when you intentionally need a private host. Cloud metadata endpoints remain blocked.
 

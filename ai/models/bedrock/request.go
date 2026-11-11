@@ -14,12 +14,14 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/bedrockruntime/types"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
 )
 
 func buildConverseInput(
 	ctx context.Context, modelName string, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*bedrockruntime.ConverseInput, error) {
+	ctx = download.WithRequestBudget(ctx)
 	unified := params.Settings.Cache != nil && !hasCacheSettings(params.Settings)
 	translated, err := translateCache(modelName, params.Settings)
 	if err != nil {

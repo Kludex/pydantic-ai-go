@@ -160,6 +160,39 @@ func TestRunEventStreamWrapperMustDriveRun(t *testing.T) {
 	}
 }
 
+type lateFailingStreamCapability struct{}
+
+func (lateFailingStreamCapability) Setup(*ai.CapabilityRegistry) error { return nil }
+
+func (lateFailingStreamCapability) WrapRunEventStream(
+	_ context.Context, _ *ai.RunInfo, stream ai.EventStream,
+) ai.EventStream {
+	return func(yield func(ai.StreamEvent, error) bool) {
+		for event, err := range stream {
+			if !yield(event, err) {
+				return
+			}
+		}
+		yield(nil, errors.New("finishing failed"))
+	}
+}
+
+func TestRunStreamResultIsNilWhenFinishingFails(t *testing.T) {
+	agent := ai.NewAgent[deps, string](newStreamingModel(func([]ai.ModelMessage) []ai.ModelStreamEvent {
+		return []ai.ModelStreamEvent{ai.TextDeltaEvent{Delta: "ok"}, ai.FinishEvent{}}
+	}), ai.WithCapabilities(lateFailingStreamCapability{}))
+	stream := agent.RunStream(t.Context(), "go", deps{})
+	var got error
+	for _, err := range stream.Events() {
+		if err != nil {
+			got = err
+		}
+	}
+	if got == nil || got.Error() != "finishing failed" || stream.Result() != nil {
+		t.Fatalf("unexpected late failure: err=%v result=%+v", got, stream.Result())
+	}
+}
+
 type failingStreamCapability struct {
 	calls int
 }

@@ -71,6 +71,7 @@ type Response struct {
 func Request(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams, config Config,
 ) (*ai.ModelResponse, error) {
+	ctx = download.WithRequestBudget(ctx)
 	if params.AllowText && params.OutputTool == nil {
 		return nil, fmt.Errorf("decision: text output is not supported")
 	}

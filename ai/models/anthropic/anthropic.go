@@ -1096,7 +1096,9 @@ func defaultAnthropicMaxTokens(modelName string) int {
 }
 
 func anthropicSupportsForcedToolChoice(modelName string) bool {
-	for _, prefix := range []string{"claude-fable-5-1", "claude-mythos-5-1", "claude-opus-5-5"} {
+	for _, prefix := range []string{
+		"claude-fable-5-1", "claude-fable-5-2", "claude-mythos-5-1", "claude-mythos-5-2", "claude-opus-5-5",
+	} {
 		if strings.HasPrefix(modelName, prefix) {
 			return false
 		}
@@ -1109,7 +1111,10 @@ func anthropicBindsThinkingBlocks(modelName string) bool {
 	if _, bedrockName, found := strings.Cut(modelName, "anthropic."); found {
 		modelName = bedrockName
 	}
-	for _, prefix := range []string{"claude-fable-5-1", "claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"} {
+	for _, prefix := range []string{
+		"claude-fable-5-1", "claude-fable-5-2", "claude-mythos-5-2", "claude-opus-5-5", "claude-sonnet-5-5",
+		"claude-haiku-5-5",
+	} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
 		}
@@ -1200,6 +1205,7 @@ func anthropicSupportsDynamicFiltering(modelName string) bool {
 func (m *Model) buildPayload(
 	ctx context.Context, msgs []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*messagesRequest, error) {
+	ctx = download.WithRequestBudget(ctx)
 	params, err := ai.ResolveNativeToolPreferences(m, params)
 	if err != nil {
 		return nil, err
@@ -2339,6 +2345,7 @@ type anthropicUsage struct {
 	OutputTokens             int                       `json:"output_tokens"`
 	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
+	Speed                    string                    `json:"speed"`
 	CacheCreation            *anthropicCacheCreation   `json:"cache_creation"`
 	Iterations               []anthropicIterationUsage `json:"iterations"`
 	ServerToolUse            *struct {
@@ -2450,6 +2457,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	}
 	if mr.ServiceTier != "" {
 		providerDetails["service_tier"] = mr.ServiceTier
+	}
+	if mr.Usage.Speed == "fast" {
+		providerDetails["speed"] = "fast"
 	}
 	if mr.Diagnostics != nil {
 		providerDetails["cache_diagnostics"] = mr.Diagnostics

@@ -74,6 +74,11 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `478f1a2a1cea49417426da9d45ef22a124d87806` | `WithToolKind` accepts validated `namespace.name` kinds; Python's typed tool-part registry has no Go counterpart |
 | `4645db8f1bee825a2648b7e613520996139ec671` | `ChatCompatibility.ReasoningContentOnToolCalls` sends an empty `reasoning_content` on current-turn tool calls when the request reasons; Go keeps its current-turn-only backfill instead of Python's every-turn `'field'` mode |
 | `8404728a6de1b741a3371defefd285961e8acc3e` | OpenAI accepts `scale`, `fast`, and `ultrafast` through the open `ServiceTier` string; the portable constants are unchanged |
+| `f252a8d3776b5af305d08aa22f3d5e975d04de70` | Claude Fable 5.2 and Mythos 5.2 fall back to automatic output-tool selection and retry stale thinking blocks; Go has no `anthropic_speed` setting or mid-conversation effort parts to extend |
+| `e8c98cec474bbb828161d9d63867a54c926e9135` | Gemini 4 Carbon snaps thinking levels to `LOW`, `MEDIUM`, or `HIGH` |
+| `c5a1d4e2dabe828d0b08e0e6ca1a09c50da2a24f` | Anthropic fast-mode responses record `speed: fast` in `ProviderDetails` for `genai-prices` |
+| `26e5816bad12419b70ee6e49c2bfaaa86858743b` | File URL downloads for one provider request share a 500 MiB total alongside the 50 MiB per-file limit |
+| `c8f4a6e4e676dadd53066d7e8232b2814262f710` | `StreamedRun.Result` is nil when the stream fails after the run finished |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 

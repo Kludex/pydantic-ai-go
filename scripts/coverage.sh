@@ -52,6 +52,7 @@ packages=(
     ./ai/models/deepseek
     ./ai/models/githubcopilot
     ./ai/models/google
+    ./ai/models/googledecisions
     ./ai/models/groq
     ./ai/models/huggingface
     ./ai/models/infer
@@ -83,7 +84,7 @@ packages=(
 for pkg in "${packages[@]}"; do
     profile=$(mktemp)
     if [ "$pkg" = "./ai/internal/decision" ]; then
-        go test ./ai/models/typesafe ./ai/models/systemone ./ai/models/openaidecisions \
+        go test ./ai/models/typesafe ./ai/models/systemone ./ai/models/openaidecisions ./ai/models/googledecisions \
             -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     elif [ "$pkg" = "./ai/internal/promptcache" ]; then
         go test ./ai/models/anthropic ./ai/models/bedrock ./ai/models/openai ./ai/models/openrouter \

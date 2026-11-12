@@ -109,6 +109,9 @@ Pass `Args` to execute a program directly.
 Pass `Shell` instead to interpret a command through the backend's shell.
 You cannot combine them.
 A zero `Timeout` means no command deadline; a negative duration is invalid.
+Set `Dir` to start elsewhere. It resolves like file paths, so a relative `Dir` is under the working directory.
+`Workspace.Run` applies it through `/bin/sh`, so every backend with commands supports it.
+A missing `Dir` matches `fs.ErrNotExist`, and a file matches `syscall.ENOTDIR`.
 Pass `context.Context` to every operation to carry cancellation.
 
 | Contract | Local behavior |
@@ -123,6 +126,7 @@ Pass `context.Context` to every operation to carry cancellation.
 | Signal death | Return exit code `128 + signal`. |
 | Timeout or cancellation | Kill the foreground process group best-effort and reap the direct child. |
 | Background output pipes | Drain for at most two seconds after the direct child exits. |
+| Detached processes | Never stop a process the command detached into its own session. |
 | Output cap | Stop commands exceeding 10 MiB combined output. Keep at most 64 KiB from each stream in the error. |
 
 !!! warning "Do not copy the host environment"

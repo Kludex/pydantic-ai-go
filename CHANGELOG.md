@@ -11,13 +11,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Claude Fable 5.2 and Claude Mythos 5.2 fall back to automatic output-tool selection and retry stale thinking blocks, as Fable 5.1 does.
 - Gemini 4 Carbon snaps thinking levels to `LOW`, `MEDIUM`, or `HIGH`.
 - Anthropic responses that ran in fast mode record `speed: fast` in `ProviderDetails`, the price context `genai-prices` uses for fast mode rates.
+- `ai/models/googledecisions` and the `google-decisions:` inference prefix run Gemini Decision models on the Gemini API's decisions endpoint.
+- `WorkspaceCommand.Dir` starts a command in another directory on any backend with commands.
+- Bedrock Converse maps `Thinking` to `reasoning_effort` for Z.AI GLM and DeepSeek V3.2. GLM takes an output tool without forcing it while it thinks; DeepSeek V3.2 rejects output tools while it thinks.
 
 ### Changed
 
 - The file URLs one model request downloads share a 500 MiB total on top of the 50 MiB per-file limit. Pass larger inputs as `BinaryContent`.
 
+- A `MaxTokens` above a Claude model's maximum output is lowered to it on Anthropic and Bedrock, which reject it otherwise. An `output-` beta in the `anthropic-beta` header keeps the larger value.
+
 ### Fixed
 
+- System One accepts unrounded probabilities and scores, such as a vLLM softmax, within float error.
 - `StreamedRun.Result` returns nil when an event-stream capability fails after the run finished, as its documentation says.
 
 ## [0.7.1] - 2026-11-10

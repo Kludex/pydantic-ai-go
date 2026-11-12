@@ -111,6 +111,13 @@ func TestRoundedAnswers(t *testing.T) {
 	if err != nil || response.ProviderDetails["probabilities"].(map[string]map[string]float64)["area"]["bug"] != .39 {
 		t.Fatalf("response=%+v error=%v", response, err)
 	}
+	// A vLLM softmax and its expected level are unrounded and off by float error, not display rounding.
+	unrounded := map[string]any{"type": "score", "score": 1.1171219130010348, "confidence": .72, "probabilities": map[string]float64{
+		"0": .0825415728655953, "1": .7177949412677748, "2": .19966348586662996,
+	}}
+	if _, err := serverModel(t, replyJSON(t, "score", unrounded)).Request(t.Context(), prompt(), fieldParams("score", scoreProperty(3))); err != nil {
+		t.Fatalf("unrounded score rejected: %v", err)
+	}
 }
 
 func TestEmptyChoiceLabel(t *testing.T) {

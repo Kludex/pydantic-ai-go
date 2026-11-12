@@ -100,26 +100,14 @@ func (model *Model) call(
 	if err := json.Unmarshal(data, &wire); err != nil {
 		return decision.Response{}, &ai.UnexpectedModelBehaviorError{Message: "systemone: invalid response: " + err.Error()}
 	}
-	if err := wire.validate(questions); err != nil {
+	if err := wire.validate(); err != nil {
 		return decision.Response{}, &ai.UnexpectedModelBehaviorError{Message: "systemone: invalid response: " + err.Error()}
 	}
-	result := decision.Response{Model: *wire.Model, Answers: make(map[string]decision.Answer, len(wire.Answers))}
-	result.Usage.InputTokens, result.Usage.OutputTokens = wire.inputTokens, wire.outputTokens
-	for name, answer := range wire.Answers {
-		decoded := decision.Answer{Type: answer.Type, Noul: answer.Noul, Score: answer.Score}
-		if answer.Choice != nil {
-			decoded.Choice = *answer.Choice
-		}
-		if answer.Confidence != nil {
-			decoded.Confidence = *answer.Confidence
-		}
-		if answer.Type == "choice" || answer.Type == "score" {
-			decoded.Probabilities = make(map[string]float64, len(answer.Probabilities))
-			for label, value := range answer.Probabilities {
-				decoded.Probabilities[label] = *value
-			}
-		}
-		result.Answers[name] = decoded
+	answers, err := decision.DecodeAnswers(questions, wire.Answers)
+	if err != nil {
+		return decision.Response{}, &ai.UnexpectedModelBehaviorError{Message: "systemone: invalid response: " + err.Error()}
 	}
+	result := decision.Response{Model: *wire.Model, Answers: answers}
+	result.Usage.InputTokens, result.Usage.OutputTokens = wire.inputTokens, wire.outputTokens
 	return result, nil
 }

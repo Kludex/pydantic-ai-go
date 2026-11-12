@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path"
 	"reflect"
 	"strings"
+	"syscall"
 	"time"
 	"unicode/utf8"
 )
@@ -34,11 +36,15 @@ type WorkspaceCommands interface {
 
 // WorkspaceCommand selects either Args (without a shell) or Shell, never both.
 // Env overlays backend defaults. A zero Timeout means no command deadline.
+// Dir starts the command elsewhere, resolved like file paths; the default is the
+// working directory. Workspace.Run applies it through /bin/sh, so backends receive
+// commands without Dir.
 type WorkspaceCommand struct {
 	Args    []string
 	Shell   string
 	Env     map[string]string
 	Timeout time.Duration
+	Dir     string
 }
 
 // CommandResult contains the complete output of a completed command.
@@ -210,6 +216,22 @@ func (w *Workspace) Run(ctx context.Context, command WorkspaceCommand) (CommandR
 	if !ok {
 		return CommandResult{}, ErrWorkspaceUnsupported
 	}
+	if _, wrapped := w.backend.(*Workspace); command.Dir == "" || wrapped {
+		return backend.Run(ctx, command)
+	}
+	entry, err := w.Stat(ctx, command.Dir)
+	if err != nil {
+		return CommandResult{}, err
+	}
+	if !entry.IsDir {
+		return CommandResult{}, &fs.PathError{Op: "chdir", Path: entry.Path, Err: syscall.ENOTDIR}
+	}
+	if command.Shell != "" {
+		command.Shell = "cd -- '" + strings.ReplaceAll(entry.Path, "'", `'\''`) + "' || exit\n" + command.Shell
+	} else {
+		command.Args = append([]string{"/bin/sh", "-c", `cd -- "$1" || exit; shift; exec "$@"`, "sh", entry.Path}, command.Args...)
+	}
+	command.Dir = ""
 	return backend.Run(ctx, command)
 }
 

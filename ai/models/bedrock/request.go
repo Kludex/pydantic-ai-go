@@ -150,6 +150,9 @@ func buildConverseInput(
 			return nil, fmt.Errorf("bedrock: message caching: %w", err)
 		}
 	}
+	if err := applyThinkingSettings(modelName, &params); err != nil {
+		return nil, err
+	}
 	input.ToolConfig = toolConfiguration(params)
 	if unified && input.ToolConfig == nil {
 		cache.toolDefinitions = ""
@@ -170,8 +173,8 @@ func buildConverseInput(
 		params.Settings.Temperature = nil
 		params.Settings.TopP = nil
 	}
-	if err := applyThinkingSettings(modelName, &params); err != nil {
-		return nil, err
+	if maximum := bedrockClaudeMaxOutputTokens(modelName); params.Settings.MaxTokens > maximum && maximum > 0 {
+		params.Settings.MaxTokens = maximum
 	}
 	input.InferenceConfig = inferenceConfiguration(params.Settings)
 	input.OutputConfig, err = outputConfiguration(params)
@@ -269,6 +272,22 @@ func applyThinkingSettings(modelName string, params *ai.ModelRequestParams) erro
 		if params.OutputTool != nil && !params.AllowText && !bedrockSupportsAdaptiveThinking(name) {
 			return fmt.Errorf("bedrock: extended thinking cannot force an output tool; use native or prompted output")
 		}
+	} else if efforts := bedrockReasoningEfforts(name); efforts != nil {
+		if _, configured := extra["reasoning_effort"]; !configured {
+			effort, ok := efforts[thinking.Level]
+			if !ok {
+				return fmt.Errorf("bedrock: invalid thinking level %q", thinking.Level)
+			}
+			extra["reasoning_effort"] = effort
+		}
+		if params.OutputTool != nil && params.OutputMode == ai.OutputModeTool && thinking.Level != ai.ThinkingLevelDisabled {
+			if strings.Contains(name, "zai.") {
+				// Converse takes GLM's output tools while it reasons, but not forced.
+				params.AllowText = true
+			} else if !params.AllowText {
+				return fmt.Errorf("bedrock: %s does not support thinking and output tools; use native or prompted output", modelName)
+			}
+		}
 	} else if strings.Contains(name, "openai") && thinking.Level != ai.ThinkingLevelDisabled {
 		if _, configured := extra["reasoning_effort"]; !configured {
 			extra["reasoning_effort"] = string(thinking.Level)
@@ -276,6 +295,45 @@ func applyThinkingSettings(modelName string, params *ai.ModelRequestParams) erro
 	}
 	params.Settings.ExtraBody = extra
 	return nil
+}
+
+// bedrockReasoningEfforts maps thinking levels to the reasoning_effort that Z.AI GLM and DeepSeek V3.2
+// take on Converse. Only high reasons on GLM before 5.3 and on DeepSeek V3.2; GLM-5.3 always reasons.
+func bedrockReasoningEfforts(name string) map[ai.ThinkingLevel]string {
+	highOnly := map[ai.ThinkingLevel]string{
+		ai.ThinkingLevelDisabled: "none", ai.ThinkingLevelEnabled: "high", ai.ThinkingLevelMinimal: "high",
+		ai.ThinkingLevelLow: "high", ai.ThinkingLevelMedium: "high", ai.ThinkingLevelHigh: "high",
+		ai.ThinkingLevelXHigh: "high",
+	}
+	switch {
+	case strings.Contains(name, "zai.glm-5.3"):
+		return map[ai.ThinkingLevel]string{
+			ai.ThinkingLevelDisabled: "low", ai.ThinkingLevelEnabled: "max", ai.ThinkingLevelMinimal: "low",
+			ai.ThinkingLevelLow: "low", ai.ThinkingLevelMedium: "medium", ai.ThinkingLevelHigh: "high",
+			ai.ThinkingLevelXHigh: "xhigh",
+		}
+	case strings.Contains(name, "zai.glm"), strings.HasSuffix(name, "deepseek.v3.2"):
+		return highOnly
+	}
+	return nil
+}
+
+func bedrockClaudeMaxOutputTokens(name string) int {
+	name = strings.ToLower(name)
+	for _, model := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
+		"claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-haiku-5-5",
+	} {
+		if strings.Contains(name, model) {
+			return 128000
+		}
+	}
+	for _, model := range []string{"claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5"} {
+		if strings.Contains(name, model) {
+			return 64000
+		}
+	}
+	return 0
 }
 
 func bedrockSupportsAdaptiveThinking(name string) bool {

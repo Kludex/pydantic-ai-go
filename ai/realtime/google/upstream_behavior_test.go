@@ -237,6 +237,57 @@ func TestGoogleVertexToolBoundaryDoesNotEndAnswer(t *testing.T) {
 	_ = connection.Close(t.Context())
 }
 
+func TestGoogleTurnEndingSilentlyAfterToolResultCompletesReply(t *testing.T) {
+	for _, test := range []struct {
+		name, model string
+		options     []googlert.Option
+		separate    bool
+	}{
+		{name: "one boundary", model: "gemini-3.8-live"},
+		{name: "separate boundary", model: "gemini-live-2.5-flash", options: []googlert.Option{googlert.WithVertex("project", "global")}, separate: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			live := newFakeSession()
+			options := append([]googlert.Option{googlert.WithConnector(&fakeConnector{session: live})}, test.options...)
+			session, err := realtime.Open(t.Context(), googlert.NewModel(test.model, options...), realtime.ConnectParams{
+				Request: ai.ModelRequestParams{Tools: []ai.ToolDefinition{{Name: "save", Schema: map[string]any{"type": "object"}}}},
+			}, realtime.WithToolExecutor(realtime.ToolExecutorFunc(func(context.Context, ai.ToolCallPart) (any, error) {
+				return "saved", nil
+			})))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = session.Close(t.Context()) }()
+			if err := session.Send(t.Context(), "Save it."); err != nil {
+				t.Fatal(err)
+			}
+			live.receive <- &genai.LiveServerMessage{ToolCall: &genai.LiveServerToolCall{FunctionCalls: []*genai.FunctionCall{{ID: "c", Name: "save"}}}}
+			for deadline := time.Now().Add(time.Second); ; time.Sleep(time.Millisecond) {
+				if _, tools := live.counts(); tools > 0 {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("tool result was not sent")
+				}
+			}
+			turnComplete := &genai.LiveServerMessage{
+				UsageMetadata: &genai.UsageMetadata{PromptTokenCount: 10},
+				ServerContent: &genai.LiveServerContent{TurnComplete: true},
+			}
+			if test.separate {
+				live.receive <- turnComplete
+			}
+			live.receive <- &genai.LiveServerMessage{ServerContent: &genai.LiveServerContent{GenerationComplete: true}}
+			live.receive <- turnComplete
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if err := session.WaitForReply(ctx); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestGoogleReconnectSettlesLostCallsAndTypedTurns(t *testing.T) {
 	for _, calls := range []bool{false, true} {
 		first, second := newFakeSession(), newFakeSession()

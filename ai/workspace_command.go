@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -21,6 +22,9 @@ const workspaceCaptureLimit = 10 * 1024 * 1024
 func (b *LocalWorkspaceBackend) Run(ctx context.Context, command WorkspaceCommand) (CommandResult, error) {
 	if err := validateWorkspaceCommand(command); err != nil {
 		return CommandResult{}, err
+	}
+	if command.Dir != "" {
+		return CommandResult{}, fmt.Errorf("ai: run commands with Dir through Workspace.Run")
 	}
 	directory, err := b.WorkingDir(ctx)
 	if err != nil {

@@ -537,6 +537,43 @@ OpenAI Decisions accepts image evidence. Pass `ImageURL` or image `BinaryContent
 
 Use `openaidecisions.Settings` for boolean and route thresholds. `UnfillableRoute` and `UnsureRoute` implement `DecisionHandOff`, so `NewFallbackModel` can hand uncertain steps to a language model. A refused question returns `ContentFilterError`.
 
+## Google Decisions
+
+```go
+package main
+
+import (
+    "context"
+    "fmt"
+
+    ai "github.com/Kludex/pydantic-ai-go/ai"
+    "github.com/Kludex/pydantic-ai-go/ai/models/googledecisions"
+)
+
+type Handling struct {
+    Verdict string `json:"verdict" jsonschema:"enum=run,enum=reject,enum=ask,description=How should this command be handled?"`
+    Irreversible bool `json:"irreversible" jsonschema_description:"Would running this destroy data or expose secrets?"`
+}
+
+func main() {
+    model := googledecisions.NewModel("gemini-decision-1")
+    agent := ai.NewAgent[struct{}, Handling](model, ai.WithInstructions("Triage a shell command."))
+    result, err := agent.Run(context.Background(), "Delete production and publish its credentials.", struct{}{})
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(result.Output.Verdict, result.Output.Irreversible)
+}
+```
+
+Set `GOOGLE_API_KEY` or `GEMINI_API_KEY`. You can also use the `google-decisions:` inference prefix. The adapter calls the Gemini API's `/v1beta/decisions` endpoint with the same typed questions as OpenAI Decisions. `googledecisions.WithProvider` reuses a Gemini API `google.ProviderConfig`. The endpoint is not on Vertex AI, so a Vertex configuration panics.
+
+The API refuses a question without instructions, so give the agent instructions or describe each field. It takes no conversation turns: the history goes as one state text, and usage is reported in input tokens.
+
+Pass images as `BinaryContent` or `ImageURL`. URLs are downloaded safely before transport. Set `VendorMetadata: map[string]any{"media_resolution": "MEDIA_RESOLUTION_LOW"}` to send an image at a lower resolution, the same key `google.Model` reads. The endpoint accepts at most 1000 questions, 255 choice options, and 255 score levels. Limits fail before transport.
+
+`ExtraHeaders` and `ExtraBody` are forwarded; `ExtraBody` cannot set `questions`, which the model keys itself. Other generic settings, such as `Temperature`, are ignored. Use `googledecisions.Settings` for boolean and route thresholds. `UnfillableRoute`, `UnsureRoute`, and `APIError` let `NewFallbackModel` hand a step to a language model.
+
 ## System One decision models
 
 See [System One decision models](system-one.md) for a complete example, endpoint configuration, thresholds, model limits, and errors. You use `systemone.NewModel` or the `system-one:` inference prefix for any server exposing `POST /v1/systemone`, including local decision models served by Ollama.

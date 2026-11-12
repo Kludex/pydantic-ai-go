@@ -43,6 +43,7 @@ func TestModels(t *testing.T) {
 		{"openai-decisions:gpt-6-luna", "openai-decisions"},
 		{"anthropic:claude-sonnet-4-5", "anthropic"},
 		{"google:gemini-2.5-flash", "google"},
+		{"google-decisions:gemini-decision-1", "google-decisions"},
 		{"github-copilot:claude-haiku-4.5", "github-copilot"},
 		{"bedrock:us.amazon.nova-lite-v1:0", "bedrock"},
 		{"bedrock-mantle:openai.gpt-5.6-luna", "bedrock-mantle"},

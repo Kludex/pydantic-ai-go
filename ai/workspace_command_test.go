@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -151,5 +153,82 @@ func TestWorkspaceCommandLimits(t *testing.T) {
 	}
 	if _, err := w.Run(ctx, ai.WorkspaceCommand{Shell: "rmdir \"$PWD\""}); !errors.Is(err, ai.ErrWorkspaceUnavailable) {
 		t.Fatalf("workspace destroyed by command: %v", err)
+	}
+}
+
+func TestWorkspaceCommandDir(t *testing.T) {
+	ctx := context.Background()
+	backend, w, root := localWorkspace(t)
+	dir := filepath.Join(root, "it's here")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "file"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	expected, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, command := range map[string]ai.WorkspaceCommand{
+		"relative argv":  {Args: []string{"sh", "-c", "pwd -P; printf '%s' \"$1\"", "sh", "arg"}, Dir: "it's here"},
+		"absolute shell": {Shell: "pwd -P; printf arg", Dir: dir},
+		"nested facade":  {Shell: "pwd -P; printf arg", Dir: "it's here"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			runner := w
+			if name == "nested facade" {
+				runner = ai.NewWorkspace(w)
+			}
+			result, err := runner.Run(ctx, command)
+			if err != nil || result.Stdout != expected+"\narg" {
+				t.Fatalf("command: %#v %v", result, err)
+			}
+		})
+	}
+	if _, err := w.Run(ctx, ai.WorkspaceCommand{Shell: "pwd", Dir: "missing"}); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("missing directory: %v", err)
+	}
+	if _, err := w.Run(ctx, ai.WorkspaceCommand{Shell: "pwd", Dir: "file"}); !errors.Is(err, syscall.ENOTDIR) {
+		t.Fatalf("file directory: %v", err)
+	}
+	if _, err := backend.Run(ctx, ai.WorkspaceCommand{Shell: "pwd", Dir: "it's here"}); err == nil {
+		t.Fatal("backend accepted Dir it cannot apply")
+	}
+}
+
+func TestWorkspaceLeavesDetachedProcessRunning(t *testing.T) {
+	if _, err := exec.LookPath("setsid"); err != nil {
+		t.Skip("setsid is unavailable")
+	}
+	ctx := context.Background()
+	_, w, root := localWorkspace(t)
+	release, finished, started := filepath.Join(root, "release"), filepath.Join(root, "finished"), filepath.Join(root, "started")
+	launch := `setsid sh -c ': > "$3"; while [ ! -f "$1" ]; do sleep 0.05; done; : > "$2"' sh "$@" ` +
+		`< /dev/null > /dev/null 2>&1 & while [ ! -f "$3" ]; do sleep 0.05; done`
+	result, err := w.Run(ctx, ai.WorkspaceCommand{Args: []string{"/bin/sh", "-c", launch, "sh", release, finished, started}})
+	defer func() { _ = os.WriteFile(release, nil, 0o600) }()
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("launch: %#v %v", result, err)
+	}
+	backend, err := ai.NewLocalWorkspaceBackend(root, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	attached := ai.NewWorkspace(backend)
+	if err := attached.WriteBytes(ctx, "release", nil); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		exists, err := attached.Exists(ctx, "finished")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if exists {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the detached process was stopped")
+		}
 	}
 }

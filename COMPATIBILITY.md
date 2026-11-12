@@ -79,6 +79,10 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `c5a1d4e2dabe828d0b08e0e6ca1a09c50da2a24f` | Anthropic fast-mode responses record `speed: fast` in `ProviderDetails` for `genai-prices` |
 | `26e5816bad12419b70ee6e49c2bfaaa86858743b` | File URL downloads for one provider request share a 500 MiB total alongside the 50 MiB per-file limit |
 | `c8f4a6e4e676dadd53066d7e8232b2814262f710` | `StreamedRun.Result` is nil when the stream fails after the run finished |
+| `d8bcca9ce06da5cdb998c8e15275cb1ae0865280` | `ai/models/googledecisions` and the `google-decisions:` prefix run Gemini Decision models on the Gemini API only |
+| `7ae4e2c8a418121ad044fc2d222b903af678b4b6` | A `MaxTokens` above a Claude model's maximum output is lowered to it on Anthropic and Bedrock Converse, unless an `output-` Anthropic beta is requested |
+| `451c51eb77c449b03387ed2d659cad61bc332ebc` | Bedrock Converse sends `reasoning_effort` for Z.AI GLM and DeepSeek V3.2; Go has no per-step output-mode fallback, so DeepSeek V3.2 rejects output tools while it thinks |
+| `ff0c4ddf9ab58aa9395ca722c3d0c6df0bf425b9` | `WorkspaceCommand.Dir` starts a command elsewhere through `/bin/sh` |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 

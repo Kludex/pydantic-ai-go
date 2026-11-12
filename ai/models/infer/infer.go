@@ -16,6 +16,7 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/models/deepseek"
 	"github.com/Kludex/pydantic-ai-go/ai/models/githubcopilot"
 	"github.com/Kludex/pydantic-ai-go/ai/models/google"
+	"github.com/Kludex/pydantic-ai-go/ai/models/googledecisions"
 	"github.com/Kludex/pydantic-ai-go/ai/models/groq"
 	"github.com/Kludex/pydantic-ai-go/ai/models/huggingface"
 	"github.com/Kludex/pydantic-ai-go/ai/models/meta"
@@ -71,6 +72,7 @@ func Model(name string, options ...Option) (ai.Model, error) {
 		"openai-decisions": func(name string) (ai.Model, error) { return openaidecisions.NewModel(name), nil },
 		"anthropic":        func(name string) (ai.Model, error) { return anthropic.NewModel(name), nil },
 		"google":           func(name string) (ai.Model, error) { return google.NewModel(name), nil },
+		"google-decisions": func(name string) (ai.Model, error) { return googledecisions.NewModel(name), nil },
 		"github-copilot":   func(name string) (ai.Model, error) { return githubcopilot.NewModel(name) },
 		"bedrock":          func(name string) (ai.Model, error) { return bedrock.NewModel(name), nil },
 		"bedrock-mantle":   func(name string) (ai.Model, error) { return bedrockmantle.NewModel(name), nil },

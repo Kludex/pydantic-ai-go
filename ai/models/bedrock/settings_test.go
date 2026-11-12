@@ -341,6 +341,13 @@ func TestThinkingSettings(t *testing.T) {
 		{name: "disabled", model: "anthropic.claude-3", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, contains: `"type":"disabled"`},
 		{name: "budget", model: "anthropic.claude-3", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, contains: `"budget_tokens":16384`},
 		{name: "openai", model: "openai.gpt-5.6-luna", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelHigh}, contains: `"reasoning_effort":"high"`},
+		{name: "glm on", model: "zai.glm-4.7-flash", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelLow}, contains: `"reasoning_effort":"high"`},
+		{name: "glm off", model: "zai.glm-5", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, contains: `"reasoning_effort":"none"`},
+		{name: "glm 5.3 enabled", model: "us.zai.glm-5.3", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled}, contains: `"reasoning_effort":"max"`},
+		{name: "glm 5.3 off", model: "us.zai.glm-5.3", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, contains: `"reasoning_effort":"low"`},
+		{name: "glm 5.3 medium", model: "us.zai.glm-5.3", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelMedium}, contains: `"reasoning_effort":"medium"`},
+		{name: "deepseek on", model: "deepseek.v3.2", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelXHigh}, contains: `"reasoning_effort":"high"`},
+		{name: "deepseek off", model: "deepseek.v3.2", thinking: ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, contains: `"reasoning_effort":"none"`},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			client := &fakeClient{converse: func(input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
@@ -374,6 +381,70 @@ func TestThinkingSettings(t *testing.T) {
 	} {
 		if _, err := bedrock.NewModel("anthropic.claude-3", bedrock.WithClient(client)).Request(t.Context(), nil, params); err == nil {
 			t.Fatal("expected incompatible thinking error")
+		}
+	}
+	for _, model := range []string{"zai.glm-5", "deepseek.v3.2"} {
+		if _, err := bedrock.NewModel(model, bedrock.WithClient(client)).Request(t.Context(), nil, ai.ModelRequestParams{
+			Settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: "invalid"}},
+		}); err == nil {
+			t.Fatalf("%s: expected invalid thinking level error", model)
+		}
+	}
+}
+
+func TestReasoningEffortThinkingWithOutputTool(t *testing.T) {
+	output := &ai.ToolDefinition{Name: "final_result", Schema: map[string]any{"type": "object"}}
+	params := ai.ModelRequestParams{
+		OutputTool: output, OutputMode: ai.OutputModeTool,
+		Settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled}},
+	}
+	var choice types.ToolChoice
+	client := &fakeClient{converse: func(input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
+		choice = input.ToolConfig.ToolChoice
+		return completeOutput(types.StopReasonEndTurn), nil
+	}}
+	if _, err := bedrock.NewModel("zai.glm-5", bedrock.WithClient(client)).Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := choice.(*types.ToolChoiceMemberAuto); !ok {
+		t.Fatalf("GLM output tool was forced while thinking: %T", choice)
+	}
+	if _, err := bedrock.NewModel("deepseek.v3.2", bedrock.WithClient(client)).Request(t.Context(), nil, params); err == nil ||
+		!strings.Contains(err.Error(), "does not support thinking and output tools") {
+		t.Fatalf("DeepSeek forced an output tool while thinking: %v", err)
+	}
+	params.Settings.Thinking = &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}
+	if _, err := bedrock.NewModel("deepseek.v3.2", bedrock.WithClient(client)).Request(t.Context(), nil, params); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := choice.(*types.ToolChoiceMemberTool); !ok {
+		t.Fatalf("output tool was not forced without thinking: %T", choice)
+	}
+}
+
+func TestClaudeMaxTokensCappedAtMaximumOutput(t *testing.T) {
+	for _, test := range []struct {
+		model           string
+		requested, sent int32
+	}{
+		{model: "us.anthropic.claude-opus-5-5-v1:0", requested: 200_000, sent: 128_000},
+		{model: "anthropic.claude-sonnet-4-5-20250929-v1:0", requested: 100_000, sent: 64_000},
+		{model: "anthropic.claude-sonnet-4-5-20250929-v1:0", requested: 1_000, sent: 1_000},
+		{model: "anthropic.claude-3-5-sonnet", requested: 200_000, sent: 200_000},
+		{model: "zai.glm-5", requested: 200_000, sent: 200_000},
+	} {
+		var sent int32
+		client := &fakeClient{converse: func(input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options)) (*bedrockruntime.ConverseOutput, error) {
+			sent = *input.InferenceConfig.MaxTokens
+			return completeOutput(types.StopReasonEndTurn), nil
+		}}
+		if _, err := bedrock.NewModel(test.model, bedrock.WithClient(client)).Request(t.Context(), nil, ai.ModelRequestParams{
+			Settings: ai.ModelSettings{MaxTokens: int(test.requested)},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if sent != test.sent {
+			t.Fatalf("%s: max tokens %d, want %d", test.model, sent, test.sent)
 		}
 	}
 }

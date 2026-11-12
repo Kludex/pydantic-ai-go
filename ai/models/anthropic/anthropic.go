@@ -1068,18 +1068,8 @@ func anthropicDisallowsSamplingSettings(modelName string) bool {
 }
 
 func defaultAnthropicMaxTokens(modelName string) int {
-	for _, prefix := range []string{
-		"claude-fable-5", "claude-mythos-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
-		"claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-haiku-5-5",
-	} {
-		if strings.HasPrefix(modelName, prefix) {
-			return 128000
-		}
-	}
-	for _, prefix := range []string{"claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5"} {
-		if strings.HasPrefix(modelName, prefix) {
-			return 64000
-		}
+	if maximum := anthropicMaxOutputTokens(modelName); maximum > 0 {
+		return maximum
 	}
 	if modelName == "claude-opus-4" || modelName == "claude-sonnet-4" {
 		return 4096
@@ -1093,6 +1083,38 @@ func defaultAnthropicMaxTokens(modelName string) int {
 		}
 	}
 	return defaultMaxTokens
+}
+
+// anthropicMaxOutputTokens is the Models API maximum output, thinking included, or zero when unknown.
+func anthropicMaxOutputTokens(modelName string) int {
+	for _, prefix := range []string{
+		"claude-fable-5", "claude-mythos-5", "claude-opus-4-6", "claude-opus-4-7", "claude-opus-4-8",
+		"claude-opus-5", "claude-sonnet-4-6", "claude-sonnet-5", "claude-haiku-5-5",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return 128000
+		}
+	}
+	for _, prefix := range []string{"claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5"} {
+		if strings.HasPrefix(modelName, prefix) {
+			return 64000
+		}
+	}
+	return 0
+}
+
+// requestsOutputBeta reports a beta such as output-300k-2026-03-24 that raises the maximum output,
+// leaving a larger max_tokens for the API to judge.
+func requestsOutputBeta(headers map[string]string) bool {
+	for name, value := range headers {
+		if strings.EqualFold(name, "anthropic-beta") &&
+			slices.ContainsFunc(strings.Split(value, ","), func(beta string) bool {
+				return strings.HasPrefix(strings.TrimSpace(beta), "output-")
+			}) {
+			return true
+		}
+	}
+	return false
 }
 
 func anthropicSupportsForcedToolChoice(modelName string) bool {
@@ -1420,6 +1442,10 @@ func (m *Model) buildPayload(
 			blocks[cacheIndex].CacheControl = promptCacheControl(cache.Instructions)
 		}
 		req.System = blocks
+	}
+	if maximum := anthropicMaxOutputTokens(m.name); req.MaxTokens > maximum && maximum > 0 &&
+		!requestsOutputBeta(params.Settings.ExtraHeaders) {
+		req.MaxTokens = maximum
 	}
 	if req.MaxTokens == 0 {
 		req.MaxTokens = defaultAnthropicMaxTokens(m.name)

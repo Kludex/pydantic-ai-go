@@ -319,6 +319,13 @@ func TestDefaultMaxTokens(t *testing.T) {
 		{model: "claude-unknown", want: 16384},
 		{model: "claude-sonnet-4-5", want: 64000},
 		{model: "claude-opus-5", want: 128000},
+		{model: "claude-opus-5", settings: ai.ModelSettings{MaxTokens: 200_000}, want: 128000},
+		{model: "claude-sonnet-4-5", settings: ai.ModelSettings{MaxTokens: 100_000}, want: 64000},
+		{model: "claude-sonnet-4-5", settings: ai.ModelSettings{MaxTokens: 1_000}, want: 1000},
+		{model: "claude-unknown", settings: ai.ModelSettings{MaxTokens: 200_000}, want: 200000},
+		{model: "claude-opus-5", settings: ai.ModelSettings{
+			MaxTokens: 300_000, ExtraHeaders: map[string]string{"Anthropic-Beta": "files-api-2025-04-14, output-300k-2026-03-24"},
+		}, want: 300000},
 	} {
 		t.Run(test.model, func(t *testing.T) {
 			var body map[string]any

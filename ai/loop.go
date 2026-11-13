@@ -2371,9 +2371,8 @@ func (r *run[Deps, Output]) doModelRequest(
 			observation.record(r.model, msgs, params, response, segment)
 		}
 		if err != nil {
-			var exhausted *FallbackExhaustedError
-			if errors.As(err, &exhausted) {
-				r.addUsage(modelRequestAttemptsUsage(exhausted.Attempts()))
+			if attempts := carriedAttempts(err); attempts != nil {
+				r.addUsage(modelRequestAttemptsUsage(attempts))
 				if limitErr := r.rc.UsageLimits.check(r.usageSnapshot()); limitErr != nil {
 					return nil, errors.Join(limitErr, err)
 				}

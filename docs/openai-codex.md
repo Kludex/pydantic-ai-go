@@ -168,7 +168,15 @@ The public Codex OAuth client pins `http://localhost:1455/auth/callback`. `Excha
 
 ## Credential safety
 
-The model adds `Authorization`, `chatgpt-account-id`, and `originator` only for HTTPS requests to `chatgpt.com`. A redirect to another host or to plaintext HTTP does not receive those values.
+The model adds `Authorization`, `chatgpt-account-id`, and `originator` only for HTTPS requests to the host and port of its base URL, `chatgpt.com` by default. A redirect to another host, another port, or plaintext HTTP does not receive those values.
+
+`WithBaseURL` sends requests to a gateway in front of the Codex backend instead:
+
+```go
+model, err := openaicodex.NewModel("gpt-5.6-luna", openaicodex.WithBaseURL("https://gateway.example/codex"))
+```
+
+The base URL must use HTTPS, because the credentials follow it. `NewModel` returns an error otherwise.
 
 The model copies your `http.Client` before wrapping its transport. It never changes or closes the client you pass to `WithHTTPClient`.
 

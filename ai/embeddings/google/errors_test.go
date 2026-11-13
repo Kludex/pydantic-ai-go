@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/embeddings"
 	modelgoogle "github.com/Kludex/pydantic-ai-go/ai/models/google"
 )
@@ -67,8 +68,15 @@ func TestEmbeddingRequestErrors(t *testing.T) {
 	transportFailed := failureModel(func(*http.Request) (*http.Response, error) { return nil, transportErr })
 	if _, err := transportFailed.Embed(
 		context.Background(), []string{"x"}, embeddings.InputTypeQuery, embeddings.Settings{},
-	); !errors.Is(err, transportErr) {
+	); !errors.Is(err, transportErr) || !errors.As(err, new(*ai.ModelTransportError)) {
 		t.Fatalf("unexpected transport error: %v", err)
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := transportFailed.Embed(
+		cancelled, []string{"x"}, embeddings.InputTypeQuery, embeddings.Settings{},
+	); !errors.Is(err, transportErr) || errors.As(err, new(*ai.ModelTransportError)) {
+		t.Fatalf("cancelled transport error = %v", err)
 	}
 	if _, err := transportFailed.CountTokens(context.Background(), "x"); !errors.Is(err, transportErr) {
 		t.Fatalf("unexpected count transport error: %v", err)
@@ -80,7 +88,7 @@ func TestEmbeddingRequestErrors(t *testing.T) {
 	})
 	if _, err := readFailed.Embed(
 		context.Background(), []string{"x"}, embeddings.InputTypeQuery, embeddings.Settings{},
-	); !errors.Is(err, readErr) {
+	); !errors.Is(err, readErr) || !errors.As(err, new(*ai.ModelTransportError)) {
 		t.Fatalf("unexpected read error: %v", err)
 	}
 

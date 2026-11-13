@@ -174,7 +174,7 @@ func (fallback *FallbackModel) Request(
 				return nil, predicateErr
 			}
 			if !shouldFallback {
-				return response, err
+				return response, carryAttempts(err, attempts)
 			}
 			failures = append(failures, err)
 			fallback.recordAttempt(ctx, &attempts, model, err, response, started)
@@ -261,7 +261,7 @@ func (fallback *FallbackModel) StreamRequest(
 			if events != nil {
 				return fallback.stampStream(events, model, rewound, attempts), nil
 			}
-			return nil, err
+			return nil, carryAttempts(err, attempts)
 		}
 		failures = append(failures, err)
 		fallback.recordAttempt(ctx, &attempts, model, err, nil, started)
@@ -482,10 +482,7 @@ func (fallback *FallbackModel) recordAttempt(
 	if response != nil {
 		*attempts = append(*attempts, cloneModelRequestAttempts(response.FailedAttempts)...)
 	} else {
-		var exhausted *FallbackExhaustedError
-		if errors.As(requestErr, &exhausted) {
-			*attempts = append(*attempts, exhausted.Attempts()...)
-		}
+		*attempts = append(*attempts, carriedAttempts(requestErr)...)
 	}
 	attempt := ModelRequestAttempt{
 		ModelName: model.Name(), ProviderName: fallbackProviderName(model),
@@ -684,6 +681,39 @@ func (err *FallbackExhaustedError) Failures() []error {
 // Attempts returns detached failed and rejected attempts in order.
 func (err *FallbackExhaustedError) Attempts() []ModelRequestAttempt {
 	return cloneModelRequestAttempts(err.attempts)
+}
+
+type attemptsCarrier interface {
+	Attempts() []ModelRequestAttempt
+}
+
+type carriedAttemptsError struct {
+	err      error
+	attempts []ModelRequestAttempt
+}
+
+func (err *carriedAttemptsError) Error() string { return err.err.Error() }
+
+func (err *carriedAttemptsError) Unwrap() error { return err.err }
+
+func (err *carriedAttemptsError) Attempts() []ModelRequestAttempt {
+	return cloneModelRequestAttempts(err.attempts)
+}
+
+// carryAttempts keeps the attempts made before an error the chain does not fall back on, so their usage still counts.
+func carryAttempts(err error, attempts []ModelRequestAttempt) error {
+	if len(attempts) == 0 {
+		return err
+	}
+	return &carriedAttemptsError{err: err, attempts: append(carriedAttempts(err), attempts...)}
+}
+
+func carriedAttempts(err error) []ModelRequestAttempt {
+	var carrier attemptsCarrier
+	if errors.As(err, &carrier) {
+		return carrier.Attempts()
+	}
+	return nil
 }
 
 // RejectedResponses returns detached rejected responses in attempt order.

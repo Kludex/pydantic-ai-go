@@ -24,6 +24,7 @@ type config struct {
 	credentialSet    bool
 	credentialSource CredentialSource
 	httpClient       *http.Client
+	baseURL          string
 	defaultSettings  ai.ModelSettings
 }
 
@@ -51,6 +52,13 @@ func WithHTTPClient(client *http.Client) Option {
 	return func(config *config) { config.httpClient = client }
 }
 
+// WithBaseURL sends requests to baseURL instead of https://chatgpt.com/backend-api/codex,
+// such as a gateway in front of it. Credentials are injected only on HTTPS
+// requests to its host and port, so it must be an https:// URL.
+func WithBaseURL(baseURL string) Option {
+	return func(config *config) { config.baseURL = baseURL }
+}
+
 // WithDefaultSettings sets request defaults overridden by agent and run settings.
 func WithDefaultSettings(settings ai.ModelSettings) Option {
 	settings = settings.Clone()
@@ -60,7 +68,7 @@ func WithDefaultSettings(settings ai.ModelSettings) Option {
 // NewModel creates a subscription-authenticated OpenAI Codex model. When no
 // credential option is supplied, it reads the Codex CLI auth file without changing it.
 func NewModel(name string, options ...Option) (*Model, error) {
-	configuration := config{httpClient: http.DefaultClient}
+	configuration := config{httpClient: http.DefaultClient, baseURL: defaultBaseURL}
 	for _, option := range options {
 		option(&configuration)
 	}
@@ -85,6 +93,10 @@ func NewModel(name string, options ...Option) (*Model, error) {
 		configuration.credentials = &credentials
 	}
 
+	origin, err := oauthcreds.Origin(configuration.baseURL)
+	if err != nil {
+		return nil, errors.New("openai-codex: " + err.Error())
+	}
 	baseTransport := configuration.httpClient.Transport
 	if baseTransport == nil {
 		baseTransport = http.DefaultTransport
@@ -103,7 +115,7 @@ func NewModel(name string, options ...Option) (*Model, error) {
 	})
 	requestClient := *configuration.httpClient
 	requestClient.Transport = &oauthcreds.Transport[Credentials]{
-		Base: baseTransport, Host: "chatgpt.com", Manager: manager,
+		Base: baseTransport, Origin: origin, Manager: manager,
 		Headers: func(credentials Credentials) map[string]string {
 			return map[string]string{
 				"Authorization": "Bearer " + credentials.AccessToken, "chatgpt-account-id": credentials.AccountID,
@@ -113,7 +125,7 @@ func NewModel(name string, options ...Option) (*Model, error) {
 	}
 	delegate := openai.NewResponsesModel(name,
 		openai.WithProvider(openai.ProviderConfig{
-			Name: "openai-codex", BaseURL: defaultBaseURL, HTTPClient: &requestClient,
+			Name: "openai-codex", BaseURL: configuration.baseURL, HTTPClient: &requestClient,
 		}),
 		openai.WithDefaultSettings(configuration.defaultSettings),
 	)

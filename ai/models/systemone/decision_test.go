@@ -43,6 +43,42 @@ func TestDecisionHistory(t *testing.T) {
 	}
 }
 
+func TestDecisionHistoryToolReturnIsJSON(t *testing.T) {
+	var history []any
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var body struct {
+			State struct {
+				History []any `json:"history"`
+			} `json:"state"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		history = body.State.History
+		_, _ = writer.Write([]byte(`{"model":"clm","answers":{"response":{"type":"noul","noul":0.9}},"usage":{}}`))
+	}))
+	defer server.Close()
+	model := newModel(t, systemone.WithBaseURL(server.URL))
+	messages := []ai.ModelMessage{
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "Check the weather."}}},
+		ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{ToolName: "weather", Args: json.RawMessage(`{}`)}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "weather", Content: map[string]any{"temp": 20}}}},
+		ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "judge"}}},
+	}
+	if _, err := model.Request(t.Context(), messages, boolParams()); err != nil {
+		t.Fatal(err)
+	}
+	encoded, _ := json.Marshal(history)
+	if !strings.Contains(string(encoded), `{"tool_return":{"content":"{\"temp\":20}","name":"weather"}}`) {
+		t.Fatalf("history = %s", encoded)
+	}
+	messages[2] = ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{ToolName: "weather", Content: make(chan int)}}}
+	if _, err := model.Request(t.Context(), messages, boolParams()); err == nil ||
+		!strings.Contains(err.Error(), "marshal tool return") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
 func TestNestedDefinitionContext(t *testing.T) {
 	for _, title := range []string{"", "Judgement"} {
 		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {

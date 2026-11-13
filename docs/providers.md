@@ -1334,6 +1334,8 @@ Gemini accepts image, document, audio, and video content. Ordinary URLs are down
 
 Gemini 2.5 uses token budgets for portable thinking settings. Gemini 3 and unknown future model names use thinking levels. Known Gemini 2.0, Gemini 1.x, and Gemma models omit unsupported thinking settings. Future model names also receive the modern mixed native/function-tool and strict-tool behavior by default.
 
+Gemini has no level above `high` except on `gemini-4-hydrogen`, so `ai.ThinkingLevelXHigh` resolves to `high` elsewhere. `gemini-4-hydrogen` supports `low`, `medium`, `high`, and `xhigh`, so `ai.ThinkingLevelXHigh` is sent as `XHIGH` and `ai.ThinkingLevelDisabled` and `ai.ThinkingLevelMinimal` resolve to `low`.
+
 `gemini-4-argon` supports the `low`, `medium`, and `high` thinking levels, so `ai.ThinkingLevelDisabled` and `ai.ThinkingLevelMinimal` resolve to `low`. On Vertex AI it rejects a thinking token budget with a 400 error: use a level instead.
 
 ### Cached content

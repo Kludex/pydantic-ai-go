@@ -2,24 +2,47 @@ package oauthcreds
 
 import (
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
+	"net/url"
 )
 
-// Transport injects a manager's credentials into HTTPS requests to Host and
+// Origin returns the host and port credentials for baseURL may be sent to. It
+// rejects URLs that are not HTTPS, because credentials never travel in plaintext.
+func Origin(baseURL string) (string, error) {
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", err
+	}
+	if parsed.Scheme != "https" || parsed.Hostname() == "" {
+		return "", errors.New("credentials are only sent over HTTPS, got base URL " + baseURL)
+	}
+	return origin(parsed), nil
+}
+
+func origin(location *url.URL) string {
+	port := location.Port()
+	if port == "" {
+		port = "443"
+	}
+	return location.Hostname() + ":" + port
+}
+
+// Transport injects a manager's credentials into HTTPS requests to Origin and
 // replays a request once after a 401 with refreshed credentials. Requests to
 // any other destination, or over plaintext, pass through untouched, so a
 // caller-owned client reused elsewhere never leaks the token.
 type Transport[C comparable] struct {
 	Base    http.RoundTripper
-	Host    string
+	Origin  string
 	Manager *Manager[C]
 	Headers func(credentials C) map[string]string
 }
 
 // RoundTrip implements http.RoundTripper.
 func (transport *Transport[C]) RoundTrip(request *http.Request) (*http.Response, error) {
-	if request.URL.Scheme != "https" || request.URL.Hostname() != transport.Host {
+	if request.URL.Scheme != "https" || origin(request.URL) != transport.Origin {
 		return transport.Base.RoundTrip(request)
 	}
 	var body []byte

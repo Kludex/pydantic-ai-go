@@ -853,7 +853,7 @@ func googleThinking(modelName string, transport Transport, settings *ai.Thinking
 	if usesThinkingLevel {
 		levels := map[ai.ThinkingLevel]string{
 			ai.ThinkingLevelMinimal: "MINIMAL", ai.ThinkingLevelLow: "LOW",
-			ai.ThinkingLevelMedium: "MEDIUM", ai.ThinkingLevelHigh: "HIGH", ai.ThinkingLevelXHigh: "HIGH",
+			ai.ThinkingLevelMedium: "MEDIUM", ai.ThinkingLevelHigh: "HIGH", ai.ThinkingLevelXHigh: "XHIGH",
 		}
 		level, ok := levels[settings.Level]
 		if !ok {
@@ -904,7 +904,7 @@ func containsRef(node any) bool {
 }
 
 func googleThinkingLevel(modelName string, transport Transport, requested string) string {
-	var supported []string
+	supported := []string{"MINIMAL", "LOW", "MEDIUM", "HIGH"}
 	name := strings.ToLower(modelName)
 	switch {
 	case transport == TransportGeminiAPI && (strings.HasPrefix(name, "gemini-3.1-flash-image") ||
@@ -916,12 +916,12 @@ func googleThinkingLevel(modelName string, transport Transport, requested string
 		supported = []string{"LOW", "MEDIUM", "HIGH"}
 	case strings.HasPrefix(name, "gemini-3-pro-preview"):
 		supported = []string{"LOW", "HIGH"}
-	default:
-		return requested
+	case strings.HasPrefix(name, "gemini-4-hydrogen"):
+		supported = []string{"LOW", "MEDIUM", "HIGH", "XHIGH"}
 	}
-	order := map[string]int{"MINIMAL": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3}
+	order := map[string]int{"MINIMAL": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "XHIGH": 4}
 	best := supported[0]
-	bestDistance := 4
+	bestDistance := len(order)
 	for _, level := range supported {
 		distance := order[level] - order[requested]
 		if distance < 0 {

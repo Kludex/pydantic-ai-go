@@ -45,6 +45,7 @@ func TestResponsesWebSearchUsage(t *testing.T) {
 	}{
 		{body: `{"status":"completed","output":[{"type":"web_search_call","id":"search","action":{"type":"search","query":"Go"}},{"type":"web_search_call","id":"page","action":{"type":"open_page","url":"https://go.dev"}}]}`, want: 1},
 		{body: `{"status":"completed","tool_usage":{"web_search":{"num_requests":3}},"output":[]}`, want: 3},
+		{body: `{"status":"completed","output":[{"type":"web_search_call","id":"bare","status":"completed"},{"type":"web_search_call","id":"null","action":null},{"type":"web_search_call","id":"search","action":{"type":"search","query":"Go"}}]}`, want: 1},
 		{body: `{"status":"in_progress","tool_usage":{"web_search":{"num_requests":3}}}`},
 		{body: `{"status":"completed","tool_usage":{"web_search":{"num_requests":0}},"output":[{"type":"message","content":[{"type":"output_text","text":""}]}]}`},
 	} {

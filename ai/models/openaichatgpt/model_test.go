@@ -375,3 +375,42 @@ func TestProviderSendsCredentialsOnlyToTheOpenAIAPI(t *testing.T) {
 		}
 	}
 }
+
+func TestBaseURLTakesRequestsAndCredentialsToItsOrigin(t *testing.T) {
+	for location, authorized := range map[string]bool{
+		"https://gateway.example/final": true, "https://gateway.example:443/final": true,
+		"https://gateway.example:8443/final": false, "https://api.openai.com/final": false,
+	} {
+		var redirected http.Header
+		var requested string
+		client := &http.Client{Transport: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+			if request.URL.Path != "/final" {
+				requested = request.URL.String()
+				redirect := response(http.StatusTemporaryRedirect, "")
+				redirect.Header.Set("Location", location)
+				return redirect, nil
+			}
+			redirected = request.Header.Clone()
+			reply := response(http.StatusOK, completed("resp"))
+			reply.Header.Set("Content-Type", "text/event-stream")
+			return reply, nil
+		})}
+		model, err := openaichatgpt.NewModel("m", openaichatgpt.WithCredentials(credentials()),
+			openaichatgpt.WithHTTPClient(client), openaichatgpt.WithBaseURL("https://gateway.example/v1"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err != nil {
+			t.Fatalf("%s: %v", location, err)
+		}
+		if requested != "https://gateway.example/v1/responses" ||
+			authorized != (redirected.Get("Authorization") == "Bearer access-1") {
+			t.Fatalf("%s: requested %q authorization %q", location, requested, redirected.Get("Authorization"))
+		}
+	}
+	_, err := openaichatgpt.NewModel("m", openaichatgpt.WithCredentials(credentials()),
+		openaichatgpt.WithBaseURL("http://gateway.example/v1"))
+	if err == nil || !strings.Contains(err.Error(), "only sent over HTTPS") {
+		t.Fatalf("plaintext base URL = %v", err)
+	}
+}

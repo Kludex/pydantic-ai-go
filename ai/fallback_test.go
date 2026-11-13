@@ -288,6 +288,59 @@ func TestNestedFallbackAttemptsAndExhaustedUsage(t *testing.T) {
 	}
 }
 
+func TestFallbackRejectedUsageSurvivesAnUnhandledError(t *testing.T) {
+	failure := &fallbackAPIError{"unavailable"}
+	rejectsThenRaises := func() ai.Model {
+		cost := 0.012
+		return ai.NewFallbackModel(
+			requestModel{name: "primary", request: func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "rejected"}},
+					Usage: ai.Usage{InputTokens: 120, CostUSD: &cost}}, nil
+			}},
+			ai.WithFallbackModels(requestModel{name: "failing", request: func(context.Context, []ai.ModelMessage, ai.ModelRequestParams) (*ai.ModelResponse, error) {
+				return nil, failure
+			}}),
+			ai.WithFallbackOnError(func(context.Context, error) (bool, error) { return false, nil }),
+			ai.WithFallbackOnResponse(func(_ context.Context, response *ai.ModelResponse) (bool, error) {
+				return response.Text() == "rejected", nil
+			}),
+		)
+	}
+
+	outer := ai.NewFallbackModel(rejectsThenRaises(), ai.WithFallbackModels(fallbackTextModel("backup", "accepted", nil)))
+	result, err := ai.NewAgent[struct{}, string](outer).Run(t.Context(), "go", struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := result.Messages()[len(result.Messages())-1].(ai.ModelResponse)
+	var attempts []string
+	for _, attempt := range response.FailedAttempts {
+		attempts = append(attempts, attempt.ModelName+":"+string(attempt.Outcome))
+	}
+	if strings.Join(attempts, ",") != "primary:rejected,fallback:primary,failing:error" ||
+		result.Usage().InputTokens != 120 {
+		t.Fatalf("attempts = %v usage = %+v", attempts, result.Usage())
+	}
+	limited := ai.NewAgent[struct{}, string](outer, ai.WithUsageLimits(ai.UsageLimits{InputTokenLimit: 100}))
+	if _, err := limited.Run(t.Context(), "go", struct{}{}); !errors.Is(err, ai.ErrUsageLimitExceeded) {
+		t.Fatalf("rejected usage did not count toward the limit: %v", err)
+	}
+
+	_, err = ai.NewAgent[struct{}, string](rejectsThenRaises()).Run(t.Context(), "go", struct{}{},
+		ai.WithRunUsageLimits(ai.UsageLimits{InputTokenLimit: 100}))
+	if !errors.Is(err, ai.ErrUsageLimitExceeded) || !errors.Is(err, failure) {
+		t.Fatalf("unhandled error did not carry rejected usage: %v", err)
+	}
+
+	unhandled := ai.NewFallbackModel(rejectsThenRaises(), ai.WithFallbackModels(fallbackTextModel("backup", "accepted", nil)),
+		ai.WithFallbackOnError(func(context.Context, error) (bool, error) { return false, nil }))
+	_, err = unhandled.Request(t.Context(), nil, ai.ModelRequestParams{})
+	var apiError *fallbackAPIError
+	if !errors.As(err, &apiError) || err.Error() != "unavailable" {
+		t.Fatalf("unhandled error = %v", err)
+	}
+}
+
 func TestFallbackModelPredicateErrorsAndExhaustion(t *testing.T) {
 	predicateErr := errors.New("predicate")
 	requestErr := errors.New("request")

@@ -735,9 +735,15 @@ func requestStateEntry(part ai.RequestPart, images *[]any) (any, error) {
 		text, err := promptText(part, images)
 		return map[string]any{"user": text}, err
 	case ai.ToolReturnPart:
-		return map[string]any{
-			"tool_return": map[string]any{"name": part.ToolName, "content": fmt.Sprint(part.Content)},
-		}, nil
+		content, ok := part.Content.(string)
+		if !ok {
+			encoded, err := json.Marshal(part.Content)
+			if err != nil {
+				return nil, fmt.Errorf("decision: marshal tool return: %w", err)
+			}
+			content = string(encoded)
+		}
+		return map[string]any{"tool_return": map[string]any{"name": part.ToolName, "content": content}}, nil
 	case ai.RetryPromptPart:
 		return map[string]any{"retry": part.ModelResponse()}, nil
 	default:

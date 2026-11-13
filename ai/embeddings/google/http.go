@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 
+	ai "github.com/Kludex/pydantic-ai-go/ai"
 	modelgoogle "github.com/Kludex/pydantic-ai-go/ai/models/google"
 )
 
@@ -31,17 +32,24 @@ func (model *Model) doRequest(
 	}
 	response, err := model.httpClient.Do(request)
 	if err != nil {
-		return nil, fmt.Errorf("google embeddings: request: %w", err)
+		return nil, model.transportError(ctx, "request", err)
 	}
 	defer func() { _ = response.Body.Close() }()
 	responseBody, err := io.ReadAll(response.Body)
 	if err != nil {
-		return nil, fmt.Errorf("google embeddings: read response: %w", err)
+		return nil, model.transportError(ctx, "read response", err)
 	}
 	if response.StatusCode != http.StatusOK {
 		return nil, &modelgoogle.APIError{StatusCode: response.StatusCode, Body: string(responseBody)}
 	}
 	return responseBody, nil
+}
+
+func (model *Model) transportError(ctx context.Context, operation string, err error) error {
+	if ctx.Err() != nil {
+		return fmt.Errorf("google embeddings: %s: %w", operation, err)
+	}
+	return &ai.ModelTransportError{ModelName: model.name, ProviderName: "google embeddings", Operation: operation, Err: err}
 }
 
 func clonePointer[T any](value *T) *T {

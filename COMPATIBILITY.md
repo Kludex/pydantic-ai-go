@@ -83,6 +83,10 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `7ae4e2c8a418121ad044fc2d222b903af678b4b6` | A `MaxTokens` above a Claude model's maximum output is lowered to it on Anthropic and Bedrock Converse, unless an `output-` Anthropic beta is requested |
 | `451c51eb77c449b03387ed2d659cad61bc332ebc` | Bedrock Converse sends `reasoning_effort` for Z.AI GLM and DeepSeek V3.2; Go has no per-step output-mode fallback, so DeepSeek V3.2 rejects output tools while it thinks |
 | `ff0c4ddf9ab58aa9395ca722c3d0c6df0bf425b9` | `WorkspaceCommand.Dir` starts a command elsewhere through `/bin/sh` |
+| `2652686fad85bfeb48693ee2c4cfd2e42136967c` | Gemini 4 Hydrogen takes `XHIGH`; other Gemini models still snap `ThinkingLevelXHigh` to `HIGH` |
+| `db141af6d7c4f215259cb16d6cbf48de73018b76` | A nested `FallbackModel`'s rejected attempts ride on an error it does not fall back on, so outer fallbacks and run usage count them |
+| `75ef1a9bd9b6a841efc320adc9a27668bd689bb1` | Google embeddings return `ModelTransportError` for connection and read failures |
+| `6ee7f29f03a746653de405cf9494e14a68ccd317` | `openaicodex.WithBaseURL` and `openaichatgpt.WithBaseURL` take an HTTPS base URL and scope credentials to its host and port; the other OpenAI-compatible packages already had `WithBaseURL` |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 

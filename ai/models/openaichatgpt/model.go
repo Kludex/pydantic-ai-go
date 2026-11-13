@@ -27,6 +27,7 @@ type config struct {
 	credentials      *Credentials
 	credentialSource CredentialSource
 	httpClient       *http.Client
+	baseURL          string
 	defaultSettings  ai.ModelSettings
 }
 
@@ -45,10 +46,17 @@ func WithCredentialSource(source CredentialSource) Option {
 }
 
 // WithHTTPClient sets the caller-owned HTTP client. The model copies it and
-// wraps its transport, injecting credentials only on HTTPS requests to
-// api.openai.com, so the client can safely serve other destinations too.
+// wraps its transport, injecting credentials only on HTTPS requests to the
+// base URL's host and port, so the client can safely serve other destinations too.
 func WithHTTPClient(client *http.Client) Option {
 	return func(config *config) { config.httpClient = client }
+}
+
+// WithBaseURL sends requests to baseURL instead of https://api.openai.com/v1,
+// such as a gateway in front of it. Credentials are injected only on HTTPS
+// requests to its host and port, so it must be an https:// URL.
+func WithBaseURL(baseURL string) Option {
+	return func(config *config) { config.baseURL = baseURL }
 }
 
 // WithDefaultSettings sets request defaults overridden by agent and run settings.
@@ -60,7 +68,7 @@ func WithDefaultSettings(settings ai.ModelSettings) Option {
 // NewModel creates a ChatGPT plan model such as gpt-6.1-sol. It never falls
 // back to OPENAI_API_KEY: sign in with NewOAuthFlow first.
 func NewModel(name string, options ...Option) (*Model, error) {
-	configuration := config{httpClient: http.DefaultClient}
+	configuration := config{httpClient: http.DefaultClient, baseURL: defaultBaseURL}
 	for _, option := range options {
 		option(&configuration)
 	}
@@ -80,6 +88,10 @@ func NewModel(name string, options ...Option) (*Model, error) {
 		}
 	}
 
+	origin, err := oauthcreds.Origin(configuration.baseURL)
+	if err != nil {
+		return nil, errors.New("openai-chatgpt: " + err.Error())
+	}
 	base := configuration.httpClient.Transport
 	if base == nil {
 		base = http.DefaultTransport
@@ -98,14 +110,14 @@ func NewModel(name string, options ...Option) (*Model, error) {
 	})
 	requestClient := *configuration.httpClient
 	requestClient.Transport = &oauthcreds.Transport[Credentials]{
-		Base: base, Host: "api.openai.com", Manager: manager,
+		Base: base, Origin: origin, Manager: manager,
 		Headers: func(credentials Credentials) map[string]string {
 			return map[string]string{"Authorization": "Bearer " + credentials.AccessToken}
 		},
 	}
 	delegate := openai.NewResponsesModel(name,
 		openai.WithProvider(openai.ProviderConfig{
-			Name: "openai-chatgpt", BaseURL: defaultBaseURL, HTTPClient: &requestClient,
+			Name: "openai-chatgpt", BaseURL: configuration.baseURL, HTTPClient: &requestClient,
 		}),
 		openai.WithChatCompatibility(openai.ChatCompatibility{DeveloperSystemPrompts: true}),
 		openai.WithDeferredToolSupport(false),

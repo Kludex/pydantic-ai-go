@@ -947,3 +947,33 @@ func TestHTTPClientRemainsCallerOwned(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestBaseURLTakesRequestsAndCredentialsToItsOrigin(t *testing.T) {
+	var seen []string
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		if request.URL.Path == "/codex/responses" {
+			seen = append(seen, request.URL.String()+" "+request.Header.Get("Authorization"))
+			redirect := response(http.StatusTemporaryRedirect, "")
+			redirect.Header.Set("Location", "https://gateway.example:8443/final")
+			return redirect, nil
+		}
+		seen = append(seen, request.Header.Get("Authorization"))
+		return codexSSE("done"), nil
+	})
+	model := newModel(t, transport, openaicodex.WithBaseURL("https://gateway.example/codex"))
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(seen) != 2 || seen[0] != "https://gateway.example/codex/responses Bearer access-old" || seen[1] != "" {
+		t.Fatalf("requests = %q", seen)
+	}
+	if model.ProviderURL() != "https://gateway.example/codex" {
+		t.Fatalf("provider URL = %q", model.ProviderURL())
+	}
+	for _, baseURL := range []string{"http://gateway.example/codex", "://"} {
+		_, err := openaicodex.NewModel("m", openaicodex.WithCredentials(credentials("access")), openaicodex.WithBaseURL(baseURL))
+		if err == nil {
+			t.Fatalf("%s: expected an error", baseURL)
+		}
+	}
+}

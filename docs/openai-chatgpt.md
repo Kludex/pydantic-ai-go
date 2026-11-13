@@ -163,6 +163,19 @@ A sign-in the token endpoint rejects, or whose ID token fails validation, return
 
 When the user's plan cannot serve a request, the request fails with an `openai.APIError` whose body carries an error code such as `subscription_sharing_usage_limit_exceeded`. OpenAI never moves the request to another billing method. [Errors and recovery](https://developers.openai.com/siwc/token-sharing-open-source/errors-and-recovery) lists the codes and what to tell the user.
 
+## Base URL
+
+`WithBaseURL` sends requests to a gateway in front of the OpenAI API instead of `https://api.openai.com/v1`:
+
+```go
+model, err := openaichatgpt.NewModel("gpt-6.1-sol",
+	openaichatgpt.WithCredentials(credentials),
+	openaichatgpt.WithBaseURL("https://gateway.example/v1"),
+)
+```
+
+The model sends the user's credentials only on HTTPS requests to the base URL's host and port, so a redirect elsewhere does not receive them. The base URL must use HTTPS, and `NewModel` returns an error otherwise.
+
 ## Limitations
 
 ChatGPT plan usage is a preview with the [limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) OpenAI documents:

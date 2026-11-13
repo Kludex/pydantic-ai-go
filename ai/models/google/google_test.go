@@ -420,6 +420,18 @@ func TestThinkingSettings(t *testing.T) {
 			model: "gemini-4-carbon", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
 			level: "LOW", include: true, hasInclude: true,
 		},
+		"hydrogen xhigh": {
+			model: "gemini-4-hydrogen", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelXHigh},
+			level: "XHIGH", include: true, hasInclude: true,
+		},
+		"hydrogen high": {
+			model: "gemini-4-hydrogen", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			level: "HIGH", include: true, hasInclude: true,
+		},
+		"hydrogen disabled snaps up": {
+			model: "gemini-4-hydrogen", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			level: "LOW",
+		},
 		"pro medium tie snaps down": {
 			model: "gemini-3-pro-preview", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
 			level: "LOW", include: true, hasInclude: true,

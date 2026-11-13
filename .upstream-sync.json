@@ -2,6 +2,6 @@
   "$comment": "Tracks the upstream pydantic_ai source this Go port is synced against. The daily sync job diffs the upstream subpath between `commit` and pydantic-ai main, ports relevant changes, and bumps `commit` in the same PR.",
   "repo": "pydantic/pydantic-ai",
   "subpath": "pydantic_ai_slim/pydantic_ai",
-  "commit": "d94586aad1acd640715f2bf1152e8d730c8f9938",
-  "synced_at": "2026-11-12"
+  "commit": "23e9a1ee9a5c3c26e93ab66d06c60a211cbeda4a",
+  "synced_at": "2026-11-13"
 }

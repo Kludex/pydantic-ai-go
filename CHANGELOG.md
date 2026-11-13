@@ -14,6 +14,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - `ai/models/googledecisions` and the `google-decisions:` inference prefix run Gemini Decision models on the Gemini API's decisions endpoint.
 - `WorkspaceCommand.Dir` starts a command in another directory on any backend with commands.
 - Bedrock Converse maps `Thinking` to `reasoning_effort` for Z.AI GLM and DeepSeek V3.2. GLM takes an output tool without forcing it while it thinks; DeepSeek V3.2 rejects output tools while it thinks.
+- Gemini 4 Hydrogen takes `ai.ThinkingLevelXHigh` as `XHIGH` and snaps the levels below `low` to `low`.
+- `openaicodex.WithBaseURL` and `openaichatgpt.WithBaseURL` send requests to another HTTPS endpoint, such as a gateway, and inject credentials only on requests to its host and port.
 
 ### Changed
 
@@ -24,6 +26,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 ### Fixed
 
 - System One accepts unrounded probabilities and scores, such as a vLLM softmax, within float error.
+- A `FallbackModel` that rejected a billed response and then returned an error it does not fall back on keeps that attempt, so an outer fallback and the run still count its tokens and cost.
+- Decision models send a structured tool return in their history as JSON, not as Go's `fmt` formatting.
+- Google embeddings return `ai.ModelTransportError` for connection and response-read failures, so `FallbackModel` falls back on them like on other provider failures.
 - `StreamedRun.Result` returns nil when an event-stream capability fails after the run finished, as its documentation says.
 
 ## [0.7.1] - 2026-11-10

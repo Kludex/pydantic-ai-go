@@ -99,7 +99,6 @@ func TestLoadToolsetsConfigValidation(t *testing.T) {
 		"non-object servers": `{"mcpServers":[]}`,
 		"invalid field type": `{"mcpServers":{"a":{"args":"bad"}}}`,
 		"missing transport":  `{"mcpServers":{"a":{}}}`,
-		"both transports":    `{"mcpServers":{"a":{"command":"cmd","url":"http://example.com"}}}`,
 		"empty server name":  `{"mcpServers":{"":{"command":"cmd"}}}`,
 		"invalid URL":        `{"mcpServers":{"a":{"url":"not a URL"}}}`,
 		"invalid URL scheme": `{"mcpServers":{"a":{"url":"file:///tmp/socket"}}}`,
@@ -128,6 +127,18 @@ func TestConfiguredMCPTransports(t *testing.T) {
 	if command.Path == "" || !reflect.DeepEqual(command.Args[1:], []string{"ok"}) || command.Dir != "/tmp" ||
 		!containsEnvironment(command.Env, "MCP_TEST=set") {
 		t.Fatalf("unexpected command transport: %+v", command)
+	}
+
+	both, err := configuredToolset[testDeps]("both", serverConfig{Command: "echo", URL: "not a URL"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved, err = both.ForRun(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := resolved.(*runToolset[testDeps]).transport.(*mcpsdk.CommandTransport); !ok {
+		t.Fatalf("command did not win over url: %T", resolved.(*runToolset[testDeps]).transport)
 	}
 
 	for _, test := range []struct {

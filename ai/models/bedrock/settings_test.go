@@ -309,6 +309,38 @@ func TestNativeOutputSchemaIsJSON(t *testing.T) {
 	}
 }
 
+func TestGLM53InlinesSchemaDefinitions(t *testing.T) {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"item": map[string]any{"$ref": "#/$defs/Item"}},
+		"$defs":      map[string]any{"Item": map[string]any{"type": "object"}},
+	}
+	for model, inlined := range map[string]bool{"us.zai.glm-5.3": true, "zai.glm-5": false} {
+		t.Run(model, func(t *testing.T) {
+			client := &fakeClient{converse: func(
+				input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+			) (*bedrockruntime.ConverseOutput, error) {
+				spec := input.ToolConfig.Tools[0].(*types.ToolMemberToolSpec).Value
+				tool, _ := spec.InputSchema.(*types.ToolInputSchemaMemberJson).Value.MarshalSmithyDocument()
+				output := *input.OutputConfig.TextFormat.Structure.(*types.OutputFormatStructureMemberJsonSchema).Value.Schema
+				for _, encoded := range []string{string(tool), output} {
+					if strings.Contains(encoded, "$defs") == inlined {
+						t.Fatalf("unexpected schema: %s", encoded)
+					}
+				}
+				return completeOutput(types.StopReasonEndTurn), nil
+			}}
+			_, err := bedrock.NewModel(model, bedrock.WithClient(client)).Request(t.Context(), nil, ai.ModelRequestParams{
+				Tools:      []ai.ToolDefinition{{Name: "lookup", Schema: schema}},
+				OutputMode: ai.OutputModeNative, OutputSchema: schema,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestThinkingSettings(t *testing.T) {
 	tests := []struct {
 		name, model, effort string

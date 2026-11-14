@@ -58,7 +58,7 @@ func TestRoutesInterfacesAndQualifiesToolIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	call := response.Parts[0].(ai.ToolCallPart)
-	if call.ToolCallID != "resp_1:call_0" || response.ProviderName != "bedrock-mantle" ||
+	if call.ToolCallID != "call_0_7QfPUJ9y" || response.ProviderName != "bedrock-mantle" ||
 		model.Name() != "openai.gpt-5.6-luna" || model.ProviderName() != "bedrock-mantle" ||
 		model.ProviderURL() != server.URL+"/openai/v1" || model.ModelProfile().SupportsImageOutput ||
 		model.SupportsNativeTool(ai.WebSearchTool{}) || *model.DefaultModelSettings().Temperature != 0.5 {
@@ -76,14 +76,49 @@ func TestRoutesInterfacesAndQualifiesToolIDs(t *testing.T) {
 	if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
 		t.Fatal(err)
 	}
-	if history[0].(ai.ModelResponse).Parts[0].(ai.ToolCallPart).ToolCallID != "resp_1:call_0" {
+	if history[0].(ai.ModelResponse).Parts[0].(ai.ToolCallPart).ToolCallID != "call_0_7QfPUJ9y" {
 		t.Fatal("request preparation mutated caller history")
 	}
-	for _, input := range replayInput {
-		if callID, ok := input["call_id"]; ok && callID != "call_0" {
-			t.Fatalf("unexpected replay input: %#v", replayInput)
+	if callIDs := replayedCallIDs(replayInput); len(callIDs) != 3 || callIDs[0] != "call_0" || callIDs[2] != "call_0" {
+		t.Fatalf("unexpected replay input: %#v", replayInput)
+	}
+
+	for name, test := range map[string]struct {
+		providerName, providerURL, callID, want string
+	}{
+		"legacy prefix":  {"bedrock-mantle", "", "resp_1:call_0", "call_0"},
+		"other endpoint": {"bedrock-mantle", server.URL + "/v1", "call_0_7QfPUJ9y", "call_0_7QfPUJ9y"},
+		"other provider": {"openai", "", "call_0_7QfPUJ9y", "call_0_7QfPUJ9y"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			requests = 1
+			history := []ai.ModelMessage{
+				ai.ModelResponse{
+					Parts:        []ai.ResponsePart{ai.ToolCallPart{ToolName: "lookup", ToolCallID: test.callID, Args: json.RawMessage(`{}`)}},
+					ProviderName: test.providerName, ProviderURL: test.providerURL, ProviderResponseID: "resp_1",
+				},
+				ai.ModelRequest{Parts: []ai.RequestPart{
+					ai.ToolReturnPart{ToolName: "lookup", ToolCallID: test.callID, Content: "result"},
+				}},
+			}
+			if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{}); err != nil {
+				t.Fatal(err)
+			}
+			if callIDs := replayedCallIDs(replayInput); len(callIDs) != 2 || callIDs[0] != test.want || callIDs[1] != test.want {
+				t.Fatalf("unexpected replay input: %#v", replayInput)
+			}
+		})
+	}
+}
+
+func replayedCallIDs(input []map[string]any) []any {
+	var callIDs []any
+	for _, item := range input {
+		if callID, ok := item["call_id"]; ok {
+			callIDs = append(callIDs, callID)
 		}
 	}
+	return callIDs
 }
 
 func TestGPTOSSAndSafeguardRouting(t *testing.T) {
@@ -109,7 +144,7 @@ func TestGPTOSSAndSafeguardRouting(t *testing.T) {
 	}
 }
 
-func TestResponseWithoutIDKeepsRawToolID(t *testing.T) {
+func TestResponseWithoutIDScopesToolIDByTimestamp(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		_, _ = io.WriteString(response, `{"model":"openai.gpt-5.5","status":"completed","output":[{"id":"fc","type":"function_call","name":"lookup","call_id":"call_0","arguments":"{}"}]}`)
 	}))
@@ -120,10 +155,33 @@ func TestResponseWithoutIDKeepsRawToolID(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if response.Parts[0].(ai.ToolCallPart).ToolCallID != "call_0" {
-		t.Fatalf("unexpected tool ID: %#v", response.Parts[0])
+	if call := response.Parts[0].(ai.ToolCallPart); !strings.HasPrefix(call.ToolCallID, "call_0_") ||
+		len(call.ToolCallID) != len("call_0_")+8 {
+		t.Fatalf("unexpected tool ID: %#v", call)
 	}
-
+	encoded, err := ai.MarshalMessages([]ai.ModelMessage{*response})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := ai.UnmarshalMessages(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var replayed []map[string]any
+	server.Config.Handler = http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body struct {
+			Input []map[string]any `json:"input"`
+		}
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		replayed = body.Input
+		_, _ = io.WriteString(response, `{"model":"openai.gpt-5.5","status":"completed","output":[]}`)
+	})
+	if _, err := model.Request(t.Context(), decoded, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if callIDs := replayedCallIDs(replayed); len(callIDs) != 1 || callIDs[0] != "call_0" {
+		t.Fatalf("unexpected replay input: %#v", replayed)
+	}
 }
 
 func TestChatStreamPassesThrough(t *testing.T) {
@@ -177,7 +235,7 @@ func TestStreamQualifiesToolIDs(t *testing.T) {
 			finishID = event.Parts[0].(ai.ToolCallPart).ToolCallID
 		}
 	}
-	if startID != "resp_stream:call_0" || finishID != "resp_stream:call_0" {
+	if startID != "call_0_vkLtF0AF" || finishID != "call_0_vkLtF0AF" {
 		t.Fatalf("unexpected streamed IDs %q and %q", startID, finishID)
 	}
 	stream, err = model.StreamRequest(t.Context(), promptMessages(), ai.ModelRequestParams{})
@@ -185,6 +243,50 @@ func TestStreamQualifiesToolIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	stream(func(ai.ModelStreamEvent, error) bool { return false })
+}
+
+func TestStreamKeepsToolIDsSentBeforeResponseID(t *testing.T) {
+	events := []string{
+		`{"type":"response.output_item.added","output_index":0,"item":{"id":"fc","type":"function_call","name":"lookup","call_id":"call_0","arguments":"{}"}}`,
+		`{"type":"response.completed","response":{"id":"resp_stream","model":"openai.gpt-5.5","status":"completed","output":[{"id":"fc","type":"function_call","name":"lookup","call_id":"call_0","arguments":"{}"},{"id":"fc_1","type":"function_call","name":"lookup","call_id":"call_1","arguments":"{}"}]}}`,
+	}
+	failed := true
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		if failed {
+			response.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		response.Header().Set("Content-Type", "text/event-stream")
+		for _, event := range events {
+			_, _ = fmt.Fprintf(response, "data: %s\n\n", event)
+		}
+		_, _ = io.WriteString(response, "data: [DONE]\n\n")
+	}))
+	defer server.Close()
+	model := bedrockmantle.NewModel("openai.gpt-5.5", bedrockmantle.WithBaseURL(server.URL),
+		bedrockmantle.WithAPIKey("token"), bedrockmantle.WithHTTPClient(server.Client()))
+	if _, err := model.StreamRequest(t.Context(), promptMessages(), ai.ModelRequestParams{}); err == nil {
+		t.Fatal("expected stream open error")
+	}
+	failed = false
+	stream, err := model.StreamRequest(t.Context(), promptMessages(), ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var finishIDs []string
+	for event, eventErr := range stream {
+		if eventErr != nil {
+			t.Fatal(eventErr)
+		}
+		if finish, ok := event.(ai.FinishEvent); ok {
+			for _, part := range finish.Parts {
+				finishIDs = append(finishIDs, part.(ai.ToolCallPart).ToolCallID)
+			}
+		}
+	}
+	if len(finishIDs) != 2 || finishIDs[0] != "call_0" || finishIDs[1] != "call_1_vkLtF0AF" {
+		t.Fatalf("unexpected streamed IDs %q", finishIDs)
+	}
 }
 
 func TestBearerProviderAndSigV4Authentication(t *testing.T) {

@@ -16,8 +16,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Bedrock Converse maps `Thinking` to `reasoning_effort` for Z.AI GLM and DeepSeek V3.2. GLM takes an output tool without forcing it while it thinks; DeepSeek V3.2 rejects output tools while it thinks.
 - Gemini 4 Hydrogen takes `ai.ThinkingLevelXHigh` as `XHIGH` and snaps the levels below `low` to `low`.
 - `openaicodex.WithBaseURL` and `openaichatgpt.WithBaseURL` send requests to another HTTPS endpoint, such as a gateway, and inject credentials only on requests to its host and port.
+- Bedrock Converse inlines `$defs` in Z.AI GLM-5.3 tool and output schemas, since GLM-5.3 stringifies nested arguments whose schema is a `$ref`.
 
 ### Changed
+
+- Bedrock Mantle stores GPT-5 tool call IDs as `call_0_<hash>`, a hash of the response ID or, without one, of the response timestamp, instead of `<response ID>:call_0`. The new form stays within the `[a-zA-Z0-9_-]` set Anthropic and Bedrock require when the history moves to them. Only responses from the same Mantle endpoint are restored to the provider's IDs, and stored `<response ID>:call_0` IDs still restore. A streamed call that arrives before the response ID is kept as sent.
+- `mcp.LoadToolsets` runs `command` for an entry that also has `url`, as PydanticAI does, instead of rejecting it.
 
 - The file URLs one model request downloads share a 500 MiB total on top of the 50 MiB per-file limit. Pass larger inputs as `BinaryContent`.
 

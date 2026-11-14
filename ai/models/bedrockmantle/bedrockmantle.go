@@ -211,8 +211,11 @@ func (model *Model) Request(
 	if err := model.validateRequest(params); err != nil {
 		return nil, err
 	}
-	response, err := model.delegate.Request(ctx, restoreProviderToolCallIDs(messages), params)
-	if response != nil && model.interfaceName == interfaceOpenAIResponses {
+	if model.interfaceName != interfaceOpenAIResponses {
+		return model.delegate.Request(ctx, messages, params)
+	}
+	response, err := model.delegate.Request(ctx, restoreProviderToolCallIDs(messages, model.providerURL), params)
+	if response != nil {
 		qualifyResponseToolCallIDs(response)
 	}
 	return response, err
@@ -225,9 +228,12 @@ func (model *Model) StreamRequest(
 	if err := model.validateRequest(params); err != nil {
 		return nil, err
 	}
-	stream, err := model.streaming.StreamRequest(ctx, restoreProviderToolCallIDs(messages), params)
-	if err != nil || model.interfaceName != interfaceOpenAIResponses {
-		return stream, err
+	if model.interfaceName != interfaceOpenAIResponses {
+		return model.streaming.StreamRequest(ctx, messages, params)
+	}
+	stream, err := model.streaming.StreamRequest(ctx, restoreProviderToolCallIDs(messages, model.providerURL), params)
+	if err != nil {
+		return nil, err
 	}
 	return qualifyStreamToolCallIDs(stream), nil
 }

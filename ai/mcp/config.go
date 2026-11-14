@@ -31,7 +31,8 @@ type serverConfig struct {
 }
 
 // LoadToolsets reads the common mcpServers JSON format. Each returned toolset
-// is prefixed with and identified by its server name.
+// is prefixed with and identified by its server name. An entry with both
+// command and url runs command and ignores url and headers.
 func LoadToolsets[Deps any](path string, opts ...Option) ([]ai.Toolset[Deps], error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -85,8 +86,6 @@ func configuredToolset[Deps any](name string, server serverConfig, opts []Option
 	options := append([]Option(nil), opts...)
 	options = append(options, WithID(name))
 	switch {
-	case server.Command != "" && server.URL != "":
-		return nil, fmt.Errorf("ai/mcp: server %q must have either command or url, not both", name)
 	case server.Command != "":
 		return NewToolset(func(context.Context, *ai.RunContext[Deps]) (mcpsdk.Transport, error) {
 			command := exec.Command(server.Command, server.Args...)

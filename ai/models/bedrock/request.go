@@ -16,6 +16,8 @@ import (
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/requestschema"
+	jsonschema "github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 func buildConverseInput(
@@ -32,6 +34,10 @@ func buildConverseInput(
 		return nil, err
 	}
 	params.Settings = settings
+	if strings.Contains(modelName, "zai.glm-5.3") {
+		// GLM-5.3 stringifies nested tool arguments whose schema is a $ref into $defs.
+		params = requestschema.Transform(params, jsonschema.InlineDefinitions)
+	}
 	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
 		return nil, err
 	}

@@ -1113,6 +1113,41 @@ func TestNonNativeThinkingIsCarriedInUserTurnForClaude(t *testing.T) {
 	}
 }
 
+func TestOpenAIEncryptedReasoningIsNotReplayedToClaude(t *testing.T) {
+	gpt := bedrock.NewModel("us.openai.gpt-5.6-luna", bedrock.WithClient(&fakeClient{converse: func(
+		*bedrockruntime.ConverseInput, ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		return &bedrockruntime.ConverseOutput{StopReason: types.StopReasonEndTurn, Output: &types.ConverseOutputMemberMessage{
+			Value: types.Message{Role: types.ConversationRoleAssistant, Content: []types.ContentBlock{
+				&types.ContentBlockMemberReasoningContent{Value: &types.ReasoningContentBlockMemberRedactedContent{
+					Value: []byte("rsn_gpt-encrypted-reasoning"),
+				}},
+				&types.ContentBlockMemberText{Value: "Ok!"},
+			}},
+		}}, nil
+	}}))
+	response, err := gpt.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []types.Message
+	claude := bedrock.NewModel("us.anthropic.claude-sonnet-4-5-v1:0", bedrock.WithClient(&fakeClient{converse: func(
+		input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+	) (*bedrockruntime.ConverseOutput, error) {
+		got = input.Messages
+		return completeOutput(types.StopReasonEndTurn), nil
+	}}))
+	if _, err := claude.Request(t.Context(), []ai.ModelMessage{*response}, ai.ModelRequestParams{AllowText: true}); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || len(got[0].Content) != 1 {
+		t.Fatalf("expected only the answer text, got %#v", got)
+	}
+	if text, ok := got[0].Content[0].(*types.ContentBlockMemberText); !ok || text.Value != "Ok!" {
+		t.Fatalf("expected only the answer text, got %#v", got[0].Content)
+	}
+}
+
 func TestWarnsAboutIgnoredParallelToolCalls(t *testing.T) {
 	client := &streamingClient{fakeClient: &fakeClient{converse: func(
 		*bedrockruntime.ConverseInput, ...func(*bedrockruntime.Options),

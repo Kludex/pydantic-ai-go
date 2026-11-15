@@ -901,3 +901,68 @@ func TestFastModeProviderDetails(t *testing.T) {
 		})
 	}
 }
+
+func TestInferenceGeo(t *testing.T) {
+	geo, err := (anthropic.Settings{InferenceGeo: "us"}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := `{"input_tokens":1,"output_tokens":1,"inference_geo":"us"}`
+	for name, settings := range map[string]ai.ModelSettings{"set": geo, "unset": {}} {
+		want := map[string]any{"set": "us"}[name]
+		sent := func(t *testing.T, r *http.Request) {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["inference_geo"] != want || body["anthropic_inference_geo"] != nil {
+				t.Errorf("inference_geo sent = %#v, want %#v", body["inference_geo"], want)
+			}
+		}
+		t.Run(name+" request", func(t *testing.T) {
+			model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				sent(t, r)
+				_, _ = io.WriteString(w, `{"model":"claude-opus-4-6","content":[{"type":"text","text":"hi"}],"usage":`+usage+`}`)
+			})
+			resp, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true, Settings: settings})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.ProviderDetails["inference_geo"] != want {
+				t.Fatalf("inference_geo reported = %#v, want %#v", resp.ProviderDetails, want)
+			}
+		})
+		t.Run(name+" stream", func(t *testing.T) {
+			events := anthropicSSE(t, []string{
+				`{"type":"message_start","message":{"id":"m","model":"claude-opus-4-6","usage":` + usage + `}}`,
+				`{"type":"message_stop"}`,
+			})
+			model := newServer(t, func(w http.ResponseWriter, r *http.Request) {
+				sent(t, r)
+				events(w, r)
+			})
+			collected, err := collectAnthropicStream(t, model, ai.ModelRequestParams{AllowText: true, Settings: settings})
+			if err != nil {
+				t.Fatal(err)
+			}
+			finish := collected[len(collected)-1].(ai.FinishEvent)
+			if finish.ProviderDetails["inference_geo"] != want {
+				t.Fatalf("inference_geo reported = %#v, want %#v", finish.ProviderDetails, want)
+			}
+		})
+	}
+
+	if _, err := (anthropic.Settings{
+		Common: ai.ModelSettings{ExtraBody: map[string]any{"anthropic_inference_geo": "us"}}, InferenceGeo: "eu",
+	}).Build(); err == nil {
+		t.Fatal("conflicting inference geo was accepted")
+	}
+	model := newServer(t, func(http.ResponseWriter, *http.Request) {})
+	for _, value := range []any{"", 1} {
+		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"anthropic_inference_geo": value},
+		}}); err == nil || !strings.Contains(err.Error(), "inference geo") {
+			t.Fatalf("invalid inference geo %#v: %v", value, err)
+		}
+	}
+}

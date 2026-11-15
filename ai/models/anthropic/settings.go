@@ -85,6 +85,11 @@ type Settings struct {
 	CodeExecutionToolVersion CodeExecutionToolVersion
 	// Effort overrides the portable thinking level's generation effort.
 	Effort Effort
+	// InferenceGeo selects where inference runs, such as "us" or "global".
+	// Other values are sent as given for the API to accept or reject. The
+	// legacy Bedrock client ignores it with a warning, since the endpoint
+	// decides the region there. Models older than Claude 4.6 reject it.
+	InferenceGeo string
 }
 
 const (
@@ -96,6 +101,7 @@ const (
 	containerSetting            = "anthropic_container"
 	codeExecutionVersionSetting = "anthropic_code_execution_tool_version"
 	effortSetting               = "anthropic_effort"
+	inferenceGeoSetting         = "anthropic_inference_geo"
 )
 
 type cacheSettings struct {
@@ -195,6 +201,12 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 		}
 		extra[effortSetting] = settings.Effort
 	}
+	if settings.InferenceGeo != "" {
+		if _, exists := extra[inferenceGeoSetting]; exists {
+			return ai.ModelSettings{}, fmt.Errorf("anthropic: setting field %q is reserved", inferenceGeoSetting)
+		}
+		extra[inferenceGeoSetting] = settings.InferenceGeo
+	}
 	if len(extra) == 0 {
 		extra = nil
 	}
@@ -260,6 +272,7 @@ type providerSettings struct {
 	ContainerSet             bool
 	CodeExecutionToolVersion CodeExecutionToolVersion
 	Effort                   Effort
+	InferenceGeo             string
 }
 
 func extractProviderSettings(settings ai.ModelSettings) (ai.ModelSettings, providerSettings, error) {
@@ -327,6 +340,14 @@ func extractProviderSettings(settings ai.ModelSettings) (ai.ModelSettings, provi
 			return ai.ModelSettings{}, providerSettings{}, err
 		}
 		provider.Effort = effort
+	}
+	if value, exists := extra[inferenceGeoSetting]; exists {
+		delete(extra, inferenceGeoSetting)
+		geo, ok := value.(string)
+		if !ok || geo == "" {
+			return ai.ModelSettings{}, providerSettings{}, fmt.Errorf("anthropic: inference geo must be a non-empty string")
+		}
+		provider.InferenceGeo = geo
 	}
 	if len(extra) == 0 {
 		extra = nil

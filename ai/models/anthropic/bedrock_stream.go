@@ -56,7 +56,7 @@ func (model *Model) streamLegacyBedrock(
 		copyLegacyBedrockStream(stream, writer)
 		close(done)
 	}()
-	events := model.eventStream(ctx, reader)
+	events := model.eventStream(ctx, reader, false)
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		for event, eventErr := range events {
 			if !yield(event, eventErr) {

@@ -1157,6 +1157,43 @@ Claude Haiku 5.5, Sonnet 4.6+, Opus 4.6+, Fable 5 and 5.1, and Mythos 5 and 5.1 
 
 Claude Opus 5.5 cannot disable thinking. `ThinkingLevelDisabled` omits the `thinking` field and preserves an explicit effort, so Anthropic uses adaptive thinking. Lower the effort when you need a faster response.
 
+### Data residency
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/models/anthropic"
+)
+
+func main() {
+	settings, err := (anthropic.Settings{InferenceGeo: "us"}).Build()
+	if err != nil {
+		log.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](
+		anthropic.NewModel("claude-sonnet-4-6"),
+		ai.WithModelSettings(settings),
+	)
+	result, err := agent.Run(context.Background(), "Say hello.", struct{}{})
+	if err != nil {
+		log.Fatal(err)
+	}
+	messages := result.Messages()
+	response := messages[len(messages)-1].(ai.ModelResponse)
+	fmt.Println(response.ProviderDetails["inference_geo"], result.Output)
+}
+```
+
+`InferenceGeo` is sent as Anthropic's `inference_geo` parameter. `"us"` keeps inference on US infrastructure at 1.1 times the standard price, which the computed cost does not include yet. `"global"` lets it run in any geography. Other values are sent as given. Without it, the workspace default applies.
+
+Where the request ran is reported in `ModelResponse.ProviderDetails["inference_geo"]`, only when you set it, because Anthropic echoes a value on every response. Models older than Claude 4.6 reject the parameter with a 400 instead of dropping it. The legacy Bedrock client ignores it with a `slog` warning: there, the endpoint or inference profile decides the region.
+
 Claude Fable 5.1 and Opus 5.5 reject forced tool choices. A required output tool falls back to `tool_choice: auto`. The model can ignore it, so output validation and retry limits still apply.
 
 Claude Fable 5.1, Opus 5.5, Sonnet 5.5, and Haiku 5.5 can reject a signed thinking block when the preceding instructions or tools changed. The adapter retries that request once with `prefix_mismatch_behavior: drop_block`. This includes their Bedrock IDs on the direct API and on the legacy Bedrock client. Anthropic reports the drop in `ModelResponse.ProviderDetails["input_transformations"]`, and later requests in the same normalized history preserve the recovery setting. Keep dynamic instructions and tool order stable when possible because the changed prefix also prevents prompt-cache reuse.

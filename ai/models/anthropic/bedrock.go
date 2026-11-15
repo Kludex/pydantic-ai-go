@@ -143,7 +143,7 @@ func (model *Model) requestLegacyBedrock(
 	if output == nil {
 		return nil, fmt.Errorf("anthropic: legacy Bedrock response is nil")
 	}
-	response, err := parseResponse(output.Body)
+	response, err := parseResponse(output.Body, false)
 	if response != nil {
 		response.ProviderName = "anthropic"
 		response.ProviderURL = model.baseURL

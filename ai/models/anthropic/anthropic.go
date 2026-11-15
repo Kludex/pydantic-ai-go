@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"net/http"
 	"os"
@@ -276,7 +277,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if statusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: statusCode, Body: string(data)}
 	}
-	response, err := parseResponse(data)
+	response, err := parseResponse(data, payload.InferenceGeo != "")
 	if response != nil {
 		response.ProviderName = "anthropic"
 		response.ProviderURL = m.baseURL
@@ -443,6 +444,7 @@ type messagesRequest struct {
 	ContainerFromHistory bool                         `json:"-"`
 	Thinking             *thinkingParam               `json:"thinking,omitempty"`
 	ServiceTier          string                       `json:"service_tier,omitempty"`
+	InferenceGeo         string                       `json:"inference_geo,omitempty"`
 	ContextManagement    map[string]any               `json:"context_management,omitempty"`
 	Container            any                          `json:"container,omitempty"`
 	MCPServers           []anthropicMCPServer         `json:"mcp_servers,omitempty"`
@@ -1404,6 +1406,16 @@ func (m *Model) buildPayload(
 		ContainerFromHistory: containerFromHistory,
 		CacheControl:         promptCacheControl(cache.Automatic),
 		ExtraBody:            params.Settings.ExtraBody,
+	}
+	if providerSettings.InferenceGeo != "" {
+		if m.legacyBedrockClient != nil {
+			slog.WarnContext(ctx, fmt.Sprintf(
+				"anthropic: inference geo %q is not supported on legacy Bedrock, where the endpoint decides the inference region, and will be ignored",
+				providerSettings.InferenceGeo,
+			))
+		} else {
+			req.InferenceGeo = providerSettings.InferenceGeo
+		}
 	}
 	if cache.Diagnostics && m.legacyBedrockClient == nil {
 		req.Diagnostics = &struct {
@@ -2372,6 +2384,7 @@ type anthropicUsage struct {
 	CacheCreationInputTokens int                       `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int                       `json:"cache_read_input_tokens"`
 	Speed                    string                    `json:"speed"`
+	InferenceGeo             string                    `json:"inference_geo"`
 	CacheCreation            *anthropicCacheCreation   `json:"cache_creation"`
 	Iterations               []anthropicIterationUsage `json:"iterations"`
 	ServerToolUse            *struct {
@@ -2472,7 +2485,9 @@ func (u anthropicUsage) usage() ai.Usage {
 	}
 }
 
-func parseResponse(data []byte) (*ai.ModelResponse, error) {
+// parseResponse reports usage.inference_geo only when the request set it:
+// Anthropic echoes it on every response.
+func parseResponse(data []byte, reportInferenceGeo bool) (*ai.ModelResponse, error) {
 	var mr messagesResponse
 	if err := json.Unmarshal(data, &mr); err != nil {
 		return nil, &ai.ModelTransportError{ProviderName: "anthropic", Operation: "parse response", Err: err}
@@ -2486,6 +2501,9 @@ func parseResponse(data []byte) (*ai.ModelResponse, error) {
 	}
 	if mr.Usage.Speed == "fast" {
 		providerDetails["speed"] = "fast"
+	}
+	if reportInferenceGeo && mr.Usage.InferenceGeo != "" {
+		providerDetails["inference_geo"] = mr.Usage.InferenceGeo
 	}
 	if mr.Diagnostics != nil {
 		providerDetails["cache_diagnostics"] = mr.Diagnostics

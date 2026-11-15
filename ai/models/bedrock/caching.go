@@ -33,6 +33,8 @@ func cacheProfile(name string) ai.ModelProfile {
 		if strings.Contains(name, "claude") {
 			profile.SupportedCacheRetentions = promptcache.BedrockRetentions(name)
 		}
+	} else if bedrockOpenAIResponsesModel(name) {
+		profile.DefaultCacheRetention = 30 * time.Minute
 	}
 	return profile
 }

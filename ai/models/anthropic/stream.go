@@ -51,7 +51,7 @@ func (m *Model) StreamRequest(
 			return nil, err
 		}
 		if resp.StatusCode == http.StatusOK {
-			return m.eventStream(ctx, resp.Body), nil
+			return m.eventStream(ctx, resp.Body, payload.InferenceGeo != ""), nil
 		}
 		data, err := io.ReadAll(resp.Body)
 		_ = resp.Body.Close()
@@ -105,7 +105,7 @@ type streamEvent struct {
 }
 
 func (m *Model) eventStream(
-	ctx context.Context, body io.ReadCloser,
+	ctx context.Context, body io.ReadCloser, reportInferenceGeo bool,
 ) iter.Seq2[ai.ModelStreamEvent, error] {
 	return func(yield func(ai.ModelStreamEvent, error) bool) {
 		defer func() { _ = body.Close() }()
@@ -115,6 +115,7 @@ func (m *Model) eventStream(
 		stopReason := ""
 		containerID := ""
 		fast := false
+		inferenceGeo := ""
 		var inputTransformations []map[string]any
 		var diagnostics map[string]any
 		scanner := bufio.NewScanner(body)
@@ -145,6 +146,9 @@ func (m *Model) eventStream(
 				}
 				usage = event.Message.Usage.usage()
 				fast = event.Message.Usage.Speed == "fast"
+				if reportInferenceGeo {
+					inferenceGeo = event.Message.Usage.InferenceGeo
+				}
 				if event.Message.Container != nil {
 					containerID = event.Message.Container.ID
 				}
@@ -270,6 +274,9 @@ func (m *Model) eventStream(
 				}
 				if fast {
 					providerDetails["speed"] = "fast"
+				}
+				if inferenceGeo != "" {
+					providerDetails["inference_geo"] = inferenceGeo
 				}
 				if len(inputTransformations) > 0 {
 					providerDetails["input_transformations"] = slices.Clone(inputTransformations)

@@ -89,6 +89,7 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `8a04f26304ec86f3588feece8689f6fa14c6ed41` | Bedrock Converse inlines `$defs` in Z.AI GLM-5.3 tool and output schemas |
 | `44443816fc816a5bc3ede57c54f60ccd12c1227f` | Bedrock Mantle GPT-5 Responses tool call IDs are stored as `call_0_<hash>` of the response ID or timestamp and restored only for the same Mantle endpoint; Go has no portable `ModelProfile` flag for other OpenAI-compatible endpoints |
 | `b34a8fa230b0939a6103d3387137e69f0231e507` | `mcp.LoadToolsets` runs `command` for an entry that also has `url` |
+| `86d9ad923931d600f78bb100d402b9921b2db467` | `anthropic.Settings.InferenceGeo` sends `inference_geo` and reports it in `ProviderDetails` only when sent; the legacy Bedrock client ignores it with a warning |
 | `6ee7f29f03a746653de405cf9494e14a68ccd317` | `openaicodex.WithBaseURL` and `openaichatgpt.WithBaseURL` take an HTTPS base URL and scope credentials to its host and port; the other OpenAI-compatible packages already had `WithBaseURL` |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.

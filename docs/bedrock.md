@@ -35,7 +35,7 @@ $ AWS_REGION=us-east-1 go run ./examples/bedrock
 
 `NewModel` loads the default AWS SDK configuration on the first operation. This keeps construction free of network and credential-provider work. Concurrent calls share the loaded client. `RunStream` uses `ConverseStream` when the client supports it and emits normalized text, reasoning, and function-tool events.
 
-You can pass a foundation model ID, an inference profile ID, or an ARN. Bedrock validates whether that resource supports the Converse API. GPT-5.6 Sol, Luna, and Terra, GPT-6 Sol, Luna, and Astra, and GPT-6.1 Sol use Converse without unsupported temperature or top-p fields.
+You can pass a foundation model ID, an inference profile ID, or an ARN. Bedrock validates whether that resource supports the Converse API. GPT-5.6 Sol, Luna, and Terra, GPT-6 Sol, Luna, and Astra, and GPT-6.1 Sol and Terra use Converse without unsupported temperature or top-p fields.
 
 ## Configure data retention for Claude Fable
 
@@ -179,7 +179,7 @@ The Converse adapter maps these provider-neutral values:
 
 Bedrock requires text beside a document. The adapter inserts a neutral text block when a user prompt contains documents without text. It preserves the newest four explicit cache points because Bedrock rejects requests above that limit.
 
-Claude copies formatting it sees in assistant turns. So for Claude models, reasoning without a Bedrock signature, or from another provider, is sent as text in a `user` turn ahead of the assistant turn, wrapped in `<assistant_thinking model="..." provider="...">`. Bedrock requires alternating roles, so that text joins a preceding `user` turn, ahead of a trailing cache point so the point keeps its position. See [Carried-over thinking](providers.md#carried-over-thinking). Other models drop reasoning from another provider.
+Claude copies formatting it sees in assistant turns. So for Claude models, reasoning without a Bedrock signature, or from another provider, is sent as text in a `user` turn ahead of the assistant turn, wrapped in `<assistant_thinking model="..." provider="...">`. Bedrock requires alternating roles, so that text joins a preceding `user` turn, ahead of a trailing cache point so the point keeps its position. See [Carried-over thinking](providers.md#carried-over-thinking). Other models drop reasoning from another provider. GPT-5.6 and GPT-6 encrypted reasoning is never replayed, so it cannot reach a Claude model that cannot verify it.
 
 Bedrock receives detached byte slices. A request does not retain caller-owned file buffers.
 
@@ -233,7 +233,7 @@ Native output sends your reflected JSON Schema through Converse `outputConfig.te
 
 ## Portable settings
 
-Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and extra-header settings map to Converse fields. Bedrock rejects temperature and top-p for its GPT-5.6 Sol/Luna/Terra and GPT-6 Sol/Luna/Astra Converse models, so the adapter omits those settings for these exact model families. GPT-OSS keeps them. `ModelSettings.ExtraBody` maps to `additionalModelRequestFields` for model-specific Bedrock parameters.
+Portable maximum-token, temperature, top-p, stop-sequence, service-tier, and extra-header settings map to Converse fields. Bedrock rejects temperature and top-p for its GPT-5.6 Sol/Luna/Terra, GPT-6 Sol/Luna/Astra, and GPT-6.1 Sol/Terra Converse models, so the adapter omits those settings for these exact model families. GPT-OSS keeps them. Bedrock caches these models automatically for at least 30 minutes, so their `ModelProfile.DefaultCacheRetention` is 30 minutes for `ai.PromptCacheOutlook`. `ModelSettings.ExtraBody` maps to `additionalModelRequestFields` for model-specific Bedrock parameters.
 
 `WithDefaultSettings` stores a detached copy. Agent and run settings override those defaults through the standard fieldwise merge.
 

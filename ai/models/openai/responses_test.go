@@ -2435,7 +2435,7 @@ func TestResponsesServerManagedToolSearchPairingEdges(t *testing.T) {
 		model := newResponsesServer(t, func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(`{
 				"model":"gpt-5.4","status":"completed","output":[
-					{"id":"tso","type":"tool_search_output","call_id":"call","execution":"server","status":"in_progress","tools":[{"type":"function","name":"real"},{"type":"file_search"}]},
+					{"id":"tso","type":"tool_search_output","call_id":"call","execution":"server","status":"in_progress","tools":[{"type":"function","name":"real"},{"type":"file_search"},{"type":"namespace","name":"rates","tools":[{"type":"function","name":"get_exchange_rate","defer_loading":true},{"type":"custom","name":"freeform"},"bad"]}]},
 					{"id":"ts","type":"tool_search_call","call_id":"call","execution":"server","status":"incomplete","arguments":{}}
 				],"usage":{}
 			}`))
@@ -2447,8 +2447,8 @@ func TestResponsesServerManagedToolSearchPairingEdges(t *testing.T) {
 		call := response.Parts[0].(ai.NativeToolCallPart)
 		returned := response.Parts[1].(ai.NativeToolReturnPart)
 		matches := returned.Content.(ai.ToolSearchResult).DiscoveredTools
-		if call.ToolCallID != "call" || returned.ToolCallID != "call" || len(matches) != 1 ||
-			matches[0].Name != "real" || call.ProviderDetails["status"] != "incomplete" ||
+		if call.ToolCallID != "call" || returned.ToolCallID != "call" || len(matches) != 2 ||
+			matches[0].Name != "real" || matches[1].Name != "get_exchange_rate" || call.ProviderDetails["status"] != "incomplete" ||
 			returned.ProviderDetails["status"] != "in_progress" {
 			t.Fatalf("unexpected explicit pairing: %+v", response.Parts)
 		}

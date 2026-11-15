@@ -174,7 +174,7 @@ func buildConverseInput(
 	}
 	limitCachePoints(input.Messages, 4-reservedCachePoints)
 	raiseBedrockCacheTTLs(input)
-	if bedrockAnthropicDisallowsSampling(modelName) || bedrockOpenAIDisallowsSampling(modelName) {
+	if bedrockAnthropicDisallowsSampling(modelName) || bedrockOpenAIResponsesModel(modelName) {
 		params.Settings = params.Settings.Clone()
 		params.Settings.Temperature = nil
 		params.Settings.TopP = nil
@@ -360,10 +360,13 @@ func bedrockSupportsXHigh(name string) bool {
 		strings.Contains(name, "claude-fable-5") || strings.Contains(name, "claude-mythos-5")
 }
 
-func bedrockOpenAIDisallowsSampling(modelName string) bool {
+// bedrockOpenAIResponsesModel reports the GPT models Converse serves like the
+// Responses API: they reject sampling settings and cache for at least 30 minutes.
+func bedrockOpenAIResponsesModel(modelName string) bool {
 	name := strings.ToLower(modelName)
 	for _, model := range []string{
 		"gpt-5.6-sol", "gpt-5.6-luna", "gpt-5.6-terra", "gpt-6-sol", "gpt-6-luna", "gpt-6-astra", "gpt-6.1-sol",
+		"gpt-6.1-terra",
 	} {
 		if strings.HasSuffix(name, "openai."+model) || name == model {
 			return true

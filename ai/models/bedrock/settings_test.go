@@ -139,8 +139,12 @@ func TestOpenAIConverseDropsUnsupportedSampling(t *testing.T) {
 	for _, name := range []string{
 		"us.openai.gpt-5.6-sol", "us.openai.gpt-5.6-luna", "us.openai.gpt-5.6-terra",
 		"global.openai.gpt-6-sol", "global.openai.gpt-6-luna", "global.openai.gpt-6-astra", "global.openai.gpt-6.1-sol",
+		"global.openai.gpt-6.1-terra",
 	} {
 		t.Run(name, func(t *testing.T) {
+			if profile := bedrock.NewModel(name).ModelProfile(); profile.DefaultCacheRetention != 30*time.Minute || profile.SupportsCache {
+				t.Fatalf("unexpected cache profile: %#v", profile)
+			}
 			client := &fakeClient{converse: func(
 				input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
 			) (*bedrockruntime.ConverseOutput, error) {
@@ -169,6 +173,9 @@ func TestOpenAIConverseDropsUnsupportedSampling(t *testing.T) {
 		return completeOutput(types.StopReasonEndTurn), nil
 	}}
 	temperature, topP := float64(.2), float64(.3)
+	if retention := bedrock.NewModel("openai.gpt-oss-120b-1:0").ModelProfile().DefaultCacheRetention; retention != 0 {
+		t.Fatalf("GPT-OSS cache retention = %s", retention)
+	}
 	_, err := bedrock.NewModel("openai.gpt-oss-120b-1:0", bedrock.WithClient(client)).Request(
 		t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Temperature: &temperature, TopP: &topP}},
 	)

@@ -17,6 +17,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - Gemini 4 Hydrogen takes `ai.ThinkingLevelXHigh` as `XHIGH` and snaps the levels below `low` to `low`.
 - `openaicodex.WithBaseURL` and `openaichatgpt.WithBaseURL` send requests to another HTTPS endpoint, such as a gateway, and inject credentials only on requests to its host and port.
 - Bedrock Converse inlines `$defs` in Z.AI GLM-5.3 tool and output schemas, since GLM-5.3 stringifies nested arguments whose schema is a `$ref`.
+- `anthropic.Settings.InferenceGeo` sends Anthropic's `inference_geo` data-residency parameter and reports where the request ran in `ProviderDetails["inference_geo"]`. The legacy Bedrock client ignores it with a warning.
+- Bedrock Converse omits temperature and top-p for GPT-6.1 Terra, and reports a 30-minute `DefaultCacheRetention` for GPT-5.6, GPT-6, and GPT-6.1 models.
+- OpenAI Responses tool search reveals deferred tools that a `tool_search_output` returns wrapped in a namespace.
 
 ### Changed
 

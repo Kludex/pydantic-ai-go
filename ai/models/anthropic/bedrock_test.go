@@ -1,9 +1,11 @@
 package anthropic_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -477,5 +479,36 @@ func TestLegacyBedrockStaleThinkingRecovery(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestLegacyBedrockIgnoresInferenceGeo(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(previous)
+	var body map[string]any
+	client := &legacyBedrockClient{invoke: func(input *bedrockruntime.InvokeModelInput) (*bedrockruntime.InvokeModelOutput, error) {
+		if err := json.Unmarshal(input.Body, &body); err != nil {
+			t.Fatal(err)
+		}
+		return &bedrockruntime.InvokeModelOutput{
+			Body: []byte(`{"model":"model","content":[],"usage":{"inference_geo":"global"}}`),
+		}, nil
+	}}
+	settings, err := (anthropic.Settings{InferenceGeo: "us"}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := anthropic.NewLegacyBedrockModel("claude-sonnet-4-6", anthropic.LegacyBedrockConfig{Client: client})
+	response, err := model.Request(context.Background(), nil, ai.ModelRequestParams{Settings: settings})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, sent := body["inference_geo"]; sent || response.ProviderDetails["inference_geo"] != nil {
+		t.Fatalf("legacy Bedrock sent or reported inference geo: %#v %#v", body, response.ProviderDetails)
+	}
+	if !strings.Contains(logged.String(), `inference geo \"us\" is not supported on legacy Bedrock`) {
+		t.Fatalf("missing warning: %s", logged.String())
 	}
 }

@@ -1760,10 +1760,21 @@ func responsesToolSearchReturn(
 ) ai.NativeToolReturnPart {
 	matches := make([]ai.ToolSearchMatch, 0, len(item.Tools))
 	for _, tool := range item.Tools {
-		toolType, _ := tool["type"].(string)
-		name, _ := tool["name"].(string)
-		if toolType == "function" && name != "" {
-			matches = append(matches, ai.ToolSearchMatch{Name: name})
+		candidates := []map[string]any{tool}
+		if tool["type"] == "namespace" {
+			inner, _ := tool["tools"].([]any)
+			candidates = candidates[:0]
+			for _, value := range inner {
+				if function, ok := value.(map[string]any); ok {
+					candidates = append(candidates, function)
+				}
+			}
+		}
+		for _, candidate := range candidates {
+			name, _ := candidate["name"].(string)
+			if candidate["type"] == "function" && name != "" {
+				matches = append(matches, ai.ToolSearchMatch{Name: name})
+			}
 		}
 	}
 	return ai.NativeToolReturnPart{

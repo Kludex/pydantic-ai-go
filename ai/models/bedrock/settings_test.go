@@ -316,13 +316,15 @@ func TestNativeOutputSchemaIsJSON(t *testing.T) {
 	}
 }
 
-func TestGLM53InlinesSchemaDefinitions(t *testing.T) {
+func TestGLM53AndMiniMaxInlineSchemaDefinitions(t *testing.T) {
 	schema := map[string]any{
 		"type":       "object",
 		"properties": map[string]any{"item": map[string]any{"$ref": "#/$defs/Item"}},
 		"$defs":      map[string]any{"Item": map[string]any{"type": "object"}},
 	}
-	for model, inlined := range map[string]bool{"us.zai.glm-5.3": true, "zai.glm-5": false} {
+	for model, inlined := range map[string]bool{
+		"us.zai.glm-5.3": true, "zai.glm-5": false, "us.minimax.minimax-m2.5": true, "minimax.minimax-m3.5": false,
+	} {
 		t.Run(model, func(t *testing.T) {
 			client := &fakeClient{converse: func(
 				input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),

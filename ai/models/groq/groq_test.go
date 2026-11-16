@@ -3,6 +3,7 @@ package groq_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -663,6 +664,11 @@ func TestSettingsValidation(t *testing.T) {
 	}{
 		{name: "format", settings: groq.Settings{ReasoningFormat: "invalid"}, match: "invalid reasoning format"},
 		{name: "effort", settings: groq.Settings{ReasoningEffort: "invalid"}, match: "invalid reasoning effort"},
+		{name: "tier", settings: groq.Settings{ServiceTier: "priority"}, match: "invalid service tier"},
+		{name: "tier conflict", settings: groq.Settings{
+			Common:      ai.ModelSettings{ExtraBody: map[string]any{"service_tier": "flex"}},
+			ServiceTier: groq.ServiceTierAuto,
+		}, match: "service_tier"},
 		{name: "format conflict", settings: groq.Settings{
 			Common:          ai.ModelSettings{ExtraBody: map[string]any{"reasoning_format": "raw"}},
 			ReasoningFormat: groq.ReasoningFormatParsed,
@@ -699,6 +705,40 @@ func TestSettingsValidation(t *testing.T) {
 		if _, err := (groq.Settings{ReasoningEffort: effort}).Build(); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func TestServiceTier(t *testing.T) {
+	performance, err := (groq.Settings{
+		Common: ai.ModelSettings{ServiceTier: ai.ServiceTierFlex}, ServiceTier: groq.ServiceTierPerformance,
+	}).Build()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		settings ai.ModelSettings
+		want     any
+	}{
+		"auto":        {settings: ai.ModelSettings{ServiceTier: ai.ServiceTierAuto}, want: "auto"},
+		"default":     {settings: ai.ModelSettings{ServiceTier: ai.ServiceTierDefault}, want: "on_demand"},
+		"flex":        {settings: ai.ModelSettings{ServiceTier: ai.ServiceTierFlex}, want: "flex"},
+		"priority":    {settings: ai.ModelSettings{ServiceTier: ai.ServiceTierPriority}},
+		"unset":       {},
+		"performance": {settings: performance, want: "performance"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				_ = json.NewDecoder(request.Body).Decode(&body)
+				_, _ = io.WriteString(response, `{"service_tier":"on_demand","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`)
+			}))
+			defer server.Close()
+			model := groq.NewModel("llama-3.3-70b-versatile", groq.WithBaseURL(server.URL), groq.WithHTTPClient(server.Client()))
+			response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: test.settings})
+			if err != nil || body["service_tier"] != test.want || response.ProviderDetails["service_tier"] != "on_demand" {
+				t.Fatalf("unexpected request or response: %#v %#v %v", body, response, err)
+			}
+		})
 	}
 }
 

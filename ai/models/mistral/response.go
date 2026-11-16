@@ -95,8 +95,20 @@ func marshalRequest(payload chatRequest, extra map[string]any) ([]byte, error) {
 }
 
 func (model *Model) reasoningEffort(thinking *ai.ThinkingSettings) string {
-	if thinking == nil || strings.HasPrefix(strings.ToLower(model.name), "magistral") ||
-		!adjustableReasoningModel(model.name) {
+	if thinking == nil {
+		return ""
+	}
+	if large4Model(model.name) {
+		switch thinking.Level {
+		case ai.ThinkingLevelDisabled, ai.ThinkingLevelMinimal, ai.ThinkingLevelLow:
+			return "low"
+		case ai.ThinkingLevelMedium:
+			return "medium"
+		default:
+			return "high"
+		}
+	}
+	if strings.HasPrefix(strings.ToLower(model.name), "magistral") || !adjustableReasoningModel(model.name) {
 		return ""
 	}
 	if thinking.Level == ai.ThinkingLevelDisabled {
@@ -108,12 +120,16 @@ func (model *Model) reasoningEffort(thinking *ai.ThinkingSettings) string {
 func adjustableReasoningModel(name string) bool {
 	name = strings.ToLower(name)
 	return map[string]bool{
-		"mistral-large-4": true, "mistral-large-4-0": true,
 		"mistral-small-latest": true, "mistral-small-2603": true,
 		"mistral-medium-latest": true, "mistral-medium": true,
 		"mistral-medium-3": true, "mistral-medium-3-5": true,
 		"mistral-medium-3.5": true, "mistral-medium-2604": true,
 	}[name]
+}
+
+func large4Model(name string) bool {
+	name = strings.ToLower(name)
+	return name == "mistral-large-4" || name == "mistral-large-4-0"
 }
 
 func mistralFinishReason(reason string) ai.FinishReason {

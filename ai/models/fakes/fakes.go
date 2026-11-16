@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
+	"math"
 	"strconv"
 	"strings"
 
@@ -173,6 +175,11 @@ func valueFromSchema(value any, root map[string]any, resolving map[string]bool) 
 			return valueFromSchema(alternatives[0], root, resolving)
 		}
 	}
+	if types, ok := schema["type"].([]any); ok && len(types) > 0 {
+		member := maps.Clone(schema)
+		member["type"] = types[0]
+		return valueFromSchema(member, root, resolving)
+	}
 	switch schema["type"] {
 	case "string":
 		if schema["format"] == "date-time" {
@@ -183,7 +190,7 @@ func valueFromSchema(value any, root map[string]any, resolving map[string]bool) 
 		}
 		return "a"
 	case "integer":
-		return 0
+		return integerFromSchema(schema)
 	case "number":
 		return 0.0
 	case "boolean":
@@ -224,6 +231,31 @@ func valueFromSchema(value any, root map[string]any, resolving map[string]bool) 
 	default:
 		return nil
 	}
+}
+
+// integerFromSchema returns the lowest integer inside the lower bounds, else the highest inside the upper bounds.
+func integerFromSchema(schema map[string]any) int {
+	inclusive, hasInclusive := schemaLimit(schema["minimum"])
+	exclusive, hasExclusive := schemaLimit(schema["exclusiveMinimum"])
+	switch {
+	case hasInclusive && hasExclusive:
+		return int(max(math.Ceil(inclusive), math.Floor(exclusive)+1))
+	case hasInclusive:
+		return int(math.Ceil(inclusive))
+	case hasExclusive:
+		return int(math.Floor(exclusive) + 1)
+	}
+	inclusive, hasInclusive = schemaLimit(schema["maximum"])
+	exclusive, hasExclusive = schemaLimit(schema["exclusiveMaximum"])
+	switch {
+	case hasInclusive && hasExclusive:
+		return int(min(math.Floor(inclusive), math.Ceil(exclusive)-1))
+	case hasInclusive:
+		return int(math.Floor(inclusive))
+	case hasExclusive:
+		return int(math.Ceil(exclusive) - 1)
+	}
+	return 0
 }
 
 func schemaLimit(value any) (float64, bool) {

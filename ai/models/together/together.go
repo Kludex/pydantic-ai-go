@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/requestschema"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/thinking"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
@@ -60,8 +62,13 @@ func NewModel(name string, options ...Option) *openai.Model {
 	}
 	lowerName := strings.ToLower(name)
 	compatibility := openai.ChatCompatibility{ReasoningFallback: true}
-	if strings.HasPrefix(lowerName, "deepseek-ai/deepseek-v4-") {
+	vendor, model, _ := strings.Cut(lowerName, "/")
+	if vendor == "deepseek-ai" && thinking.DeepSeekV4(model) {
 		compatibility.DisableRequiredToolChoice = true
+	}
+	if (vendor == "minimax" || vendor == "minimaxai") && requestschema.MiniMax(model) {
+		// MiniMax stringifies nested tool arguments whose schema is a $ref into $defs.
+		compatibility.InlineSchemaDefinitions = true
 	}
 	openAIOptions := []openai.Option{
 		openai.WithProvider(NewProviderConfig()),

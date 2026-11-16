@@ -156,6 +156,17 @@ func TestModelProfilesAndGateway(t *testing.T) {
 		t.Fatalf("unexpected GPT-OSS request: %#v %#v %v", bodies, response, err)
 	}
 
+	for name, want := range map[string]any{"kimi-k2.6": "high", "kimi-k2-instruct": nil} {
+		bodies = nil
+		kimi := cerebras.NewModel(name, cerebras.WithProvider(provider))
+		_, err := kimi.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+		}})
+		if err != nil || bodies[0]["reasoning_effort"] != want {
+			t.Fatalf("unexpected %s reasoning effort: %#v %v", name, bodies, err)
+		}
+	}
+
 	conflict := ai.ModelRequestParams{Settings: ai.ModelSettings{
 		Thinking:  &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
 		ExtraBody: map[string]any{"reasoning_effort": "high"},

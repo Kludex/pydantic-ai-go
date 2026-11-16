@@ -22,6 +22,8 @@ func TestDeepSeekChatThinkingAndToolChoice(t *testing.T) {
 	}{
 		"V4 default thinking":    {model: "deepseek-v4-flash", wantChoice: "auto"},
 		"flash default thinking": {model: "deepseek-flash", wantChoice: "auto"},
+		"V4.1 default thinking":  {model: "deepseek-v4.1-flash", wantChoice: "auto"},
+		"V4p1 disabled thinking": {model: "deepseek-v4p1-flash", thinking: disabledThinking(), wantChoice: "required", wantReasoning: "none"},
 		"V4 disabled thinking":   {model: "deepseek-v4-pro", thinking: disabledThinking(), wantChoice: "required", wantReasoning: "none"},
 		"reasoner":               {model: "deepseek-reasoner", wantChoice: "auto"},
 		"reasoner cannot disable": {

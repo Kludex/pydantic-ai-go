@@ -43,6 +43,18 @@ func TestGeneratedSchemaReferencesAndTuples(t *testing.T) {
 		{name: "unknown limit", node: map[string]any{
 			"type": "array", "items": true, "maxItems": "unknown",
 		}, want: []any{"a"}},
+		{name: "type list", node: map[string]any{"type": []any{"integer", "null"}, "minimum": 3}, want: 3.0},
+		{name: "integer minimum", node: map[string]any{"type": "integer", "minimum": 1.5}, want: 2.0},
+		{name: "integer exclusive minimum", node: map[string]any{"type": "integer", "exclusiveMinimum": 2.5}, want: 3.0},
+		{name: "integer mixed minimum", node: map[string]any{
+			"type": "integer", "minimum": 1, "exclusiveMinimum": 4,
+		}, want: 5.0},
+		{name: "integer maximum", node: map[string]any{"type": "integer", "maximum": -1.5}, want: -2.0},
+		{name: "integer exclusive maximum", node: map[string]any{"type": "integer", "exclusiveMaximum": -3}, want: -4.0},
+		{name: "integer mixed maximum", node: map[string]any{
+			"type": "integer", "maximum": -1, "exclusiveMaximum": -5.5,
+		}, want: -6.0},
+		{name: "integer unbounded", node: map[string]any{"type": "integer"}, want: 0.0},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			schema := map[string]any{

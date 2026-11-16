@@ -190,6 +190,10 @@ func TestVLLMFamilyProfiles(t *testing.T) {
 		"GLM always-on": {
 			model: "zai/GLM-5.3", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
 		},
+		"DeepSeek V4.1 effort": {
+			model: "deepseek-ai/DeepSeek-V4p1-Flash", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			wantReasoning: "high",
+		},
 		"GLM effort": {
 			model: "zai/GLM-5.2", thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
 			wantReasoning: "high",

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -18,8 +19,11 @@ func TestTogetherRequestAndForcedToolChoice(t *testing.T) {
 		model      string
 		wantChoice string
 	}{
-		"DeepSeek V4": {model: "deepseek-ai/DeepSeek-V4-Pro", wantChoice: "auto"},
-		"Qwen":        {model: "Qwen/Qwen3-32B", wantChoice: "required"},
+		"DeepSeek V4":     {model: "deepseek-ai/DeepSeek-V4-Pro", wantChoice: "auto"},
+		"DeepSeek V4.1":   {model: "deepseek-ai/DeepSeek-V4.1-Flash", wantChoice: "auto"},
+		"DeepSeek V4p1":   {model: "deepseek-ai/deepseek-v4p1-flash", wantChoice: "auto"},
+		"DeepSeek V4-pro": {model: "other/deepseek-v4-pro", wantChoice: "required"},
+		"Qwen":            {model: "Qwen/Qwen3-32B", wantChoice: "required"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var body map[string]any
@@ -94,5 +98,33 @@ func TestMistralToolCallIDLength(t *testing.T) {
 		if got := together.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
 			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
 		}
+	}
+}
+
+func TestTogetherMiniMaxInlinesSchemaDefinitions(t *testing.T) {
+	schema := map[string]any{
+		"type":       "object",
+		"properties": map[string]any{"item": map[string]any{"$ref": "#/$defs/Item"}},
+		"$defs":      map[string]any{"Item": map[string]any{"type": "object"}},
+	}
+	for name, inlined := range map[string]bool{
+		"MiniMaxAI/MiniMax-M3": true, "minimax/minimax-m3.1-flash": true, "MiniMaxAI/MiniMax-M2-her": false,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var body string
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				raw, _ := io.ReadAll(request.Body)
+				body = string(raw)
+				_, _ = io.WriteString(response, `{"choices":[{"message":{"content":"done"},"finish_reason":"stop"}]}`)
+			}))
+			defer server.Close()
+			model := together.NewModel(name, together.WithBaseURL(server.URL), together.WithHTTPClient(server.Client()))
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+				Tools: []ai.ToolDefinition{{Name: "lookup", Schema: schema}},
+			})
+			if err != nil || strings.Contains(body, "$defs") == inlined {
+				t.Fatalf("unexpected request: %s %v", body, err)
+			}
+		})
 	}
 }

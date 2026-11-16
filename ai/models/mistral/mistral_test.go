@@ -230,9 +230,14 @@ func TestSingleForcedToolKeepsDeclarations(t *testing.T) {
 	}
 }
 
-func TestLarge4AdjustableReasoning(t *testing.T) {
+func TestLarge4ReasoningEffort(t *testing.T) {
+	want := map[ai.ThinkingLevel]any{
+		ai.ThinkingLevelDisabled: "low", ai.ThinkingLevelMinimal: "low", ai.ThinkingLevelLow: "low",
+		ai.ThinkingLevelMedium: "medium", ai.ThinkingLevelEnabled: "high", ai.ThinkingLevelHigh: "high",
+		ai.ThinkingLevelXHigh: "high",
+	}
 	for _, name := range []string{"mistral-large-4", "mistral-large-4-0", "mistral-large-4-preview"} {
-		for _, level := range []ai.ThinkingLevel{ai.ThinkingLevelHigh, ai.ThinkingLevelDisabled} {
+		for level, effort := range want {
 			var captured map[string]any
 			server := responseServer(t, `{"choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`, &captured)
 			model := mistral.NewModel(name, mistral.WithBaseURL(server.URL), mistral.WithHTTPClient(server.Client()))
@@ -243,11 +248,10 @@ func TestLarge4AdjustableReasoning(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := map[ai.ThinkingLevel]any{ai.ThinkingLevelHigh: "high", ai.ThinkingLevelDisabled: "none"}[level]
 			if name == "mistral-large-4-preview" {
-				want = nil
+				effort = nil
 			}
-			if captured["reasoning_effort"] != want {
+			if captured["reasoning_effort"] != effort {
 				t.Fatalf("%s %s: unexpected reasoning effort %#v", name, level, captured["reasoning_effort"])
 			}
 		}

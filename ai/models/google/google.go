@@ -1320,8 +1320,10 @@ func googleFinishReason(reason string) ai.FinishReason {
 		"BLOCKLIST": ai.FinishReasonContentFilter, "PROHIBITED_CONTENT": ai.FinishReasonContentFilter,
 		"SPII": ai.FinishReasonContentFilter, "IMAGE_SAFETY": ai.FinishReasonContentFilter,
 		"IMAGE_PROHIBITED_CONTENT": ai.FinishReasonContentFilter, "MODEL_ARMOR": ai.FinishReasonContentFilter,
-		"LANGUAGE": ai.FinishReasonError, "MALFORMED_FUNCTION_CALL": ai.FinishReasonError,
-		"UNEXPECTED_TOOL_CALL": ai.FinishReasonError, "NO_IMAGE": ai.FinishReasonError,
+		"IMAGE_RECITATION": ai.FinishReasonContentFilter,
+		"LANGUAGE":         ai.FinishReasonError, "MALFORMED_FUNCTION_CALL": ai.FinishReasonError,
+		"UNEXPECTED_TOOL_CALL": ai.FinishReasonError, "TOO_MANY_TOOL_CALLS": ai.FinishReasonError,
+		"NO_IMAGE": ai.FinishReasonError,
 	}[reason]
 }
 

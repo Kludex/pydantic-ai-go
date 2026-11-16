@@ -140,7 +140,9 @@ func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequest
 	settings := params.Settings.Clone()
 	settings.LogitBias = nil
 	thinking := settings.Thinking
-	settings.Thinking = nil
+	if !kimiReasoningModel(model.name) {
+		settings.Thinking = nil
+	}
 	extra := maps.Clone(settings.ExtraBody)
 	if extra == nil {
 		extra = map[string]any{}
@@ -164,6 +166,16 @@ func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequest
 	settings.ExtraBody = extra
 	params.Settings = settings
 	return params, nil
+}
+
+func kimiReasoningModel(name string) bool {
+	name = strings.ToLower(name)
+	for _, prefix := range []string{"kimi-k2.5", "kimi-k2.6", "kimi-k2.7", "kimi-k2-thinking", "kimi-k3", "kimi-thinking"} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (model *Model) prepareMessages(messages []ai.ModelMessage) []ai.ModelMessage {

@@ -167,6 +167,19 @@ func TestProviderOptions(t *testing.T) {
 	}
 }
 
+func TestTimeoutFinishReason(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(response, `{"finish_reason":"TIMEOUT","message":{"content":[{"type":"text","text":"partial"}]}}`)
+	}))
+	defer server.Close()
+	model := cohere.NewModel("model", cohere.WithBaseURL(server.URL), cohere.WithAPIKey("key"),
+		cohere.WithHTTPClient(server.Client()))
+	result, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil || result.FinishReason != ai.FinishReasonError {
+		t.Fatalf("unexpected result: %#v %v", result, err)
+	}
+}
+
 func TestMappingFailures(t *testing.T) {
 	model := cohere.NewModel("model")
 	tests := []struct {

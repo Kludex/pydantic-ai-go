@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/thinking"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
@@ -189,7 +190,7 @@ func vllmFamilyProfile(name string) familyProfile {
 	qwen3 := strings.HasPrefix(bare, "qwen3") && !strings.HasPrefix(bare, "qwen3-coder") &&
 		!strings.HasPrefix(bare, "qwen3.8") && !strings.Contains(bare, "-instruct")
 	profile.supportsThinking = qwen3 || strings.HasPrefix(bare, "gemma-4") ||
-		strings.HasPrefix(bare, "deepseek-r1") || strings.HasPrefix(bare, "deepseek-v4-") ||
+		strings.HasPrefix(bare, "deepseek-r1") || thinking.DeepSeekV4(bare) ||
 		strings.HasPrefix(bare, "magistral") || strings.Contains(bare, "command-a-reasoning") ||
 		strings.HasPrefix(bare, "gpt-oss") || strings.HasPrefix(bare, "glm-5") ||
 		strings.HasPrefix(bare, "glm-4.7") || strings.HasPrefix(bare, "glm-4.6") ||

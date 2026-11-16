@@ -602,6 +602,25 @@ func TestGoogleModelArmorAndSPIIFinishReasons(t *testing.T) {
 	}
 }
 
+func TestGoogleImageRecitationAndTooManyToolCallsFinishReasons(t *testing.T) {
+	for reason, want := range map[string]ai.FinishReason{
+		"IMAGE_RECITATION": ai.FinishReasonContentFilter, "TOO_MANY_TOOL_CALLS": ai.FinishReasonError,
+		"IMAGE_OTHER": "",
+	} {
+		t.Run(reason, func(t *testing.T) {
+			model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
+				_, _ = fmt.Fprintf(response, `{
+					"candidates":[{"content":{"parts":[{"text":"partial"}]},"finishReason":%q}]
+				}`, reason)
+			})
+			response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{})
+			if err != nil || response.FinishReason != want || response.ProviderDetails["finish_reason"] != reason {
+				t.Fatalf("unexpected %s response: %v %+v", reason, err, response)
+			}
+		})
+	}
+}
+
 func TestGoogleCandidateSafetyRatings(t *testing.T) {
 	model := newServer(t, func(response http.ResponseWriter, _ *http.Request) {
 		_, _ = response.Write([]byte(`{

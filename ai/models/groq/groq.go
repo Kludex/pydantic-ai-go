@@ -48,7 +48,21 @@ const (
 	ReasoningEffortHigh ReasoningEffort = "high"
 )
 
-// Settings combines portable settings with Groq reasoning options.
+// ServiceTier selects Groq's processing tier.
+type ServiceTier string
+
+const (
+	// ServiceTierAuto lets Groq choose the tier.
+	ServiceTierAuto ServiceTier = "auto"
+	// ServiceTierOnDemand requests standard on-demand capacity.
+	ServiceTierOnDemand ServiceTier = "on_demand"
+	// ServiceTierFlex requests flexible capacity that may fail fast under load.
+	ServiceTierFlex ServiceTier = "flex"
+	// ServiceTierPerformance requests Groq's enterprise performance tier.
+	ServiceTierPerformance ServiceTier = "performance"
+)
+
+// Settings combines portable settings with Groq reasoning and service tier options.
 type Settings struct {
 	// Common contains portable model settings.
 	Common ai.ModelSettings
@@ -56,6 +70,8 @@ type Settings struct {
 	ReasoningFormat ReasoningFormat
 	// ReasoningEffort controls model-specific reasoning effort.
 	ReasoningEffort ReasoningEffort
+	// ServiceTier takes precedence over Common.ServiceTier and is the only way to request the performance tier.
+	ServiceTier ServiceTier
 }
 
 // Build returns detached portable settings accepted by agents and direct requests.
@@ -67,6 +83,11 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	if err := validateReasoningEffort(settings.ReasoningEffort); err != nil {
 		return ai.ModelSettings{}, err
 	}
+	switch settings.ServiceTier {
+	case "", ServiceTierAuto, ServiceTierOnDemand, ServiceTierFlex, ServiceTierPerformance:
+	default:
+		return ai.ModelSettings{}, fmt.Errorf("groq: invalid service tier %q", settings.ServiceTier)
+	}
 	extra := maps.Clone(common.ExtraBody)
 	if extra == nil {
 		extra = map[string]any{}
@@ -77,6 +98,7 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	}{
 		{name: "reasoning_format", value: string(settings.ReasoningFormat)},
 		{name: "reasoning_effort", value: string(settings.ReasoningEffort)},
+		{name: "service_tier", value: string(settings.ServiceTier)},
 	}
 	for _, value := range values {
 		if value.value == "" {
@@ -340,7 +362,7 @@ func validateMessages(messages []ai.ModelMessage) error {
 }
 
 func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequestParams, error) {
-	params.Settings = model.prepareThinking(params.Settings)
+	params.Settings = prepareServiceTier(model.prepareThinking(params.Settings))
 	if len(params.NativeTools) == 0 {
 		return params, nil
 	}
@@ -434,6 +456,26 @@ func (model *Model) prepareThinking(settings ai.ModelSettings) ai.ModelSettings 
 	if strings.HasPrefix(model.name, "openai/gpt-oss") && !explicitEffort {
 		settings.ExtraBody["reasoning_effort"] = groqReasoningEffort(thinking.Level)
 	}
+	return settings
+}
+
+// prepareServiceTier sends the portable tier as Groq's. Groq has no priority tier, so it is omitted.
+func prepareServiceTier(settings ai.ModelSettings) ai.ModelSettings {
+	if settings.ServiceTier == "" {
+		return settings
+	}
+	tier := map[ai.ServiceTier]ServiceTier{
+		ai.ServiceTierAuto: ServiceTierAuto, ai.ServiceTierDefault: ServiceTierOnDemand, ai.ServiceTierFlex: ServiceTierFlex,
+	}[settings.ServiceTier]
+	settings = settings.Clone()
+	settings.ServiceTier = ""
+	if _, explicit := settings.ExtraBody["service_tier"]; explicit || tier == "" {
+		return settings
+	}
+	if settings.ExtraBody == nil {
+		settings.ExtraBody = make(map[string]any)
+	}
+	settings.ExtraBody["service_tier"] = string(tier)
 	return settings
 }
 

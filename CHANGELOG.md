@@ -20,6 +20,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - `anthropic.Settings.InferenceGeo` sends Anthropic's `inference_geo` data-residency parameter and reports where the request ran in `ProviderDetails["inference_geo"]`. The legacy Bedrock client ignores it with a warning.
 - Bedrock Converse omits temperature and top-p for GPT-6.1 Terra, and reports a 30-minute `DefaultCacheRetention` for GPT-5.6, GPT-6, and GPT-6.1 models.
 - OpenAI Responses tool search reveals deferred tools that a `tool_search_output` returns wrapped in a namespace.
+- `groq.Settings.ServiceTier` requests Groq's `auto`, `on_demand`, `flex`, or enterprise `performance` tier. Portable `ModelSettings.ServiceTier` maps `default` to `on_demand` and omits `priority`, which Groq lacks.
+- `openai.ChatCompatibility.InlineSchemaDefinitions` inlines `$defs` in Chat tool and output schemas. Together and Bedrock Converse set it for published MiniMax models, which stringify nested arguments whose schema is a `$ref`.
+- Cerebras sends portable `Thinking` as `reasoning_effort` to Kimi reasoning models, such as `kimi-k2.6`.
+- DeepSeek, Together, and vLLM treat V4 point releases such as `deepseek-v4.1-flash` and `deepseek-v4p1-flash` like V4 for thinking and forced tool choice.
 
 ### Changed
 
@@ -32,6 +36,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Fixed
 
+- Mistral Large 4 maps `Thinking` to its `low`, `medium`, and `high` `reasoning_effort` values. It cannot turn reasoning off, so disabled thinking sends `low` instead of the rejected `none`.
+- Gemini `IMAGE_RECITATION` finish reasons map to `content_filter` and `TOO_MANY_TOOL_CALLS` to `error`. Cohere `TIMEOUT` maps to `error`.
+- `fakes.TestModel` generates integers inside `minimum`, `maximum`, and exclusive bounds, and values for list-form `type` schemas, instead of `0` and `null`.
 - System One accepts unrounded probabilities and scores, such as a vLLM softmax, within float error.
 - A `FallbackModel` that rejected a billed response and then returned an error it does not fall back on keeps that attempt, so an outer fallback and the run still count its tokens and cost.
 - Decision models send a structured tool return in their history as JSON, not as Go's `fmt` formatting.

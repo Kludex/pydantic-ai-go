@@ -90,7 +90,7 @@ for pkg in "${packages[@]}"; do
         go test ./ai/models/anthropic ./ai/models/bedrock ./ai/models/openai ./ai/models/openrouter \
             -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     elif [ "$pkg" = "./ai/internal/requestschema" ]; then
-        go test ./ai/models/openrouter ./ai/models/vllm ./ai/models/zai ./ai/models/mistral \
+        go test ./ai/models/openrouter ./ai/models/vllm ./ai/models/zai ./ai/models/mistral ./ai/models/bedrock ./ai/models/together \
             -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     elif [ "$pkg" = "./ai/realtime/internal/openaiprotocol" ]; then
         go test ./ai/realtime/internal/openaiprotocol ./ai/realtime/openai ./ai/realtime/azure ./ai/realtime/xai \
@@ -100,7 +100,8 @@ for pkg in "${packages[@]}"; do
     elif [ "$pkg" = "./ai/internal/settingwarnings" ]; then
         go test ./ai ./ai/mcp -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     elif [ "$pkg" = "./ai/internal/thinking" ]; then
-        go test ./ai/models/anthropic ./ai/models/bedrock -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
+        go test ./ai/models/anthropic ./ai/models/bedrock ./ai/models/deepseek ./ai/models/together ./ai/models/vllm \
+            -coverpkg="$pkg" -coverprofile="$profile" > /dev/null
     else
         go test "$pkg" -coverprofile="$profile" > /dev/null
     fi

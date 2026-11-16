@@ -21,6 +21,8 @@ import (
 	"github.com/Kludex/pydantic-ai-go/ai/internal/contextwindow"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/download"
 	"github.com/Kludex/pydantic-ai-go/ai/internal/promptcache"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/requestschema"
+	jsonschema "github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 // Model calls the OpenAI Chat Completions API. Create one with NewModel.
@@ -138,6 +140,9 @@ type ChatCompatibility struct {
 	// DeveloperSystemPrompts sends Responses system prompts with the developer
 	// role, for endpoints that reject explicit system messages.
 	DeveloperSystemPrompts bool
+	// InlineSchemaDefinitions inlines $defs in Chat tool and output schemas, for
+	// models that stringify nested arguments whose schema is a $ref.
+	InlineSchemaDefinitions bool
 }
 
 // WithChatCompatibility configures OpenAI-compatible response and history
@@ -568,6 +573,9 @@ func (m *Model) buildPayload(
 	params, err := ai.ResolveNativeToolPreferences(m, params)
 	if err != nil {
 		return nil, err
+	}
+	if m.chatCompatibility.InlineSchemaDefinitions {
+		params = requestschema.Transform(params, jsonschema.InlineDefinitions)
 	}
 	translated, err := translateCache(params.Settings, m.ModelProfile())
 	if err != nil {

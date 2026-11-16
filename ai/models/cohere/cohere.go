@@ -249,7 +249,7 @@ func cohereFinishReason(reason string) ai.FinishReason {
 	return map[string]ai.FinishReason{
 		"COMPLETE": ai.FinishReasonStop, "STOP_SEQUENCE": ai.FinishReasonStop,
 		"MAX_TOKENS": ai.FinishReasonLength, "TOOL_CALL": ai.FinishReasonToolCall,
-		"ERROR": ai.FinishReasonError,
+		"ERROR": ai.FinishReasonError, "TIMEOUT": ai.FinishReasonError,
 	}[reason]
 }
 

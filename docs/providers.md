@@ -723,7 +723,7 @@ func main() {
 
 Set `CEREBRAS_API_KEY`.
 
-Cerebras returns reasoning either through the OpenAI-compatible `reasoning` field or inside `<think>` tags. Both forms become `ThinkingPart`. GLM history replays reasoning with the tags Cerebras requires and defaults `clear_thinking` to `false`. Portable disabled thinking maps to `reasoning_effort: "none"` for GLM. GPT-OSS always reasons, so disabled thinking is omitted instead of sending an invalid setting. Cerebras documents `logit_bias` but does not apply it, so the adapter omits the portable field.
+Cerebras returns reasoning either through the OpenAI-compatible `reasoning` field or inside `<think>` tags. Both forms become `ThinkingPart`. GLM history replays reasoning with the tags Cerebras requires and defaults `clear_thinking` to `false`. Portable disabled thinking maps to `reasoning_effort: "none"` for GLM. GPT-OSS always reasons, so disabled thinking is omitted instead of sending an invalid setting. Kimi reasoning models, such as `kimi-k2.6`, receive portable thinking as `reasoning_effort`. Cerebras documents `logit_bias` but does not apply it, so the adapter omits the portable field.
 
 Use `cerebras.Settings` for the typed `ClearThinking` and legacy `DisableReasoning` controls. `Settings.Build` returns detached `ai.ModelSettings` and rejects conflicts with `ExtraBody`.
 
@@ -788,7 +788,7 @@ Set `MISTRAL_API_KEY`. Set `MISTRAL_BASE_URL` only when you use a compatible gat
 
 The adapter uses Mistral's native Chat Completions contract. It supports static and streamed text, thinking chunks, function tools, tool-based structured output, prompt cache keys, tool selection, parallel calls, usage, and portable generation settings.
 
-Mistral accepts direct or downloaded images, inline images, direct or downloaded PDFs, and downloaded text documents. Audio, video, uploaded-file references, and other binary media fail before transport. Models in the Mistral Large 4, Small 4, and Medium 3.5 families map enabled reasoning to `high` and disabled reasoning to `none`. Older snapshots and `mistral-large-latest` do not support reasoning, so the adapter omits `reasoning_effort` for them. Magistral reasoning is always enabled, so the adapter omits `reasoning_effort`.
+Mistral accepts direct or downloaded images, inline images, direct or downloaded PDFs, and downloaded text documents. Audio, video, uploaded-file references, and other binary media fail before transport. Models in the Mistral Small 4 and Medium 3.5 families map enabled reasoning to `high` and disabled reasoning to `none`. Mistral Large 4 cannot turn reasoning off, so it maps minimal, low, and disabled reasoning to `low`, medium to `medium`, and higher levels to `high`. Older snapshots and `mistral-large-latest` do not support reasoning, so the adapter omits `reasoning_effort` for them. Magistral reasoning is always enabled, so the adapter omits `reasoning_effort`.
 
 When exactly one tool may be called and a call is required, the adapter forces it by name with `tool_choice: {"type": "function", ...}` and keeps every declaration. Filtering `tools` would change the prompt prefix and invalidate Mistral's prompt cache. This covers `ToolChoiceAny` with one `AllowedTools` name and `ToolChoiceNone` with a required output tool. A larger allowed subset is still sent by filtering `tools`, because Mistral cannot force a subset.
 
@@ -1619,6 +1619,8 @@ Set `GROQ_API_KEY`. `GROQ_BASE_URL` overrides the default `https://api.groq.com/
 Groq accepts `ImageURL` and image `BinaryContent` prompt items. Unsupported audio, video, document, and uploaded-file items fail before transport. A `tool_use_failed` provider response becomes ordinary model output so the agent can validate the recovered call and send a retry instead of aborting the run.
 
 `ReasoningFormatParsed` returns reasoning as separate `ThinkingPart` values. Raw `<think>` output is also normalized across static and streamed responses. `ModelSettings.Thinking` follows Groq's model families: GPT-OSS maps portable effort to `low`, `medium`, or `high`; Qwen 3 can disable reasoning with `none`; and legacy reasoning models map visibility without sending unsupported effort values. `WithReasoningWarningHandler` reports when Qwen 3 disabled thinking overrides an explicit effort setting. `WithProvider` keeps Groq response parsing when you route requests through a gateway.
+
+Portable `ModelSettings.ServiceTier` maps `auto` to `auto`, `default` to `on_demand`, and `flex` to `flex`. Groq has no `priority` tier, so the adapter omits it. Set `groq.Settings.ServiceTier` to request Groq's enterprise `performance` tier; it takes precedence over the portable field. The tier Groq ran the request on is reported in `ProviderDetails["service_tier"]`.
 
 ### Compound web search
 

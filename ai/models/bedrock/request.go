@@ -34,8 +34,8 @@ func buildConverseInput(
 		return nil, err
 	}
 	params.Settings = settings
-	if strings.Contains(modelName, "zai.glm-5.3") {
-		// GLM-5.3 stringifies nested tool arguments whose schema is a $ref into $defs.
+	if strings.Contains(modelName, "zai.glm-5.3") || isMiniMax(modelName) {
+		// GLM-5.3 and MiniMax stringify nested tool arguments whose schema is a $ref into $defs.
 		params = requestschema.Transform(params, jsonschema.InlineDefinitions)
 	}
 	if err := ai.ValidateNativeTools(params.NativeTools); err != nil {
@@ -474,4 +474,9 @@ func appendUserContent(messages []types.Message, content []types.ContentBlock) [
 	}
 	last.Content = slices.Concat(last.Content[:end:end], content, last.Content[end:])
 	return messages
+}
+
+func isMiniMax(modelName string) bool {
+	_, name, found := strings.Cut(strings.ToLower(modelName), "minimax.")
+	return found && requestschema.MiniMax(name)
 }

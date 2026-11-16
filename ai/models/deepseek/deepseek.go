@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/thinking"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
 )
 
@@ -246,7 +247,7 @@ func (configuration config) providerConfig() openai.ProviderConfig {
 
 func deepSeekCompatibility(name string) openai.ChatCompatibility {
 	name = strings.ToLower(name)
-	isV4 := name == "deepseek-flash" || strings.HasPrefix(name, "deepseek-v4-")
+	isV4 := name == "deepseek-flash" || thinking.DeepSeekV4(name)
 	return openai.ChatCompatibility{
 		ReasoningContent:                    true,
 		ReasoningContentOnToolCalls:         true,
@@ -265,7 +266,7 @@ func prepareThinking(name string, settings ai.ModelSettings) ai.ModelSettings {
 		settings.Thinking = nil
 		return settings
 	}
-	if name != "deepseek-reasoner" && name != "deepseek-flash" && !strings.HasPrefix(name, "deepseek-v4-") {
+	if name != "deepseek-reasoner" && name != "deepseek-flash" && !thinking.DeepSeekV4(name) {
 		settings = settings.Clone()
 		settings.Thinking = nil
 	}

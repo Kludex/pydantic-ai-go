@@ -2,6 +2,7 @@ package ai_test
 
 import (
 	"context"
+	"slices"
 	"testing"
 	"time"
 
@@ -155,5 +156,120 @@ func TestModelWithoutNativeSearchReplayReceivesLocalHistory(t *testing.T) {
 		t.Context(), "current", deps{}, ai.WithMessageHistory(history),
 	); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func openAISearchCall(id string) ai.NativeToolCallPart {
+	return ai.NativeToolCallPart{
+		ToolName: ai.ToolSearchName, Args: []byte(`{"queries":["metrics"]}`), ToolCallID: id,
+		ToolKind: ai.ToolPartKindToolSearch, ProviderName: "openai",
+	}
+}
+
+func searchReturn(id, provider string) ai.NativeToolReturnPart {
+	return ai.NativeToolReturnPart{
+		ToolName: ai.ToolSearchName, ToolCallID: id, ToolKind: ai.ToolPartKindToolSearch,
+		Content: ai.ToolSearchResult{}, ProviderName: provider, Outcome: ai.ToolReturnOutcomeSuccess,
+	}
+}
+
+func anthropicSearchCall(id string) ai.NativeToolCallPart {
+	call := openAISearchCall(id)
+	call.ProviderName = "anthropic"
+	return call
+}
+
+func toolExchange(messages []ai.ModelMessage) []string {
+	var exchange []string
+	for _, message := range messages {
+		switch message := message.(type) {
+		case ai.ModelResponse:
+			for _, part := range message.Parts {
+				if call, ok := part.(ai.ToolCallPart); ok {
+					exchange = append(exchange, "call "+call.ToolCallID)
+				}
+			}
+		case ai.ModelRequest:
+			for _, part := range message.Parts {
+				if result, ok := part.(ai.ToolReturnPart); ok {
+					exchange = append(exchange, string(result.Outcome)+" "+result.ToolCallID)
+				}
+			}
+		}
+	}
+	return exchange
+}
+
+func TestTranslatedToolSearchHistoryIsPaired(t *testing.T) {
+	prompt := ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "show metrics"}}}
+	statusCall := ai.ToolCallPart{ToolName: "send_status", Args: []byte(`{}`), ToolCallID: "toolu_1"}
+	statusReturn := ai.ModelRequest{Parts: []ai.RequestPart{ai.ToolReturnPart{
+		ToolName: "send_status", Content: "sent", ToolCallID: "toolu_1", Outcome: ai.ToolReturnOutcomeSuccess,
+	}}}
+	done := ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "Here are the metrics."}}}
+	openAIOutputIDs := []ai.ModelMessage{prompt, ai.ModelResponse{Parts: []ai.ResponsePart{
+		openAISearchCall("tsc_1"), searchReturn("tso_1", "openai"),
+		openAISearchCall("tsc_2"), searchReturn("tso_2", "openai"), ai.TextPart{Content: "Here are the metrics."},
+	}}}
+	unansweredSearch := []ai.ModelMessage{
+		prompt, ai.ModelResponse{Parts: []ai.ResponsePart{anthropicSearchCall("srvtoolu_1"), statusCall}}, statusReturn, done,
+	}
+	cases := []struct {
+		name     string
+		history  []ai.ModelMessage
+		rejects  bool
+		fallback bool
+		want     []string
+	}{
+		{name: "output IDs", history: openAIOutputIDs, rejects: true,
+			want: []string{"call tsc_1", "success tsc_1", "call tsc_2", "success tsc_2"}},
+		{name: "output IDs through fallback", history: openAIOutputIDs, rejects: true, fallback: true,
+			want: []string{"call tsc_1", "success tsc_1", "call tsc_2", "success tsc_2"}},
+		{name: "output IDs after their calls", rejects: true, history: []ai.ModelMessage{prompt, ai.ModelResponse{
+			Parts: []ai.ResponsePart{
+				openAISearchCall("tsc_1"), openAISearchCall("tsc_2"),
+				searchReturn("tso_1", "openai"), searchReturn("tso_2", "openai"),
+			},
+		}, done}, want: []string{"call tsc_1", "call tsc_2", "success tsc_1", "success tsc_2"}},
+		{name: "output ID with no call to take", rejects: true, history: []ai.ModelMessage{prompt, ai.ModelResponse{
+			Parts: []ai.ResponsePart{
+				openAISearchCall("tsc_1"), searchReturn("tsc_1", "openai"), searchReturn("tso_2", "openai"),
+			},
+		}, done}, want: []string{"call tsc_1", "success tsc_1", "success tso_2"}},
+		{name: "output IDs where unpaired calls are accepted", history: openAIOutputIDs,
+			want: []string{"call tsc_1", "success tso_1", "call tsc_2", "success tso_2"}},
+		{name: "unanswered search", history: unansweredSearch, rejects: true,
+			want: []string{"call srvtoolu_1", "call toolu_1", "success toolu_1", "interrupted srvtoolu_1"}},
+		{name: "unanswered search through fallback", history: unansweredSearch, rejects: true, fallback: true,
+			want: []string{"call srvtoolu_1", "call toolu_1", "success toolu_1", "interrupted srvtoolu_1"}},
+		{name: "unanswered search where unpaired calls are accepted", history: unansweredSearch, fallback: true,
+			want: []string{"call srvtoolu_1", "call toolu_1", "success toolu_1"}},
+		{name: "late result", rejects: true, history: []ai.ModelMessage{
+			prompt, ai.ModelResponse{Parts: []ai.ResponsePart{anthropicSearchCall("srvtoolu_1"), statusCall}},
+			statusReturn, ai.ModelResponse{Parts: []ai.ResponsePart{
+				searchReturn("srvtoolu_1", "anthropic"), ai.TextPart{Content: "done"},
+			}},
+		}, want: []string{"call srvtoolu_1", "call toolu_1", "success toolu_1", "success srvtoolu_1"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var seen []ai.ModelMessage
+			var model ai.Model = ai.NewProfiledModel(fakes.NewFunctionModel(func(
+				_ context.Context, messages []ai.ModelMessage, _ ai.ModelRequestParams,
+			) (*ai.ModelResponse, error) {
+				seen = messages
+				return &ai.ModelResponse{Parts: []ai.ResponsePart{ai.TextPart{Content: "done"}}}, nil
+			}), ai.ModelProfile{RejectsUnpairedToolCalls: tc.rejects})
+			if tc.fallback {
+				model = ai.NewFallbackModel(model)
+			}
+			agent := ai.NewAgent[deps, string](model)
+			if _, err := agent.Run(t.Context(), "and for Q3?", deps{}, ai.WithMessageHistory(tc.history)); err != nil {
+				t.Fatal(err)
+			}
+			if got := toolExchange(seen); !slices.Equal(got, tc.want) {
+				t.Fatalf("tool exchange = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

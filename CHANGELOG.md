@@ -24,9 +24,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - `openai.ChatCompatibility.InlineSchemaDefinitions` inlines `$defs` in Chat tool and output schemas. Together and Bedrock Converse set it for published MiniMax models, which stringify nested arguments whose schema is a `$ref`.
 - Cerebras sends portable `Thinking` as `reasoning_effort` to Kimi reasoning models, such as `kimi-k2.6`.
 - DeepSeek, Together, and vLLM treat V4 point releases such as `deepseek-v4.1-flash` and `deepseek-v4p1-flash` like V4 for thinking and forced tool choice.
+- `ModelProfile.RejectsUnpairedToolCalls` pairs tool-search history translated from another provider: a result naming no call takes the oldest unanswered call's ID in its response, and a call with no result gets an interrupted one. OpenAI and the direct Anthropic API set it.
+- `openai.Settings.SafetyIdentifier` sends OpenAI's `safety_identifier` on Chat Completions and Responses.
+- xAI sends portable `ServiceTier` `default` and `priority`, and reports the served tier in `ProviderDetails["service_tier"]`.
+- Gemma 4 on the Google adapter takes portable `Thinking` as `MINIMAL` or `HIGH` thinking levels.
+- `openai.RequestRejectedError` is returned before an OpenAI Chat request that sends tools to a GPT-6 model with reasoning on, which the API rejects. It is eligible for model fallback.
 
 ### Changed
 
+- Native tool-search history is translated for the selected model in `PrepareModelMessages`, so each `FallbackModel` candidate translates it for its own provider. Capability middleware and request spans now see the translated history.
+- GPT-6.1 Terra is treated as a GPT-6 model for default reasoning, minimal effort, prompt-cache breakpoints, and Responses phases on OpenAI.
 - Bedrock Mantle stores GPT-5 tool call IDs as `call_0_<hash>`, a hash of the response ID or, without one, of the response timestamp, instead of `<response ID>:call_0`. The new form stays within the `[a-zA-Z0-9_-]` set Anthropic and Bedrock require when the history moves to them. Only responses from the same Mantle endpoint are restored to the provider's IDs, and stored `<response ID>:call_0` IDs still restore. A streamed call that arrives before the response ID is kept as sent.
 - `mcp.LoadToolsets` runs `command` for an entry that also has `url`, as PydanticAI does, instead of rejecting it.
 

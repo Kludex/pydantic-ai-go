@@ -313,6 +313,7 @@ func (m *Model) Name() string { return m.name }
 func (m *Model) ModelProfile() ai.ModelProfile {
 	profile := ai.ModelProfile{
 		DefaultOutputMode: ai.OutputModeTool, ContextWindow: m.contextWindow, ToolCallIDLength: m.toolCallIDLength,
+		RejectsUnpairedToolCalls: m.providerName == "openai",
 	}
 	if m.providerName == "openai" && supportsOpenAIPromptCache(m.name) {
 		profile.DefaultCacheRetention = 30 * time.Minute
@@ -458,6 +459,23 @@ func (e *APIError) Error() string {
 // IsModelAPIError marks provider API responses as eligible for default model fallback.
 func (*APIError) IsModelAPIError() bool { return true }
 
+// RequestRejectedError reports a request the API is known to reject, returned before it is sent.
+// Another model may accept the request, so it is eligible for default model fallback.
+type RequestRejectedError struct {
+	// ModelName is the model the request was for.
+	ModelName string
+	// Reason says why the API rejects the request and how to change it.
+	Reason string
+}
+
+// Error describes the rejected request.
+func (e *RequestRejectedError) Error() string {
+	return fmt.Sprintf("openai: request to %q rejected: %s", e.ModelName, e.Reason)
+}
+
+// IsModelAPIError marks the rejection as eligible for default model fallback.
+func (*RequestRejectedError) IsModelAPIError() bool { return true }
+
 type chatRequest struct {
 	Model                string                `json:"model"`
 	Messages             []chatMessage         `json:"messages"`
@@ -481,6 +499,7 @@ type chatRequest struct {
 	TopLogprobs          *int                  `json:"top_logprobs,omitempty"`
 	ServiceTier          ai.ServiceTier        `json:"service_tier,omitempty"`
 	PromptCacheKey       string                `json:"prompt_cache_key,omitempty"`
+	SafetyIdentifier     string                `json:"safety_identifier,omitempty"`
 	PromptCacheRetention PromptCacheRetention  `json:"prompt_cache_retention,omitempty"`
 	PromptCacheOptions   *PromptCacheOptions   `json:"prompt_cache_options,omitempty"`
 	Verbosity            TextVerbosity         `json:"verbosity,omitempty"`
@@ -593,6 +612,10 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
+	settings, safetyIdentifier, err := extractSafetyIdentifier(settings)
+	if err != nil {
+		return nil, err
+	}
 	settings, responseSettings, err := extractRawAnnotationSettings(settings)
 	if err != nil {
 		return nil, err
@@ -642,6 +665,16 @@ func (m *Model) buildPayload(
 	if err != nil {
 		return nil, err
 	}
+	if m.providerName == "openai" && (len(params.Tools) > 0 || params.OutputTool != nil) &&
+		openAIIsGPT6Model(strings.ToLower(m.name)) && openAIModelReasoningActive(m.name, reasoningEffort) {
+		reason := "OpenAI rejects tools, output tools included, while reasoning is enabled on GPT-6 over " +
+			"Chat Completions; use NewResponsesModel"
+		disabled, _ := openAIThinkingEffortForModel(m.name, &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled})
+		if disabled == "none" {
+			reason += " or ai.ThinkingLevelDisabled"
+		}
+		return nil, &RequestRejectedError{ModelName: m.name, Reason: reason}
+	}
 	serviceTier, err := openAIServiceTier(params.Settings.ServiceTier)
 	if err != nil {
 		return nil, err
@@ -661,6 +694,7 @@ func (m *Model) buildPayload(
 		TopLogprobs:          params.Settings.TopLogprobs,
 		ServiceTier:          serviceTier,
 		PromptCacheKey:       promptCache.Key,
+		SafetyIdentifier:     safetyIdentifier,
 		PromptCacheRetention: promptCache.Retention,
 		PromptCacheOptions:   promptCache.Options,
 		Verbosity:            verbosity,
@@ -1011,7 +1045,7 @@ func openAIModelReasoningActive(modelName, effort string) bool {
 }
 
 func openAIIsGPT6Model(modelName string) bool {
-	for _, prefix := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol"} {
+	for _, prefix := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
 		}

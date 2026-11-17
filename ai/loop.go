@@ -389,7 +389,7 @@ func (a *Agent[Deps, Output]) newRun(
 		seed := history[len(history)-1].(ModelResponse)
 		resumeSeed = cloneModelResponse(&seed)
 	} else {
-		history, interruptedReturns = repairDanglingToolCalls(history, cfg.deferredResults != nil)
+		history, interruptedReturns = repairDanglingToolCalls(history, cfg.deferredResults != nil, nil)
 	}
 	runID := cfg.runID
 	if runID == "" {
@@ -639,7 +639,9 @@ type trackedToolCall struct {
 	dangling      bool
 }
 
-func repairDanglingToolCalls(messages []ModelMessage, preserveDangling bool) ([]ModelMessage, []RequestPart) {
+func repairDanglingToolCalls(
+	messages []ModelMessage, preserveDangling bool, only map[string]bool,
+) ([]ModelMessage, []RequestPart) {
 	tracked := make([]*trackedToolCall, 0)
 	open := map[string][]*trackedToolCall{}
 	for index, message := range messages {
@@ -679,7 +681,7 @@ func repairDanglingToolCalls(messages []ModelMessage, preserveDangling bool) ([]
 	}
 	dangling := map[int][]RequestPart{}
 	for _, item := range tracked {
-		if item.active || item.dangling {
+		if (item.active || item.dangling) && (only == nil || only[item.call.ToolCallID]) {
 			call := item.call
 			dangling[item.responseIndex] = append(dangling[item.responseIndex], ToolReturnPart{
 				ToolName: call.ToolName, ToolCallID: call.ToolCallID, ToolKind: call.ToolKind,
@@ -2446,11 +2448,6 @@ func (r *run[Deps, Output]) requestModelSegment(
 	ctx context.Context, msgs []ModelMessage, params ModelRequestParams, emit func(StreamEvent) bool,
 	observe func(*ModelResponse),
 ) (*ModelResponse, error) {
-	provider := ""
-	if model, ok := r.model.(NativeToolSearchHistoryModel); ok {
-		provider = model.NativeToolSearchProvider()
-	}
-	msgs = adaptNativeToolSearchHistory(msgs, provider)
 	if params.Settings.RequestTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, params.Settings.RequestTimeout)

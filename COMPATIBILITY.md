@@ -93,6 +93,11 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `55ab870d5eacbe77355ea509003ffb6a055e347b` | `groq.Settings.ServiceTier` sends Groq tiers, including `performance`; portable `default` becomes `on_demand` and `priority` is omitted |
 | `ba805d5d431e1dc6c0b1eb6202201907f727d234` | Mistral Large 4 maps `Thinking` to `low`, `medium`, or `high`; disabled thinking sends `low` because the model cannot turn reasoning off |
 | `b1fce8f412b927ac7f8b60c7ddcc644aefb75242` | Together and Bedrock Converse inline `$defs` for published MiniMax models; Python's MiniMax thinking flags have no Go counterpart |
+| `6dae6b4fc7ab83cf77f9683f693170493addcf99` | `ModelProfile.RejectsUnpairedToolCalls` pairs translated tool-search history for OpenAI and the direct Anthropic API, per fallback candidate |
+| `6f0aff79a6cbbf5579e16dddbd1be32add89e5e6` | OpenAI Chat returns the fallback-eligible `openai.RequestRejectedError` before sending tools to GPT-6 with reasoning on |
+| `16a89753961db3e431b5728fdaacc37d03b851de` | `openai.Settings.SafetyIdentifier` sends `safety_identifier` on Chat Completions and Responses, not on token counting |
+| `b5dcf1bdb4c51714c424a1b85c8f4d12544edd9d` | xAI sends portable `default` and `priority` service tiers, omits `auto` and `flex`, and reports the served tier |
+| `43f82e2653dd56d7a26361b1299d0afcb437f4ec` | Gemma 4 on Google takes `MINIMAL` or `HIGH` thinking levels and keeps strict tools off |
 | `6ee7f29f03a746653de405cf9494e14a68ccd317` | `openaicodex.WithBaseURL` and `openaichatgpt.WithBaseURL` take an HTTPS base URL and scope credentials to its host and port; the other OpenAI-compatible packages already had `WithBaseURL` |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.

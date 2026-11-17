@@ -20,7 +20,7 @@ func RepairMessages(messages []ModelMessage, options MessageRepairOptions) []Mod
 			}
 		}
 		if lastResponse >= 0 {
-			prefix, pending := repairDanglingToolCalls(repaired[:lastResponse], false)
+			prefix, pending := repairDanglingToolCalls(repaired[:lastResponse], false, nil)
 			if len(pending) > 0 {
 				prefix = append(prefix, synthesizedToolReturnRequest(prefix, pending))
 			}
@@ -28,7 +28,7 @@ func RepairMessages(messages []ModelMessage, options MessageRepairOptions) []Mod
 			return mergeConsecutiveMessages(repaired)
 		}
 	}
-	repaired, pending := repairDanglingToolCalls(repaired, false)
+	repaired, pending := repairDanglingToolCalls(repaired, false, nil)
 	if len(pending) > 0 {
 		repaired = append(repaired, synthesizedToolReturnRequest(repaired, pending))
 	}

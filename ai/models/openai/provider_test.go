@@ -95,6 +95,7 @@ func TestOpenAIPromptCacheRequestSettings(t *testing.T) {
 	settings, err := (openai.Settings{
 		Common:               ai.ModelSettings{ExtraBody: map[string]any{"custom": true}},
 		PromptCacheKey:       "conversation",
+		SafetyIdentifier:     "user-hash",
 		PromptCacheRetention: openai.PromptCacheRetention24Hours,
 		PromptCacheOptions: &openai.PromptCacheOptions{
 			Mode: openai.PromptCacheModeExplicit, TTL: openai.PromptCacheTTL30Minutes,
@@ -139,11 +140,14 @@ func TestOpenAIPromptCacheRequestSettings(t *testing.T) {
 	for index, body := range bodies[:2] {
 		options := body["prompt_cache_options"].(map[string]any)
 		if body["prompt_cache_key"] != "conversation" || body["prompt_cache_retention"] != "24h" ||
-			options["mode"] != "explicit" || options["ttl"] != "30m" || body["custom"] != true {
+			options["mode"] != "explicit" || options["ttl"] != "30m" || body["custom"] != true ||
+			body["safety_identifier"] != "user-hash" {
 			t.Fatalf("unexpected prompt cache request %d: %#v", index, body)
 		}
 	}
-	for _, field := range []string{"prompt_cache_key", "prompt_cache_retention", "prompt_cache_options"} {
+	for _, field := range []string{
+		"prompt_cache_key", "prompt_cache_retention", "prompt_cache_options", "safety_identifier",
+	} {
 		if _, exists := bodies[2][field]; exists {
 			t.Fatalf("token count request included %q: %#v", field, bodies[2])
 		}
@@ -1353,6 +1357,16 @@ func TestOpenAIChatCompatibilityValidation(t *testing.T) {
 			}()
 			_ = openai.WithChatCompatibility(compatibility)
 		})
+	}
+}
+
+func TestOpenAIRejectsUnpairedToolCalls(t *testing.T) {
+	compatible := openai.WithProviderName("compatible")
+	if !openai.NewModel("gpt-5").ModelProfile().RejectsUnpairedToolCalls ||
+		!openai.NewResponsesModel("gpt-5").ModelProfile().RejectsUnpairedToolCalls ||
+		openai.NewModel("gpt-5", compatible).ModelProfile().RejectsUnpairedToolCalls ||
+		openai.NewResponsesModel("gpt-5", compatible).ModelProfile().RejectsUnpairedToolCalls {
+		t.Fatal("only OpenAI's own API should pair translated tool-search history")
 	}
 }
 

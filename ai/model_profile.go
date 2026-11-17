@@ -36,6 +36,11 @@ type ModelProfile struct {
 	// a tool call ID. Zero accepts any ID. Requests replace IDs that do not fit with stable
 	// hashes that do, and the stored history keeps the original IDs.
 	ToolCallIDLength int
+	// RejectsUnpairedToolCalls reports that the API rejects a tool call with no result, or a
+	// result that names no call. Requests then pair tool-search history translated from another
+	// provider: a result naming no call takes the ID of the oldest unanswered call in its
+	// response, and a call with no result gets an interrupted one.
+	RejectsUnpairedToolCalls bool
 	// SupportsRequestScopedSystemPrompts reports that the provider keeps a
 	// request-scoped SystemPromptPart in the conversation and stops rendering it
 	// itself once a later request exists, like Anthropic's clear_at system entries.

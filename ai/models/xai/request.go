@@ -78,7 +78,9 @@ func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequest
 	settings.Logprobs = nil
 	settings.TopLogprobs = nil
 	settings.LogitBias = nil
-	settings.ServiceTier = ""
+	if settings.ServiceTier != ai.ServiceTierDefault && settings.ServiceTier != ai.ServiceTierPriority {
+		settings.ServiceTier = ""
+	}
 	if len(extra) == 0 {
 		extra = nil
 	}

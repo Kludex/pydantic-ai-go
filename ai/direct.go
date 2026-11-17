@@ -403,11 +403,6 @@ func requestDirectSegment(
 	emit func(StreamEvent) bool,
 	observe func(*ModelResponse),
 ) (*ModelResponse, error) {
-	provider := ""
-	if nativeHistoryModel, ok := model.(NativeToolSearchHistoryModel); ok {
-		provider = nativeHistoryModel.NativeToolSearchProvider()
-	}
-	messages = adaptNativeToolSearchHistory(messages, provider)
 	if params.Settings.RequestTimeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, params.Settings.RequestTimeout)

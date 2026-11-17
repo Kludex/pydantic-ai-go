@@ -162,3 +162,41 @@ func TestProviderAndGateway(t *testing.T) {
 
 func intPointer(value int) *int              { return &value }
 func timePointer(value time.Time) *time.Time { return &value }
+
+func TestServiceTier(t *testing.T) {
+	for _, test := range []struct {
+		tier ai.ServiceTier
+		want any
+	}{
+		{tier: ai.ServiceTierDefault, want: "default"},
+		{tier: ai.ServiceTierPriority, want: "priority"},
+		{tier: ai.ServiceTierAuto},
+		{tier: ai.ServiceTierFlex},
+	} {
+		t.Run(string(test.tier), func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+				var body map[string]any
+				if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+					t.Fatal(err)
+				}
+				if body["service_tier"] != test.want {
+					t.Errorf("service_tier = %#v, want %#v", body["service_tier"], test.want)
+				}
+				response.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(response, `{"id":"resp","model":"grok-4.3","status":"completed",
+					"service_tier":"priority","usage":{},"output":[]}`)
+			}))
+			defer server.Close()
+			model := xai.NewModel("grok-4.3", xai.WithBaseURL(server.URL), xai.WithHTTPClient(server.Client()))
+			result, err := model.Request(t.Context(), []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "hi"}}},
+			}, ai.ModelRequestParams{Settings: ai.ModelSettings{ServiceTier: test.tier}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.ProviderDetails["service_tier"] != "priority" {
+				t.Fatalf("served tier not recorded: %#v", result.ProviderDetails)
+			}
+		})
+	}
+}

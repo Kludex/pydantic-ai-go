@@ -12,7 +12,8 @@ import (
 )
 
 // PrepareModelMessages converts realtime speech history into content a standard model can consume.
-// It also sends the tool results answering a response in the order of its calls, and replaces tool
+// It translates tool-search history another provider ran natively into local tool calls and results,
+// and sends the tool results answering a response in the order of its calls, and replaces tool
 // call IDs that do not fit the profile's ToolCallIDLength. It returns a detached history and leaves
 // the durable history unchanged. Composite dispatchers may defer conversion so each selected child
 // applies its own profile.
@@ -32,6 +33,12 @@ func prepareModelMessages(
 	if err != nil {
 		return nil, err
 	}
+	nativeSearchProvider := ""
+	if native, ok := model.(NativeToolSearchHistoryModel); ok {
+		nativeSearchProvider = native.NativeToolSearchProvider()
+	}
+	untranslated := messages
+	messages = adaptNativeToolSearchHistory(messages, nativeSearchProvider, profile.RejectsUnpairedToolCalls)
 	if !profile.SupportsRequestScopedSystemPrompts {
 		messages = scopeRequestSystemPrompts(messages)
 	}
@@ -45,6 +52,9 @@ func prepareModelMessages(
 		messages = synthesizeToolAvailabilityMessages(messages, params)
 	}
 	orderToolResultsByCall(messages)
+	if profile.RejectsUnpairedToolCalls {
+		messages = repairTranslatedToolSearchCalls(messages, untranslated, nativeSearchProvider)
+	}
 	if profile.ToolCallIDLength > 0 {
 		if err := fitToolCallIDs(messages, profile.ToolCallIDLength); err != nil {
 			return nil, err

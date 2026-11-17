@@ -74,9 +74,13 @@ Use `openai.NewResponsesModel` instead of `openai.NewModel` when you need the Re
 
 Chat Completions accepts provider-hosted documents as `ai.UploadedFile` values with `ProviderName: "openai"`. Uploaded image IDs are not valid Chat image inputs. Use an image URL, inline image data, or the Responses API instead.
 
-Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, `gpt-5.6`, and the GPT-6 Astra, Sol, and Luna families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
+Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. Same-provider history replays `commentary` and `final_answer` phases for `gpt-5.3-codex`, `gpt-5.4`, `gpt-5.5`, `gpt-5.6`, and the GPT-6 Astra, Sol, Luna, and Terra families. Use `openai.WithResponsesPhaseSupport(true)` for a compatible gateway or future model. Use `false` when an endpoint rejects the field.
 
 `ModelSettings.ServiceTier` also accepts OpenAI's own tiers `"scale"`, `"fast"`, and `"ultrafast"`. `fast` is OpenAI's newer name for `priority`. OpenAI accepts `ultrafast` only on the Responses API, so Chat Completions returns the API's error for it.
+
+`openai.Settings.SafetyIdentifier` sends `safety_identifier` on Chat Completions and Responses. Pass a hash of your end user's ID, so OpenAI can detect policy violations without receiving identifying information.
+
+GPT-6 models reject tools, output tools included, on Chat Completions while reasoning is on. `openai.NewModel` returns an `*openai.RequestRejectedError` before sending such a request, so a `FallbackModel` moves on as it would for the API's 400. Use `openai.NewResponsesModel`, or set `ai.ThinkingLevelDisabled` on models that can turn reasoning off.
 
 GPT-6 Sol and Luna reason at medium effort by default. Set `ThinkingLevelDisabled` to send `reasoning_effort: "none"` when you need Chat Completions function calling. Use the Responses API when you need reasoning and tools together.
 
@@ -978,6 +982,8 @@ The adapter uses xAI's Responses-compatible HTTP endpoint because xAI does not p
 
 Grok 4, code, and build models support hosted web search, X search, code execution, MCP servers, and managed collections search. `xai.Settings` configures output inclusion, stored-response continuity, reasoning effort, server-side turn limits, and multi-agent counts. Unsupported required native tools fail before transport.
 
+Portable `ModelSettings.ServiceTier` sends `default` and `priority`. xAI has no `auto` or `flex` tier, so the adapter omits them. The tier xAI served the request at is reported in `ProviderDetails["service_tier"]`.
+
 ## Z.AI
 
 ```go
@@ -1369,7 +1375,7 @@ Set `GOOGLE_API_KEY` or the legacy `GEMINI_API_KEY`. `GOOGLE_API_KEY` takes prec
 
 Gemini accepts image, document, audio, and video content. Ordinary URLs are downloaded with SSRF protection. Gemini Files API URLs and YouTube videos are sent directly.
 
-Gemini 2.5 uses token budgets for portable thinking settings. Gemini 3 and unknown future model names use thinking levels. Known Gemini 2.0, Gemini 1.x, and Gemma models omit unsupported thinking settings. Future model names also receive the modern mixed native/function-tool and strict-tool behavior by default.
+Gemini 2.5 uses token budgets for portable thinking settings. Gemini 3, Gemma 4, and unknown future model names use thinking levels. Gemma 4 takes only `MINIMAL` and `HIGH`, so other levels snap to the nearest one, and it keeps strict tool definitions off. Known Gemini 2.0, Gemini 1.x, and earlier Gemma models omit unsupported thinking settings. Future model names also receive the modern mixed native/function-tool and strict-tool behavior by default.
 
 Gemini has no level above `high` except on `gemini-4-hydrogen`, so `ai.ThinkingLevelXHigh` resolves to `high` elsewhere. `gemini-4-hydrogen` supports `low`, `medium`, `high`, and `xhigh`, so `ai.ThinkingLevelXHigh` is sent as `XHIGH` and `ai.ThinkingLevelDisabled` and `ai.ThinkingLevelMinimal` resolve to `low`.
 

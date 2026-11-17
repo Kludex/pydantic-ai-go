@@ -70,6 +70,10 @@ type Settings struct {
 	ResponsesInclude []string
 	// PromptCacheKey groups requests that should reuse a cached prefix.
 	PromptCacheKey string
+	// SafetyIdentifier is a stable ID for the end user, which helps OpenAI detect usage policy
+	// violations. Chat Completions and Responses send it as `safety_identifier`. Hash the user's
+	// username or email address so no identifying information reaches OpenAI.
+	SafetyIdentifier string
 	// PromptCacheRetention selects the maximum cache retention policy.
 	PromptCacheRetention PromptCacheRetention
 	// PromptCacheOptions configures GPT-5.6 request-wide caching.
@@ -90,6 +94,7 @@ const (
 	cacheInstructionsSetting      = "openai_cache_instructions"
 	promptCacheDiagnosticsSetting = "openai_prompt_cache_diagnostics"
 	textVerbositySetting          = "openai_text_verbosity"
+	safetyIdentifierSetting       = "openai_safety_identifier"
 )
 
 type promptCacheSettings struct {
@@ -127,7 +132,7 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 	for _, name := range []string{
 		predictionSetting, includeRawAnnotationsSetting, responsesIncludeSetting,
 		promptCacheKeySetting, promptCacheRetentionSetting, promptCacheOptionsSetting,
-		cacheInstructionsSetting, promptCacheDiagnosticsSetting, textVerbositySetting,
+		cacheInstructionsSetting, promptCacheDiagnosticsSetting, textVerbositySetting, safetyIdentifierSetting,
 	} {
 		if _, exists := extra[name]; exists {
 			return ai.ModelSettings{}, fmt.Errorf("openai: setting field %q is reserved", name)
@@ -179,6 +184,8 @@ func (settings Settings) Build() (ai.ModelSettings, error) {
 		{hidden: promptCacheRetentionSetting, wire: "prompt_cache_retention", value: settings.PromptCacheRetention,
 			set: settings.PromptCacheRetention != ""},
 		{hidden: promptCacheOptionsSetting, wire: "prompt_cache_options", value: optionsValue, set: options != nil},
+		{hidden: safetyIdentifierSetting, wire: "safety_identifier", value: settings.SafetyIdentifier,
+			set: settings.SafetyIdentifier != ""},
 	}
 	for _, field := range values {
 		if !field.set {
@@ -288,6 +295,23 @@ func validatePromptCacheRetention(retention PromptCacheRetention) error {
 	default:
 		return fmt.Errorf("openai: invalid prompt cache retention %q", retention)
 	}
+}
+
+func extractSafetyIdentifier(settings ai.ModelSettings) (ai.ModelSettings, string, error) {
+	value, exists := settings.ExtraBody[safetyIdentifierSetting]
+	if !exists {
+		return settings, "", nil
+	}
+	settings = settings.Clone()
+	delete(settings.ExtraBody, safetyIdentifierSetting)
+	if len(settings.ExtraBody) == 0 {
+		settings.ExtraBody = nil
+	}
+	identifier, ok := value.(string)
+	if !ok {
+		return ai.ModelSettings{}, "", fmt.Errorf("openai: safety identifier must be a string")
+	}
+	return settings, identifier, nil
 }
 
 func extractTextVerbosity(settings ai.ModelSettings) (ai.ModelSettings, TextVerbosity, error) {

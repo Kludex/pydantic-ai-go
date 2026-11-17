@@ -65,6 +65,9 @@ func TestPromptCacheSettingsValidation(t *testing.T) {
 		{name: "reserved", settings: Settings{
 			Common: ai.ModelSettings{ExtraBody: map[string]any{promptCacheKeySetting: "raw"}}, PromptCacheKey: "typed",
 		}, want: `setting field "openai_prompt_cache_key" is reserved`},
+		{name: "safety identifier conflict", settings: Settings{
+			Common: ai.ModelSettings{ExtraBody: map[string]any{"safety_identifier": "raw"}}, SafetyIdentifier: "typed",
+		}, want: `extra body field "safety_identifier" conflicts`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -105,6 +108,14 @@ func TestPromptCacheSettingsValidation(t *testing.T) {
 		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: malformed})
 		if err == nil || !strings.Contains(err.Error(), "prompt cache key") {
 			t.Fatalf("unexpected malformed request error from %T: %v", model, err)
+		}
+	}
+	for _, model := range models {
+		_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{safetyIdentifierSetting: 42},
+		}})
+		if err == nil || !strings.Contains(err.Error(), "safety identifier must be a string") {
+			t.Fatalf("unexpected malformed safety identifier error from %T: %v", model, err)
 		}
 	}
 	if duration, ok := NewResponsesModel("model").PromptCacheRetention(malformed); ok || duration != 0 {

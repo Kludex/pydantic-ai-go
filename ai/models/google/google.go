@@ -823,7 +823,7 @@ func googleThinking(modelName string, transport Transport, settings *ai.Thinking
 		return nil, nil
 	}
 	config := &thinkingConfig{}
-	usesThinkingLevel := googleIsModernModel(modelName)
+	usesThinkingLevel := googleIsModernModel(modelName) || googleIsGemma4(modelName)
 	if settings.Level == ai.ThinkingLevelDisabled {
 		if settings.IncludeThoughts != nil {
 			include := *settings.IncludeThoughts
@@ -880,10 +880,15 @@ func googleIsModernModel(modelName string) bool {
 		!strings.Contains(name, "gemini-2.")
 }
 
+func googleIsGemma4(modelName string) bool {
+	name := strings.ToLower(modelName)
+	return strings.HasPrefix(name, "gemma-4") || strings.HasPrefix(name, "gemma4")
+}
+
 func googleSupportsThinking(modelName string) bool {
 	name := strings.ToLower(modelName)
 	return !strings.Contains(name, "gemini-2.5-flash-image") &&
-		(strings.Contains(name, "gemini-2.5") || googleIsModernModel(modelName))
+		(strings.Contains(name, "gemini-2.5") || googleIsModernModel(modelName) || googleIsGemma4(modelName))
 }
 
 func containsRef(node any) bool {
@@ -918,6 +923,8 @@ func googleThinkingLevel(modelName string, transport Transport, requested string
 		supported = []string{"LOW", "HIGH"}
 	case strings.HasPrefix(name, "gemini-4-hydrogen"):
 		supported = []string{"LOW", "MEDIUM", "HIGH", "XHIGH"}
+	case strings.HasPrefix(name, "gemma-4"):
+		supported = []string{"MINIMAL", "HIGH"}
 	}
 	order := map[string]int{"MINIMAL": 0, "LOW": 1, "MEDIUM": 2, "HIGH": 3, "XHIGH": 4}
 	best := supported[0]
@@ -1181,7 +1188,8 @@ func convertTool(def ai.ToolDefinition) functionDeclaration {
 }
 
 func supportsStrictTools(name string) bool {
-	return googleSupportsThinking(name) && !strings.Contains(strings.ToLower(name), "image")
+	return googleSupportsThinking(name) && !strings.Contains(strings.ToLower(name), "image") &&
+		!strings.Contains(strings.ToLower(name), "gemma")
 }
 
 func transformSchema(source map[string]any) map[string]any {

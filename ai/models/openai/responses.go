@@ -96,6 +96,7 @@ func (m *ResponsesModel) ModelProfile() ai.ModelProfile {
 		SupportsImageOutput:           true,
 		SupportsToolAvailabilityDelta: m.deferredToolSupport,
 		ContextWindow:                 m.contextWindow,
+		RejectsUnpairedToolCalls:      m.providerName == "openai",
 	}
 	if m.providerName == "openai" && supportsOpenAIPromptCache(m.name) {
 		profile.DefaultCacheRetention = 30 * time.Minute
@@ -438,6 +439,7 @@ type responsesRequest struct {
 	Include               []string                     `json:"include,omitempty"`
 	ServiceTier           ai.ServiceTier               `json:"service_tier,omitempty"`
 	PromptCacheKey        string                       `json:"prompt_cache_key,omitempty"`
+	SafetyIdentifier      string                       `json:"safety_identifier,omitempty"`
 	PromptCacheRetention  PromptCacheRetention         `json:"prompt_cache_retention,omitempty"`
 	PromptCacheOptions    *responsesPromptCacheOptions `json:"prompt_cache_options,omitempty"`
 	IncludeRawAnnotations bool                         `json:"-"`
@@ -810,6 +812,10 @@ func (m *ResponsesModel) buildResponsesPayload(
 	if err != nil {
 		return nil, err
 	}
+	settings, safetyIdentifier, err := extractSafetyIdentifier(settings)
+	if err != nil {
+		return nil, err
+	}
 	params.Settings = settings
 	reasoningEffort, err := openAIThinkingEffortForModel(m.name, params.Settings.Thinking)
 	if err != nil {
@@ -829,6 +835,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		TopLogprobs:           params.Settings.TopLogprobs,
 		ServiceTier:           serviceTier,
 		PromptCacheKey:        promptCache.Key,
+		SafetyIdentifier:      safetyIdentifier,
 		PromptCacheRetention:  promptCache.Retention,
 		Include:               slices.Clone(responseSettings.Include),
 		IncludeRawAnnotations: responseSettings.IncludeRawAnnotations,

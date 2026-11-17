@@ -210,6 +210,86 @@ func TestGPT61SolThinkingProfile(t *testing.T) {
 	}
 }
 
+func TestGPT6ChatRejectsToolsWhileReasoning(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
+		requests++
+		_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
+	}))
+	defer server.Close()
+	tools := []ai.ToolDefinition{{Name: "search", Schema: map[string]any{"type": "object"}}}
+	output := &ai.ToolDefinition{Name: "final_result", Schema: map[string]any{"type": "object"}}
+	disabled := ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}
+	for _, test := range []struct {
+		name     string
+		model    string
+		provider string
+		params   ai.ModelRequestParams
+		remedy   bool
+		rejected bool
+	}{
+		{name: "tools", model: "gpt-6-luna", params: ai.ModelRequestParams{Tools: tools}, remedy: true, rejected: true},
+		{name: "output tool", model: "gpt-6.1-terra", params: ai.ModelRequestParams{OutputTool: output}, remedy: true,
+			rejected: true},
+		{name: "reasoning cannot be disabled", model: "gpt-6-astra",
+			params: ai.ModelRequestParams{Tools: tools, Settings: disabled}, rejected: true},
+		{name: "reasoning disabled", model: "gpt-6-sol", params: ai.ModelRequestParams{Tools: tools, Settings: disabled}},
+		{name: "no tools", model: "gpt-6-luna"},
+		{name: "other model", model: "gpt-5.6-sol", params: ai.ModelRequestParams{Tools: tools}},
+		{name: "compatible provider", model: "gpt-6-luna", provider: "compatible",
+			params: ai.ModelRequestParams{Tools: tools}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requests = 0
+			options := []openai.Option{openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client())}
+			if test.provider != "" {
+				options = append(options, openai.WithProviderName(test.provider))
+			}
+			_, err := openai.NewModel(test.model, options...).Request(t.Context(), nil, test.params)
+			var rejected *openai.RequestRejectedError
+			if !test.rejected {
+				if err != nil || requests != 1 {
+					t.Fatalf("request was not sent: requests=%d err=%v", requests, err)
+				}
+				return
+			}
+			var apiErr ai.ModelAPIError
+			if !errors.As(err, &rejected) || !errors.As(err, &apiErr) || !apiErr.IsModelAPIError() || requests != 0 ||
+				rejected.ModelName != test.model {
+				t.Fatalf("expected a fallback-eligible rejection before sending: requests=%d err=%v", requests, err)
+			}
+			if strings.Contains(err.Error(), "ThinkingLevelDisabled") != test.remedy {
+				t.Fatalf("unexpected remedy: %v", err)
+			}
+		})
+	}
+}
+
+func TestChatInlineSchemaDefinitions(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
+	}))
+	defer server.Close()
+	model := openai.NewModel("model", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
+		openai.WithChatCompatibility(openai.ChatCompatibility{InlineSchemaDefinitions: true}))
+	schema := map[string]any{
+		"type": "object", "properties": map[string]any{"item": map[string]any{"$ref": "#/$defs/Item"}},
+		"$defs": map[string]any{"Item": map[string]any{"type": "string"}},
+	}
+	_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{
+		Tools: []ai.ToolDefinition{{Name: "save", Schema: schema}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameters, _ := json.Marshal(body["tools"].([]any)[0].(map[string]any)["function"].(map[string]any)["parameters"])
+	if strings.Contains(string(parameters), "$defs") || strings.Contains(string(parameters), "$ref") {
+		t.Fatalf("definitions were not inlined: %s", parameters)
+	}
+}
+
 func TestExtraBodyRejectsConflictsAndInvalidValues(t *testing.T) {
 	model := openai.NewModel("gpt-5")
 	for name, body := range map[string]map[string]any{

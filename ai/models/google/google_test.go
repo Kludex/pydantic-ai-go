@@ -432,6 +432,18 @@ func TestThinkingSettings(t *testing.T) {
 			model: "gemini-4-hydrogen", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
 			level: "LOW",
 		},
+		"gemma 4 disabled sends minimal": {
+			model: "gemma-4-31b-it", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			level: "MINIMAL",
+		},
+		"gemma 4 low snaps down": {
+			model: "gemma-4-26b-a4b-it", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelLow},
+			level: "MINIMAL", include: true, hasInclude: true,
+		},
+		"gemma 4 high": {
+			model: "gemma-4-31b-it", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			level: "HIGH", include: true, hasInclude: true,
+		},
 		"pro medium tie snaps down": {
 			model: "gemini-3-pro-preview", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMedium},
 			level: "LOW", include: true, hasInclude: true,
@@ -489,6 +501,29 @@ func TestThinkingSettings(t *testing.T) {
 			}})
 			if err == nil || !strings.Contains(err.Error(), "invalid thinking level") {
 				t.Fatalf("unexpected invalid thinking error: %v", err)
+			}
+		})
+	}
+}
+
+func TestEarlierGemmaOmitsThinking(t *testing.T) {
+	for _, name := range []string{"gemma-3-27b-it", "medgemma-4b-it"} {
+		t.Run(name, func(t *testing.T) {
+			var body map[string]any
+			model := newNamedServer(t, name, func(w http.ResponseWriter, r *http.Request) {
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+			})
+			_, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelHigh},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if config, ok := body["generationConfig"].(map[string]any); ok && config["thinkingConfig"] != nil {
+				t.Fatalf("thinking config sent to %s: %v", name, config)
 			}
 		})
 	}
@@ -2184,6 +2219,7 @@ func TestStrictToolProfileDefaults(t *testing.T) {
 		{name: "Gemini 3", modelName: "gemini-3-pro", mode: "VALIDATED"},
 		{name: "Gemini 2.0", modelName: "gemini-2.0-flash", mode: "AUTO"},
 		{name: "image model", modelName: "gemini-3-pro-image-preview", mode: "AUTO"},
+		{name: "Gemma 4", modelName: "gemma-4-31b-it", mode: "AUTO"},
 		{name: "disabled override", modelName: "gemini-2.5-flash", extra: []google.Option{google.WithStrictToolSupport(false)}, mode: "AUTO"},
 		{name: "enabled override", modelName: "proxy-model", extra: []google.Option{google.WithStrictToolSupport(true)}, mode: "VALIDATED"},
 	}

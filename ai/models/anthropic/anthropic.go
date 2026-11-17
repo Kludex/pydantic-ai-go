@@ -56,6 +56,7 @@ func (m *Model) ModelProfile() ai.ModelProfile {
 		SupportsRequestScopedSystemPrompts: m.clearsRequestScopedPrompts(),
 		ContextWindow:                      m.contextWindow,
 		DefaultCacheRetention:              5 * time.Minute,
+		RejectsUnpairedToolCalls:           m.legacyBedrockClient == nil,
 	}
 }
 

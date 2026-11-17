@@ -150,6 +150,9 @@ func TestLegacyBedrockToolSearchProfile(t *testing.T) {
 		model.SupportsToolSearchStrategy(ai.ToolSearchStrategyKeywords) {
 		t.Fatal("unexpected legacy Bedrock tool-search support")
 	}
+	if model.ModelProfile().RejectsUnpairedToolCalls || !anthropic.NewModel("claude-sonnet-4-6").ModelProfile().RejectsUnpairedToolCalls {
+		t.Fatal("only the Claude API should pair translated tool-search history")
+	}
 	schema := map[string]any{"type": "object", "properties": map[string]any{}}
 	params := ai.ModelRequestParams{
 		Tools: []ai.ToolDefinition{{

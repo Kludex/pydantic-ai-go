@@ -167,11 +167,18 @@ func (model *Model) PromptCacheRetention(settings ai.ModelSettings) (time.Durati
 	return cache.retention()
 }
 
+func (model *Model) unsupportedSettings() []string {
+	if bedrockRejectsStopSequences(model.name) {
+		return []string{ai.SettingParallelToolCalls, ai.SettingStopSequences}
+	}
+	return []string{ai.SettingParallelToolCalls}
+}
+
 // Request implements ai.Model.
 func (model *Model) Request(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (*ai.ModelResponse, error) {
-	ai.WarnUnsupportedSettings(ctx, model, params, ai.SettingParallelToolCalls)
+	ai.WarnUnsupportedSettings(ctx, model, params, model.unsupportedSettings()...)
 	input, err := buildConverseInput(ctx, model.name, messages, params)
 	if err != nil {
 		return nil, err

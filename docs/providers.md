@@ -42,7 +42,7 @@ Most settings a model does not support, like `Temperature` or `Seed`, are tuning
 
 The warning goes to `slog.Warn` by default. `ai.WithUnsupportedSettingSink` sends it to your function instead, as an `ai.UnsupportedSettingWarning`. The example panics, so an ignored guarantee fails loudly. A nil sink silences the warnings.
 
-OpenAI Responses ignores `StopSequences`. Gemini ignores `ParallelToolCalls` and raw `ExtraBody` fields. Bedrock Converse and Cohere ignore `ParallelToolCalls`. The MCP `SamplingModel` ignores `ParallelToolCalls`, `ExtraHeaders`, and raw `ExtraBody` fields. Stop sequences an MCP server chooses for a sampling request never warn, because you did not choose them.
+OpenAI Responses ignores `StopSequences`. Gemini ignores `ParallelToolCalls` and raw `ExtraBody` fields. Bedrock Converse and Cohere ignore `ParallelToolCalls`. Bedrock Converse also ignores `StopSequences` for the models that reject them: OpenAI, xAI, Qwen, Google, Z.AI, Moonshot AI, MiniMax, and NVIDIA models, DeepSeek V3.2, Writer Palmyra Vision, and Mistral's Devstral, Magistral, Ministral 3, Mistral Large 3, and Voxtral. The MCP `SamplingModel` ignores `ParallelToolCalls`, `ExtraHeaders`, and raw `ExtraBody` fields. Stop sequences an MCP server chooses for a sampling request never warn, because you did not choose them.
 
 ## OpenAI
 
@@ -81,6 +81,8 @@ Responses assistant phases are retained in `TextPart.ProviderDetails["phase"]`. 
 `openai.Settings.SafetyIdentifier` sends `safety_identifier` on Chat Completions and Responses. Pass a hash of your end user's ID, so OpenAI can detect policy violations without receiving identifying information.
 
 GPT-6 models reject tools, output tools included, on Chat Completions while reasoning is on. `openai.NewModel` returns an `*openai.RequestRejectedError` before sending such a request, so a `FallbackModel` moves on as it would for the API's 400. Use `openai.NewResponsesModel`, or set `ai.ThinkingLevelDisabled` on models that can turn reasoning off.
+
+GPT-6 Astra, GPT-6.1 Sol, and GPT-6.2 Sol and Astra always reason, so `ThinkingLevelDisabled` sends no effort and Chat requests with tools are rejected.
 
 GPT-6 Sol and Luna reason at medium effort by default. Set `ThinkingLevelDisabled` to send `reasoning_effort: "none"` when you need Chat Completions function calling. Use the Responses API when you need reasoning and tools together.
 
@@ -671,6 +673,8 @@ Set `CO_API_KEY`. Set `CO_BASE_URL` for a compatible endpoint.
 
 The model uses Cohere's v2 Chat API. It supports text, thinking, function tools, tool output, structured output through a function tool, Cohere finish reasons, billed-unit details, and cached-token usage. Cohere does not expose streaming or multimodal input through this adapter. Unsupported native tools, native JSON Schema output, and multimodal content fail before transport.
 
+The plan Cohere writes before its tool calls becomes a `ThinkingPart` with `ProviderDetails["tool_plan"]`, not text, so it never becomes the run's output. It goes back to Cohere as `tool_plan` on later requests.
+
 Use `cohere.Settings.TopK` for Cohere's `k` sampling setting. Portable max tokens, stop sequences, temperature, top-p, seed, presence penalty, and frequency penalty map directly.
 
 ## Crusoe
@@ -761,7 +765,7 @@ func main() {
 
 Set `HF_TOKEN`. The default endpoint lets Hugging Face select a provider automatically. Use `WithInferenceProvider` to route through a named provider or `WithBaseURL` for an explicit OpenAI-compatible endpoint.
 
-The adapter supports static and streamed text, function tools, URL or inline image input, usage, finish reasons, and `<think>` reasoning. Reasoning becomes `ThinkingPart` and replays with tags on later same-provider turns. Hugging Face does not expose native JSON Schema output through this API. Use the default tool output or prompted output instead. Audio, video, documents, uploaded files, and non-image binary input fail before transport.
+The adapter supports static and streamed text, function tools, URL or inline image input, usage, finish reasons, and reasoning returned in the `reasoning` field or inside `<think>` tags. Reasoning becomes `ThinkingPart` and replays with tags on later same-provider turns. Portable `Logprobs` and `TopLogprobs` request log probabilities, returned in `ProviderDetails["logprobs"]` when the selected inference provider supports them. Hugging Face does not expose native JSON Schema output through this API. Use the default tool output or prompted output instead. Audio, video, documents, uploaded files, and non-image binary input fail before transport.
 
 ## Mistral
 
@@ -886,6 +890,8 @@ Use `openrouter.Settings` for fallback models, provider routing, presets, contex
 OpenRouter adjusts JSON Schema for the routed provider. Google routes inline definitions, simplify nullable unions, stringify enum values, convert `oneOf`, move string formats into descriptions, and remove unsupported fields. Qwen, Amazon, Meta, and Z.AI GLM 5.3 routes inline non-recursive definitions. Recursive definitions remain referenced instead of expanding forever.
 
 Anthropic routes cannot combine reasoning with forced tool choice. When structured output infers a required output tool, the model sends `tool_choice: "auto"` and keeps reasoning enabled. An explicit required or list choice fails before transport instead of letting OpenRouter silently remove reasoning.
+
+`qwen/qwen3.8-flash` reasons unless you disable thinking, and Alibaba, its only host, returns a 400 for a forced tool choice while it reasons. A required output tool falls back to `tool_choice: "auto"`. An explicit required or list choice returns an `*openai.RequestRejectedError` before sending, so a `FallbackModel` moves on as it would for the API's error.
 
 ## Snowflake Cortex
 

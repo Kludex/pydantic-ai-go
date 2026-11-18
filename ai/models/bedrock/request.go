@@ -179,6 +179,10 @@ func buildConverseInput(
 		params.Settings.Temperature = nil
 		params.Settings.TopP = nil
 	}
+	if bedrockRejectsStopSequences(modelName) && len(params.Settings.StopSequences) > 0 {
+		params.Settings = params.Settings.Clone()
+		params.Settings.StopSequences = nil
+	}
 	if maximum := bedrockClaudeMaxOutputTokens(modelName); params.Settings.MaxTokens > maximum && maximum > 0 {
 		params.Settings.MaxTokens = maximum
 	}
@@ -369,6 +373,24 @@ func bedrockOpenAIResponsesModel(modelName string) bool {
 		"gpt-6.1-terra",
 	} {
 		if strings.HasSuffix(name, "openai."+model) || name == model {
+			return true
+		}
+	}
+	return false
+}
+
+// bedrockRejectsStopSequences reports the models Converse rejects stopSequences for.
+func bedrockRejectsStopSequences(modelName string) bool {
+	name := strings.ToLower(modelName)
+	if strings.HasSuffix(name, "deepseek.v3.2") {
+		return true
+	}
+	for _, prefix := range []string{
+		"openai.", "xai.", "qwen.", "google.", "zai.", "moonshot.", "moonshotai.", "minimax.", "nvidia.",
+		"writer.palmyra-vision", "mistral.devstral", "mistral.magistral", "mistral.ministral-3",
+		"mistral.mistral-large-3", "mistral.voxtral",
+	} {
+		if strings.HasPrefix(name, prefix) || strings.Contains(name, "."+prefix) || strings.Contains(name, "/"+prefix) {
 			return true
 		}
 	}

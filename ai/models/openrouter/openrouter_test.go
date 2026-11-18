@@ -373,6 +373,46 @@ func TestOpenRouterDownstreamSchemaAndToolChoice(t *testing.T) {
 	}
 }
 
+func TestOpenRouterQwenFlashRejectsForcingWhileReasoning(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		_, _ = response.Write([]byte(`{"model":"routed","choices":[{"message":{"content":"ok"},"finish_reason":"stop"}]}`))
+	}))
+	defer server.Close()
+	model := openrouter.NewModel("qwen/qwen3.8-flash", openrouter.WithBaseURL(server.URL),
+		openrouter.WithHTTPClient(server.Client()))
+	output := &ai.ToolDefinition{Name: "final_result", Schema: map[string]any{"type": "object"}}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{OutputTool: output}); err != nil {
+		t.Fatal(err)
+	}
+	if bodies[0]["tool_choice"] != "auto" {
+		t.Fatalf("default reasoning kept the forced output tool: %#v", bodies[0])
+	}
+	disabled := ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}
+	if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{OutputTool: output, Settings: disabled}); err != nil {
+		t.Fatal(err)
+	}
+	if bodies[1]["tool_choice"] != "required" {
+		t.Fatalf("disabled reasoning relaxed the forced output tool: %#v", bodies[1])
+	}
+	for _, choice := range []any{"required", []any{"final_result"}} {
+		params := ai.ModelRequestParams{OutputTool: output, Settings: ai.ModelSettings{
+			ExtraBody: map[string]any{"tool_choice": choice},
+		}}
+		_, err := model.Request(t.Context(), nil, params)
+		var rejected *openai.RequestRejectedError
+		var apiErr ai.ModelAPIError
+		if !errors.As(err, &rejected) || !errors.As(err, &apiErr) || !apiErr.IsModelAPIError() || len(bodies) != 2 {
+			t.Fatalf("expected a fallback-eligible rejection before sending, got %v", err)
+		}
+	}
+}
+
 func TestOpenRouterInlinesGLM53ToolSchemas(t *testing.T) {
 	var bodies []map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {

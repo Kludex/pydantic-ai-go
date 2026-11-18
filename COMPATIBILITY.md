@@ -99,6 +99,15 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `b5dcf1bdb4c51714c424a1b85c8f4d12544edd9d` | xAI sends portable `default` and `priority` service tiers, omits `auto` and `flex`, and reports the served tier |
 | `43f82e2653dd56d7a26361b1299d0afcb437f4ec` | Gemma 4 on Google takes `MINIMAL` or `HIGH` thinking levels and keeps strict tools off |
 | `6ee7f29f03a746653de405cf9494e14a68ccd317` | `openaicodex.WithBaseURL` and `openaichatgpt.WithBaseURL` take an HTTPS base URL and scope credentials to its host and port; the other OpenAI-compatible packages already had `WithBaseURL` |
+| `3fedb529d67e300e9e6a91268800f8baaed76bef` | GPT-6.2 Sol and Astra always reason on OpenAI and reject Chat tools while reasoning |
+| `ce86fde1f4a74d19e5fd1712fdb1fc0bffee7a64` | Bedrock Converse drops `StopSequences` with an `UnsupportedSettingWarning` for the model families that reject them |
+| `c4e8f349a8d493046e8b643fe3630c34a9b9356a` | Anthropic tool-search calls replay input fields beyond the query from `ProviderDetails["extra_input"]` |
+| `ba082ea2c8429998d36a23e7a73b2402ba83031d` | Cohere `tool_plan` becomes a `ThinkingPart` with `ProviderDetails["tool_plan"]` and replays as `tool_plan` |
+| `55b80a96ccba15990a3f24c8afc5ba37b90a301a` | Hugging Face `reasoning` fields become `ThinkingPart`s |
+| `7fd63b57fe46a0c11c749e628005b73dff9c0ccd` | Groq forwards `Thinking` to Muse Spark Open and MiniMax M2.7 and rejects native output with function tools before sending |
+| `a2df543325761f0750f9209fb34fb6b03d95b3f3` | OpenRouter `qwen/qwen3.8-flash` relaxes a resolved forced output tool while reasoning and returns `openai.RequestRejectedError` for an explicit forcing |
+| `e80413569727eb2185b8b1cd58519a6dfdffb393` | xAI uploads each distinct document once per model |
+| `7b517b1e44338adad21b589588a895c90bd8d793` | An id-less OpenAI Realtime `response.done` closes the active response's tool batch |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 

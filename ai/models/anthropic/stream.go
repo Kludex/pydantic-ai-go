@@ -350,12 +350,11 @@ func (m *Model) eventStream(
 					}
 				default:
 					var err error
-					args, err = normalizeAnthropicToolSearchArguments(raw, strategy)
+					args, details, err = normalizeAnthropicToolSearchArguments(raw, strategy)
 					if err != nil {
 						yield(nil, err)
 						return
 					}
-					details = map[string]any{"strategy": strategy}
 				}
 				if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
 					if details == nil {

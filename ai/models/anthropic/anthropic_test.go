@@ -2743,7 +2743,7 @@ func TestAnthropicServerManagedToolSearch(t *testing.T) {
 		if request == 1 {
 			_, _ = w.Write([]byte(`{
 				"id":"message-search","model":"claude-sonnet-4-6","stop_reason":"tool_use","content":[
-					{"type":"server_tool_use","id":"search-1","name":"tool_search_tool_bm25","input":{"query":"weather"},"caller":{"type":"code_execution_20250825"}},
+					{"type":"server_tool_use","id":"search-1","name":"tool_search_tool_bm25","input":{"query":"weather","limit":3},"caller":{"type":"code_execution_20250825"}},
 					{"type":"tool_search_tool_result","tool_use_id":"search-1","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"weather"}]}},
 					{"type":"tool_use","id":"weather-1","name":"weather","input":{"city":"Paris"}}
 				],"usage":{}
@@ -2777,6 +2777,7 @@ func TestAnthropicServerManagedToolSearch(t *testing.T) {
 	returned := response.Parts[1].(ai.NativeToolReturnPart)
 	if call.ToolCallID != "search-1" || string(call.Args) != `{"queries":["weather"]}` ||
 		call.ProviderDetails["strategy"] != "bm25" || call.ProviderDetails["anthropic_caller"] == nil ||
+		call.ProviderDetails["extra_input"].(map[string]any)["limit"] != float64(3) ||
 		returned.ToolCallID != "search-1" ||
 		returned.Content.(ai.ToolSearchResult).DiscoveredTools[0].Name != "weather" {
 		t.Fatalf("unexpected normalized Anthropic search: %+v", response.Parts)
@@ -2794,7 +2795,8 @@ func TestAnthropicServerManagedToolSearch(t *testing.T) {
 	searchCall := assistant[0].(map[string]any)
 	searchResult := assistant[1].(map[string]any)
 	if searchCall["name"] != "tool_search_tool_bm25" ||
-		searchCall["input"].(map[string]any)["query"] != "weather" || searchCall["caller"] == nil ||
+		searchCall["input"].(map[string]any)["query"] != "weather" ||
+		searchCall["input"].(map[string]any)["limit"] != float64(3) || searchCall["caller"] == nil ||
 		searchResult["type"] != "tool_search_tool_result" ||
 		searchResult["content"].(map[string]any)["type"] != "tool_search_tool_search_result" {
 		t.Fatalf("unexpected Anthropic native replay: %+v", assistant)

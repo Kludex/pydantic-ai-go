@@ -246,7 +246,9 @@ func (model *Model) prepareParams(
 		return ctx, ai.ModelRequestParams{}, err
 	}
 	params = transformSchemas(params, provider, routedModel)
-	thinkingActive := false
+	// These routes reason by default and answer a forced tool choice while reasoning with a 400.
+	rejectsForcingWhileReasoning := provider == "qwen" && strings.HasPrefix(strings.ToLower(routedModel), "qwen3.8-flash")
+	thinkingActive := rejectsForcingWhileReasoning
 	if reasoning, exists := settings.ExtraBody["reasoning"]; exists {
 		switch reasoning := reasoning.(type) {
 		case Reasoning:
@@ -261,26 +263,33 @@ func (model *Model) prepareParams(
 			thinkingActive = reasoning != nil
 		}
 	}
-	if provider == "anthropic" && thinkingActive {
-		if choice, exists := settings.ExtraBody["tool_choice"]; exists {
-			switch choice := choice.(type) {
-			case string:
-				if choice == "required" {
-					return ctx, ai.ModelRequestParams{}, fmt.Errorf(
-						"openrouter: tool choice %q cannot be forced with Anthropic thinking; use auto or disable thinking",
-						choice,
-					)
-				}
-			case []string, []any:
-				return ctx, ai.ModelRequestParams{}, fmt.Errorf(
-					"openrouter: specific tools cannot be forced with Anthropic thinking; use auto or disable thinking",
-				)
+	if (provider == "anthropic" || rejectsForcingWhileReasoning) && thinkingActive {
+		conflict := ""
+		switch choice := settings.ExtraBody["tool_choice"].(type) {
+		case string:
+			if choice == "required" {
+				conflict = fmt.Sprintf("tool choice %q cannot be forced", choice)
 			}
+		case []string, []any:
+			conflict = "specific tools cannot be forced"
+		}
+		if conflict != "" && rejectsForcingWhileReasoning {
+			return ctx, ai.ModelRequestParams{}, &openai.RequestRejectedError{
+				ModelName: model.Name(), Reason: conflict + " while reasoning; use auto or disable thinking",
+			}
+		}
+		if conflict != "" {
+			return ctx, ai.ModelRequestParams{}, fmt.Errorf(
+				"openrouter: %s with Anthropic thinking; use auto or disable thinking", conflict,
+			)
 		}
 		if params.OutputTool != nil && !params.AllowText {
 			params.AllowText = true
 			if _, explicit := settings.ExtraBody["tool_choice"]; !explicit {
 				settings.ExtraBody = maps.Clone(settings.ExtraBody)
+				if settings.ExtraBody == nil {
+					settings.ExtraBody = map[string]any{}
+				}
 				settings.ExtraBody["tool_choice"] = "auto"
 			}
 		}

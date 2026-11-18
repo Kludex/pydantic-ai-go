@@ -761,7 +761,7 @@ func TestAnthropicStreamServerManagedToolSearch(t *testing.T) {
 	model := newServer(t, anthropicSSE(t, []string{
 		`{"type":"message_start","message":{"id":"message-1","model":"claude-sonnet-4-6","usage":{}}}`,
 		`{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"search-1","name":"tool_search_tool_bm25","input":{},"caller":{"type":"direct"}}}`,
-		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"weather\"}"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"weather\",\"limit\":3}"}}`,
 		`{"type":"content_block_stop","index":0}`,
 		`{"type":"content_block_start","index":1,"content_block":{"type":"tool_search_tool_result","tool_use_id":"search-1","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"weather"}]}}}`,
 		`{"type":"content_block_stop","index":1}`,
@@ -780,6 +780,7 @@ func TestAnthropicStreamServerManagedToolSearch(t *testing.T) {
 	returned := events[2].(ai.NativeToolReturnEvent)
 	if !start.Native || start.ToolCallID != "search-1" || start.ProviderName != "anthropic" ||
 		start.ProviderDetails["strategy"] != "bm25" || start.ProviderDetails["anthropic_caller"] != nil ||
+		start.ProviderDetails["extra_input"].(map[string]any)["limit"] != float64(3) ||
 		delta.ArgsDelta != `{"queries":["weather"]}` ||
 		returned.Part.ToolCallID != "search-1" ||
 		returned.Part.Content.(ai.ToolSearchResult).DiscoveredTools[0].Name != "weather" {

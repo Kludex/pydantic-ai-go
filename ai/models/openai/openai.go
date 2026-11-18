@@ -1012,7 +1012,7 @@ func openAIThinkingEffortForModel(modelName string, settings *ai.ThinkingSetting
 		return "", err
 	}
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
-	if (strings.HasPrefix(modelName, "gpt-6-astra") || strings.HasPrefix(modelName, "gpt-6.1-sol")) && effort == "none" {
+	if openAIGPT6RejectsNoReasoning(modelName) && effort == "none" {
 		return "", nil
 	}
 	if effort == "minimal" && (strings.HasPrefix(modelName, "gpt-5.6") || openAIIsGPT6Model(modelName)) {
@@ -1045,7 +1045,18 @@ func openAIModelReasoningActive(modelName, effort string) bool {
 }
 
 func openAIIsGPT6Model(modelName string) bool {
-	for _, prefix := range []string{"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra"} {
+	for _, prefix := range []string{
+		"gpt-6-astra", "gpt-6-sol", "gpt-6-luna", "gpt-6.1-sol", "gpt-6.1-terra", "gpt-6.2-sol", "gpt-6.2-astra",
+	} {
+		if strings.HasPrefix(modelName, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIGPT6RejectsNoReasoning(modelName string) bool {
+	for _, prefix := range []string{"gpt-6-astra", "gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"} {
 		if strings.HasPrefix(modelName, prefix) {
 			return true
 		}

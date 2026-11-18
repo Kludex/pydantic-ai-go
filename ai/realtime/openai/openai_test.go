@@ -510,3 +510,84 @@ func TestOpenAIPrunesAnsweredToolRounds(t *testing.T) {
 		t.Fatalf("replayed calls %v, want %v", calls, want)
 	}
 }
+
+func TestOpenAIIdlessResponseDoneAnswersToolCalls(t *testing.T) {
+	type peerSocket struct {
+		socket *websocket.Conn
+		frames chan map[string]any
+	}
+	peers := make(chan peerSocket, 1)
+	server := handshakeServer(t, func(_ map[string]any, socket *websocket.Conn, ctx context.Context) {
+		_ = writeFrame(ctx, socket, map[string]any{"type": "session.updated", "session": map[string]any{}})
+		frames := make(chan map[string]any, 64)
+		peers <- peerSocket{socket: socket, frames: frames}
+		for {
+			_, data, err := socket.Read(ctx)
+			if err != nil {
+				return
+			}
+			var frame map[string]any
+			_ = json.Unmarshal(data, &frame)
+			frames <- frame
+		}
+	})
+	defer server.Close()
+	model := openairt.NewModel("gpt-realtime", openairt.WithAPIKey("secret"), openairt.WithBaseURL(wsBase(server.URL)),
+		openairt.WithHTTPClient(server.Client()))
+	connection, err := model.Connect(t.Context(), realtime.ConnectParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = connection.Close(t.Context()) }()
+	peer := <-peers
+	events := make(chan realtime.CodecEvent, 64)
+	go func() {
+		for event, err := range connection.Events(t.Context()) {
+			if err != nil {
+				return
+			}
+			events <- event
+		}
+	}()
+	await := func(match func(realtime.CodecEvent) bool) {
+		for {
+			select {
+			case event := <-events:
+				if match(event) {
+					return
+				}
+			case <-time.After(time.Second):
+				t.Fatal("event did not arrive")
+			}
+		}
+	}
+	for _, frame := range []map[string]any{
+		{"type": "response.created", "response": map[string]any{"id": "r1"}},
+		{"type": "response.function_call_arguments.done", "response_id": "r1", "call_id": "call_1", "name": "lookup",
+			"arguments": "{}", "item_id": "fc1"},
+	} {
+		if err := writeFrame(t.Context(), peer.socket, frame); err != nil {
+			t.Fatal(err)
+		}
+	}
+	await(func(event realtime.CodecEvent) bool { _, ok := event.(realtime.ToolCall); return ok })
+	if err := connection.Send(t.Context(), realtime.ToolResult{ToolCallID: "call_1", Output: "found"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeFrame(t.Context(), peer.socket, map[string]any{
+		"type": "response.done", "response": map[string]any{"status": "completed"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	await(func(event realtime.CodecEvent) bool { _, ok := event.(realtime.ResponseDone); return ok })
+	for {
+		select {
+		case frame := <-peer.frames:
+			if frame["type"] == "response.create" {
+				return
+			}
+		case <-time.After(time.Second):
+			t.Fatal("the answered tool call never got a follow-up response")
+		}
+	}
+}

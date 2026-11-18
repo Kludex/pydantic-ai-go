@@ -20,7 +20,7 @@ import (
 func (model *Model) StreamRequest(
 	ctx context.Context, messages []ai.ModelMessage, params ai.ModelRequestParams,
 ) (iter.Seq2[ai.ModelStreamEvent, error], error) {
-	ai.WarnUnsupportedSettings(ctx, model, params, ai.SettingParallelToolCalls)
+	ai.WarnUnsupportedSettings(ctx, model, params, model.unsupportedSettings()...)
 	input, err := buildConverseInput(ctx, model.name, messages, params)
 	if err != nil {
 		return nil, err

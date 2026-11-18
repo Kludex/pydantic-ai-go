@@ -3,10 +3,12 @@ package xai
 
 import (
 	"context"
+	"crypto/sha256"
 	"iter"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 	"github.com/Kludex/pydantic-ai-go/ai/models/openai"
@@ -22,6 +24,10 @@ type Model struct {
 	httpClient     *http.Client
 	headers        http.Header
 	prepareRequest openai.RequestPreparationFunc
+
+	// uploads caches file IDs by content hash, so a document is uploaded once per model.
+	uploadsMu sync.Mutex
+	uploads   map[[sha256.Size]byte]string
 }
 
 type config struct {

@@ -362,6 +362,11 @@ func validateMessages(messages []ai.ModelMessage) error {
 }
 
 func (model *Model) prepareParams(params ai.ModelRequestParams) (ai.ModelRequestParams, error) {
+	if params.OutputMode == ai.OutputModeNative && len(params.OutputSchema) > 0 && len(params.Tools) > 0 {
+		return ai.ModelRequestParams{}, fmt.Errorf(
+			"groq: native output and function tools cannot be combined; use tool output instead",
+		)
+	}
 	params.Settings = prepareServiceTier(model.prepareThinking(params.Settings))
 	if len(params.NativeTools) == 0 {
 		return params, nil
@@ -493,6 +498,7 @@ func groqReasoningEffort(level ai.ThinkingLevel) string {
 func isReasoningModel(name string) bool {
 	for _, prefix := range []string{
 		"openai/gpt-oss", "qwen/qwen3", "qwen-qwq", "deepseek-r1", "llama-4-maverick",
+		"meta-models/muse-spark-open", "minimaxai/minimax-m2.7",
 	} {
 		if strings.HasPrefix(name, prefix) {
 			return true

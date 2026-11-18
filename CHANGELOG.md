@@ -29,6 +29,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - xAI sends portable `ServiceTier` `default` and `priority`, and reports the served tier in `ProviderDetails["service_tier"]`.
 - Gemma 4 on the Google adapter takes portable `Thinking` as `MINIMAL` or `HIGH` thinking levels.
 - `openai.RequestRejectedError` is returned before an OpenAI Chat request that sends tools to a GPT-6 model with reasoning on, which the API rejects. It is eligible for model fallback.
+- GPT-6.2 Sol and Astra are GPT-6 models on OpenAI: they reason by default, cannot turn reasoning off, and reject Chat tools while reasoning.
+- Cohere keeps the `tool_plan` it writes before tool calls as a `ThinkingPart` with `ProviderDetails["tool_plan"]`, and sends it back as `tool_plan` on later requests.
+- Hugging Face turns the `reasoning` field of static and streamed responses into `ThinkingPart`s.
+- Groq forwards `Thinking` to `meta-models/muse-spark-open` and `minimaxai/minimax-m2.7` as a parsed reasoning format.
+- OpenRouter's `qwen/qwen3.8-flash` reasons by default, so a forced output tool falls back to `auto`, and an explicit forced `tool_choice` returns a fallback-eligible `openai.RequestRejectedError` before sending.
 
 ### Changed
 
@@ -36,6 +41,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - GPT-6.1 Terra is treated as a GPT-6 model for default reasoning, minimal effort, prompt-cache breakpoints, and Responses phases on OpenAI.
 - Bedrock Mantle stores GPT-5 tool call IDs as `call_0_<hash>`, a hash of the response ID or, without one, of the response timestamp, instead of `<response ID>:call_0`. The new form stays within the `[a-zA-Z0-9_-]` set Anthropic and Bedrock require when the history moves to them. Only responses from the same Mantle endpoint are restored to the provider's IDs, and stored `<response ID>:call_0` IDs still restore. A streamed call that arrives before the response ID is kept as sent.
 - `mcp.LoadToolsets` runs `command` for an entry that also has `url`, as PydanticAI does, instead of rejecting it.
+- Bedrock Converse drops `StopSequences` with an `UnsupportedSettingWarning` on the models that reject them: OpenAI, xAI, Qwen, Google, Z.AI, Moonshot AI, MiniMax, and NVIDIA models, DeepSeek V3.2, Writer Palmyra Vision, and Mistral's Devstral, Magistral, Ministral 3, Mistral Large 3, and Voxtral.
+- xAI uploads a document once per model and reuses its file ID when the same bytes are sent again.
+- Groq returns an error before sending native output with function tools, which the API rejects.
+- An OpenAI Realtime `response.done` without a response ID ends the active response, so its answered tool calls get their follow-up response.
 
 - The file URLs one model request downloads share a 500 MiB total on top of the 50 MiB per-file limit. Pass larger inputs as `BinaryContent`.
 
@@ -48,6 +57,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 - `fakes.TestModel` generates integers inside `minimum`, `maximum`, and exclusive bounds, and values for list-form `type` schemas, instead of `0` and `null`.
 - System One accepts unrounded probabilities and scores, such as a vLLM softmax, within float error.
 - A `FallbackModel` that rejected a billed response and then returned an error it does not fall back on keeps that attempt, so an outer fallback and the run still count its tokens and cost.
+- Anthropic tool-search calls replay every input field the model sent, such as `limit`, so a thinking block after the search keeps a valid signature.
 - Decision models send a structured tool return in their history as JSON, not as Go's `fmt` formatting.
 - Google embeddings return `ai.ModelTransportError` for connection and response-read failures, so `FallbackModel` falls back on them like on other provider failures.
 - `StreamedRun.Result` returns nil when an event-stream capability fails after the run finished, as its documentation says.

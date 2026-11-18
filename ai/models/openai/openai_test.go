@@ -180,7 +180,7 @@ func TestChatThinkingSettings(t *testing.T) {
 	}
 }
 
-func TestGPT61SolThinkingProfile(t *testing.T) {
+func TestGPT6AlwaysOnThinkingProfile(t *testing.T) {
 	var body map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		body = nil
@@ -188,24 +188,24 @@ func TestGPT61SolThinkingProfile(t *testing.T) {
 		_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
 	}))
 	defer server.Close()
-	model := openai.NewModel(
-		"gpt-6.1-sol", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()),
-	)
 	temperature := 0.5
-	for _, test := range []struct {
-		settings ai.ModelSettings
-		effort   any
-	}{
-		{settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal}}, effort: "low"},
-		{settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}},
-		{settings: ai.ModelSettings{}},
-	} {
-		test.settings.Temperature = &temperature
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: test.settings}); err != nil {
-			t.Fatal(err)
-		}
-		if body["reasoning_effort"] != test.effort || body["temperature"] != nil {
-			t.Fatalf("unexpected GPT-6.1 request: %#v", body)
+	for _, name := range []string{"gpt-6.1-sol", "gpt-6.2-sol", "gpt-6.2-astra"} {
+		model := openai.NewModel(name, openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+		for _, test := range []struct {
+			settings ai.ModelSettings
+			effort   any
+		}{
+			{settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal}}, effort: "low"},
+			{settings: ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}}},
+			{settings: ai.ModelSettings{}},
+		} {
+			test.settings.Temperature = &temperature
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: test.settings}); err != nil {
+				t.Fatal(err)
+			}
+			if body["reasoning_effort"] != test.effort || body["temperature"] != nil {
+				t.Fatalf("unexpected %s request: %#v", name, body)
+			}
 		}
 	}
 }
@@ -232,6 +232,8 @@ func TestGPT6ChatRejectsToolsWhileReasoning(t *testing.T) {
 		{name: "output tool", model: "gpt-6.1-terra", params: ai.ModelRequestParams{OutputTool: output}, remedy: true,
 			rejected: true},
 		{name: "reasoning cannot be disabled", model: "gpt-6-astra",
+			params: ai.ModelRequestParams{Tools: tools, Settings: disabled}, rejected: true},
+		{name: "GPT-6.2 reasoning cannot be disabled", model: "gpt-6.2-astra",
 			params: ai.ModelRequestParams{Tools: tools, Settings: disabled}, rejected: true},
 		{name: "reasoning disabled", model: "gpt-6-sol", params: ai.ModelRequestParams{Tools: tools, Settings: disabled}},
 		{name: "no tools", model: "gpt-6-luna"},

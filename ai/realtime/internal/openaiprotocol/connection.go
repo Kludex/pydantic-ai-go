@@ -1,6 +1,7 @@
 package openaiprotocol
 
 import (
+	"cmp"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -432,16 +433,23 @@ func (connection *Connection) Events(ctx context.Context) iter.Seq2[realtime.Cod
 						return
 					}
 				}
-				connection.observe(event)
+				var endedResponseID string
 				if done, ok := event.(realtime.ResponseDone); ok {
+					// An id-less done ends the active response, whose tool calls it closes.
 					connection.stateMu.Lock()
-					batch := connection.toolBatches[done.ProviderResponseID]
+					endedResponseID = cmp.Or(done.ProviderResponseID, connection.activeResponseID)
+					connection.stateMu.Unlock()
+				}
+				connection.observe(event)
+				if _, ok := event.(realtime.ResponseDone); ok {
+					connection.stateMu.Lock()
+					batch := connection.toolBatches[endedResponseID]
 					if batch != nil {
 						batch.done = true
 					}
 					connection.stateMu.Unlock()
 					if batch != nil {
-						if err := connection.answerToolBatch(ctx, done.ProviderResponseID); err != nil {
+						if err := connection.answerToolBatch(ctx, endedResponseID); err != nil {
 							yield(nil, err)
 							return
 						}

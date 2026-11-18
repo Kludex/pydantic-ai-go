@@ -82,6 +82,7 @@ func NewModel(name string, options ...Option) *Model {
 		openai.WithStrictToolSupport(false),
 		openai.WithDeferredToolSupport(false),
 		openai.WithChatCompatibility(openai.ChatCompatibility{
+			Reasoning:            true,
 			LegacyMaxTokens:      true,
 			DisableDocumentInput: true,
 			FinishReasons: map[string]ai.FinishReason{

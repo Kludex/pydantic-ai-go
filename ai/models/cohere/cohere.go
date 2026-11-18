@@ -195,7 +195,14 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 	if err := json.Unmarshal(data, &response); err != nil {
 		return nil, fmt.Errorf("cohere: decode response: %w", err)
 	}
-	parts := make([]ai.ResponsePart, 0, len(response.Message.Content)+len(response.Message.ToolCalls))
+	parts := make([]ai.ResponsePart, 0, len(response.Message.Content)+len(response.Message.ToolCalls)+1)
+	if response.Message.ToolPlan != "" {
+		// A thinking part, not text: text before a tool call would become streamed output.
+		parts = append(parts, ai.ThinkingPart{
+			Content: response.Message.ToolPlan, ProviderName: model.providerName,
+			ProviderDetails: map[string]any{"tool_plan": true},
+		})
+	}
 	for _, content := range response.Message.Content {
 		switch content.Type {
 		case "text":
@@ -257,6 +264,7 @@ type chatResponse struct {
 	ID           string `json:"id"`
 	FinishReason string `json:"finish_reason"`
 	Message      struct {
+		ToolPlan  string            `json:"tool_plan"`
 		Content   []responseContent `json:"content"`
 		ToolCalls []cohereToolCall  `json:"tool_calls"`
 	} `json:"message"`

@@ -1181,3 +1181,43 @@ func TestWarnsAboutIgnoredParallelToolCalls(t *testing.T) {
 		t.Fatalf("warnings %v", warnings)
 	}
 }
+
+func TestStopSequencesDroppedForModelsThatRejectThem(t *testing.T) {
+	for _, test := range []struct {
+		model   string
+		dropped bool
+	}{
+		{model: "us.deepseek.v3.2", dropped: true},
+		{model: "qwen.qwen3-32b-v1:0", dropped: true},
+		{model: "openai.gpt-oss-120b-1:0", dropped: true},
+		{model: "arn:aws:bedrock:us-east-1:123456789012:inference-profile/us.mistral.magistral-small-2509", dropped: true},
+		{model: "writer.palmyra-vision-7b", dropped: true},
+		{model: "writer.palmyra-x5-v1:0"},
+		{model: "mistral.mistral-large-2402-v1:0"},
+		{model: "us.anthropic.claude-sonnet-4-v1:0"},
+	} {
+		t.Run(test.model, func(t *testing.T) {
+			var sent []string
+			client := &fakeClient{converse: func(
+				input *bedrockruntime.ConverseInput, _ ...func(*bedrockruntime.Options),
+			) (*bedrockruntime.ConverseOutput, error) {
+				if input.InferenceConfig != nil {
+					sent = input.InferenceConfig.StopSequences
+				}
+				return completeOutput(types.StopReasonEndTurn), nil
+			}}
+			var warnings []string
+			ctx := ai.WithUnsupportedSettingSink(t.Context(), func(_ context.Context, warning ai.UnsupportedSettingWarning) {
+				warnings = append(warnings, warning.Setting)
+			})
+			model := bedrock.NewModel(test.model, bedrock.WithClient(client))
+			params := ai.ModelRequestParams{Settings: ai.ModelSettings{StopSequences: []string{"END"}}}
+			if _, err := model.Request(ctx, nil, params); err != nil {
+				t.Fatal(err)
+			}
+			if test.dropped != (len(sent) == 0) || test.dropped != (len(warnings) == 1) {
+				t.Fatalf("stop sequences sent %v, warnings %v", sent, warnings)
+			}
+		})
+	}
+}

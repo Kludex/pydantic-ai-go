@@ -435,6 +435,10 @@ func TestModelFamilyThinking(t *testing.T) {
 			expectedFormat: "parsed"},
 		{name: "legacy disabled", model: "qwen-qwq-32b", level: ai.ThinkingLevelDisabled,
 			expectedFormat: "hidden"},
+		{name: "muse spark", model: "meta-models/muse-spark-open", level: ai.ThinkingLevelEnabled,
+			expectedFormat: "parsed"},
+		{name: "minimax", model: "minimaxai/minimax-m2.7", level: ai.ThinkingLevelEnabled,
+			expectedFormat: "parsed"},
 		{name: "explicit", model: "openai/gpt-oss-120b", level: ai.ThinkingLevelHigh,
 			extra:          map[string]any{"reasoning_format": "raw", "reasoning_effort": "low"},
 			expectedFormat: "raw", expectedEffort: "low"},
@@ -747,5 +751,19 @@ func TestMistralToolCallIDLength(t *testing.T) {
 		if got := groq.NewModel(name).ModelProfile().ToolCallIDLength; got != want {
 			t.Fatalf("%s tool call ID length = %d, want %d", name, got, want)
 		}
+	}
+}
+
+func TestNativeOutputRejectsFunctionTools(t *testing.T) {
+	model := groq.NewModel("openai/gpt-oss-120b", groq.WithBaseURL("http://127.0.0.1:0"))
+	params := ai.ModelRequestParams{
+		OutputMode: ai.OutputModeNative, OutputSchema: map[string]any{"type": "object"},
+		Tools: []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
+	}
+	if _, err := model.Request(t.Context(), nil, params); err == nil || !strings.Contains(err.Error(), "tool output") {
+		t.Fatalf("expected native output with function tools to be rejected, got %v", err)
+	}
+	if _, err := model.StreamRequest(t.Context(), nil, params); err == nil {
+		t.Fatal("expected streamed native output with function tools to be rejected")
 	}
 }

@@ -2191,7 +2191,8 @@ func convertResponse(
 			if strategy == "regex" {
 				wireName, wireKey = "tool_search_tool_regex", "pattern"
 			}
-			input, err := anthropicToolSearchReplayInput(p.Args, wireKey)
+			extraInput, _ := p.ProviderDetails["extra_input"].(map[string]any)
+			input, err := anthropicToolSearchReplayInput(p.Args, wireKey, extraInput)
 			if err != nil {
 				return nil, err
 			}
@@ -2282,7 +2283,9 @@ func convertResponse(
 	return []messageParam{{Role: "assistant", Content: blocks}}, nil
 }
 
-func anthropicToolSearchReplayInput(args json.RawMessage, wireKey string) (json.RawMessage, error) {
+func anthropicToolSearchReplayInput(
+	args json.RawMessage, wireKey string, extraInput map[string]any,
+) (json.RawMessage, error) {
 	if len(args) == 0 {
 		return json.RawMessage(`{}`), nil
 	}
@@ -2301,7 +2304,12 @@ func anthropicToolSearchReplayInput(args json.RawMessage, wireKey string) (json.
 			stringsOnly = append(stringsOnly, query)
 		}
 	}
-	return json.Marshal(map[string]any{wireKey: strings.Join(stringsOnly, " ")})
+	input := maps.Clone(extraInput)
+	if input == nil {
+		input = map[string]any{}
+	}
+	input[wireKey] = strings.Join(stringsOnly, " ")
+	return json.Marshal(input)
 }
 
 func anthropicToolSearchReplayResult(
@@ -2623,11 +2631,10 @@ func parseResponse(data []byte, reportInferenceGeo bool) (*ai.ModelResponse, err
 			if block.Name == "tool_search_tool_regex" {
 				strategy = "regex"
 			}
-			args, err := normalizeAnthropicToolSearchArguments(block.Input, strategy)
+			args, details, err := normalizeAnthropicToolSearchArguments(block.Input, strategy)
 			if err != nil {
 				return nil, err
 			}
-			details := map[string]any{"strategy": strategy}
 			if callerType, _ := block.Caller["type"].(string); callerType != "" && callerType != "direct" {
 				details["anthropic_caller"] = block.Caller
 			}
@@ -2689,13 +2696,18 @@ func anthropicToolSearchStrategy(name string) (string, bool) {
 	}
 }
 
-func normalizeAnthropicToolSearchArguments(raw json.RawMessage, strategy string) (json.RawMessage, error) {
+// normalizeAnthropicToolSearchArguments keeps input fields beyond the query in
+// details["extra_input"]: a thinking signature after the search is bound to the exact input.
+func normalizeAnthropicToolSearchArguments(
+	raw json.RawMessage, strategy string,
+) (json.RawMessage, map[string]any, error) {
+	details := map[string]any{"strategy": strategy}
 	if len(raw) == 0 || string(raw) == "null" {
-		return json.RawMessage(`{"queries":[]}`), nil
+		return json.RawMessage(`{"queries":[]}`), details, nil
 	}
 	var input map[string]any
 	if err := json.Unmarshal(raw, &input); err != nil {
-		return nil, fmt.Errorf("anthropic: parse tool search arguments: %w", err)
+		return nil, nil, fmt.Errorf("anthropic: parse tool search arguments: %w", err)
 	}
 	key := "query"
 	if strategy == "regex" {
@@ -2706,7 +2718,12 @@ func normalizeAnthropicToolSearchArguments(raw json.RawMessage, strategy string)
 	if query != "" {
 		queries = append(queries, query)
 	}
-	return json.Marshal(map[string]any{"queries": queries})
+	delete(input, key)
+	if len(input) > 0 {
+		details["extra_input"] = input
+	}
+	args, err := json.Marshal(map[string]any{"queries": queries})
+	return args, details, err
 }
 
 func anthropicMCPCallArgs(toolName string, raw json.RawMessage) (json.RawMessage, error) {

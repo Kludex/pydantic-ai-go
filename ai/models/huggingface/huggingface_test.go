@@ -189,3 +189,53 @@ func TestMistralToolCallIDLength(t *testing.T) {
 		}
 	}
 }
+
+func TestReasoningAndLogprobs(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body = nil
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		if request.Header.Get("Accept") == "text/event-stream" {
+			response.Header().Set("Content-Type", "text/event-stream")
+			_, _ = io.WriteString(response, "data: "+`{"id":"id","choices":[{"delta":{"reasoning":"stream why"}}]}`+"\n\n"+
+				"data: "+`{"id":"id","choices":[{"delta":{"content":"answer"},"finish_reason":"stop"}]}`+"\n\n"+
+				"data: [DONE]\n\n")
+			return
+		}
+		_, _ = io.WriteString(response, `{"id":"id","choices":[{"message":{"reasoning":"why","content":"answer"},`+
+			`"logprobs":{"content":[{"token":"answer","logprob":-0.1,"top_logprobs":[]}]},"finish_reason":"stop"}]}`)
+	}))
+	defer server.Close()
+	model := huggingface.NewModel("openai/gpt-oss-120b", huggingface.WithBaseURL(server.URL),
+		huggingface.WithHTTPClient(server.Client()))
+	logprobs, top := true, 2
+	params := ai.ModelRequestParams{Settings: ai.ModelSettings{Logprobs: &logprobs, TopLogprobs: &top}}
+	result, err := model.Request(t.Context(), nil, params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body["logprobs"] != true || body["top_logprobs"] != float64(2) {
+		t.Fatalf("logprob settings were not sent: %#v", body)
+	}
+	thinking, ok := result.Parts[0].(ai.ThinkingPart)
+	if !ok || thinking.Content != "why" || result.Parts[1].(ai.TextPart).Content != "answer" ||
+		result.ProviderDetails["logprobs"] == nil {
+		t.Fatalf("unexpected response: %#v", result)
+	}
+	stream, err := model.StreamRequest(t.Context(), nil, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var reasoning string
+	for event, err := range stream {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if delta, ok := event.(ai.ThinkingDeltaEvent); ok {
+			reasoning += delta.Delta
+		}
+	}
+	if reasoning != "stream why" {
+		t.Fatalf("streamed reasoning %q", reasoning)
+	}
+}

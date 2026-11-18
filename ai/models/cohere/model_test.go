@@ -339,3 +339,47 @@ func TestWarnsAboutIgnoredParallelToolCalls(t *testing.T) {
 		t.Fatalf("warnings %v: %v", warnings, err)
 	}
 }
+
+func TestToolPlanRoundTrip(t *testing.T) {
+	var bodies []map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		bodies = append(bodies, body)
+		if len(bodies) == 1 {
+			_, _ = io.WriteString(response, `{"id":"r1","finish_reason":"TOOL_CALL","message":{"tool_plan":"I will look it up.",`+
+				`"tool_calls":[{"id":"call","type":"function","function":{"name":"lookup","arguments":"{}"}}]},"usage":{}}`)
+			return
+		}
+		_, _ = io.WriteString(response, `{"id":"r2","finish_reason":"COMPLETE","message":{"content":[{"type":"text","text":"done"}]},"usage":{}}`)
+	}))
+	defer server.Close()
+	model := cohere.NewModel("command-a-03-2025", cohere.WithBaseURL(server.URL), cohere.WithHTTPClient(server.Client()))
+	agent := ai.NewAgent[struct{}, string](model)
+	ai.AddSimpleTool(agent, "lookup", func(context.Context, struct{}) (string, error) { return "found", nil })
+	result, err := agent.Run(t.Context(), "question", struct{}{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, ok := result.Messages()[1].(ai.ModelResponse).Parts[0].(ai.ThinkingPart)
+	if !ok || plan.Content != "I will look it up." || plan.ProviderDetails["tool_plan"] != true {
+		t.Fatalf("unexpected plan part: %#v", result.Messages()[1])
+	}
+	assistant := bodies[1]["messages"].([]any)[1].(map[string]any)
+	if assistant["tool_plan"] != "I will look it up." || assistant["content"] != nil {
+		t.Fatalf("unexpected replayed plan: %#v", assistant)
+	}
+
+	_, err = model.Request(t.Context(), []ai.ModelMessage{ai.ModelResponse{Parts: []ai.ResponsePart{
+		ai.ThinkingPart{Content: "no calls", ProviderName: "cohere", ProviderDetails: map[string]any{"tool_plan": true}},
+	}}}, ai.ModelRequestParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assistant = bodies[2]["messages"].([]any)[0].(map[string]any)
+	if assistant["tool_plan"] != nil || assistant["content"].([]any)[0].(map[string]any)["thinking"] != "no calls" {
+		t.Fatalf("a plan without tool calls must replay as thinking: %#v", assistant)
+	}
+}

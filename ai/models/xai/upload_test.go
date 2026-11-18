@@ -20,7 +20,7 @@ func TestDocumentUploads(t *testing.T) {
 		switch request.URL.Path {
 		case "/document.pdf", "/":
 			response.Header().Set("Content-Type", "application/pdf")
-			_, _ = response.Write([]byte("remote document"))
+			_, _ = response.Write([]byte("remote document" + request.URL.Path))
 		case "/files":
 			if request.Header.Get("Authorization") != "Bearer key" || request.Header.Get("X-Provider") != "yes" ||
 				request.Header.Get("X-Dynamic") != "yes" {
@@ -39,7 +39,7 @@ func TestDocumentUploads(t *testing.T) {
 			if uploads == 1 && (header.Filename != "inline.pdf" || string(data) != "inline document") {
 				t.Errorf("unexpected inline upload: %q %q", header.Filename, data)
 			}
-			if uploads == 2 && (header.Filename != "document.pdf" || string(data) != "remote document") {
+			if uploads == 2 && (header.Filename != "document.pdf" || string(data) != "remote document/document.pdf") {
 				t.Errorf("unexpected remote upload: %q %q", header.Filename, data)
 			}
 			if uploads == 3 && header.Filename != "document" {
@@ -90,5 +90,11 @@ func TestDocumentUploads(t *testing.T) {
 	}
 	if uploads != 4 || !strings.HasPrefix(model.ProviderURL(), server.URL) {
 		t.Fatalf("unexpected uploads: %d", uploads)
+	}
+	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
+		t.Fatal(err)
+	}
+	if uploads != 4 {
+		t.Fatalf("a repeated request uploaded its documents again: %d", uploads)
 	}
 }

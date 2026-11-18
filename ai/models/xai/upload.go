@@ -3,6 +3,7 @@ package xai
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -62,9 +63,22 @@ func (model *Model) prepareMessages(ctx context.Context, messages []ai.ModelMess
 				if filename == "" {
 					filename = documentFilename(mediaType)
 				}
-				fileID, err := model.uploadFile(ctx, data, filename, mediaType)
-				if err != nil {
-					return nil, err
+				key := sha256.Sum256(data)
+				model.uploadsMu.Lock()
+				fileID, uploaded := model.uploads[key]
+				model.uploadsMu.Unlock()
+				if !uploaded {
+					var err error
+					fileID, err = model.uploadFile(ctx, data, filename, mediaType)
+					if err != nil {
+						return nil, err
+					}
+					model.uploadsMu.Lock()
+					if model.uploads == nil {
+						model.uploads = map[[sha256.Size]byte]string{}
+					}
+					model.uploads[key] = fileID
+					model.uploadsMu.Unlock()
 				}
 				prompt.Contents[contentIndex] = ai.UploadedFile{
 					FileID: fileID, ProviderName: "xai", MediaType: mediaType,

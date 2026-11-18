@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
@@ -25,6 +26,7 @@ type chatRequest struct {
 
 type cohereMessage struct {
 	Role       string           `json:"role"`
+	ToolPlan   string           `json:"tool_plan,omitempty"`
 	Content    any              `json:"content,omitempty"`
 	ToolCalls  []cohereToolCall `json:"tool_calls,omitempty"`
 	ToolCallID string           `json:"tool_call_id,omitempty"`
@@ -151,13 +153,22 @@ func (model *Model) convertMessage(message ai.ModelMessage) ([]cohereMessage, er
 		return converted, nil
 	}
 	response := message.(ai.ModelResponse)
+	hasToolCalls := slices.ContainsFunc(response.Parts, func(part ai.ResponsePart) bool {
+		_, call := part.(ai.ToolCallPart)
+		return call
+	})
 	var content []cohereContent
 	var calls []cohereToolCall
+	var plans []string
 	for _, part := range response.Parts {
 		switch part := part.(type) {
 		case ai.TextPart:
 			content = append(content, cohereContent{Type: "text", Text: part.Content})
 		case ai.ThinkingPart:
+			if hasToolCalls && part.ProviderName == model.providerName && part.ProviderDetails["tool_plan"] == true {
+				plans = append(plans, part.Content)
+				continue
+			}
 			content = append(content, cohereContent{Type: "thinking", Thinking: part.Content})
 		case ai.ToolCallPart:
 			if part.ToolCallID == "" {
@@ -174,7 +185,9 @@ func (model *Model) convertMessage(message ai.ModelMessage) ([]cohereMessage, er
 	if len(content) == 0 && len(calls) == 0 {
 		return nil, nil
 	}
-	return []cohereMessage{{Role: "assistant", Content: content, ToolCalls: calls}}, nil
+	return []cohereMessage{{
+		Role: "assistant", ToolPlan: strings.Join(plans, "\n\n"), Content: content, ToolCalls: calls,
+	}}, nil
 }
 
 func cohereUserContent(part ai.UserPromptPart) (any, error) {

@@ -514,7 +514,9 @@ func TestHandlerValidation(t *testing.T) {
 		t.Fatalf("unexpected content-type status: %d", response.Code)
 	}
 	custom := agui.NewAdapter(agent, agui.Config{AllowedContentTypes: []string{"APPLICATION/CUSTOM"}}).Handler(struct{}{})
-	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{}`))
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+		`{"messages":[{"id":"user-1","role":"user","content":"Hello"}]}`,
+	))
 	request.Header.Set("Content-Type", "application/custom; charset=utf-8")
 	response = httptest.NewRecorder()
 	custom.ServeHTTP(response, request)
@@ -536,7 +538,7 @@ func TestHandlerValidation(t *testing.T) {
 	}{
 		{method: http.MethodGet, want: http.StatusMethodNotAllowed},
 		{method: http.MethodPost, body: "invalid", want: http.StatusRequestEntityTooLarge},
-		{method: http.MethodPost, body: "{}", want: http.StatusOK},
+		{method: http.MethodPost, body: "{}", want: http.StatusBadRequest},
 	}
 	for _, test := range tests {
 		response := httptest.NewRecorder()
@@ -567,6 +569,48 @@ func TestHandlerValidation(t *testing.T) {
 	)))
 	if writer.header.Get("Content-Type") != "text/event-stream" {
 		t.Fatalf("stream headers were not written: %v", writer.header)
+	}
+	failedAgent := ai.NewAgent[struct{}, string](fakes.NewFunctionModel(func(
+		context.Context, []ai.ModelMessage, ai.ModelRequestParams,
+	) (*ai.ModelResponse, error) {
+		return nil, errors.New("failed")
+	}))
+	response = httptest.NewRecorder()
+	agui.NewAdapter(failedAgent, agui.Config{DisableContentTypeCheck: true}).Handler(struct{}{}).ServeHTTP(
+		response, httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+			`{"messages":[{"id":"user","role":"user","content":"hello"}]}`,
+		)),
+	)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"type":"RUN_ERROR"`) {
+		t.Fatalf("handler did not stream model error: %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestHandlerRejectsInvalidInput(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	handler := agui.NewAdapter(agent, agui.Config{}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+		`{"threadId":"thread-1","runId":"run-1","messages":[{"id":"user-1","role":"user","content":"Hello"}],`+
+			`"tools":[{"name":"","description":"x","parameters":{"type":"object"}}]}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("got %d want 400", response.Code)
+	}
+	if body := response.Body.String(); body != "agui: frontend tool name must not be empty\n" {
+		t.Fatalf("unexpected body: %q", body)
+	}
+}
+
+func TestPrepareInputReportsInvalidInput(t *testing.T) {
+	_, _, _, err := agui.PrepareInput(agui.RunAgentInput{}, ai.MessageSanitizationOptions{})
+	if !errors.Is(err, agui.ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+	if errors.Unwrap(err) == nil || err.Error() != "agui: input requires a user message" {
+		t.Fatalf("unexpected message: %v", err)
 	}
 }
 

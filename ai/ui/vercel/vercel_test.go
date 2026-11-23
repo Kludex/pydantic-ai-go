@@ -573,6 +573,34 @@ func TestHandlerValidation(t *testing.T) {
 	}
 }
 
+func TestHandlerRejectsInvalidInput(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	handler := vercel.NewAdapter(agent, vercel.Config{}).Handler(struct{}{})
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(
+		`{"trigger":"submit-message","id":"chat-1","messages":[{"id":"user-1","role":"user",`+
+			`"parts":[{"type":"file","mediaType":"image/png","url":""}]}]}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("got %d want 400", response.Code)
+	}
+	if body := response.Body.String(); body != "vercel: file URL must not be empty\n" {
+		t.Fatalf("unexpected body: %q", body)
+	}
+}
+
+func TestPrepareInputReportsInvalidInput(t *testing.T) {
+	_, _, _, err := vercel.PrepareInput(vercel.RequestData{}, ai.MessageSanitizationOptions{})
+	if !errors.Is(err, vercel.ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+	if errors.Unwrap(err) == nil || err.Error() != `vercel: unsupported trigger ""` {
+		t.Fatalf("unexpected message: %v", err)
+	}
+}
+
 func TestApprovalRequestAndResume(t *testing.T) {
 	executions := 0
 	var received map[string]any

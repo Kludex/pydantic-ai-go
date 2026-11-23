@@ -40,6 +40,22 @@ Pass `Config.Sanitization` only after your authenticated application decides whi
 
 The request `id` becomes the agent conversation ID. `ServerMessageID` controls the assistant message identity returned to the frontend. The adapter generates one when it is empty.
 
+## Reject invalid requests
+
+`RunStream` and `PrepareInput` wrap every error caused by the client's request in `vercel.ErrInvalidInput`. `Handler` answers those with `400 Bad Request` and the error text, before it starts the stream.
+
+```go
+for event, err := range adapter.RunStream(ctx, input, deps) {
+    if errors.Is(err, vercel.ErrInvalidInput) {
+        http.Error(response, err.Error(), http.StatusBadRequest)
+        return
+    }
+    // stream event
+}
+```
+
+The error text names what the client sent wrong, so it is safe to return. Other errors, from a provider or a tool, can name a host or part of a credential. Keep them out of client responses and count them as server failures.
+
 ## Send files
 
 Use a `file` part with a hosted URL or a base64 data URL:

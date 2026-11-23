@@ -40,6 +40,22 @@ Pass `Config.Sanitization` only when your authenticated application deliberately
 
 The input's `threadId` becomes the agent conversation ID. Its `runId` remains the AG-UI protocol identity and is not forced onto the agent's run ID.
 
+## Reject invalid requests
+
+`RunStream` and `PrepareInput` wrap every error caused by the client's request in `agui.ErrInvalidInput`. `Handler` answers those with `400 Bad Request` and the error text, before it starts the stream.
+
+```go
+for event, err := range adapter.RunStream(ctx, input, deps) {
+    if errors.Is(err, agui.ErrInvalidInput) {
+        http.Error(response, err.Error(), http.StatusBadRequest)
+        return
+    }
+    // stream event
+}
+```
+
+The error text names what the client sent wrong, so it is safe to return. Other errors, from a provider or a tool, can name a host or part of a credential. Keep them out of client responses and count them as server failures.
+
 ## Send multimodal input
 
 ```json

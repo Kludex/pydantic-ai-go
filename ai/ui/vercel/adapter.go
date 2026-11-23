@@ -37,6 +37,7 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 	return func(yield func(Chunk, error) bool) {
 		prompt, history, deferred, err := prepareRunInput(input, adapter.config.Sanitization)
 		if err != nil {
+			err = inputError{err}
 			yield(Chunk{Type: ChunkError, ErrorText: err.Error()}, err)
 			return
 		}

@@ -2,6 +2,7 @@ package vercel
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -54,12 +55,20 @@ func (adapter *Adapter[Deps, Output]) Handler(deps Deps, options ...ai.RunOption
 			http.Error(response, "invalid Vercel AI request", http.StatusBadRequest)
 			return
 		}
-		response.Header().Set("Content-Type", "text/event-stream")
-		response.Header().Set("Cache-Control", "no-cache")
-		response.Header().Set("X-Accel-Buffering", "no")
-		response.Header().Set("x-vercel-ai-ui-message-stream", "v1")
 		flusher, _ := response.(http.Flusher)
+		started := false
 		for chunk, chunkErr := range adapter.RunStream(request.Context(), input, deps, options...) {
+			if !started {
+				if errors.Is(chunkErr, ErrInvalidInput) {
+					http.Error(response, chunkErr.Error(), http.StatusBadRequest)
+					return
+				}
+				response.Header().Set("Content-Type", "text/event-stream")
+				response.Header().Set("Cache-Control", "no-cache")
+				response.Header().Set("X-Accel-Buffering", "no")
+				response.Header().Set("x-vercel-ai-ui-message-stream", "v1")
+				started = true
+			}
 			encoded := []byte("[DONE]")
 			if chunk.Type != ChunkDone {
 				encoded, _ = json.Marshal(chunk)

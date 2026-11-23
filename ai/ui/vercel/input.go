@@ -14,6 +14,16 @@ import (
 func PrepareInput(
 	input RequestData, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
+	prompt, history, report, err := prepareInput(input, options)
+	if err != nil {
+		err = inputError{err}
+	}
+	return prompt, history, report, err
+}
+
+func prepareInput(
+	input RequestData, options ai.MessageSanitizationOptions,
+) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
 	if input.Trigger != "submit-message" && input.Trigger != "regenerate-message" {
 		return ai.UserPromptPart{}, nil, ai.MessageSanitizationReport{}, fmt.Errorf(
 			"vercel: unsupported trigger %q", input.Trigger,

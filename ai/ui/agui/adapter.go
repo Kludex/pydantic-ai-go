@@ -66,6 +66,7 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 			input, adapter.config.Sanitization, adapter.config.PreserveFileData,
 		)
 		if err != nil {
+			err = inputError{err}
 			yield(Event{Type: EventRunError, Message: err.Error()}, err)
 			return
 		}
@@ -75,7 +76,7 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 			tools := make([]ai.Tool[Deps], len(input.Tools))
 			for index, tool := range input.Tools {
 				if tool.Name == "" {
-					err := fmt.Errorf("agui: frontend tool name must not be empty")
+					err := inputError{errors.New("agui: frontend tool name must not be empty")}
 					yield(Event{Type: EventRunError, Message: err.Error()}, err)
 					return
 				}

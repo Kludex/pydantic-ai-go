@@ -37,6 +37,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- `agui` and `vercel` wrap errors caused by the client's request in `ErrInvalidInput`, and their `Handler` answers them with `400 Bad Request` instead of a stream error with status 200.
 - Native tool-search history is translated for the selected model in `PrepareModelMessages`, so each `FallbackModel` candidate translates it for its own provider. Capability middleware and request spans now see the translated history.
 - GPT-6.1 Terra is treated as a GPT-6 model for default reasoning, minimal effort, prompt-cache breakpoints, and Responses phases on OpenAI.
 - Bedrock Mantle stores GPT-5 tool call IDs as `call_0_<hash>`, a hash of the response ID or, without one, of the response timestamp, instead of `<response ID>:call_0`. The new form stays within the `[a-zA-Z0-9_-]` set Anthropic and Bedrock require when the history moves to them. Only responses from the same Mantle endpoint are restored to the provider's IDs, and stored `<response ID>:call_0` IDs still restore. A streamed call that arrives before the response ID is kept as sent.

@@ -14,7 +14,11 @@ import (
 func PrepareInput(
 	input RunAgentInput, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
-	return prepareInput(input, options, false)
+	prompt, history, report, err := prepareInput(input, options, false)
+	if err != nil {
+		err = inputError{err}
+	}
+	return prompt, history, report, err
 }
 
 func prepareInput(

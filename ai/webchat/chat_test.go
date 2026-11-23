@@ -45,7 +45,7 @@ func TestChatRequestValidation(t *testing.T) {
 	}
 
 	response = serve(handler, jsonRequest(http.MethodPost, "/api/chat", `{"trigger":"submit-message","messages":[]}`))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"type":"error"`) {
-		t.Fatalf("adapter error was not streamed: %d %s", response.Code, response.Body.String())
+	if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "requires a user message") {
+		t.Fatalf("invalid input was not rejected: %d %s", response.Code, response.Body.String())
 	}
 }

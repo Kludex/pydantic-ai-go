@@ -62,7 +62,7 @@ func prepareRunInput(
 		return ai.UserPromptPart{}, nil, nil, fmt.Errorf("vercel: external tool results are incomplete")
 	}
 	if len(decisions) == 0 && len(callResults) == 0 {
-		prompt, history, _, err := PrepareInput(input, options)
+		prompt, history, _, err := prepareInput(input, options)
 		return prompt, history, nil, err
 	}
 	messages, err := convertMessages(input.Messages, externalIDs)

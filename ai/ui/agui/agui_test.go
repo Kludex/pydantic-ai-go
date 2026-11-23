@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"slices"
 	"strings"
 	"testing"
@@ -1163,8 +1164,9 @@ func TestRunStreamRejectsInvalidFrontendTools(t *testing.T) {
 	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
 	adapter := agui.NewAdapter(agent, agui.Config{})
 	tests := map[string][]agui.FrontendTool{
-		"duplicate name": {{Name: "lookup"}, {Name: "lookup"}},
-		"invalid schema": {{Name: "lookup", Parameters: map[string]any{"type": 42}}},
+		"duplicate name":     {{Name: "lookup"}, {Name: "lookup"}},
+		"invalid schema":     {{Name: "lookup", Parameters: map[string]any{"type": 42}}},
+		"external reference": {{Name: "lookup", Parameters: map[string]any{"$ref": "other.json"}}},
 	}
 	for name, tools := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -1201,13 +1203,15 @@ func TestResumeRejectsInvalidResults(t *testing.T) {
 		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{
 			{ID: "done", Type: "function", Function: agui.ToolCallFunction{Name: "lookup", Arguments: `{}`}},
 			{ID: "pending", Type: "function", Function: agui.ToolCallFunction{Name: "lookup", Arguments: `{}`}},
+			{ID: "twice", Type: "function", Function: agui.ToolCallFunction{Name: "lookup", Arguments: `{}`}},
+			{ID: "twice", Type: "function", Function: agui.ToolCallFunction{Name: "lookup", Arguments: `{}`}},
 		}},
 		{ID: "tool", Role: "tool", ToolCallID: "done", Content: "result"},
 	}
 	tests := map[string]agui.ResumeEntry{
 		"unknown call":   {InterruptID: "ext-missing", Payload: []byte(`{"result":"x"}`)},
+		"duplicate call": {InterruptID: "ext-twice", Payload: []byte(`{"result":"x"}`)},
 		"completed call": {InterruptID: "ext-done", Payload: []byte(`{"result":"x"}`)},
-		"undecodable":    {InterruptID: "ext-pending", Payload: []byte(`{"result":1e1000}`)},
 	}
 	for name, entry := range tests {
 		t.Run(name, func(t *testing.T) {
@@ -1229,5 +1233,76 @@ func TestPrepareInputRejectsUnparsableFileURL(t *testing.T) {
 	}}}, ai.MessageSanitizationOptions{})
 	if !errors.Is(err, agui.ErrInvalidInput) {
 		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestFrontendToolSchemaDoesNotReadFiles(t *testing.T) {
+	directory := t.TempDir()
+	t.Chdir(directory)
+	if err := os.WriteFile("other.json", []byte(`{"type":"object"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	input := agui.RunAgentInput{
+		Messages: []agui.Message{{ID: "user", Role: "user", Content: "hi"}},
+		Tools:    []agui.FrontendTool{{Name: "lookup", Parameters: map[string]any{"$ref": "other.json"}}},
+	}
+	var got error
+	for _, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(context.Background(), input, struct{}{}) {
+		got = err
+	}
+	if !errors.Is(got, agui.ErrInvalidInput) || strings.Contains(got.Error(), directory) {
+		t.Fatalf("got %v, want ErrInvalidInput without a server path", got)
+	}
+}
+
+func TestFrontendToolAcceptsTypedSchemaValues(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	input := agui.RunAgentInput{
+		Messages: []agui.Message{{ID: "user", Role: "user", Content: "hi"}},
+		Tools: []agui.FrontendTool{{Name: "lookup", Parameters: map[string]any{
+			"allOf": []map[string]any{{"type": "object"}},
+		}}},
+	}
+	for _, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(context.Background(), input, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestAdapterKeepsItsOwnSanitizationConfig(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	schemes := []string{"https"}
+	adapter := agui.NewAdapter(agent, agui.Config{Sanitization: ai.MessageSanitizationOptions{AllowedFileURLSchemes: schemes}})
+	schemes[0] = "bad scheme"
+	input := agui.RunAgentInput{Messages: []agui.Message{{ID: "user", Role: "user", Content: "hi"}}}
+	for _, err := range adapter.RunStream(context.Background(), input, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestResumeKeepsLargeNumbers(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.AddExternalTool[struct{}, string, struct{}, string](agent, "lookup")
+	input := agui.RunAgentInput{Messages: []agui.Message{
+		{ID: "user", Role: "user", Content: "run"},
+		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{
+			{ID: "call", Type: "function", Function: agui.ToolCallFunction{Name: "lookup", Arguments: `{}`}},
+		}},
+	}, Resume: []agui.ResumeEntry{{InterruptID: "ext-call", Payload: []byte(`{"result":9007199254740993}`)}}}
+	content := ""
+	for event, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(context.Background(), input, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
+		if event.Type == agui.EventToolCallResult {
+			content, _ = event.Content.(string)
+		}
+	}
+	if content != "9007199254740993" {
+		t.Fatalf("got %q, want the exact number", content)
 	}
 }

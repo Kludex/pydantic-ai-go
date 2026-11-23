@@ -1,6 +1,7 @@
 package agui
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -79,12 +80,12 @@ func prepareRunInput(
 	if err != nil {
 		return ai.UserPromptPart{}, nil, nil, err
 	}
-	pending := pendingToolCallIDs(history)
+	pending := pendingToolCalls(history)
 	results := ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{}, Calls: map[string]any{}}
 	for _, entry := range input.Resume {
 		toolCallID, kind, _ := resumeToolCall(entry.InterruptID)
-		if _, ok := pending[toolCallID]; !ok {
-			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("agui: resume for %q does not match a pending tool call", toolCallID)
+		if pending[toolCallID] != 1 {
+			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("agui: resume for %q does not match one pending tool call", toolCallID)
 		}
 		if kind == "approval" {
 			results.Approvals[toolCallID] = resumeApproval(entry)
@@ -99,18 +100,18 @@ func prepareRunInput(
 	return ai.UserPromptPart{}, history, &results, nil
 }
 
-func pendingToolCallIDs(messages []ai.ModelMessage) map[string]struct{} {
-	pending := map[string]struct{}{}
+func pendingToolCalls(messages []ai.ModelMessage) map[string]int {
+	pending := map[string]int{}
 	for _, message := range messages {
 		switch message := message.(type) {
 		case ai.ModelResponse:
 			for _, call := range message.ToolCalls() {
-				pending[call.ToolCallID] = struct{}{}
+				pending[call.ToolCallID]++
 			}
 		case ai.ModelRequest:
 			for _, part := range message.Parts {
-				if result, ok := part.(ai.ToolReturnPart); ok {
-					delete(pending, result.ToolCallID)
+				if result, ok := part.(ai.ToolReturnPart); ok && pending[result.ToolCallID] > 0 {
+					pending[result.ToolCallID]--
 				}
 			}
 		}
@@ -160,9 +161,10 @@ func resumeExternalResult(entry ResumeEntry) (any, error) {
 		return nil, fmt.Errorf("agui: external tool result for %q requires a result", entry.InterruptID)
 	}
 	var result any
-	if err := json.Unmarshal(payload.Result, &result); err != nil {
-		return nil, fmt.Errorf("agui: decode external tool result for %q: %w", entry.InterruptID, err)
-	}
+	decoder := json.NewDecoder(bytes.NewReader(payload.Result))
+	decoder.UseNumber()
+	// payload.Result was already decoded once, so it is valid JSON.
+	_ = decoder.Decode(&result)
 	return result, nil
 }
 

@@ -1040,6 +1040,19 @@ func TestResumeRejectsInvalidResults(t *testing.T) {
 				Input: []byte(`{}`), Approval: &vercel.ToolApproval{ID: "native", Approved: &approved},
 			}},
 		}),
+		"external result for provider-executed call": requestWith(user, vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Metadata: map[string]any{
+				"pydantic_ai": map[string]any{"external_tool_call_ids": []string{"native"}},
+			}, Parts: []vercel.UIMessagePart{{
+				Type: "tool-search", ToolCallID: "native", State: "output-available", ProviderExecuted: &approved,
+				Input: []byte(`{}`), Output: []byte(`"x"`),
+			}},
+		}),
+		"missing chat ID": func() vercel.RequestData {
+			request := requestWith(user)
+			request.ID = ""
+			return request
+		}(),
 		"unsupported trigger": func() vercel.RequestData {
 			request := requestWith(user, vercel.UIMessage{
 				ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
@@ -1061,5 +1074,18 @@ func TestResumeRejectsInvalidResults(t *testing.T) {
 				t.Fatalf("got %v, want ErrInvalidInput", got)
 			}
 		})
+	}
+}
+
+func TestAdapterKeepsItsOwnSanitizationConfig(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	schemes := []string{"https"}
+	adapter := vercel.NewAdapter(agent, vercel.Config{Sanitization: ai.MessageSanitizationOptions{AllowedFileURLSchemes: schemes}})
+	schemes[0] = "bad scheme"
+	input := requestWith(vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "hi"}}})
+	for _, err := range adapter.RunStream(context.Background(), input, struct{}{}) {
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }

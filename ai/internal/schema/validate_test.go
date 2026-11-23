@@ -86,3 +86,10 @@ func TestCompileValidatorErrors(t *testing.T) {
 		t.Fatal("expected resource error")
 	}
 }
+
+func TestCompileRejectsExternalReferences(t *testing.T) {
+	_, err := schema.Compile(map[string]any{"$ref": "other.json"})
+	if err == nil || !strings.Contains(err.Error(), "https://schema.invalid/other.json") {
+		t.Fatalf("expected unsupported external reference, got %v", err)
+	}
+}

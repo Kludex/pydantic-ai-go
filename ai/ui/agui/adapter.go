@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
@@ -33,6 +34,9 @@ func NewAdapter[Deps, Output any](agent *ai.Agent[Deps, Output], config Config) 
 	if _, err := parseVersion(config.Version); err != nil {
 		panic(err.Error())
 	}
+	config.Sanitization.AllowedFileURLSchemes = slices.Clone(config.Sanitization.AllowedFileURLSchemes)
+	config.Sanitization.AllowedFileDownloadModes = slices.Clone(config.Sanitization.AllowedFileDownloadModes)
+	config.Sanitization.ResolvedToolCallIDs = slices.Clone(config.Sanitization.ResolvedToolCallIDs)
 	if _, _, err := ai.SanitizeMessages(nil, config.Sanitization); err != nil {
 		panic(err.Error())
 	}
@@ -209,7 +213,7 @@ func validateTools(tools []FrontendTool) error {
 		if tool.Parameters == nil {
 			continue
 		}
-		if _, err := schema.Compile(tool.Parameters); err != nil {
+		if _, err := schema.Compile(cloneMap(tool.Parameters)); err != nil {
 			return fmt.Errorf("agui: frontend tool %q parameters: %w", tool.Name, err)
 		}
 	}

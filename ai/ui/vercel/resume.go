@@ -10,6 +10,9 @@ import (
 func prepareRunInput(
 	input RequestData, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, *ai.DeferredToolResults, error) {
+	if err := validateTrigger(input.Trigger); err != nil {
+		return ai.UserPromptPart{}, nil, nil, err
+	}
 	decisions := map[string]ai.ToolApproval{}
 	callResults := map[string]any{}
 	externalIDs := map[string]struct{}{}
@@ -73,7 +76,25 @@ func prepareRunInput(
 	if err != nil {
 		return ai.UserPromptPart{}, nil, nil, err
 	}
+	local := localToolCallIDs(history)
+	for toolCallID := range decisions {
+		if _, ok := local[toolCallID]; !ok {
+			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("vercel: approval for %q does not match a local tool call", toolCallID)
+		}
+	}
 	return ai.UserPromptPart{}, history, &ai.DeferredToolResults{Calls: callResults, Approvals: decisions}, nil
+}
+
+func localToolCallIDs(messages []ai.ModelMessage) map[string]struct{} {
+	ids := map[string]struct{}{}
+	for _, message := range messages {
+		if response, ok := message.(ai.ModelResponse); ok {
+			for _, call := range response.ToolCalls() {
+				ids[call.ToolCallID] = struct{}{}
+			}
+		}
+	}
+	return ids
 }
 
 func externalToolResult(part UIMessagePart) (any, error) {

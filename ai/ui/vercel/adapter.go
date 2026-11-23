@@ -27,6 +27,9 @@ func NewAdapter[Deps, Output any](agent *ai.Agent[Deps, Output], config Config) 
 	if config.SDKVersion < 5 || config.SDKVersion > 7 {
 		panic("vercel: SDK version must be 5, 6, or 7")
 	}
+	if _, _, err := ai.SanitizeMessages(nil, config.Sanitization); err != nil {
+		panic(err.Error())
+	}
 	return &Adapter[Deps, Output]{agent: agent, config: config}
 }
 

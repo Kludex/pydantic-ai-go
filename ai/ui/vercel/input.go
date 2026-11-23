@@ -14,6 +14,9 @@ import (
 func PrepareInput(
 	input RequestData, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
+	if _, _, err := ai.SanitizeMessages(nil, options); err != nil {
+		return ai.UserPromptPart{}, nil, ai.MessageSanitizationReport{}, err
+	}
 	prompt, history, report, err := prepareInput(input, options)
 	if err != nil {
 		err = inputError{err}
@@ -21,13 +24,18 @@ func PrepareInput(
 	return prompt, history, report, err
 }
 
+func validateTrigger(trigger string) error {
+	if trigger != "submit-message" && trigger != "regenerate-message" {
+		return fmt.Errorf("vercel: unsupported trigger %q", trigger)
+	}
+	return nil
+}
+
 func prepareInput(
 	input RequestData, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
-	if input.Trigger != "submit-message" && input.Trigger != "regenerate-message" {
-		return ai.UserPromptPart{}, nil, ai.MessageSanitizationReport{}, fmt.Errorf(
-			"vercel: unsupported trigger %q", input.Trigger,
-		)
+	if err := validateTrigger(input.Trigger); err != nil {
+		return ai.UserPromptPart{}, nil, ai.MessageSanitizationReport{}, err
 	}
 	messages, err := convertMessages(input.Messages, nil)
 	if err != nil {

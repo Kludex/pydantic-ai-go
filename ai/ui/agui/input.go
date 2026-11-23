@@ -14,6 +14,9 @@ import (
 func PrepareInput(
 	input RunAgentInput, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
+	if _, _, err := ai.SanitizeMessages(nil, options); err != nil {
+		return ai.UserPromptPart{}, nil, ai.MessageSanitizationReport{}, err
+	}
 	prompt, history, report, err := prepareInput(input, options, false)
 	if err != nil {
 		err = inputError{err}
@@ -76,9 +79,13 @@ func prepareRunInput(
 	if err != nil {
 		return ai.UserPromptPart{}, nil, nil, err
 	}
+	pending := pendingToolCallIDs(history)
 	results := ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{}, Calls: map[string]any{}}
 	for _, entry := range input.Resume {
 		toolCallID, kind, _ := resumeToolCall(entry.InterruptID)
+		if _, ok := pending[toolCallID]; !ok {
+			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("agui: resume for %q does not match a pending tool call", toolCallID)
+		}
 		if kind == "approval" {
 			results.Approvals[toolCallID] = resumeApproval(entry)
 			continue
@@ -90,6 +97,25 @@ func prepareRunInput(
 		results.Calls[toolCallID] = result
 	}
 	return ai.UserPromptPart{}, history, &results, nil
+}
+
+func pendingToolCallIDs(messages []ai.ModelMessage) map[string]struct{} {
+	pending := map[string]struct{}{}
+	for _, message := range messages {
+		switch message := message.(type) {
+		case ai.ModelResponse:
+			for _, call := range message.ToolCalls() {
+				pending[call.ToolCallID] = struct{}{}
+			}
+		case ai.ModelRequest:
+			for _, part := range message.Parts {
+				if result, ok := part.(ai.ToolReturnPart); ok {
+					delete(pending, result.ToolCallID)
+				}
+			}
+		}
+	}
+	return pending
 }
 
 func resumeToolCall(interruptID string) (string, string, bool) {
@@ -134,7 +160,9 @@ func resumeExternalResult(entry ResumeEntry) (any, error) {
 		return nil, fmt.Errorf("agui: external tool result for %q requires a result", entry.InterruptID)
 	}
 	var result any
-	_ = json.Unmarshal(payload.Result, &result)
+	if err := json.Unmarshal(payload.Result, &result); err != nil {
+		return nil, fmt.Errorf("agui: decode external tool result for %q: %w", entry.InterruptID, err)
+	}
 	return result, nil
 }
 

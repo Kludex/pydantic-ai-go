@@ -433,8 +433,8 @@ func TestInputValidation(t *testing.T) {
 	_, _, _, err := vercel.PrepareInput(requestWith(vercel.UIMessage{
 		ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "hello"}},
 	}), ai.MessageSanitizationOptions{AllowedFileURLSchemes: []string{"bad scheme"}})
-	if err == nil {
-		t.Fatal("expected sanitization error")
+	if err == nil || errors.Is(err, vercel.ErrInvalidInput) {
+		t.Fatalf("invalid options must not be reported as invalid input: %v", err)
 	}
 }
 
@@ -755,9 +755,12 @@ func TestApprovalResumeValidation(t *testing.T) {
 		{name: "invalid message", input: requestWith(vercel.UIMessage{
 			Role: "assistant", Parts: []vercel.UIMessagePart{{Type: "tool-x", ToolCallID: "call", State: "approval-responded"}},
 		})},
-		{name: "sanitization", input: base, config: vercel.Config{Sanitization: ai.MessageSanitizationOptions{
-			AllowedFileURLSchemes: []string{"bad scheme"},
-		}}},
+		{name: "sanitization", input: requestWith(
+			vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{
+				{Type: "file", MediaType: "image/png", URL: "http://[::1"},
+			}},
+			base.Messages[1],
+		)},
 		{name: "incomplete external result", input: requestWith(vercel.UIMessage{
 			ID: "assistant", Role: "assistant", Metadata: map[string]any{
 				"pydantic_ai": map[string]any{"external_tool_call_ids": []string{"call"}},
@@ -818,6 +821,9 @@ func TestAdapterValidationAndErrors(t *testing.T) {
 	assertPanic(t, func() { vercel.NewAdapter(agent, vercel.Config{MaxRequestBytes: -1}) })
 	assertPanic(t, func() { vercel.NewAdapter(agent, vercel.Config{SDKVersion: 4}) })
 	assertPanic(t, func() { vercel.NewAdapter(agent, vercel.Config{SDKVersion: 8}) })
+	assertPanic(t, func() {
+		vercel.NewAdapter(agent, vercel.Config{Sanitization: ai.MessageSanitizationOptions{AllowedFileURLSchemes: []string{"bad scheme"}}})
+	})
 	for _, version := range []int{5, 6, 7} {
 		vercel.NewAdapter(agent, vercel.Config{SDKVersion: version})
 	}
@@ -838,7 +844,7 @@ func TestAdapterValidationAndErrors(t *testing.T) {
 			}
 		}
 	}
-	if !errors.Is(got, modelErr) {
+	if !errors.Is(got, modelErr) || errors.Is(got, vercel.ErrInvalidInput) {
 		t.Fatalf("unexpected model error: %v", got)
 	}
 
@@ -1011,4 +1017,49 @@ func modelVisible(messages []ai.ModelMessage) []string {
 		}
 	}
 	return visible
+}
+
+func TestPrepareInputRejectsUnparsableFileURL(t *testing.T) {
+	_, _, _, err := vercel.PrepareInput(requestWith(vercel.UIMessage{
+		ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "file", MediaType: "image/png", URL: "http://[::1"}},
+	}), ai.MessageSanitizationOptions{})
+	if !errors.Is(err, vercel.ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestResumeRejectsInvalidResults(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.AddExternalTool[struct{}, string, struct{}, string](agent, "lookup")
+	approved := true
+	user := vercel.UIMessage{ID: "user", Role: "user", Parts: []vercel.UIMessagePart{{Type: "text", Text: "run"}}}
+	tests := map[string]vercel.RequestData{
+		"approval for provider-executed call": requestWith(user, vercel.UIMessage{
+			ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+				Type: "tool-search", ToolCallID: "native", State: "approval-responded", ProviderExecuted: &approved,
+				Input: []byte(`{}`), Approval: &vercel.ToolApproval{ID: "native", Approved: &approved},
+			}},
+		}),
+		"unsupported trigger": func() vercel.RequestData {
+			request := requestWith(user, vercel.UIMessage{
+				ID: "assistant", Role: "assistant", Parts: []vercel.UIMessagePart{{
+					Type: "tool-lookup", ToolCallID: "call", State: "approval-responded", Input: []byte(`{}`),
+					Approval: &vercel.ToolApproval{ID: "call", Approved: &approved},
+				}},
+			})
+			request.Trigger = "bogus"
+			return request
+		}(),
+	}
+	for name, input := range tests {
+		t.Run(name, func(t *testing.T) {
+			var got error
+			for _, err := range vercel.NewAdapter(agent, vercel.Config{}).RunStream(context.Background(), input, struct{}{}) {
+				got = err
+			}
+			if !errors.Is(got, vercel.ErrInvalidInput) {
+				t.Fatalf("got %v, want ErrInvalidInput", got)
+			}
+		})
+	}
 }

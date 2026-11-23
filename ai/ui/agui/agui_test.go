@@ -113,8 +113,8 @@ func TestPrepareInputSanitizesHistory(t *testing.T) {
 	_, _, _, err = agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{
 		{ID: "user", Role: "user", Content: "hello"},
 	}}, ai.MessageSanitizationOptions{AllowedFileURLSchemes: []string{"bad scheme"}})
-	if err == nil {
-		t.Fatal("expected sanitization option error")
+	if err == nil || errors.Is(err, agui.ErrInvalidInput) {
+		t.Fatalf("invalid options must not be reported as invalid input: %v", err)
 	}
 }
 
@@ -965,21 +965,29 @@ func TestApprovalResumeValidation(t *testing.T) {
 	}
 
 	invalidMessage := base
+	invalidMessage.Messages = append([]agui.Message(nil), base.Messages...)
 	invalidMessage.Messages[0].ID = ""
 	invalidMessage.Resume = []agui.ResumeEntry{{InterruptID: "int-call_approve", Payload: []byte(`{"approved":true}`)}}
-	for _, config := range []agui.Config{
-		{},
-		{Sanitization: ai.MessageSanitizationOptions{AllowedFileURLSchemes: []string{"bad scheme"}}},
+	badURL := []any{map[string]any{"type": "binary", "mimeType": "image/png", "url": "http://[::1"}}
+	for _, edit := range []func(){
+		func() {},
+		func() {
+			invalidMessage.Messages[0].ID = "user"
+			invalidMessage.Messages[0].Content = badURL
+		},
 	} {
+		edit()
 		var got error
-		for _, err := range agui.NewAdapter(agent, config).RunStream(context.Background(), invalidMessage, struct{}{}) {
+		for _, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(context.Background(), invalidMessage, struct{}{}) {
 			got = err
 		}
-		if got == nil {
-			t.Fatal("expected resume preparation error")
+		if !errors.Is(got, agui.ErrInvalidInput) {
+			t.Fatalf("expected invalid resume input, got %v", got)
 		}
-		invalidMessage.Messages[0].ID = "user"
 	}
+	assertPanic(t, func() {
+		agui.NewAdapter(agent, agui.Config{Sanitization: ai.MessageSanitizationOptions{AllowedFileURLSchemes: []string{"bad scheme"}}})
+	})
 }
 
 func TestRunErrorsAndGeneratedIDs(t *testing.T) {
@@ -999,7 +1007,7 @@ func TestRunErrorsAndGeneratedIDs(t *testing.T) {
 			got = err
 		}
 	}
-	if !errors.Is(got, modelErr) || events[0].ThreadID == "" || events[0].RunID == "" ||
+	if !errors.Is(got, modelErr) || errors.Is(got, agui.ErrInvalidInput) || events[0].ThreadID == "" || events[0].RunID == "" ||
 		events[len(events)-1].Type != agui.EventRunError {
 		t.Fatalf("unexpected failed run: events=%#v err=%v", events, got)
 	}
@@ -1149,4 +1157,77 @@ func modelVisible(messages []ai.ModelMessage) []string {
 		}
 	}
 	return visible
+}
+
+func TestRunStreamRejectsInvalidFrontendTools(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	adapter := agui.NewAdapter(agent, agui.Config{})
+	tests := map[string][]agui.FrontendTool{
+		"duplicate name": {{Name: "lookup"}, {Name: "lookup"}},
+		"invalid schema": {{Name: "lookup", Parameters: map[string]any{"type": 42}}},
+	}
+	for name, tools := range tests {
+		t.Run(name, func(t *testing.T) {
+			input := agui.RunAgentInput{Messages: []agui.Message{{ID: "user", Role: "user", Content: "hi"}}, Tools: tools}
+			var got error
+			for _, err := range adapter.RunStream(context.Background(), input, struct{}{}) {
+				got = err
+			}
+			if !errors.Is(got, agui.ErrInvalidInput) {
+				t.Fatalf("got %v, want ErrInvalidInput", got)
+			}
+		})
+	}
+}
+
+func TestRunStreamRejectsUnclonableState(t *testing.T) {
+	agent := ai.NewAgent[*forwardedDeps, string](fakes.NewTestModel())
+	input := agui.RunAgentInput{Messages: []agui.Message{{ID: "user", Role: "user", Content: "hi"}}, State: make(chan int)}
+	var got error
+	for _, err := range agui.NewAdapter(agent, agui.Config{}).RunStream(context.Background(), input, &forwardedDeps{}) {
+		got = err
+	}
+	if !errors.Is(got, agui.ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", got)
+	}
+}
+
+func TestResumeRejectsInvalidResults(t *testing.T) {
+	agent := ai.NewAgent[struct{}, string](fakes.NewTestModel())
+	ai.AddExternalTool[struct{}, string, struct{}, string](agent, "lookup")
+	adapter := agui.NewAdapter(agent, agui.Config{})
+	messages := []agui.Message{
+		{ID: "user", Role: "user", Content: "run"},
+		{ID: "assistant", Role: "assistant", ToolCalls: []agui.ToolCall{
+			{ID: "done", Type: "function", Function: agui.ToolCallFunction{Name: "lookup", Arguments: `{}`}},
+			{ID: "pending", Type: "function", Function: agui.ToolCallFunction{Name: "lookup", Arguments: `{}`}},
+		}},
+		{ID: "tool", Role: "tool", ToolCallID: "done", Content: "result"},
+	}
+	tests := map[string]agui.ResumeEntry{
+		"unknown call":   {InterruptID: "ext-missing", Payload: []byte(`{"result":"x"}`)},
+		"completed call": {InterruptID: "ext-done", Payload: []byte(`{"result":"x"}`)},
+		"undecodable":    {InterruptID: "ext-pending", Payload: []byte(`{"result":1e1000}`)},
+	}
+	for name, entry := range tests {
+		t.Run(name, func(t *testing.T) {
+			input := agui.RunAgentInput{Messages: messages, Resume: []agui.ResumeEntry{entry}}
+			var got error
+			for _, err := range adapter.RunStream(context.Background(), input, struct{}{}) {
+				got = err
+			}
+			if !errors.Is(got, agui.ErrInvalidInput) {
+				t.Fatalf("got %v, want ErrInvalidInput", got)
+			}
+		})
+	}
+}
+
+func TestPrepareInputRejectsUnparsableFileURL(t *testing.T) {
+	_, _, _, err := agui.PrepareInput(agui.RunAgentInput{Messages: []agui.Message{{
+		ID: "user", Role: "user", Content: []any{map[string]any{"type": "binary", "mimeType": "image/png", "url": "http://[::1"}},
+	}}}, ai.MessageSanitizationOptions{})
+	if !errors.Is(err, agui.ErrInvalidInput) {
+		t.Fatalf("got %v, want ErrInvalidInput", err)
+	}
 }

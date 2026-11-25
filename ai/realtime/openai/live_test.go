@@ -171,6 +171,37 @@ func TestLiveConfigAndHistory(t *testing.T) {
 	_ = collectLive(t, connection)
 }
 
+func TestLiveVoiceSettings(t *testing.T) {
+	for name, test := range map[string]struct {
+		provider map[string]any
+		options  []openairt.Option
+		want     any
+	}{
+		"built-in":      {provider: map[string]any{"openai_voice": "marin"}, want: "marin"},
+		"custom":        {provider: map[string]any{"openai_voice": map[string]any{"id": "voice_1"}}, want: map[string]any{"id": "voice_1"}},
+		"model default": {options: []openairt.Option{openairt.WithLiveSettings(openairt.LiveSettings{VoiceID: "voice_2"})}, want: map[string]any{"id": "voice_2"}},
+		"string over default": {
+			provider: map[string]any{"openai_voice": "cedar"},
+			options:  []openairt.Option{openairt.WithLiveSettings(openairt.LiveSettings{VoiceID: "voice_2"})}, want: "cedar",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			connection, peer := livePair(t, realtime.ConnectParams{Settings: realtime.Settings{Provider: test.provider}}, test.options...)
+			output, _ := peer.start["audio"].(map[string]any)["output"].(map[string]any)
+			if !reflect.DeepEqual(output["voice"], test.want) {
+				t.Fatalf("voice: %+v", peer.start["audio"])
+			}
+			peer.end(t, "remote_hangup", 0)
+			_ = collectLive(t, connection)
+		})
+	}
+	for _, voice := range []any{map[string]any{}, map[string]any{"id": ""}, map[string]any{"id": "v", "name": "x"}} {
+		if _, err := openairt.NewLiveModel("gpt-live-1").Connect(t.Context(), realtime.ConnectParams{Settings: realtime.Settings{Provider: map[string]any{"openai_voice": voice}}}); err == nil {
+			t.Fatalf("accepted voice %v", voice)
+		}
+	}
+}
+
 func TestLiveInputWireProtocol(t *testing.T) {
 	connection, peer := livePair(t, realtime.ConnectParams{})
 	inputs := []realtime.Input{realtime.AudioInput{Data: []byte{1, 0}}, realtime.TextInput{Text: "hello"}, realtime.TextContext{Text: "silent"}, realtime.ImageInput{Content: ai.BinaryContent{Data: []byte("image"), MediaType: "image/png"}, Respond: true}, realtime.CreateResponse{}, realtime.ToolResult{ToolCallID: "unknown", Output: "result", Content: []ai.UserContent{ai.TextContent{Text: "extra"}, ai.BinaryContent{Data: []byte("png"), MediaType: "image/png"}, ai.BinaryContent{Data: []byte("pdf"), MediaType: "application/pdf"}, ai.UploadedFile{FileID: "file-1", ProviderName: "openai"}, ai.UploadedFile{FileID: "file-2", ProviderName: "openai", MediaType: "image/png"}, ai.CachePoint{}, ai.ImageURL{URL: "https://example.com/i.png", ForceDownload: ai.FileDownloadNever}, ai.DocumentURL{URL: "https://example.com/f.pdf", ForceDownload: ai.FileDownloadNever}}}}

@@ -1,11 +1,13 @@
 package anthropic_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -82,7 +84,9 @@ func TestAnthropicCountTokens(t *testing.T) {
 	}}, ai.ModelRequestParams{
 		Instructions: "Be brief.",
 		Tools:        []ai.ToolDefinition{{Name: "lookup", Schema: map[string]any{"type": "object"}}},
-		NativeTools:  []ai.NativeTool{ai.WebSearchTool{}},
+		NativeTools: []ai.NativeTool{ai.WebSearchTool{}, ai.CodeExecutionTool{
+			Files: []ai.UploadedFile{{FileID: "file-1", ProviderName: "anthropic"}},
+		}},
 		Settings: ai.ModelSettings{
 			MaxTokens: 100, Temperature: &temperature, ParallelToolCalls: &parallel,
 			ExtraHeaders: map[string]string{"X-Test": "value"}, ExtraBody: map[string]any{"custom": true},
@@ -102,6 +106,10 @@ func TestAnthropicCountTokens(t *testing.T) {
 	if len(tools) != 1 || tools[0].(map[string]any)["name"] != "lookup" ||
 		tools[0].(map[string]any)["type"] != nil {
 		t.Fatalf("token count did not isolate function tools: %#v", tools)
+	}
+	content := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if len(content) != 1 || content[0].(map[string]any)["type"] != "text" {
+		t.Fatalf("token count sent container uploads: %#v", content)
 	}
 }
 
@@ -956,11 +964,16 @@ func TestErrors(t *testing.T) {
 		}
 	})
 	t.Run("unknown content block", func(t *testing.T) {
+		var logged bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+		defer slog.SetDefault(previous)
 		model := newServer(t, func(w http.ResponseWriter, _ *http.Request) {
-			_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"mystery"}],"usage":{}}`))
+			_, _ = w.Write([]byte(`{"model":"m","content":[{"type":"mystery"},{"type":"text","text":"hi"}],"usage":{}}`))
 		})
-		if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true}); err == nil {
-			t.Fatal("expected error for unknown block")
+		response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+		if err != nil || len(response.Parts) != 1 || !strings.Contains(logged.String(), `\"mystery\"`) {
+			t.Fatalf("unknown block was not skipped: %+v err=%v logs=%s", response, err, logged.String())
 		}
 	})
 	t.Run("unknown message type", func(t *testing.T) {

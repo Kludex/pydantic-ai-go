@@ -12,6 +12,7 @@ var privateNetworks = []netip.Prefix{
 	netip.MustParsePrefix("192.168.0.0/16"),
 	netip.MustParsePrefix("192.0.0.0/24"),
 	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.2/32"),
 	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("198.51.100.0/24"),
 	netip.MustParsePrefix("203.0.113.0/24"),
@@ -25,12 +26,25 @@ var privateNetworks = []netip.Prefix{
 	netip.MustParsePrefix("::ffff:0:0:0/96"),
 	netip.MustParsePrefix("100::/64"),
 	netip.MustParsePrefix("100:0:0:1::/64"),
+	netip.MustParsePrefix("2001::/23"),
 	netip.MustParsePrefix("2001::/32"),
 	netip.MustParsePrefix("2001:2::/48"),
 	netip.MustParsePrefix("2001:db8::/32"),
 	netip.MustParsePrefix("3fff::/20"),
 	netip.MustParsePrefix("5f00::/16"),
 	netip.MustParsePrefix("ff00::/8"),
+}
+
+// privateNetworkExceptions are the globally reachable assignments inside 2001::/23.
+// An IPv4 address they embed is still checked.
+var privateNetworkExceptions = []netip.Prefix{
+	netip.MustParsePrefix("2001:1::1/128"),
+	netip.MustParsePrefix("2001:1::2/128"),
+	netip.MustParsePrefix("2001:1::3/128"),
+	netip.MustParsePrefix("2001:3::/32"),
+	netip.MustParsePrefix("2001:4:112::/48"),
+	netip.MustParsePrefix("2001:20::/28"),
+	netip.MustParsePrefix("2001:30::/28"),
 }
 
 var cloudMetadataAddresses = map[netip.Addr]struct{}{

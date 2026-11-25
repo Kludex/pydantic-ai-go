@@ -84,6 +84,8 @@ GPT-6 models reject tools, output tools included, on Chat Completions while reas
 
 GPT-6 Astra, GPT-6.1 Sol, and GPT-6.2 Sol and Astra always reason, so `ThinkingLevelDisabled` sends no effort and Chat requests with tools are rejected.
 
+On the `openai` provider, GPT-5.1 through GPT-5.5 reject `minimal` effort, so `ThinkingLevelMinimal` sends `low`. `gpt-5-search-api` rejects any effort, so portable `Thinking` sends none. It reasons anyway, so `Temperature` and `TopP` are omitted as for other reasoning models. Other OpenAI-compatible providers keep sending `minimal` and the effort, since the restrictions are unverified there.
+
 GPT-6 Sol and Luna reason at medium effort by default. Set `ThinkingLevelDisabled` to send `reasoning_effort: "none"` when you need Chat Completions function calling. Use the Responses API when you need reasoning and tools together.
 
 ### Predicted output
@@ -1381,9 +1383,9 @@ Set `GOOGLE_API_KEY` or the legacy `GEMINI_API_KEY`. `GOOGLE_API_KEY` takes prec
 
 Gemini accepts image, document, audio, and video content. Ordinary URLs are downloaded with SSRF protection. Gemini Files API URLs and YouTube videos are sent directly.
 
-Gemini 2.5 uses token budgets for portable thinking settings. Gemini 3, Gemma 4, and unknown future model names use thinking levels. Gemma 4 takes only `MINIMAL` and `HIGH`, so other levels snap to the nearest one, and it keeps strict tool definitions off. Known Gemini 2.0, Gemini 1.x, and earlier Gemma models omit unsupported thinking settings. Future model names also receive the modern mixed native/function-tool and strict-tool behavior by default.
+Gemini 2.5 uses token budgets for portable thinking settings. On the Gemini API, `ai.ThinkingLevelDisabled` sends a budget of 128 to `gemini-2.5-flash`, because the model it is rerouted to from 2026-12-01 rejects 0, and `ai.ThinkingLevelMinimal` sends 512 to `gemini-2.5-flash-lite`, its smallest accepted budget. Vertex AI keeps 0 and 128. Gemini 3, Gemma 4, and unknown future model names use thinking levels. Gemma 4 takes only `MINIMAL` and `HIGH`, so other levels snap to the nearest one, and it keeps strict tool definitions off. Known Gemini 2.0, Gemini 1.x, and earlier Gemma models omit unsupported thinking settings. Future model names also receive the modern mixed native/function-tool and strict-tool behavior by default.
 
-Gemini has no level above `high` except on `gemini-4-hydrogen`, so `ai.ThinkingLevelXHigh` resolves to `high` elsewhere. `gemini-4-hydrogen` supports `low`, `medium`, `high`, and `xhigh`, so `ai.ThinkingLevelXHigh` is sent as `XHIGH` and `ai.ThinkingLevelDisabled` and `ai.ThinkingLevelMinimal` resolve to `low`.
+Gemini has no level above `high` except on `gemini-4-hydrogen` and, on the Gemini API, `gemini-4-neon`, so `ai.ThinkingLevelXHigh` resolves to `high` elsewhere. Both support `low`, `medium`, `high`, and `xhigh`, so `ai.ThinkingLevelXHigh` is sent as `XHIGH` and `ai.ThinkingLevelDisabled` and `ai.ThinkingLevelMinimal` resolve to `low`.
 
 `gemini-4-argon` supports the `low`, `medium`, and `high` thinking levels, so `ai.ThinkingLevelDisabled` and `ai.ThinkingLevelMinimal` resolve to `low`. On Vertex AI it rejects a thinking token budget with a 400 error: use a level instead.
 

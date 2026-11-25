@@ -661,7 +661,7 @@ func (m *Model) buildPayload(
 			}
 		}
 	}
-	reasoningEffort, err := openAIThinkingEffortForModel(m.name, params.Settings.Thinking)
+	reasoningEffort, err := openAIThinkingEffortForModel(m.providerName, m.name, params.Settings.Thinking)
 	if err != nil {
 		return nil, err
 	}
@@ -669,7 +669,9 @@ func (m *Model) buildPayload(
 		openAIIsGPT6Model(strings.ToLower(m.name)) && openAIModelReasoningActive(m.name, reasoningEffort) {
 		reason := "OpenAI rejects tools, output tools included, while reasoning is enabled on GPT-6 over " +
 			"Chat Completions; use NewResponsesModel"
-		disabled, _ := openAIThinkingEffortForModel(m.name, &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled})
+		disabled, _ := openAIThinkingEffortForModel(
+			m.providerName, m.name, &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+		)
 		if disabled == "none" {
 			reason += " or ai.ThinkingLevelDisabled"
 		}
@@ -1006,16 +1008,24 @@ func openAIServiceTier(tier ai.ServiceTier) (ai.ServiceTier, error) {
 	}
 }
 
-func openAIThinkingEffortForModel(modelName string, settings *ai.ThinkingSettings) (string, error) {
+func openAIThinkingEffortForModel(providerName, modelName string, settings *ai.ThinkingSettings) (string, error) {
 	effort, err := openAIThinkingEffort(settings)
 	if err != nil {
 		return "", err
 	}
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
-	if openAIGPT6RejectsNoReasoning(modelName) && effort == "none" {
+	official := providerName == "openai"
+	switch {
+	case official && strings.HasPrefix(modelName, "gpt-5-search-api"):
 		return "", nil
-	}
-	if effort == "minimal" && (strings.HasPrefix(modelName, "gpt-5.6") || openAIIsGPT6Model(modelName)) {
+	case openAIGPT6RejectsNoReasoning(modelName) && effort == "none":
+		return "", nil
+	case effort == "minimal" && (strings.HasPrefix(modelName, "gpt-5.6") || openAIIsGPT6Model(modelName)):
+		return "low", nil
+	case effort == "minimal" && official && slices.ContainsFunc(
+		[]string{"gpt-5.1", "gpt-5.2", "gpt-5.3", "gpt-5.4", "gpt-5.5"},
+		func(prefix string) bool { return strings.HasPrefix(modelName, prefix) },
+	):
 		return "low", nil
 	}
 	return effort, nil
@@ -1041,7 +1051,7 @@ func openAIThinkingEffort(settings *ai.ThinkingSettings) (string, error) {
 func openAIModelReasoningActive(modelName, effort string) bool {
 	modelName = strings.TrimPrefix(strings.ToLower(modelName), "openai.")
 	return effort != "none" && (effort != "" || strings.HasPrefix(modelName, "gpt-5.6") ||
-		openAIIsGPT6Model(modelName))
+		strings.HasPrefix(modelName, "gpt-5-search-api") || openAIIsGPT6Model(modelName))
 }
 
 func openAIIsGPT6Model(modelName string) bool {
@@ -1284,32 +1294,48 @@ type chatUsage struct {
 		ToolCallsExecuted  *int `json:"tool_calls_executed"`
 		WebSearchRequests  *int `json:"web_search_requests"`
 	} `json:"server_tool_use_details"`
-	CompletionTokensDetails struct {
-		ReasoningTokens          int `json:"reasoning_tokens"`
-		AudioTokens              int `json:"audio_tokens"`
-		AcceptedPredictionTokens int `json:"accepted_prediction_tokens"`
-		RejectedPredictionTokens int `json:"rejected_prediction_tokens"`
-	} `json:"completion_tokens_details"`
+	TotalTokens             int                          `json:"total_tokens"`
+	CompletionTokensDetails *chatCompletionTokensDetails `json:"completion_tokens_details"`
 }
 
-func (u chatUsage) usage() ai.Usage {
+type chatCompletionTokensDetails struct {
+	ReasoningTokens          int `json:"reasoning_tokens"`
+	AudioTokens              int `json:"audio_tokens"`
+	AcceptedPredictionTokens int `json:"accepted_prediction_tokens"`
+	RejectedPredictionTokens int `json:"rejected_prediction_tokens"`
+}
+
+// Gemini's OpenAI-compatible endpoint counts thinking only in total_tokens.
+func (u chatUsage) usage(reasoningOnlyInTotal bool) ai.Usage {
+	var completion chatCompletionTokensDetails
+	output := u.CompletionTokens
+	if u.CompletionTokensDetails != nil {
+		completion = *u.CompletionTokensDetails
+	} else if gap := u.TotalTokens - u.PromptTokens - u.CompletionTokens; reasoningOnlyInTotal && gap > 0 {
+		completion.ReasoningTokens = gap
+		output += gap
+	}
 	return ai.Usage{
-		Requests: 1, InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens,
+		Requests: 1, InputTokens: u.PromptTokens, OutputTokens: output,
 		CacheWriteTokens:         u.PromptTokensDetails.CacheWriteTokens,
 		CacheReadTokens:          u.PromptTokensDetails.CachedTokens,
 		InputAudioTokens:         u.PromptTokensDetails.AudioTokens,
-		OutputAudioTokens:        u.CompletionTokensDetails.AudioTokens,
-		ReasoningTokens:          u.CompletionTokensDetails.ReasoningTokens,
-		AcceptedPredictionTokens: u.CompletionTokensDetails.AcceptedPredictionTokens,
-		RejectedPredictionTokens: u.CompletionTokensDetails.RejectedPredictionTokens,
+		OutputAudioTokens:        completion.AudioTokens,
+		ReasoningTokens:          completion.ReasoningTokens,
+		AcceptedPredictionTokens: completion.AcceptedPredictionTokens,
+		RejectedPredictionTokens: completion.RejectedPredictionTokens,
 		CostUSD:                  u.Cost,
 		Details: map[string]int{
-			"reasoning_tokens":           u.CompletionTokensDetails.ReasoningTokens,
-			"audio_tokens":               u.CompletionTokensDetails.AudioTokens,
-			"accepted_prediction_tokens": u.CompletionTokensDetails.AcceptedPredictionTokens,
-			"rejected_prediction_tokens": u.CompletionTokensDetails.RejectedPredictionTokens,
+			"reasoning_tokens":           completion.ReasoningTokens,
+			"audio_tokens":               completion.AudioTokens,
+			"accepted_prediction_tokens": completion.AcceptedPredictionTokens,
+			"rejected_prediction_tokens": completion.RejectedPredictionTokens,
 		},
 	}
+}
+
+func (m *Model) chatReasoningOnlyInTotal() bool {
+	return m.providerName == "openai" && strings.HasPrefix(strings.ToLower(m.name), "gemini")
 }
 
 func addExtendedChatUsageDetails(details map[string]any, usage chatUsage) {
@@ -1433,7 +1459,7 @@ func (model *Model) parseResponse(data []byte) (*ai.ModelResponse, error) {
 		providerDetails["refusal"] = cr.Choices[0].Message.Refusal
 	}
 	resp := &ai.ModelResponse{
-		ModelName: cr.Model, Timestamp: timestamp, Usage: cr.Usage.usage(),
+		ModelName: cr.Model, Timestamp: timestamp, Usage: cr.Usage.usage(model.chatReasoningOnlyInTotal()),
 		ProviderDetails: providerDetails, ProviderResponseID: cr.ID,
 		FinishReason: model.chatFinishReason(cr.Choices[0].FinishReason), State: ai.ModelResponseStateComplete,
 	}
@@ -1716,6 +1742,8 @@ func (model *Model) convertUserPrompt(
 					)
 				}
 				parts = append(parts, contentPart{Type: "video_url", VideoURL: &videoURL{URL: location}})
+			case hasYAMLSuffix(item.MediaType) && fileExtensions[strings.ToLower(item.MediaType)] == "":
+				parts = append(parts, inlinedTextFilePart(item.Data, item.MediaType, item.ResolvedIdentifier()))
 			default:
 				if !isTextLikeMediaType(item.MediaType) {
 					if _, err := fileExtension(item.MediaType); err != nil {

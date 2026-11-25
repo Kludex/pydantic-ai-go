@@ -16,11 +16,18 @@ func (model *LiveModel) resolveLiveSettings(common realtime.Settings) (LiveSetti
 	for key, value := range common.Provider {
 		switch key {
 		case "openai_voice":
-			text, ok := value.(string)
-			if !ok {
-				return settings, fmt.Errorf("openai GPT-Live: %s must be a string", key)
+			switch voice := value.(type) {
+			case string:
+				settings.Voice, settings.VoiceID = voice, ""
+			case map[string]any:
+				id, ok := voice["id"].(string)
+				if !ok || id == "" || len(voice) != 1 {
+					return settings, fmt.Errorf(`openai GPT-Live: %s must be a string or {"id": "..."}`, key)
+				}
+				settings.VoiceID = id
+			default:
+				return settings, fmt.Errorf(`openai GPT-Live: %s must be a string or {"id": "..."}`, key)
 			}
-			settings.Voice = text
 		case "openai_live_instructions":
 			text, ok := value.(string)
 			if !ok {
@@ -222,7 +229,10 @@ func (model *LiveModel) liveConfig(params realtime.ConnectParams, settings LiveS
 	if voice == "" {
 		voice = model.config.settings.Voice
 	}
-	if voice != "" {
+	switch {
+	case settings.VoiceID != "":
+		audio["output"] = map[string]any{"voice": map[string]any{"id": settings.VoiceID}}
+	case voice != "":
 		audio["output"] = map[string]any{"voice": voice}
 	}
 	config := map[string]any{"model": model.Name(), "instructions": settings.Instructions,

@@ -79,16 +79,16 @@ func userUIParts(part ai.UserPromptPart) []UIMessagePart {
 			parts = append(parts, UIMessagePart{
 				Type: "file", MediaType: content.MediaType,
 				URL:              "data:" + content.MediaType + ";base64," + base64.StdEncoding.EncodeToString(content.Data),
-				ProviderMetadata: dumpPartMetadata("", "", "", nil, "", content.VendorMetadata),
+				ProviderMetadata: fileMetadata(content.VendorMetadata, content.Identifier),
 			})
 		case ai.ImageURL:
-			parts = append(parts, urlUIPart(content.URL, content.MediaType, content.VendorMetadata))
+			parts = append(parts, urlUIPart(content.URL, content.MediaType, content.VendorMetadata, content.Identifier))
 		case ai.AudioURL:
-			parts = append(parts, urlUIPart(content.URL, content.MediaType, content.VendorMetadata))
+			parts = append(parts, urlUIPart(content.URL, content.MediaType, content.VendorMetadata, content.Identifier))
 		case ai.VideoURL:
-			parts = append(parts, urlUIPart(content.URL, content.MediaType, content.VendorMetadata))
+			parts = append(parts, urlUIPart(content.URL, content.MediaType, content.VendorMetadata, content.Identifier))
 		case ai.DocumentURL:
-			parts = append(parts, urlUIPart(content.URL, content.MediaType, content.VendorMetadata))
+			parts = append(parts, urlUIPart(content.URL, content.MediaType, content.VendorMetadata, content.Identifier))
 		}
 	}
 	return parts
@@ -110,11 +110,22 @@ func withUserPromptStart(metadata map[string]any) map[string]any {
 	return metadata
 }
 
-func urlUIPart(url string, mediaType string, vendorMetadata map[string]any) UIMessagePart {
+func urlUIPart(url, mediaType string, vendorMetadata map[string]any, identifier string) UIMessagePart {
 	return UIMessagePart{
-		Type: "file", URL: url, MediaType: mediaType,
-		ProviderMetadata: dumpPartMetadata("", "", "", nil, "", vendorMetadata),
+		Type: "file", URL: url, MediaType: mediaType, ProviderMetadata: fileMetadata(vendorMetadata, identifier),
 	}
+}
+
+func fileMetadata(vendorMetadata map[string]any, identifier string) map[string]any {
+	metadata := dumpPartMetadata("", "", "", nil, "", vendorMetadata)
+	if identifier == "" {
+		return metadata
+	}
+	if metadata == nil {
+		metadata = map[string]any{providerMetadataKey: map[string]any{}}
+	}
+	metadata[providerMetadataKey].(map[string]any)["identifier"] = identifier
+	return metadata
 }
 
 // enqueuedMessages skips malformed data and nested payloads, so a client cannot recurse.

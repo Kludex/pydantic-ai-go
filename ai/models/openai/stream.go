@@ -206,7 +206,7 @@ func (m *Model) eventStream(
 				chunkUsage = chunk.XGroq.Usage
 			}
 			if chunkUsage != nil {
-				usage = chunkUsage.usage()
+				usage = chunkUsage.usage(m.chatReasoningOnlyInTotal())
 				if m.chatCompatibility.ExtendedMetadata {
 					addExtendedChatUsageDetails(providerDetails, *chunkUsage)
 				}

@@ -100,8 +100,10 @@ func (model *Model) userContentItem(ctx context.Context, item ai.UserContent) ([
 
 func binaryContentChunks(item ai.BinaryContent) ([]contentChunk, error) {
 	mediaType := strings.ToLower(item.MediaType)
+	bareType, _, _ := strings.Cut(mediaType, ";")
 	switch {
-	case isTextLike(mediaType):
+	case isTextLike(mediaType) ||
+		strings.HasSuffix(strings.TrimSpace(bareType), "+yaml") && !strings.HasPrefix(mediaType, "image/"):
 		return []contentChunk{{
 			Type: "text", Text: inlineTextFile(item.Data, mediaType, item.ResolvedIdentifier()),
 		}}, nil

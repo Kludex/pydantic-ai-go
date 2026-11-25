@@ -20,6 +20,7 @@ import (
 // LiveSettings configures GPT-Live's voice and delegated Responses backend.
 type LiveSettings struct {
 	Voice        string
+	VoiceID      string
 	Instructions string
 	Delegation   map[string]any
 	TurnSilence  time.Duration

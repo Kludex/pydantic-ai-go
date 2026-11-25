@@ -278,7 +278,7 @@ func (m *Model) Request(ctx context.Context, msgs []ai.ModelMessage, params ai.M
 	if statusCode != http.StatusOK {
 		return nil, &APIError{StatusCode: statusCode, Body: string(data)}
 	}
-	response, err := parseResponse(data, payload.InferenceGeo != "")
+	response, err := parseResponse(ctx, data, payload.InferenceGeo != "")
 	if response != nil {
 		response.ProviderName = "anthropic"
 		response.ProviderURL = m.baseURL
@@ -308,7 +308,8 @@ func (m *Model) CountTokens(
 		countMessages[index] = message
 		countMessages[index].Content = make([]contentBlock, 0, len(message.Content))
 		for _, block := range message.Content {
-			if block.Type == "advisor_tool_result" || block.Type == "server_tool_use" && block.Name == "advisor" {
+			if block.Type == "advisor_tool_result" || block.Type == "server_tool_use" && block.Name == "advisor" ||
+				block.Type == "container_upload" {
 				continue
 			}
 			countMessages[index].Content = append(countMessages[index].Content, block)
@@ -2496,7 +2497,7 @@ func (u anthropicUsage) usage() ai.Usage {
 
 // parseResponse reports usage.inference_geo only when the request set it:
 // Anthropic echoes it on every response.
-func parseResponse(data []byte, reportInferenceGeo bool) (*ai.ModelResponse, error) {
+func parseResponse(ctx context.Context, data []byte, reportInferenceGeo bool) (*ai.ModelResponse, error) {
 	var mr messagesResponse
 	if err := json.Unmarshal(data, &mr); err != nil {
 		return nil, &ai.ModelTransportError{ProviderName: "anthropic", Operation: "parse response", Err: err}
@@ -2664,7 +2665,7 @@ func parseResponse(data []byte, reportInferenceGeo bool) (*ai.ModelResponse, err
 			}
 			resp.Parts = append(resp.Parts, part)
 		default:
-			return nil, fmt.Errorf("anthropic: unknown content block type %q", block.Type)
+			warnUnknownAnthropicBlock(ctx, "content block", block.Type)
 		}
 	}
 	return resp, nil
@@ -2848,4 +2849,10 @@ func contentString(content any) (string, error) {
 		return "", fmt.Errorf("anthropic: marshal tool return: %w", err)
 	}
 	return string(b), nil
+}
+
+func warnUnknownAnthropicBlock(ctx context.Context, kind, blockType string) {
+	slog.WarnContext(ctx, fmt.Sprintf(
+		"anthropic: handling of %s type %q is not yet implemented, so it was skipped", kind, blockType,
+	))
 }

@@ -359,8 +359,28 @@ func TestThinkingSettings(t *testing.T) {
 		hasInclude bool
 	}{
 		"disabled budget": {
-			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			model: "gemini-2.5-flash-lite", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
 			budget: func() *int { value := 0; return &value }(),
+		},
+		"flash disabled sends minimum budget": {
+			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			budget: func() *int { value := 128; return &value }(),
+		},
+		"flash minimal budget": {
+			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
+			budget: func() *int { value := 128; return &value }(), include: true, hasInclude: true,
+		},
+		"flash lite minimal budget": {
+			model: "gemini-2.5-flash-lite", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal},
+			budget: func() *int { value := 512; return &value }(), include: true, hasInclude: true,
+		},
+		"neon disabled snaps up": {
+			model: "gemini-4-neon", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled},
+			level: "LOW",
+		},
+		"neon xhigh": {
+			model: "gemini-4-neon", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelXHigh},
+			level: "XHIGH", include: true, hasInclude: true,
 		},
 		"enabled": {
 			model: "gemini-2.5-flash", settings: &ai.ThinkingSettings{Level: ai.ThinkingLevelEnabled},
@@ -489,6 +509,37 @@ func TestThinkingSettings(t *testing.T) {
 			}
 			if test.level != "" && thinking["thinkingLevel"] != test.level {
 				t.Fatalf("unexpected thinking level: %v", thinking)
+			}
+		})
+	}
+
+	for name, test := range map[string]struct {
+		model    string
+		settings ai.ThinkingSettings
+		budget   any
+		level    any
+	}{
+		"flash disabled": {model: "gemini-2.5-flash", settings: ai.ThinkingSettings{Level: ai.ThinkingLevelDisabled}, budget: 0.0},
+		"flash lite minimal": {
+			model: "gemini-2.5-flash-lite", settings: ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal}, budget: 128.0,
+		},
+		"neon minimal": {model: "gemini-4-neon", settings: ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal}, level: "MINIMAL"},
+	} {
+		t.Run("vertex "+name, func(t *testing.T) {
+			var body map[string]any
+			model := newNamedServer(t, test.model, func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewDecoder(r.Body).Decode(&body)
+				_, _ = w.Write([]byte(`{"candidates":[{"content":{"parts":[{"text":"done"}]}}]}`))
+			}, google.WithProvider(google.ProviderConfig{Transport: google.TransportVertexAI, Name: "google-cloud"}))
+			settings := test.settings
+			if _, err := model.Request(t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{
+				Thinking: &settings,
+			}}); err != nil {
+				t.Fatal(err)
+			}
+			thinking := body["generationConfig"].(map[string]any)["thinkingConfig"].(map[string]any)
+			if thinking["thinkingBudget"] != test.budget || thinking["thinkingLevel"] != test.level {
+				t.Fatalf("unexpected Vertex thinking: %v", thinking)
 			}
 		})
 	}

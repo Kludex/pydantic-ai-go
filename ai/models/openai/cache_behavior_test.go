@@ -118,7 +118,8 @@ func TestResponsesPromptCacheDiagnostics(t *testing.T) {
 				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 					t.Error(err)
 				}
-				_, _ = w.Write([]byte(`{"output":[],"prompt_cache_diagnostics":{"type":"cache_hit"}}`))
+				_, _ = w.Write([]byte(`{"output":[],"prompt_cache_diagnostics":{"type":"cache_hit"},` +
+					`"input_transformations":[{"type":"reasoning_dropped","item_id":"rs_1"}]}`))
 			}))
 			defer server.Close()
 			provider := test.provider
@@ -142,21 +143,24 @@ func TestResponsesPromptCacheDiagnostics(t *testing.T) {
 			}
 			options, _ := body["prompt_cache_options"].(map[string]any)
 			comparison, _ := options["comparison_response_id"].(string)
-			if comparison != test.want || response.ProviderDetails["prompt_cache_diagnostics"].(map[string]any)["type"] != "cache_hit" {
+			transformations, _ := response.ProviderDetails["input_transformations"].([]map[string]any)
+			if comparison != test.want || response.ProviderDetails["prompt_cache_diagnostics"].(map[string]any)["type"] != "cache_hit" ||
+				len(transformations) != 1 || transformations[0]["item_id"] != "rs_1" {
 				t.Fatalf("comparison=%q body=%#v response=%+v", comparison, body, response)
 			}
 		})
 	}
 	model := newResponsesServer(t, sseHandler(t, []string{
 		`{"type":"response.created","response":{"id":"resp","status":"in_progress","prompt_cache_diagnostics":{"type":"unavailable"}}}`,
-		`{"type":"response.completed","response":{"id":"resp","status":"completed","service_tier":"flex","prompt_cache_diagnostics":{"type":"cache_hit"},"output":[]}}`,
+		`{"type":"response.completed","response":{"id":"resp","status":"completed","service_tier":"flex","prompt_cache_diagnostics":{"type":"cache_hit"},"input_transformations":[{"item_id":"rs_1"}],"output":[]}}`,
 	}))
 	events, err := collect(t, model, ai.ModelRequestParams{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	finish := events[len(events)-1].(ai.FinishEvent)
-	if finish.ProviderDetails["prompt_cache_diagnostics"].(map[string]any)["type"] != "cache_hit" || finish.ProviderDetails["service_tier"] != "flex" {
+	if finish.ProviderDetails["prompt_cache_diagnostics"].(map[string]any)["type"] != "cache_hit" || finish.ProviderDetails["service_tier"] != "flex" ||
+		len(finish.ProviderDetails["input_transformations"].([]map[string]any)) != 1 {
 		t.Fatalf("terminal diagnostics=%#v", finish.ProviderDetails)
 	}
 }

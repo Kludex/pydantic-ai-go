@@ -341,11 +341,17 @@ func (c *responsesMessageConverter) convertResponse(message ai.ModelResponse) ([
 						return nil, fmt.Errorf("openai: parse tool search arguments: %w", err)
 					}
 				}
+				if strings.HasPrefix(id, "fc_") {
+					id = ""
+				}
 				out = append(out, responsesInput{
 					Type: "tool_search_call", ID: id, CallID: part.ToolCallID,
 					Arguments: arguments, Execution: "client", Status: "completed",
 				})
 				continue
+			}
+			if part.ToolKind == ai.ToolPartKindToolSearch && strings.HasPrefix(id, "tsc_") {
+				id = ""
 			}
 			namespace := ""
 			if part.ProviderName == "" || part.ProviderName == c.providerName {

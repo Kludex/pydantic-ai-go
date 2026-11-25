@@ -8,6 +8,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Added
 
+- On the `openai` provider, `ThinkingLevelMinimal` sends `low` to GPT-5.1 through GPT-5.5, and `gpt-5-search-api` sends no reasoning effort and no sampling settings, which the API rejects.
+- On the Gemini API, `ThinkingLevelDisabled` sends a 128-token budget to `gemini-2.5-flash` ahead of its reroute to a model that rejects 0, and `ThinkingLevelMinimal` sends 512 to `gemini-2.5-flash-lite`. `gemini-4-neon` takes `LOW`, `MEDIUM`, `HIGH`, and `XHIGH` there.
+- OpenAI Chat counts the thinking tokens Gemini reports only in `total_tokens` as output and reasoning tokens, for `gemini*` models on the `openai` provider.
+- Anthropic token counting leaves out the `container_upload` blocks of `CodeExecutionTool.Files`, which the endpoint rejects.
+- Anthropic skips content blocks and deltas of an unknown type with a `slog` warning instead of failing the response.
+- OpenAI Chat and Mistral inline `+yaml` structured-suffix binary content as text.
+- OpenAI Responses records `input_transformations` in `ProviderDetails`, static and streamed, and drops the `fc_` or `tsc_` item ID the API rejects when replaying a client tool search.
+- Safe downloads also block `192.88.99.2` and `2001::/23`, except the globally reachable assignments inside it.
+- The Vercel AI adapter keeps a caller-set `Identifier` on user files across round trips.
+- GPT-Live takes a custom voice through `LiveSettings.VoiceID` or `openai_voice` as `{"id": ...}`.
 - Claude Fable 5.2 and Claude Mythos 5.2 fall back to automatic output-tool selection and retry stale thinking blocks, as Fable 5.1 does.
 - Gemini 4 Carbon snaps thinking levels to `LOW`, `MEDIUM`, or `HIGH`.
 - Anthropic responses that ran in fast mode record `speed: fast` in `ProviderDetails`, the price context `genai-prices` uses for fast mode rates.

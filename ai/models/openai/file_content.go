@@ -89,13 +89,7 @@ func (model *Model) chatDocumentPart(
 	data []byte, dataURI, mediaType, identifier string,
 ) (contentPart, error) {
 	if isTextLikeMediaType(mediaType) {
-		return contentPart{
-			Type: "text",
-			Text: fmt.Sprintf(
-				"-----BEGIN FILE id=\"%s\" type=\"%s\"-----\n%s\n-----END FILE id=\"%s\"-----",
-				identifier, mediaType, data, identifier,
-			),
-		}, nil
+		return inlinedTextFilePart(data, mediaType, identifier), nil
 	}
 	if model.chatCompatibility.DisableDocumentInput {
 		return contentPart{}, fmt.Errorf(
@@ -109,6 +103,22 @@ func (model *Model) chatDocumentPart(
 	return contentPart{
 		Type: "file", File: &chatFile{FileData: dataURI, Filename: "filename." + extension},
 	}, nil
+}
+
+func inlinedTextFilePart(data []byte, mediaType, identifier string) contentPart {
+	return contentPart{
+		Type: "text",
+		Text: fmt.Sprintf(
+			"-----BEGIN FILE id=\"%s\" type=\"%s\"-----\n%s\n-----END FILE id=\"%s\"-----",
+			identifier, mediaType, data, identifier,
+		),
+	}
+}
+
+// hasYAMLSuffix reports an RFC 9512 +yaml structured-syntax media type.
+func hasYAMLSuffix(mediaType string) bool {
+	mediaType, _, _ = strings.Cut(mediaType, ";")
+	return strings.HasSuffix(strings.ToLower(strings.TrimSpace(mediaType)), "+yaml")
 }
 
 func chatImageDetail(metadata map[string]any) string {

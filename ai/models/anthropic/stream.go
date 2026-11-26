@@ -124,6 +124,7 @@ func (m *Model) eventStream(
 		searchArgs := make(map[int]*strings.Builder)
 		mcpToolNames := make(map[string]string)
 		citations := make(map[int][]map[string]any)
+		ignored := make(map[int]bool)
 		for scanner.Scan() {
 			data, ok := strings.CutPrefix(scanner.Text(), "data:")
 			if !ok {
@@ -222,10 +223,13 @@ func (m *Model) eventStream(
 					}
 					continue
 				}
-				if !m.emitContentBlockStart(yield, event) {
+				if !m.emitContentBlockStart(ctx, yield, event, ignored) {
 					return
 				}
 			case "content_block_delta":
+				if ignored[event.Index] {
+					continue
+				}
 				if arguments, ok := searchArgs[event.Index]; ok && event.Delta.Type == "input_json_delta" {
 					arguments.WriteString(event.Delta.PartialJSON)
 					continue
@@ -240,7 +244,7 @@ func (m *Model) eventStream(
 					}
 					continue
 				}
-				if !emitContentBlockDelta(yield, event) {
+				if !emitContentBlockDelta(ctx, yield, event) {
 					return
 				}
 			case "message_delta":
@@ -298,6 +302,7 @@ func (m *Model) eventStream(
 				yield(nil, &APIError{Body: fmt.Sprintf("stream error %s: %s", event.Error.Type, event.Error.Message)})
 				return
 			case "content_block_stop":
+				delete(ignored, event.Index)
 				block, ok := searchCalls[event.Index]
 				if !ok {
 					continue
@@ -389,7 +394,9 @@ func (m *Model) eventStream(
 	}
 }
 
-func (m *Model) emitContentBlockStart(yield func(ai.ModelStreamEvent, error) bool, event streamEvent) bool {
+func (m *Model) emitContentBlockStart(
+	ctx context.Context, yield func(ai.ModelStreamEvent, error) bool, event streamEvent, ignored map[int]bool,
+) bool {
 	partID := strconv.Itoa(event.Index)
 	switch event.ContentBlock.Type {
 	case "text":
@@ -418,11 +425,13 @@ func (m *Model) emitContentBlockStart(yield func(ai.ModelStreamEvent, error) boo
 		input := strings.TrimSpace(string(event.ContentBlock.Input))
 		return input == "" || input == "{}" || yield(ai.ToolCallDeltaEvent{PartID: partID, ArgsDelta: input}, nil)
 	default:
-		return yield(nil, fmt.Errorf("anthropic: unsupported content block type %q", event.ContentBlock.Type))
+		warnUnknownAnthropicBlock(ctx, "content block", event.ContentBlock.Type)
+		ignored[event.Index] = true
+		return true
 	}
 }
 
-func emitContentBlockDelta(yield func(ai.ModelStreamEvent, error) bool, event streamEvent) bool {
+func emitContentBlockDelta(ctx context.Context, yield func(ai.ModelStreamEvent, error) bool, event streamEvent) bool {
 	partID := strconv.Itoa(event.Index)
 	switch event.Delta.Type {
 	case "text_delta":
@@ -436,6 +445,7 @@ func emitContentBlockDelta(yield func(ai.ModelStreamEvent, error) bool, event st
 			PartID: partID, SignatureDelta: event.Delta.Signature, ProviderName: "anthropic",
 		}, nil)
 	default:
-		return yield(nil, fmt.Errorf("anthropic: unsupported content block delta type %q", event.Delta.Type))
+		warnUnknownAnthropicBlock(ctx, "content block delta", event.Delta.Type)
+		return true
 	}
 }

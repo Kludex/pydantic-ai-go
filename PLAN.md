@@ -2,7 +2,7 @@
 
 An idiomatic Go library for the LLM agent loop. Typed outputs via generics, tool calling, model-agnostic providers, OTel-native tracing. Companion to [pydantic-evals-go](https://github.com/Kludex/pydantic-evals-go).
 
-Module: `github.com/Kludex/pydantic-ai-go`, core package `github.com/Kludex/pydantic-ai-go/ai`. Go 1.25.
+Module: `github.com/Kludex/pydantic-ai-go`, core package `github.com/Kludex/pydantic-ai-go/ai`. Go 1.26.
 
 ## Design Principles
 

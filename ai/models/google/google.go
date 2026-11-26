@@ -829,9 +829,13 @@ func googleThinking(modelName string, transport Transport, settings *ai.Thinking
 			include := *settings.IncludeThoughts
 			config.IncludeThoughts = &include
 		}
-		if usesThinkingLevel {
+		switch {
+		case usesThinkingLevel:
 			config.ThinkingLevel = googleThinkingLevel(modelName, transport, "MINIMAL")
-		} else {
+		case transport == TransportGeminiAPI && strings.ToLower(modelName) == "gemini-2.5-flash":
+			budget := 128
+			config.ThinkingBudget = &budget
+		default:
 			budget := 0
 			config.ThinkingBudget = &budget
 		}
@@ -865,6 +869,9 @@ func googleThinking(modelName string, transport Transport, settings *ai.Thinking
 	budgets := map[ai.ThinkingLevel]int{
 		ai.ThinkingLevelMinimal: 128, ai.ThinkingLevelLow: 2048, ai.ThinkingLevelMedium: 8192,
 		ai.ThinkingLevelHigh: 24576, ai.ThinkingLevelXHigh: 24576,
+	}
+	if transport == TransportGeminiAPI && strings.ToLower(modelName) == "gemini-2.5-flash-lite" {
+		budgets[ai.ThinkingLevelMinimal] = 512
 	}
 	budget, ok := budgets[settings.Level]
 	if !ok {
@@ -921,7 +928,8 @@ func googleThinkingLevel(modelName string, transport Transport, requested string
 		supported = []string{"LOW", "MEDIUM", "HIGH"}
 	case strings.HasPrefix(name, "gemini-3-pro-preview"):
 		supported = []string{"LOW", "HIGH"}
-	case strings.HasPrefix(name, "gemini-4-hydrogen"):
+	case strings.HasPrefix(name, "gemini-4-hydrogen"),
+		transport == TransportGeminiAPI && strings.HasPrefix(name, "gemini-4-neon"):
 		supported = []string{"LOW", "MEDIUM", "HIGH", "XHIGH"}
 	case strings.HasPrefix(name, "gemma-4"):
 		supported = []string{"MINIMAL", "HIGH"}

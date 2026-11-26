@@ -32,6 +32,11 @@ func TestValidateAddress(t *testing.T) {
 		"benchmarking":      {address: "2001:2::1", wantError: "private or internal"},
 		"documentation":     {address: "3fff::1", wantError: "private or internal"},
 		"SRv6 SID":          {address: "5f00::1", wantError: "private or internal"},
+		"6a44 relay":        {address: "192.88.99.2", wantError: "private or internal"},
+		"IETF protocol":     {address: "2001:5::1", wantError: "private or internal"},
+		"PCP anycast":       {address: "2001:1::1"},
+		"AMT":               {address: "2001:3::1"},
+		"ORCHIDv2":          {address: "2001:20::1"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			err := validateAddress(netip.MustParseAddr(test.address), test.allowLocal)

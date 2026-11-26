@@ -108,6 +108,21 @@ The port includes these applicable changes through the baseline recorded in `.up
 | `a2df543325761f0750f9209fb34fb6b03d95b3f3` | OpenRouter `qwen/qwen3.8-flash` relaxes a resolved forced output tool while reasoning and returns `openai.RequestRejectedError` for an explicit forcing |
 | `e80413569727eb2185b8b1cd58519a6dfdffb393` | xAI uploads each distinct document once per model |
 | `7b517b1e44338adad21b589588a895c90bd8d793` | An id-less OpenAI Realtime `response.done` closes the active response's tool batch |
+| `4326c21272d2bbe3cdda6fb68898c5af0f1e964c` | On the `openai` provider, minimal effort sends `low` to GPT-5.1 through GPT-5.5 |
+| `8833aee26d9f69e4de93125c29d5b0c26cd27976` | On the `openai` provider, `gpt-5-search-api` sends no reasoning effort and no sampling settings |
+| `6954c15ce9078ae74e3fd0e2d4013aeb58d71538` | On the Gemini API, disabled thinking sends a 128-token budget to `gemini-2.5-flash` |
+| `d2863ab24f7df13c7ac6e55e603e1088e3cf4723` | On the Gemini API, minimal thinking sends a 512-token budget to `gemini-2.5-flash-lite` |
+| `0dbd1e646a7c8318dd1c15d8cebf921280d47f49` | On the Gemini API, `gemini-4-neon` takes `LOW`, `MEDIUM`, `HIGH`, and `XHIGH` |
+| `792caee15441bb51e32603f9df849f070f2ce439` | OpenAI Chat counts Gemini thinking reported only in `total_tokens` as output and reasoning tokens |
+| `dbc3d126836528c59c76ddac00fa38b00a1b1e74` | Anthropic token counts leave out `container_upload` blocks |
+| `94a91072200f96fe128935e9c81bb2a3bf5f94b5` | Anthropic skips unknown content blocks and deltas with a warning |
+| `03201f889abd88131c2dcf4c84367bdec20affb9` | OpenAI Chat and Mistral inline `+yaml` binary content as text |
+| `c95a241d9f4a3f123522d5ee56e611f40566839c` | OpenAI Responses omits an `fc_` item ID on a replayed client `tool_search_call` |
+| `1c470a38a343519bf988c4f103e5e46be9618ffa` | OpenAI Responses omits a `tsc_` item ID on a tool search replayed as a `function_call` |
+| `d682f0acc07b2fb7ef420b49707dd1e92329f295` | OpenAI Responses records `input_transformations` in `ProviderDetails`; there is no span event |
+| `4f624a87b58099fe31fe4cbf19fe11681f9f54e2` | Safe downloads block `192.88.99.2` and `2001::/23`, except its globally reachable assignments |
+| `f1890796f19b2e51fa31d4bee1920a016e86eb00` | Vercel AI user files keep a caller-set `Identifier` across round trips |
+| `10cdc94c17d29e8677b34f401f4e3d0243d4c711` | GPT-Live takes a custom voice through `LiveSettings.VoiceID` or `openai_voice` as `{"id": ...}` |
 
 Go keeps its existing tool-search limit contract: zero selects ten results and negative values are rejected. It does not adopt Python's negative slice behavior. Portable caching uses a typed configuration instead of Python's boolean/string/dictionary union. Nil is unset, an empty `CacheConfig` enables caching, and `CacheRetentionDisabled` disables it.
 

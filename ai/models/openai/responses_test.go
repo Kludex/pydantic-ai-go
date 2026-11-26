@@ -1566,6 +1566,52 @@ func TestResponsesNativeDeferredToolSearch(t *testing.T) {
 	}
 }
 
+func TestResponsesClientToolSearchReplayDropsRejectedItemIDs(t *testing.T) {
+	var body map[string]any
+	model := newResponsesServer(t, func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		_, _ = w.Write([]byte(`{"model":"gpt-5","status":"completed","output":[],"usage":{}}`))
+	})
+	schema := map[string]any{"type": "object", "properties": map[string]any{}}
+	search := ai.ToolDefinition{
+		Name: ai.ToolSearchName, Schema: schema,
+		ToolKind: ai.ToolPartKindToolSearch, ToolSearchStrategy: ai.ToolSearchStrategyKeywords,
+	}
+	deferred := []ai.ToolDefinition{{Name: "hidden", Schema: schema, DeferLoading: true}}
+	for _, test := range []struct {
+		name     string
+		id       string
+		deferred []ai.ToolDefinition
+		itemType string
+		wantID   any
+	}{
+		{name: "function call ID on tool search", id: "fc_1", deferred: deferred, itemType: "tool_search_call"},
+		{name: "opaque ID on tool search", id: "opaque", deferred: deferred, itemType: "tool_search_call",
+			wantID: "opaque"},
+		{name: "tool search ID on function call", id: "tsc_1", itemType: "function_call"},
+		{name: "opaque ID on function call", id: "opaque", itemType: "function_call", wantID: "opaque"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			history := []ai.ModelMessage{
+				ai.ModelRequest{Parts: []ai.RequestPart{ai.UserPromptPart{Content: "find"}}},
+				ai.ModelResponse{Parts: []ai.ResponsePart{ai.ToolCallPart{
+					ToolName: ai.ToolSearchName, ToolCallID: "search", ID: test.id,
+					ToolKind: ai.ToolPartKindToolSearch, Args: []byte(`{"queries":["hidden"]}`),
+				}}},
+			}
+			if _, err := model.Request(t.Context(), history, ai.ModelRequestParams{
+				Tools: []ai.ToolDefinition{search}, DeferredTools: test.deferred, AllowText: true,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			call := body["input"].([]any)[1].(map[string]any)
+			if call["type"] != test.itemType || call["id"] != test.wantID {
+				t.Fatalf("unexpected replayed call: %+v", call)
+			}
+		})
+	}
+}
+
 func TestResponsesDeferredToolSupportCanBeDisabled(t *testing.T) {
 	var gotBody map[string]any
 	model := newResponsesServerWithOptions(t, func(w http.ResponseWriter, r *http.Request) {

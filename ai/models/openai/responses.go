@@ -817,7 +817,7 @@ func (m *ResponsesModel) buildResponsesPayload(
 		return nil, err
 	}
 	params.Settings = settings
-	reasoningEffort, err := openAIThinkingEffortForModel(m.name, params.Settings.Thinking)
+	reasoningEffort, err := openAIThinkingEffortForModel(m.providerName, m.name, params.Settings.Thinking)
 	if err != nil {
 		return nil, err
 	}
@@ -1127,6 +1127,7 @@ type responsesResponse struct {
 	Status                 string             `json:"status"`
 	Background             bool               `json:"background"`
 	PromptCacheDiagnostics map[string]any     `json:"prompt_cache_diagnostics"`
+	InputTransformations   []map[string]any   `json:"input_transformations"`
 	ServiceTier            string             `json:"service_tier"`
 	IncompleteDetails      *incompleteDetails `json:"incomplete_details"`
 	Error                  *struct {
@@ -1292,6 +1293,9 @@ func (response responsesResponse) metadata() (string, map[string]any, time.Time,
 	}
 	if response.PromptCacheDiagnostics != nil {
 		providerDetails["prompt_cache_diagnostics"] = response.PromptCacheDiagnostics
+	}
+	if len(response.InputTransformations) > 0 {
+		providerDetails["input_transformations"] = slices.Clone(response.InputTransformations)
 	}
 	if len(providerDetails) == 0 {
 		providerDetails = nil

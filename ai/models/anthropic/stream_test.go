@@ -1,10 +1,12 @@
 package anthropic_test
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -352,8 +354,6 @@ func TestStreamProtocolErrors(t *testing.T) {
 		{name: "malformed", events: []string{`not json`}, want: "parse stream event"},
 		{name: "api error", events: []string{`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`}, want: "overloaded_error"},
 		{name: "unknown event", events: []string{`{"type":"mystery"}`}, want: "unknown stream event"},
-		{name: "unknown block", events: []string{`{"type":"content_block_start","content_block":{"type":"audio"}}`}, want: "unsupported content block"},
-		{name: "unknown delta", events: []string{`{"type":"content_block_delta","delta":{"type":"audio_delta"}}`}, want: "unsupported content block delta"},
 		{name: "missing stop", events: []string{`{"type":"ping"}`}, want: "without message_stop"},
 	}
 	for _, test := range tests {
@@ -364,6 +364,39 @@ func TestStreamProtocolErrors(t *testing.T) {
 				t.Fatalf("expected %q error, got %v", test.want, err)
 			}
 		})
+	}
+}
+
+func TestStreamSkipsUnknownBlocksAndDeltas(t *testing.T) {
+	var logged bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+	defer slog.SetDefault(previous)
+	model := newServer(t, anthropicSSE(t, []string{
+		`{"type":"message_start","message":{"id":"msg","model":"claude","usage":{"input_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"audio"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"dropped"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":1,"delta":{"type":"audio_delta"}}`,
+		`{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"hi"}}`,
+		`{"type":"content_block_stop","index":1}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}`,
+		`{"type":"message_stop"}`,
+	}))
+	events, err := collectAnthropicStream(t, model, ai.ModelRequestParams{AllowText: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text string
+	for _, event := range events {
+		if delta, ok := event.(ai.TextDeltaEvent); ok {
+			text += delta.Delta
+		}
+	}
+	if text != "hi" || !strings.Contains(logged.String(), `content block type \"audio\"`) ||
+		!strings.Contains(logged.String(), `content block delta type \"audio_delta\"`) {
+		t.Fatalf("unexpected text %q or warnings %s", text, logged.String())
 	}
 }
 

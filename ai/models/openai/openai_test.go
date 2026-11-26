@@ -210,6 +210,64 @@ func TestGPT6AlwaysOnThinkingProfile(t *testing.T) {
 	}
 }
 
+func TestOpenAIProviderReasoningEffortRestrictions(t *testing.T) {
+	var body map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		body = nil
+		_ = json.NewDecoder(request.Body).Decode(&body)
+		if request.URL.Path == "/responses" {
+			_, _ = response.Write([]byte(`{"id":"r","model":"m","status":"completed","output":[],"usage":{}}`))
+			return
+		}
+		_, _ = response.Write([]byte(`{"choices":[{"message":{"content":"done"}}],"usage":{}}`))
+	}))
+	defer server.Close()
+	temperature := 0.5
+	minimal := ai.ModelSettings{Thinking: &ai.ThinkingSettings{Level: ai.ThinkingLevelMinimal}, Temperature: &temperature}
+	compatible := openai.WithProvider(openai.ProviderConfig{
+		Name: "compatible", BaseURL: server.URL, HTTPClient: server.Client(),
+	})
+	for _, test := range []struct {
+		model  string
+		option openai.Option
+		effort any
+	}{
+		{model: "gpt-5.1", effort: "low"},
+		{model: "gpt-5.5-2026-04-23", effort: "low"},
+		{model: "gpt-5", effort: "minimal"},
+		{model: "gpt-5.4", option: compatible, effort: "minimal"},
+		{model: "gpt-5-search-api"},
+		{model: "gpt-5-search-api", option: compatible, effort: "minimal"},
+	} {
+		options := []openai.Option{openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client())}
+		if test.option != nil {
+			options = append(options, test.option)
+		}
+		if _, err := openai.NewModel(test.model, options...).Request(
+			t.Context(), nil, ai.ModelRequestParams{Settings: minimal},
+		); err != nil {
+			t.Fatal(err)
+		}
+		if body["reasoning_effort"] != test.effort || body["temperature"] != nil {
+			t.Fatalf("unexpected %s Chat request: %#v", test.model, body)
+		}
+		if _, err := openai.NewResponsesModel(test.model, options...).Request(
+			t.Context(), nil, ai.ModelRequestParams{Settings: minimal},
+		); err != nil {
+			t.Fatal(err)
+		}
+		reasoning, _ := body["reasoning"].(map[string]any)
+		if test.effort == nil && reasoning != nil || test.effort != nil && reasoning["effort"] != test.effort {
+			t.Fatalf("unexpected %s Responses request: %#v", test.model, body)
+		}
+	}
+	if _, err := openai.NewModel("gpt-5-search-api", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client())).Request(
+		t.Context(), nil, ai.ModelRequestParams{Settings: ai.ModelSettings{Temperature: &temperature}},
+	); err != nil || body["temperature"] != nil {
+		t.Fatalf("gpt-5-search-api sent temperature: body=%#v err=%v", body, err)
+	}
+}
+
 func TestGPT6ChatRejectsToolsWhileReasoning(t *testing.T) {
 	requests := 0
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, _ *http.Request) {
@@ -895,11 +953,16 @@ func TestChatFileContent(t *testing.T) {
 		ai.BinaryContent{Data: []byte("name = \"demo\""), MediaType: "application/toml", Identifier: "project"},
 		ai.UploadedFile{FileID: "file-report", ProviderName: "openai", MediaType: "application/pdf"},
 		ai.BinaryContent{Data: []byte("x"), MediaType: "application/json; charset=utf-8", Identifier: "j"},
+		ai.BinaryContent{Data: []byte("a: 1"), MediaType: "application/openapi+yaml; version=3.1", Identifier: "y"},
 	}}}}}
 	if _, err := model.Request(t.Context(), messages, ai.ModelRequestParams{}); err != nil {
 		t.Fatal(err)
 	}
 	parts := body["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if parts[10].(map[string]any)["text"] !=
+		"-----BEGIN FILE id=\"y\" type=\"application/openapi+yaml; version=3.1\"-----\na: 1\n-----END FILE id=\"y\"-----" {
+		t.Fatalf("+yaml media type was not inlined as text: %#v", parts[10])
+	}
 	if parts[9].(map[string]any)["type"] != "text" || parts[9].(map[string]any)["text"] !=
 		"-----BEGIN FILE id=\"j\" type=\"application/json; charset=utf-8\"-----\nx\n-----END FILE id=\"j\"-----" {
 		t.Fatalf("parameterized JSON media type was not inlined as text: %#v", parts[9])

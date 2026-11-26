@@ -147,13 +147,14 @@ A delegation is work that the voice model sends to a Responses backend. Your `Co
 | `realtime.Settings.Thinking` | Configures the backend's reasoning. An explicit delegated `reasoning_effort` takes precedence. |
 | `LiveSettings.Delegation["reasoning_summary"]` | Requests `detailed`, `concise`, or `auto` reasoning summaries from the backend. Reasoning recorded ahead of a backend web search then carries the summary as its `ThinkingPart` content. |
 | `realtime.Settings.ParallelToolCalls` | Configures the backend. An explicit delegated value takes precedence. |
+| `LiveSettings.VoiceID` | Selects a custom voice created through OpenAI's voice API by its ID. It takes precedence over `Voice`, which names a built-in voice. |
 | `LiveSettings.TurnSilence` | Defaults to two seconds. Delegated work suspends the silence clock so a tool's wait does not end the turn. |
 | `LiveSettings.Store` | Defaults to false. With reconnect enabled, stored sessions are forked; other sessions replay recent text history. |
 | `realtime.Settings.Reconnect` | Re-dials a dropped connection. Without it, or once its attempts run out, a drop ends the session with a non-recoverable `realtime.SessionError`, as on the other providers. |
 | `LiveSettings.IdleAudio` | Defaults to false. Streams silence while `SendAudio` is quiet so text lands without a microphone. Rejected on a WebRTC sideband. |
 | `LiveSettings.DataChannel` | Controls browser event permissions. Both event lists are empty by default to keep instructions and tools server-owned. |
 
-Session-level `Settings.Provider` values override the matching model defaults: `openai_voice`, `openai_live_instructions`, `openai_live_delegation`, `openai_live_turn_silence_ms`, `openai_live_store`, `openai_live_idle_audio`, and `openai_live_data_channel`. The silence value uses milliseconds.
+Session-level `Settings.Provider` values override the matching model defaults: `openai_voice`, `openai_live_instructions`, `openai_live_delegation`, `openai_live_turn_silence_ms`, `openai_live_store`, `openai_live_idle_audio`, and `openai_live_data_channel`. The silence value uses milliseconds. `openai_voice` takes a built-in voice name or `map[string]any{"id": "voice_..."}` for a custom voice.
 
 Tool results can include text, images, documents, and OpenAI uploaded files. They reach the backend as Responses input items. Audio and video attachments are rejected before any result is sent. Parallel calls continue only after every requested result arrives and the response that requested them ends.
 

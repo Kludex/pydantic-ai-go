@@ -501,3 +501,63 @@ func TestStreamScannerError(t *testing.T) {
 		t.Fatalf("unexpected scanner error: %v", err)
 	}
 }
+
+func TestGeminiUsageCountsThinkingLeftOutOfCompletionTokens(t *testing.T) {
+	const usage = `{"prompt_tokens":5,"completion_tokens":2,"total_tokens":17}`
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		if body["stream"] == true {
+			sseHandler(t, []string{
+				`{"choices":[{"delta":{"content":"Hi"}}],"usage":{"prompt_tokens":5,"completion_tokens":1,"total_tokens":10}}`,
+				`{"choices":[{"delta":{},"finish_reason":"stop"}],"usage":` + usage + `}`,
+				`[DONE]`,
+			})(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Hi"}}],"usage":` + usage + `}`))
+	}))
+	defer server.Close()
+	for _, test := range []struct {
+		name     string
+		model    string
+		options  []openai.Option
+		output   int
+		thinking int
+	}{
+		{name: "gemini", model: "gemini-3.8-flash", output: 12, thinking: 10},
+		{name: "other model", model: "gpt-5", output: 2},
+		{name: "compatible provider", model: "gemini-3.8-flash", output: 2, options: []openai.Option{
+			openai.WithProvider(openai.ProviderConfig{Name: "compatible", BaseURL: server.URL}),
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			options := append([]openai.Option{openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client())},
+				test.options...)
+			model := openai.NewModel(test.model, options...)
+			response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			events, err := collect(t, model, ai.ModelRequestParams{AllowText: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			finish := events[len(events)-1].(ai.FinishEvent)
+			for _, got := range []ai.Usage{response.Usage, finish.Usage} {
+				if got.InputTokens != 5 || got.OutputTokens != test.output || got.ReasoningTokens != test.thinking ||
+					got.Details["reasoning_tokens"] != test.thinking {
+					t.Fatalf("unexpected usage %+v", got)
+				}
+			}
+		})
+	}
+	model := openai.NewModel("gemini-3.8-flash", openai.WithBaseURL(server.URL), openai.WithHTTPClient(server.Client()))
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"choices":[{"message":{"content":"Hi"}}],"usage":{"prompt_tokens":5,"completion_tokens":2,"total_tokens":17,"completion_tokens_details":{"reasoning_tokens":3}}}`))
+	})
+	response, err := model.Request(t.Context(), nil, ai.ModelRequestParams{AllowText: true})
+	if err != nil || response.Usage.OutputTokens != 2 || response.Usage.ReasoningTokens != 3 {
+		t.Fatalf("reported details were overridden: %+v err=%v", response.Usage, err)
+	}
+}

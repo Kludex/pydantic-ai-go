@@ -771,8 +771,8 @@ func TestTransformEnqueuedMessages(t *testing.T) {
 				ai.SystemPromptPart{Content: "secret"},
 				ai.UserPromptPart{Contents: []ai.UserContent{
 					ai.TextContent{Text: "look"},
-					ai.BinaryContent{Data: []byte("pdf"), MediaType: "application/pdf"},
-					ai.ImageURL{URL: "https://example.com/a.png", MediaType: "image/png"},
+					ai.BinaryContent{Data: []byte("pdf"), MediaType: "application/pdf", Identifier: "report"},
+					ai.ImageURL{URL: "https://example.com/a.png", MediaType: "image/png", Identifier: "photo"},
 					ai.AudioURL{URL: "https://example.com/a.mp3", MediaType: "audio/mpeg"},
 					ai.VideoURL{URL: "https://example.com/a.mp4", MediaType: "video/mp4"},
 					ai.DocumentURL{URL: "https://example.com/a.txt", MediaType: "text/plain",
@@ -799,8 +799,10 @@ func TestTransformEnqueuedMessages(t *testing.T) {
 		`{"type":"reasoning","text":"thought","state":"done"},` +
 		`{"type":"file","url":"data:image/png;base64,cG5n","mediaType":"image/png"}]},` +
 		`{"id":"e-user-1","role":"user","parts":[{"type":"text","text":"look","state":"done"},` +
-		`{"type":"file","url":"data:application/pdf;base64,cGRm","mediaType":"application/pdf"},` +
-		`{"type":"file","url":"https://example.com/a.png","mediaType":"image/png"},` +
+		`{"type":"file","url":"data:application/pdf;base64,cGRm","mediaType":"application/pdf",` +
+		`"providerMetadata":{"pydantic_ai":{"identifier":"report"}}},` +
+		`{"type":"file","url":"https://example.com/a.png","mediaType":"image/png",` +
+		`"providerMetadata":{"pydantic_ai":{"identifier":"photo"}}},` +
 		`{"type":"file","url":"https://example.com/a.mp3","mediaType":"audio/mpeg"},` +
 		`{"type":"file","url":"https://example.com/a.mp4","mediaType":"video/mp4"},` +
 		`{"type":"file","url":"https://example.com/a.txt","mediaType":"text/plain",` +
@@ -826,7 +828,9 @@ func TestTransformEnqueuedMessages(t *testing.T) {
 		t.Fatalf("unexpected history: %#v err=%v", history, err)
 	}
 	reply, request, own := history[0].(ai.ModelResponse), history[1].(ai.ModelRequest), history[2].(ai.ModelResponse)
-	if len(reply.Parts) != 3 || len(request.Parts[0].(ai.UserPromptPart).Contents) != 6 ||
+	contents := request.Parts[0].(ai.UserPromptPart).Contents
+	if len(reply.Parts) != 3 || len(contents) != 6 || contents[1].(ai.BinaryContent).Identifier != "report" ||
+		contents[2].(ai.ImageURL).Identifier != "photo" ||
 		!request.Timestamp.Equal(timestamp) || request.Metadata["app"] != "x" ||
 		own.Parts[0].(ai.TextPart).Content != "own" {
 		t.Fatalf("enqueued messages did not load in place: %#v", history)

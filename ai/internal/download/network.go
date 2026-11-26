@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"slices"
 )
 
 func resolveHost(ctx context.Context, host string, allowLocal bool) ([]netip.Addr, error) {
@@ -39,19 +40,11 @@ func validateAddress(address netip.Addr, allowLocal bool) error {
 
 func isPrivateAddress(address netip.Addr) bool {
 	address = address.Unmap()
-	for _, network := range privateNetworks {
-		if network.Contains(address) {
-			return true
-		}
-	}
-	for _, embedded := range embeddedIPv4Addresses(address, false) {
-		for _, network := range privateNetworks {
-			if network.Contains(embedded) {
-				return true
-			}
-		}
-	}
-	return false
+	targets := append([]netip.Addr{address}, embeddedIPv4Addresses(address, false)...)
+	return slices.ContainsFunc(targets, func(target netip.Addr) bool {
+		contains := func(network netip.Prefix) bool { return network.Contains(target) }
+		return slices.ContainsFunc(privateNetworks, contains) && !slices.ContainsFunc(privateNetworkExceptions, contains)
+	})
 }
 
 func isCloudMetadataAddress(address netip.Addr) bool {

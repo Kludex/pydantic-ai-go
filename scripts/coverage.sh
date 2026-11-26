@@ -119,6 +119,7 @@ for pkg in "${packages[@]}"; do
                 loaded[file] = 1
             }
             if (source[file, position[1]] ~ /\/\/ pragma: no cover - [[:alnum:]]/) next
+            if (source[file, position[1] - 1] ~ /[{:] *\/\/ pragma: no cover - [[:alnum:]]/) next
             print
         }
     ' "$profile" > "$filtered"

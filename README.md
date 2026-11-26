@@ -6,7 +6,7 @@ Build typed LLM agents in Go.
 
 ## Install
 
-You need Go 1.27 or newer.
+You need Go 1.26 or newer.
 
 ```console
 go get github.com/Kludex/pydantic-ai-go/ai

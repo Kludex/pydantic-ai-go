@@ -25,12 +25,13 @@ type ValidationIssue struct {
 
 // Compile compiles a JSON Schema for repeated validation.
 func Compile(document map[string]any) (*Validator, error) {
-	return compileAt(document, "schema.json")
+	return compileAt(document, "https://schema.invalid/schema.json")
 }
 
 func compileAt(document map[string]any, location string) (*Validator, error) {
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat()
+	compiler.UseLoader(noLoader{})
 	if err := compiler.AddResource(location, normalize(document)); err != nil {
 		return nil, fmt.Errorf("add schema resource: %w", err)
 	}
@@ -39,6 +40,12 @@ func compileAt(document map[string]any, location string) (*Validator, error) {
 		return nil, fmt.Errorf("compile schema: %w", err)
 	}
 	return &Validator{schema: compiled}, nil
+}
+
+type noLoader struct{}
+
+func (noLoader) Load(url string) (any, error) {
+	return nil, fmt.Errorf("external schema reference %q is not supported", url)
 }
 
 func normalize(value any) any {

@@ -1,6 +1,7 @@
 package agui
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -14,7 +15,14 @@ import (
 func PrepareInput(
 	input RunAgentInput, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, ai.MessageSanitizationReport, error) {
-	return prepareInput(input, options, false)
+	if _, _, err := ai.SanitizeMessages(nil, options); err != nil {
+		return ai.UserPromptPart{}, nil, ai.MessageSanitizationReport{}, err
+	}
+	prompt, history, report, err := prepareInput(input, options, false)
+	if err != nil {
+		err = inputError{err}
+	}
+	return prompt, history, report, err
 }
 
 func prepareInput(
@@ -72,9 +80,13 @@ func prepareRunInput(
 	if err != nil {
 		return ai.UserPromptPart{}, nil, nil, err
 	}
+	pending := pendingToolCalls(history)
 	results := ai.DeferredToolResults{Approvals: map[string]ai.ToolApproval{}, Calls: map[string]any{}}
 	for _, entry := range input.Resume {
 		toolCallID, kind, _ := resumeToolCall(entry.InterruptID)
+		if pending[toolCallID] != 1 {
+			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("agui: resume for %q does not match one pending tool call", toolCallID)
+		}
 		if kind == "approval" {
 			results.Approvals[toolCallID] = resumeApproval(entry)
 			continue
@@ -86,6 +98,25 @@ func prepareRunInput(
 		results.Calls[toolCallID] = result
 	}
 	return ai.UserPromptPart{}, history, &results, nil
+}
+
+func pendingToolCalls(messages []ai.ModelMessage) map[string]int {
+	pending := map[string]int{}
+	for _, message := range messages {
+		switch message := message.(type) {
+		case ai.ModelResponse:
+			for _, call := range message.ToolCalls() {
+				pending[call.ToolCallID]++
+			}
+		case ai.ModelRequest:
+			for _, part := range message.Parts {
+				if result, ok := part.(ai.ToolReturnPart); ok && pending[result.ToolCallID] > 0 {
+					pending[result.ToolCallID]--
+				}
+			}
+		}
+	}
+	return pending
 }
 
 func resumeToolCall(interruptID string) (string, string, bool) {
@@ -130,7 +161,10 @@ func resumeExternalResult(entry ResumeEntry) (any, error) {
 		return nil, fmt.Errorf("agui: external tool result for %q requires a result", entry.InterruptID)
 	}
 	var result any
-	_ = json.Unmarshal(payload.Result, &result)
+	decoder := json.NewDecoder(bytes.NewReader(payload.Result))
+	decoder.UseNumber()
+	// payload.Result was already decoded once, so it is valid JSON.
+	_ = decoder.Decode(&result)
 	return result, nil
 }
 

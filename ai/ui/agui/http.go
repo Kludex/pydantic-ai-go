@@ -2,6 +2,7 @@ package agui
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -54,11 +55,19 @@ func (adapter *Adapter[Deps, Output]) Handler(deps Deps, options ...ai.RunOption
 			http.Error(response, "invalid AG-UI request", http.StatusBadRequest)
 			return
 		}
-		response.Header().Set("Content-Type", "text/event-stream")
-		response.Header().Set("Cache-Control", "no-cache")
-		response.Header().Set("X-Accel-Buffering", "no")
 		flusher, _ := response.(http.Flusher)
+		started := false
 		for event, eventErr := range adapter.RunStream(request.Context(), input, deps, options...) {
+			if !started {
+				if errors.Is(eventErr, ErrInvalidInput) {
+					http.Error(response, eventErr.Error(), http.StatusBadRequest)
+					return
+				}
+				response.Header().Set("Content-Type", "text/event-stream")
+				response.Header().Set("Cache-Control", "no-cache")
+				response.Header().Set("X-Accel-Buffering", "no")
+				started = true
+			}
 			encoded, _ := json.Marshal(event)
 			if _, err := fmt.Fprintf(response, "data: %s\n\n", encoded); err != nil {
 				return

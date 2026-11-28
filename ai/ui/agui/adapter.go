@@ -6,11 +6,13 @@ import (
 	"errors"
 	"fmt"
 	"iter"
+	"slices"
 	"strconv"
 	"sync/atomic"
 	"time"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
+	"github.com/Kludex/pydantic-ai-go/ai/internal/schema"
 )
 
 var generatedID atomic.Uint64
@@ -30,6 +32,12 @@ func NewAdapter[Deps, Output any](agent *ai.Agent[Deps, Output], config Config) 
 		panic("agui: maximum request bytes must not be negative")
 	}
 	if _, err := parseVersion(config.Version); err != nil {
+		panic(err.Error())
+	}
+	config.Sanitization.AllowedFileURLSchemes = slices.Clone(config.Sanitization.AllowedFileURLSchemes)
+	config.Sanitization.AllowedFileDownloadModes = slices.Clone(config.Sanitization.AllowedFileDownloadModes)
+	config.Sanitization.ResolvedToolCallIDs = slices.Clone(config.Sanitization.ResolvedToolCallIDs)
+	if _, _, err := ai.SanitizeMessages(nil, config.Sanitization); err != nil {
 		panic(err.Error())
 	}
 	return &Adapter[Deps, Output]{agent: agent, config: config}
@@ -52,6 +60,7 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		if receiver, ok := any(deps).(RunInputReceiver); ok {
 			forwarded, err := detachedForwardedInput(input, threadID, runID)
 			if err != nil {
+				err = inputError{err}
 				yield(Event{Type: EventRunError, Message: err.Error()}, err)
 				return
 			}
@@ -66,6 +75,12 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 			input, adapter.config.Sanitization, adapter.config.PreserveFileData,
 		)
 		if err != nil {
+			err = inputError{err}
+			yield(Event{Type: EventRunError, Message: err.Error()}, err)
+			return
+		}
+		if err := validateTools(input.Tools); err != nil {
+			err = inputError{err}
 			yield(Event{Type: EventRunError, Message: err.Error()}, err)
 			return
 		}
@@ -74,11 +89,6 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 		if len(input.Tools) > 0 {
 			tools := make([]ai.Tool[Deps], len(input.Tools))
 			for index, tool := range input.Tools {
-				if tool.Name == "" {
-					err := fmt.Errorf("agui: frontend tool name must not be empty")
-					yield(Event{Type: EventRunError, Message: err.Error()}, err)
-					return
-				}
 				tools[index] = ai.NewRawExternalTool[Deps](ai.ToolDefinition{
 					Name: tool.Name, Description: tool.Description, Schema: cloneMap(tool.Parameters),
 				})
@@ -188,6 +198,26 @@ func yieldQueuedEvents(yield func(Event, error) bool, queue *EventQueue) bool {
 		}
 	}
 	return true
+}
+
+func validateTools(tools []FrontendTool) error {
+	names := make(map[string]struct{}, len(tools))
+	for _, tool := range tools {
+		if tool.Name == "" {
+			return errors.New("agui: frontend tool name must not be empty")
+		}
+		if _, duplicate := names[tool.Name]; duplicate {
+			return fmt.Errorf("agui: duplicate frontend tool name %q", tool.Name)
+		}
+		names[tool.Name] = struct{}{}
+		if tool.Parameters == nil {
+			continue
+		}
+		if _, err := schema.Compile(cloneMap(tool.Parameters)); err != nil {
+			return fmt.Errorf("agui: frontend tool %q parameters: %w", tool.Name, err)
+		}
+	}
+	return nil
 }
 
 func detachedForwardedInput(input RunAgentInput, threadID string, runID string) (ForwardedInput, error) {

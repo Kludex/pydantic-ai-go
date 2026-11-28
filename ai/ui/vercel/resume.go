@@ -10,6 +10,13 @@ import (
 func prepareRunInput(
 	input RequestData, options ai.MessageSanitizationOptions,
 ) (ai.UserPromptPart, []ai.ModelMessage, *ai.DeferredToolResults, error) {
+	if err := validateTrigger(input.Trigger); err != nil {
+		return ai.UserPromptPart{}, nil, nil, err
+	}
+	if input.ID == "" {
+		return ai.UserPromptPart{}, nil, nil, fmt.Errorf("vercel: chat ID must not be empty")
+	}
+	resolvedFrom := len(options.ResolvedToolCallIDs)
 	decisions := map[string]ai.ToolApproval{}
 	callResults := map[string]any{}
 	externalIDs := map[string]struct{}{}
@@ -62,7 +69,7 @@ func prepareRunInput(
 		return ai.UserPromptPart{}, nil, nil, fmt.Errorf("vercel: external tool results are incomplete")
 	}
 	if len(decisions) == 0 && len(callResults) == 0 {
-		prompt, history, _, err := PrepareInput(input, options)
+		prompt, history, _, err := prepareInput(input, options)
 		return prompt, history, nil, err
 	}
 	messages, err := convertMessages(input.Messages, externalIDs)
@@ -73,7 +80,25 @@ func prepareRunInput(
 	if err != nil {
 		return ai.UserPromptPart{}, nil, nil, err
 	}
+	local := localToolCalls(history)
+	for _, toolCallID := range options.ResolvedToolCallIDs[resolvedFrom:] {
+		if local[toolCallID] != 1 {
+			return ai.UserPromptPart{}, nil, nil, fmt.Errorf("vercel: resume for %q does not match one local tool call", toolCallID)
+		}
+	}
 	return ai.UserPromptPart{}, history, &ai.DeferredToolResults{Calls: callResults, Approvals: decisions}, nil
+}
+
+func localToolCalls(messages []ai.ModelMessage) map[string]int {
+	calls := map[string]int{}
+	for _, message := range messages {
+		if response, ok := message.(ai.ModelResponse); ok {
+			for _, call := range response.ToolCalls() {
+				calls[call.ToolCallID]++
+			}
+		}
+	}
+	return calls
 }
 
 func externalToolResult(part UIMessagePart) (any, error) {

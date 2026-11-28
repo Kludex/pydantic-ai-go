@@ -3,6 +3,7 @@ package vercel
 import (
 	"context"
 	"iter"
+	"slices"
 
 	ai "github.com/Kludex/pydantic-ai-go/ai"
 )
@@ -27,6 +28,12 @@ func NewAdapter[Deps, Output any](agent *ai.Agent[Deps, Output], config Config) 
 	if config.SDKVersion < 5 || config.SDKVersion > 7 {
 		panic("vercel: SDK version must be 5, 6, or 7")
 	}
+	config.Sanitization.AllowedFileURLSchemes = slices.Clone(config.Sanitization.AllowedFileURLSchemes)
+	config.Sanitization.AllowedFileDownloadModes = slices.Clone(config.Sanitization.AllowedFileDownloadModes)
+	config.Sanitization.ResolvedToolCallIDs = slices.Clone(config.Sanitization.ResolvedToolCallIDs)
+	if _, _, err := ai.SanitizeMessages(nil, config.Sanitization); err != nil {
+		panic(err.Error())
+	}
 	return &Adapter[Deps, Output]{agent: agent, config: config}
 }
 
@@ -37,6 +44,7 @@ func (adapter *Adapter[Deps, Output]) RunStream(
 	return func(yield func(Chunk, error) bool) {
 		prompt, history, deferred, err := prepareRunInput(input, adapter.config.Sanitization)
 		if err != nil {
+			err = inputError{err}
 			yield(Chunk{Type: ChunkError, ErrorText: err.Error()}, err)
 			return
 		}

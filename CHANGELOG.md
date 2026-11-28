@@ -6,6 +6,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-11-28
+
 ### Added
 
 - On the `openai` provider, `ThinkingLevelMinimal` sends `low` to GPT-5.1 through GPT-5.5, and `gpt-5-search-api` sends no reasoning effort and no sampling settings, which the API rejects.
@@ -47,6 +49,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 ### Changed
 
+- The module requires Go 1.26 or newer, up from Go 1.25.
 - `agui` and `vercel` wrap errors caused by the client's request in `ErrInvalidInput`, and their `Handler` answers them with `400 Bad Request` instead of a stream error with status 200.
 - `agui.NewAdapter` and `vercel.NewAdapter` panic on invalid `Config.Sanitization`, which previously failed every request.
 - AG-UI rejects duplicate frontend tool names, invalid frontend tool schemas, resumes for calls that are not pending, and external results that do not decode before the run starts.
@@ -332,7 +335,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Thi
 
 - No security fixes have been released yet.
 
-[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/Kludex/pydantic-ai-go/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.7.1...v0.8.0
 [0.7.1]: https://github.com/Kludex/pydantic-ai-go/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/Kludex/pydantic-ai-go/compare/v0.5.0...v0.6.0
